@@ -34,6 +34,7 @@ public class ModelConfigController {
     @GetMapping
     public ResponseEntity<?> getEffectiveModels(
             @RequestHeader(value = "X-User-Roles", defaultValue = "USER") String roles,
+            @RequestHeader(value = "X-User-ID", required = false) String tenantId,
             @RequestParam(value = "category", required = false) String category) {
         var denied = AdminRoleGuard.denyIfNotAdmin(roles);
         if (denied != null) return denied;
@@ -41,7 +42,10 @@ public class ModelConfigController {
             return ResponseEntity.badRequest().body(Map.of(
                     "error", "Invalid category key '" + category + "'"));
         }
-        return ResponseEntity.ok(service.getEffectiveModelList(category));
+        // tenantId drives the cloud-connect vs BYOK/cloud-prod filter so the
+        // admin Models panel shows the same providers the picker would (see
+        // ModelCatalogService.getEffectiveModelList). null tenant = key filter.
+        return ResponseEntity.ok(service.getEffectiveModelList(category, tenantId));
     }
 
     /**

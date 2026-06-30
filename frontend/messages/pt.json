@@ -4334,7 +4334,8 @@
       },
       "enterprise": {
         "name": "Enterprise",
-        "cta": "Falar com vendas"
+        "cta": "Fale conosco",
+        "contactMessage": "Olá, gostaria de falar sobre o plano Enterprise para a minha organização."
       },
       "price": {
         "free": "Grátis",
@@ -4663,6 +4664,13 @@
     "deletedMessage": "{count, plural, one {# arquivo excluído} other {# arquivos excluídos}}",
     "deleteFailedTitle": "Falha ao excluir",
     "deleteFailedMessage": "Não foi possível excluir os arquivos selecionados.",
+    "deleteFolder": "Excluir pasta",
+    "deleteFolderConfirmTitle": "Excluir esta pasta?",
+    "deleteFolderConfirmMessage": "{name} e {count, plural, one {# arquivo} other {# arquivos}} que ela contém serão removidos permanentemente.",
+    "folderDeletedTitle": "Pasta excluída",
+    "folderDeletedMessage": "{count, plural, one {# arquivo excluído} other {# arquivos excluídos}}",
+    "deleteFolderFailedTitle": "Falha ao excluir",
+    "deleteFolderFailedMessage": "Não foi possível excluir a pasta.",
     "downloadFailedTitle": "Falha no download",
     "downloadFailedMessage": "Não foi possível baixar os arquivos selecionados.",
     "newFolder": "Nova pasta",
@@ -5197,6 +5205,7 @@
         "title": "SAML SSO",
         "description": "Connect this workspace to an enterprise identity provider. SAML users are added as workspace members on first login.",
         "lockedDescription": "O SSO SAML está disponível nos espaços de trabalho Team e Enterprise.",
+        "ceUnavailable": "O SSO SAML está disponível apenas no LiveContext Cloud. As instalações auto-hospedadas não podem ativar o SSO.",
         "ownerOnly": "Apenas proprietários e administradores do espaço de trabalho podem gerenciar o SSO SAML.",
         "displayName": "Nome do provedor",
         "displayNamePlaceholder": "SSO da empresa",

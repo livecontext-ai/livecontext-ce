@@ -4,6 +4,7 @@ import com.apimarketplace.common.storage.domain.QuotaStatus;
 import com.apimarketplace.common.storage.domain.StorageEntity;
 import com.apimarketplace.common.storage.domain.StorageStatus;
 import com.apimarketplace.common.storage.dto.MappingResolutionResult;
+import com.apimarketplace.common.storage.dto.VirtualFolderAddress;
 import com.apimarketplace.common.storage.exception.QuotaExceededException;
 import com.apimarketplace.common.storage.repository.StorageRepository;
 import com.apimarketplace.common.storage.service.StorageBreakdownService;
@@ -81,6 +82,80 @@ class StorageServiceTest {
                 }
                 return quotaService.checkQuota(tenantId, additionalBytes);
             });
+    }
+
+    @Nested
+    @DisplayName("deleteVirtualScopeForScope (Files virtual workflow-folder delete)")
+    class DeleteVirtualScopeForScopeTests {
+
+        @Test
+        @DisplayName("WORKFLOW-level address soft-deletes the whole workflow subtree (all coordinates null) + refreshes quota")
+        void workflowLevelDeletesWholeSubtree() {
+            VirtualFolderAddress address = new VirtualFolderAddress("wf-1", null, null, null, null);
+            when(storageRepository.softDeleteByVirtualScope(ORG_ID, "wf-1", null, null, null, null)).thenReturn(5);
+
+            int count = storageService.deleteVirtualScopeForScope(TENANT_ID, ORG_ID, address, List.of());
+
+            assertThat(count).isEqualTo(5);
+            verify(storageRepository).softDeleteByVirtualScope(ORG_ID, "wf-1", null, null, null, null);
+            verify(quotaService).updateOrganizationUsage(ORG_ID);
+        }
+
+        @Test
+        @DisplayName("EPOCH-level address narrows the delete to that epoch's coordinate")
+        void epochLevelNarrowsToEpoch() {
+            VirtualFolderAddress address = new VirtualFolderAddress("wf-1", null, 4, null, null);
+            when(storageRepository.softDeleteByVirtualScope(ORG_ID, "wf-1", null, 4, null, null)).thenReturn(2);
+
+            int count = storageService.deleteVirtualScopeForScope(TENANT_ID, ORG_ID, address, List.of());
+
+            assertThat(count).isEqualTo(2);
+            verify(storageRepository).softDeleteByVirtualScope(ORG_ID, "wf-1", null, 4, null, null);
+        }
+
+        @Test
+        @DisplayName("A restricted member's deny-listed ids route to the excluding-ids variant (those files are preserved)")
+        void excludedIdsRouteToExcludingVariant() {
+            VirtualFolderAddress address = new VirtualFolderAddress("wf-1", null, null, null, null);
+            UUID denied = UUID.randomUUID();
+            when(storageRepository.softDeleteByVirtualScopeExcludingIds(
+                    ORG_ID, "wf-1", null, null, null, null, List.of(denied))).thenReturn(3);
+
+            int count = storageService.deleteVirtualScopeForScope(TENANT_ID, ORG_ID, address, List.of(denied));
+
+            assertThat(count).isEqualTo(3);
+            verify(storageRepository).softDeleteByVirtualScopeExcludingIds(
+                    ORG_ID, "wf-1", null, null, null, null, List.of(denied));
+            verify(storageRepository, never()).softDeleteByVirtualScope(
+                    anyString(), anyString(), any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("Deleting nothing (count 0) does NOT churn the org quota")
+        void zeroDeletedSkipsQuotaRefresh() {
+            VirtualFolderAddress address = new VirtualFolderAddress("wf-1", null, null, null, null);
+            when(storageRepository.softDeleteByVirtualScope(ORG_ID, "wf-1", null, null, null, null)).thenReturn(0);
+
+            storageService.deleteVirtualScopeForScope(TENANT_ID, ORG_ID, address, List.of());
+
+            verify(quotaService, never()).updateOrganizationUsage(anyString());
+        }
+
+        @Test
+        @DisplayName("A null address is rejected (never a blanket delete)")
+        void nullAddressRejected() {
+            assertThatThrownBy(() -> storageService.deleteVirtualScopeForScope(TENANT_ID, ORG_ID, null, List.of()))
+                    .isInstanceOf(IllegalArgumentException.class);
+            verify(storageRepository, never()).softDeleteByVirtualScope(any(), any(), any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("A blank organization id is rejected (strict org scope)")
+        void blankOrgRejected() {
+            VirtualFolderAddress address = new VirtualFolderAddress("wf-1", null, null, null, null);
+            assertThatThrownBy(() -> storageService.deleteVirtualScopeForScope(TENANT_ID, "  ", address, List.of()))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
     }
 
     @Nested

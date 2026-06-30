@@ -4551,7 +4551,8 @@
       },
       "enterprise": {
         "name": "Enterprise",
-        "cta": "Contact Sales"
+        "cta": "Contact us",
+        "contactMessage": "Hi, I'd like to discuss the Enterprise plan for my organization."
       },
       "price": {
         "free": "Free",
@@ -4880,6 +4881,13 @@
     "deletedMessage": "{count, plural, one {# file deleted} other {# files deleted}}",
     "deleteFailedTitle": "Delete failed",
     "deleteFailedMessage": "Could not delete the selected files.",
+    "deleteFolder": "Delete folder",
+    "deleteFolderConfirmTitle": "Delete this folder?",
+    "deleteFolderConfirmMessage": "{name} and all {count, plural, one {# file} other {# files}} it contains will be permanently removed.",
+    "folderDeletedTitle": "Folder deleted",
+    "folderDeletedMessage": "{count, plural, one {# file deleted} other {# files deleted}}",
+    "deleteFolderFailedTitle": "Delete failed",
+    "deleteFolderFailedMessage": "Could not delete the folder.",
     "downloadFailedTitle": "Download failed",
     "downloadFailedMessage": "Could not download the selected files.",
     "newFolder": "New folder",
@@ -5535,6 +5543,7 @@
         "title": "SAML SSO",
         "description": "Connect this workspace to an enterprise identity provider. SAML users are added as workspace members on first login.",
         "lockedDescription": "SAML SSO is available on Team and Enterprise workspaces.",
+        "ceUnavailable": "SAML SSO is only available on LiveContext Cloud. Self-hosted installs can't enable SSO.",
         "ownerOnly": "Only workspace owners and admins can manage SAML SSO.",
         "displayName": "Provider name",
         "displayNamePlaceholder": "Company SSO",

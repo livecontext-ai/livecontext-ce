@@ -6,6 +6,7 @@ import com.apimarketplace.auth.credential.service.oauth2.refresh.RefreshTerminal
 import com.apimarketplace.auth.credential.service.oauth2.refresh.RefreshTransientException;
 import com.apimarketplace.notification.client.NotificationClient;
 import com.apimarketplace.notification.client.dto.NotificationEmitRequest;
+import com.apimarketplace.auth.repository.OrganizationRepository;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -57,6 +58,17 @@ public class OAuth2RefreshScheduler {
      */
     @Autowired(required = false)
     private NotificationClient notificationClient;
+
+    /**
+     * Personal-org resolver for the CRED_EXPIRED bell. Optional ({@code required=false})
+     * so unit tests that don't exercise the personal-scope fallback need not wire it.
+     * A personal-scope credential ({@code organization_id == null}) routes its bell to
+     * the owner's personal org, so the org-scoped notification row carries a real org
+     * instead of being left to the ambient context (which fails loud on the scheduler
+     * thread and silently drops the notification).
+     */
+    @Autowired(required = false)
+    private OrganizationRepository organizationRepository;
 
     public OAuth2RefreshScheduler(
             CredentialRepository credentialRepository,
@@ -193,6 +205,23 @@ public class OAuth2RefreshScheduler {
         // Using current-day for terminal failures: re-failures within the same day
         // collapse to one bell row; tomorrow's re-fail is a new event.
         req.setSourceId(cred.id() + ":" + epochDay);
+        // Stamp the OWNER org explicitly. The org-scoped notification row would otherwise be
+        // left to the listener, which fails loud on this @Scheduled thread (no ambient org)
+        // and silently drops the bell. Team-scope credential -> its own org; personal scope
+        // (organization_id null) -> the owner's personal org.
+        String notifOrgId = cred.organizationId();
+        if ((notifOrgId == null || notifOrgId.isBlank()) && organizationRepository != null) {
+            try {
+                notifOrgId = organizationRepository.findByOwnerIdAndIsPersonalTrue(Long.parseLong(cred.tenantId()))
+                        .map(o -> o.getId().toString())
+                        .orElse(null);
+            } catch (NumberFormatException ignore) {
+                // tenantId is not a numeric user id - leave the org unresolved.
+            }
+        }
+        if (notifOrgId != null && !notifOrgId.isBlank()) {
+            req.setOrganizationId(notifOrgId);
+        }
 
         Map<String, Object> payload = new HashMap<>();
         payload.put("status", "expired");

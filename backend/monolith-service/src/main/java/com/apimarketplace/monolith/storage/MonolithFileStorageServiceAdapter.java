@@ -43,6 +43,38 @@ public class MonolithFileStorageServiceAdapter implements com.apimarketplace.orc
                 tenantId, workflowId, runId, stepAlias, fileName, mimeType, content));
     }
 
+    /**
+     * Context-carrying byte[] upload for WORKFLOW file producers (Download File, Convert To File,
+     * Compression, SFTP, interface screenshots, ...). MUST be overridden: the orchestrator
+     * {@code FileStorageService} interface ships a DEFAULT epoch-aware overload that silently DROPS
+     * the run coordinates and falls back to the no-context {@code upload(...)} (epoch=0, spawn=0,
+     * itemIndex=null, sourceType=S3_FILE). Microservice mode dodges this because
+     * {@code StorageClientAdapter} overrides the same overload (it forwards the coordinates as
+     * {@code ?epoch=&spawn=&itemIndex=&sourceType=} query params). Without this override every
+     * monolith (CE) workflow file would land at epoch 0 - so the Files browser shows a single
+     * "Epoch 0" folder no matter how many epochs actually ran. Delegate to the storage-service
+     * epoch-aware overload (which {@code S3FileStorageService} implements) so the real coordinates
+     * reach {@code storage.storage}.
+     */
+    @Override
+    public FileRef upload(String tenantId, String workflowId, String runId, String stepAlias,
+                          String fileName, String mimeType, byte[] content,
+                          int epoch, int spawn, Integer itemIndex, String sourceType) {
+        return toOrchestratorRef(storageFileStorageService.upload(
+                tenantId, workflowId, runId, stepAlias, fileName, mimeType, content,
+                epoch, spawn, itemIndex, sourceType));
+    }
+
+    /** Context-carrying InputStream upload - mirror of the byte[] variant above (same epoch-loss fix). */
+    @Override
+    public FileRef upload(String tenantId, String workflowId, String runId, String stepAlias,
+                          String fileName, String mimeType, InputStream content, long size,
+                          int epoch, int spawn, Integer itemIndex, String sourceType) {
+        return toOrchestratorRef(storageFileStorageService.upload(
+                tenantId, workflowId, runId, stepAlias, fileName, mimeType, content, size,
+                epoch, spawn, itemIndex, sourceType));
+    }
+
     @Override
     public String generateDownloadUrl(String key, Duration duration) {
         return storageFileStorageService.generateDownloadUrl(key, duration);

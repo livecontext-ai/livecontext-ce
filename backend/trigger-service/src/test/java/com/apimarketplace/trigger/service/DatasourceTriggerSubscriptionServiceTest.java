@@ -96,6 +96,31 @@ class DatasourceTriggerSubscriptionServiceTest {
         assertThat(result.isActive()).isTrue();
     }
 
+    @Test
+    @DisplayName("Regression (org bleed) - upsert stamps the workflow OWNER org from the request, never leaving it to ambient")
+    void upsertStampsOwnerOrgFromRequest() {
+        UUID workflowId = UUID.randomUUID();
+        when(repository.findByWorkflowIdAndTriggerId(workflowId, "trigger:on_new_user"))
+                .thenReturn(Optional.empty());
+        when(repository.save(any(DatasourceTriggerSubscriptionEntity.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        // 8-arg request carries the workflow owner org. Before the fix, upsert never set
+        // organizationId on the entity, so the org-scoped row was stamped from whatever org
+        // happened to be ambient on the thread (cross-tenant bleed). It must now take the
+        // request's owner org explicitly.
+        DatasourceSubscriptionRequest request = new DatasourceSubscriptionRequest(
+                workflowId, 1, "trigger:on_new_user", 42L, "tenant-A", "org-owner-9",
+                List.of("row_created"), null);
+
+        service.upsert(request);
+
+        ArgumentCaptor<DatasourceTriggerSubscriptionEntity> captor =
+                ArgumentCaptor.forClass(DatasourceTriggerSubscriptionEntity.class);
+        verify(repository).save(captor.capture());
+        assertThat(captor.getValue().getOrganizationId()).isEqualTo("org-owner-9");
+    }
+
     // ==================== Prune ====================
 
     @Test

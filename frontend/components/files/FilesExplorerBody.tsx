@@ -28,6 +28,11 @@ export interface FilesExplorerBodyProps {
 
   /** Navigate into a folder (manual or virtual). */
   onOpenFolder: (entry: StorageExplorerEntry) => void;
+  /**
+   * Delete a VIRTUAL workflow folder (removes every file it groups). Grid only. Omit to keep virtual
+   * folders read-only (no trash button). The parent owns the confirmation + refresh.
+   */
+  onDeleteVirtualFolder?: (entry: StorageExplorerEntry) => void;
   /** Open a file's detail view (grid click + compact explorer row click). */
   onOpenFile?: (entry: StorageExplorerEntry) => void;
   /** Picker density (compact): select a file instead of opening it (shows an expand-preview chevron). */
@@ -74,6 +79,7 @@ export function FilesExplorerBody({
   enableFolders,
   tFiles,
   onOpenFolder,
+  onDeleteVirtualFolder,
   onOpenFile,
   onSelectFile,
   onDownloadFile,
@@ -132,7 +138,15 @@ export function FilesExplorerBody({
     }
     // Virtual workflow folders are navigation-only (no dnd, no select); manual folders are full tiles.
     return isVirtualEntry(entry) ? (
-      <VirtualFolderCard key={entryKey(entry)} entry={entry} label={label} countLabel={countLabel} onOpen={onOpenFolder} />
+      <VirtualFolderCard
+        key={entryKey(entry)}
+        entry={entry}
+        label={label}
+        countLabel={countLabel}
+        onOpen={onOpenFolder}
+        onDelete={onDeleteVirtualFolder}
+        deleteLabel={tFiles('deleteFolder')}
+      />
     ) : (
       <FolderCard
         key={entryKey(entry)}

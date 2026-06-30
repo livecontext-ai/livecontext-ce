@@ -4334,7 +4334,8 @@
       },
       "enterprise": {
         "name": "Enterprise",
-        "cta": "联系销售"
+        "cta": "联系我们",
+        "contactMessage": "您好，我想了解适合我们组织的企业版方案。"
       },
       "price": {
         "free": "免费",
@@ -4663,6 +4664,13 @@
     "deletedMessage": "{count, plural, other {已删除 # 个文件}}",
     "deleteFailedTitle": "删除失败",
     "deleteFailedMessage": "无法删除所选文件。",
+    "deleteFolder": "删除文件夹",
+    "deleteFolderConfirmTitle": "删除此文件夹？",
+    "deleteFolderConfirmMessage": "{name} 及其包含的 {count, plural, other {# 个文件}} 将被永久删除。",
+    "folderDeletedTitle": "文件夹已删除",
+    "folderDeletedMessage": "{count, plural, other {已删除 # 个文件}}",
+    "deleteFolderFailedTitle": "删除失败",
+    "deleteFolderFailedMessage": "无法删除该文件夹。",
     "downloadFailedTitle": "下载失败",
     "downloadFailedMessage": "无法下载所选文件。",
     "newFolder": "新建文件夹",
@@ -5197,6 +5205,7 @@
         "title": "SAML SSO",
         "description": "Connect this workspace to an enterprise identity provider. SAML users are added as workspace members on first login.",
         "lockedDescription": "SAML SSO 在 Team 和 Enterprise 工作区中可用。",
+        "ceUnavailable": "SAML SSO 仅在 LiveContext Cloud 上提供。自托管部署无法启用 SSO。",
         "ownerOnly": "只有工作区所有者和管理员才能管理 SAML SSO。",
         "displayName": "提供商名称",
         "displayNamePlaceholder": "公司 SSO",

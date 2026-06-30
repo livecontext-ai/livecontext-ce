@@ -121,7 +121,7 @@ class SubAgentExecutionHandlerCoverageTest {
     /** Wires the happy-path collaborators so execute() reaches buildToolResult. */
     private void stubExecutablePath() {
         when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(createAgent()));
-        when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+        when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
         when(coreToolsCache.getCoreTools()).thenReturn(List.of());
         var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
         when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
@@ -239,7 +239,7 @@ class SubAgentExecutionHandlerCoverageTest {
             AgentEntity entity = createAgent();
             entity.setExecutionTimeout(entityTimeout);
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             when(coreToolsCache.getCoreTools()).thenReturn(List.of());
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
@@ -286,7 +286,7 @@ class SubAgentExecutionHandlerCoverageTest {
             AgentEntity entity = createAgent();
             entity.setInactivityTimeout(entityInactivity);
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             when(coreToolsCache.getCoreTools()).thenReturn(List.of());
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))

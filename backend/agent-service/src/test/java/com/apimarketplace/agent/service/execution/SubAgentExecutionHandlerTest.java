@@ -192,7 +192,7 @@ class SubAgentExecutionHandlerTest {
         void shouldAllowNoRestriction() {
             AgentEntity entity = createAgent();
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -263,7 +263,7 @@ class SubAgentExecutionHandlerTest {
 
             AgentEntity entity = createAgent();
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -355,7 +355,7 @@ class SubAgentExecutionHandlerTest {
         void shouldExecuteSuccessfully() {
             AgentEntity entity = createAgent();
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-sub");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-sub");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -381,7 +381,7 @@ class SubAgentExecutionHandlerTest {
         void shouldCombineContextAndPrompt() {
             AgentEntity entity = createAgent();
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -413,7 +413,7 @@ class SubAgentExecutionHandlerTest {
         void shouldIncrementDepth() {
             AgentEntity entity = createAgent();
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -443,7 +443,7 @@ class SubAgentExecutionHandlerTest {
         void stampsExecutionIdOnSubAgentContext() {
             AgentEntity entity = createAgent();
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -556,7 +556,7 @@ class SubAgentExecutionHandlerTest {
             // Child has only `mode` and `tools` - none of the 5 internal lists
             entity.setToolsConfig(Map.of("mode", "all"));
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -597,7 +597,7 @@ class SubAgentExecutionHandlerTest {
                 "fileAccessMode", "read"
             ));
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -635,7 +635,7 @@ class SubAgentExecutionHandlerTest {
                 "workflowsGrant", "bogus"
             ));
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -671,7 +671,7 @@ class SubAgentExecutionHandlerTest {
                 "tables", List.of(209, 42)
             ));
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
 
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
@@ -707,7 +707,7 @@ class SubAgentExecutionHandlerTest {
                 "files", List.of("file-1", "file-2")
             ));
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
 
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
@@ -739,7 +739,7 @@ class SubAgentExecutionHandlerTest {
             AgentEntity entity = createAgent();
             entity.setToolsConfig(Map.of("mode", "all"));
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -782,7 +782,7 @@ class SubAgentExecutionHandlerTest {
                 "tablesGrant", "all"
             ));
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -823,7 +823,7 @@ class SubAgentExecutionHandlerTest {
                 "tablesGrant", "custom"
             ));
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -854,7 +854,7 @@ class SubAgentExecutionHandlerTest {
         void shouldSaveAssistantResponse() {
             AgentEntity entity = createAgent();
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -878,7 +878,7 @@ class SubAgentExecutionHandlerTest {
         void shouldRecordObservability() {
             AgentEntity entity = createAgent();
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -905,7 +905,7 @@ class SubAgentExecutionHandlerTest {
         void shouldAllowUpTo5() {
             AgentEntity entity = createAgent();
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -942,7 +942,7 @@ class SubAgentExecutionHandlerTest {
         void shouldProceedWhenRedisRateLimitFails() {
             AgentEntity entity = createAgent();
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -976,7 +976,7 @@ class SubAgentExecutionHandlerTest {
         void shouldTruncateLongResponse() {
             AgentEntity entity = createAgent();
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -1018,7 +1018,7 @@ class SubAgentExecutionHandlerTest {
             AgentEntity entity = createAgent();
             entity.setToolsConfig(null);
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             when(coreToolsCache.getCoreTools()).thenReturn(List.of(
                 ToolDefinition.builder().name("agent").build(),
                 ToolDefinition.builder().name("workflow").build()
@@ -1049,7 +1049,7 @@ class SubAgentExecutionHandlerTest {
             AgentEntity entity = createAgent();
             entity.setToolsConfig(Map.of("mode", "none"));
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             when(coreToolsCache.getCoreTools(anySet())).thenReturn(List.of(
                 ToolDefinition.builder().name("table").build()));
 
@@ -1085,7 +1085,7 @@ class SubAgentExecutionHandlerTest {
             // catalog/skill/files are always-on; interfaces/workflows/applications absent ⇒ blocked.
             entity.setToolsConfig(Map.of("mode", "custom", "tablesGrant", "all", "agentsGrant", "all"));
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             when(coreToolsCache.getCoreTools(anySet())).thenReturn(List.of(
                 ToolDefinition.builder().name("table").build(),
                 ToolDefinition.builder().name("agent").build()
@@ -1118,7 +1118,7 @@ class SubAgentExecutionHandlerTest {
         private void setupAgentExecution() {
             AgentEntity entity = createAgent();
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-sub");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-sub");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -1379,7 +1379,7 @@ class SubAgentExecutionHandlerTest {
         private void setupAgentForSuccessfulExecution() {
             AgentEntity entity = createAgent();
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any()))
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any()))
                 .thenReturn("conv-sub");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
@@ -1415,7 +1415,7 @@ class SubAgentExecutionHandlerTest {
         void insufficientBudgetExceptionShortCircuitsSpawn() {
             AgentEntity entity = createAgent();
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any()))
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any()))
                 .thenReturn("conv-sub");
 
             // tryReserveChain rejects spawn: one ancestor ran out of room. The whole
@@ -1464,7 +1464,7 @@ class SubAgentExecutionHandlerTest {
         void refundsReservationOnEarlyFailureAfterReserve() {
             AgentEntity entity = createAgent();
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any()))
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any()))
                 .thenReturn("conv-sub");            var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -1570,7 +1570,7 @@ class SubAgentExecutionHandlerTest {
         void shouldRouteToBridgeForClaudeCode() {
             AgentEntity entity = createBridgeAgent("claude-code", "claude-sonnet-4-6");
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -1601,7 +1601,7 @@ class SubAgentExecutionHandlerTest {
             AgentEntity entity = createBridgeAgent("claude-code", "claude-sonnet-4-6");
             entity.setToolsConfig(Map.of("mode", "none")); // catalog/MCP blocked, internal kept
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -1631,7 +1631,7 @@ class SubAgentExecutionHandlerTest {
         void shouldRouteToBridgeForCodex() {
             AgentEntity entity = createBridgeAgent("codex", "codex-mini-latest");
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -1657,7 +1657,7 @@ class SubAgentExecutionHandlerTest {
         void shouldRouteToBridgeForGeminiCli() {
             AgentEntity entity = createBridgeAgent("gemini-cli", "gemini-2.5-pro");
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -1682,7 +1682,7 @@ class SubAgentExecutionHandlerTest {
         void shouldRouteToBridgeForMistralVibe() {
             AgentEntity entity = createBridgeAgent("mistral-vibe", "mistral-large");
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -1707,7 +1707,7 @@ class SubAgentExecutionHandlerTest {
         void shouldNotRouteToBridgeForApiProviders() {
             AgentEntity entity = createAgent(); // openai/gpt-4 by default
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -1733,7 +1733,7 @@ class SubAgentExecutionHandlerTest {
         void shouldHandleBridgeNullResponse() {
             AgentEntity entity = createBridgeAgent("claude-code", "claude-sonnet-4-6");
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -1755,7 +1755,7 @@ class SubAgentExecutionHandlerTest {
         void shouldHandleBridgeErrorResponse() {
             AgentEntity entity = createBridgeAgent("claude-code", "claude-sonnet-4-6");
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -1780,7 +1780,7 @@ class SubAgentExecutionHandlerTest {
         void shouldPassStreamingContextInBridgeRequest() {
             AgentEntity entity = createBridgeAgent("claude-code", "claude-sonnet-4-6");
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -1813,7 +1813,7 @@ class SubAgentExecutionHandlerTest {
         void shouldRecordObservabilityForBridge() {
             AgentEntity entity = createBridgeAgent("claude-code", "claude-sonnet-4-6");
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -1837,7 +1837,7 @@ class SubAgentExecutionHandlerTest {
         void shouldSaveConversationForBridge() {
             AgentEntity entity = createBridgeAgent("claude-code", "claude-sonnet-4-6");
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -1865,7 +1865,7 @@ class SubAgentExecutionHandlerTest {
 
             AgentEntity entity = createBridgeAgent("claude-code", "claude-sonnet-4-6");
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -1903,7 +1903,7 @@ class SubAgentExecutionHandlerTest {
         void shouldTruncateLongBridgeResponse() {
             AgentEntity entity = createBridgeAgent("claude-code", "claude-sonnet-4-6");
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -1937,7 +1937,7 @@ class SubAgentExecutionHandlerTest {
             AgentEntity entity = createBridgeAgent("claude-code", "claude-sonnet-4-6");
             entity.setCreditBudget(new BigDecimal("50"));
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             // Budget enabled: 50 total, 30 consumed
             BudgetState enabledBudget = new BudgetState(
                 new BigDecimal("50"), new BigDecimal("30"), BigDecimal.ZERO, false);
@@ -1969,7 +1969,7 @@ class SubAgentExecutionHandlerTest {
         void shouldNotPassBudgetWhenDisabled() {
             AgentEntity entity = createBridgeAgent("claude-code", "claude-sonnet-4-6");
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             // Budget disabled (default in setUp)
 
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
@@ -1997,7 +1997,7 @@ class SubAgentExecutionHandlerTest {
         void shouldPropagateBudgetScopeToObservability() {
             AgentEntity entity = createBridgeAgent("claude-code", "claude-sonnet-4-6");
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -2029,7 +2029,7 @@ class SubAgentExecutionHandlerTest {
         void shouldMapBridgeResponseUsageInfo() {
             AgentEntity entity = createBridgeAgent("claude-code", "claude-sonnet-4-6");
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-1");
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-1");
             var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
@@ -2203,7 +2203,7 @@ class SubAgentExecutionHandlerTest {
             AgentEntity entity = createAgent();
             entity.setMaxTokens(entityMaxTokens);
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any())).thenReturn("conv-sub");            var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any())).thenReturn("conv-sub");            var mockCallback = mock(ConversationRedisStreamingCallback.ConversationCallback.class);
             when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockCallback);
             when(agentLoopService.execute(any(AgentLoopContext.class), any(StreamingCallback.class)))

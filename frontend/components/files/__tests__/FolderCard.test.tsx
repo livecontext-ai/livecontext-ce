@@ -152,8 +152,9 @@ describe('FolderCard', () => {
 });
 
 describe('VirtualFolderCard', () => {
-  // A virtual workflow folder navigates by virtualId; it can't be moved/deleted, so
-  // it has no checkbox and isn't a drop target/draggable (no dnd wiring at all).
+  // A virtual workflow folder navigates by virtualId and isn't a drop target/draggable nor
+  // bulk-selectable (no checkbox, no dnd wiring). It CAN be deleted as a whole via a hover trash
+  // button when the parent passes onDelete (removes every file the folder groups).
   function makeVirtual(overrides: Partial<StorageExplorerEntry> = {}): StorageExplorerEntry {
     return {
       id: null,
@@ -207,5 +208,32 @@ describe('VirtualFolderCard', () => {
     );
     expect(container.querySelectorAll('img').length).toBe(2);
     expect(container.querySelector('.grid-cols-3')?.children.length).toBe(9);
+  });
+
+  it('renders NO delete button when onDelete is omitted (read-only surface)', () => {
+    const { queryByRole } = render(
+      <VirtualFolderCard entry={makeVirtual()} onOpen={vi.fn()} label="Epoch 1" countLabel="5 items" />,
+    );
+    expect(queryByRole('button', { name: 'Delete folder' })).toBeNull();
+  });
+
+  it('shows a delete button when onDelete is provided; clicking it deletes WITHOUT navigating', () => {
+    const onOpen = vi.fn();
+    const onDelete = vi.fn();
+    const { getByRole } = render(
+      <VirtualFolderCard
+        entry={makeVirtual()}
+        onOpen={onOpen}
+        onDelete={onDelete}
+        deleteLabel="Delete folder"
+        label="Epoch 1"
+        countLabel="5 items"
+      />,
+    );
+    fireEvent.click(getByRole('button', { name: 'Delete folder' }));
+    // The delete affordance stops propagation: it deletes the folder, it does NOT open it.
+    expect(onDelete).toHaveBeenCalledTimes(1);
+    expect(onDelete.mock.calls[0][0].virtualId).toBe('wf:42/e0');
+    expect(onOpen).not.toHaveBeenCalled();
   });
 });

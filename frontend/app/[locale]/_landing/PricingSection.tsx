@@ -23,6 +23,9 @@ type PlanCard = {
   cta: string;
   badge?: string;
   disabled?: boolean;
+  // Enterprise is "talk to us": the CTA deep-links to the contact form with this
+  // predefined, localized subject pre-filled. Other plans stay self-serve.
+  contactMessage?: string;
 };
 
 export default function PricingSection() {
@@ -91,7 +94,7 @@ export default function PricingSection() {
       showSuffix: false,
       features: featuresFor('enterprise'),
       cta: tCards('enterprise.cta'),
-      disabled: true,
+      contactMessage: tCards('enterprise.contactMessage'),
     },
   ];
 
@@ -248,7 +251,11 @@ function PlanCardView({ plan }: { plan: PlanCard }) {
       </div>
 
       <a
-        href={plan.id === 'enterprise' ? 'mailto:contact@livecontext.ai' : '/app/settings/pricing'}
+        href={
+          plan.id === 'enterprise'
+            ? `/contact?category=other&message=${encodeURIComponent(plan.contactMessage ?? '')}`
+            : '/app/settings/pricing'
+        }
         onClick={plan.id === 'enterprise' ? undefined : handleSignIn}
         className="mt-6 inline-flex items-center justify-center w-full h-10 rounded-full text-sm font-medium transition-all duration-200 hover:brightness-110 active:scale-[0.98] cursor-pointer"
         style={{

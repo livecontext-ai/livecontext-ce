@@ -70,7 +70,7 @@ class AgentConversationModuleTest {
         @DisplayName("should load sub-agent conversation history")
         void shouldLoadSubAgentHistory() {
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(createAgent()));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any()))
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any()))
                 .thenReturn("child-conv-1");
             when(conversationServiceClient.getConversationMessages("child-conv-1", 20, TENANT_ID))
                 .thenReturn(List.of(
@@ -221,7 +221,7 @@ class AgentConversationModuleTest {
         @DisplayName("should share sub-agent conversation")
         void shouldShareSubAgentConversation() {
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(createAgent()));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any()))
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any()))
                 .thenReturn("child-conv-1");
             when(conversationServiceClient.enableSharing("child-conv-1", TENANT_ID, "read"))
                 .thenReturn(Map.of("shareToken", "cs_child456"));
@@ -316,7 +316,7 @@ class AgentConversationModuleTest {
         @DisplayName("should unshare sub-agent conversation")
         void shouldUnshareSubAgentConversation() {
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(createAgent()));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any()))
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any()))
                 .thenReturn("child-conv-1");
 
             Map<String, Object> params = Map.of("action", "unshare", "agent_id", AGENT_ID.toString());
@@ -396,7 +396,7 @@ class AgentConversationModuleTest {
         @SuppressWarnings("unchecked")
         void shouldRefreshSubAgentConversation() {
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(createAgent()));
-            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any()))
+            when(conversationServiceClient.findOrCreateAgentConversation(any(), any(), any(), any()))
                 .thenReturn("child-conv-1");
 
             when(restTemplate.exchange(
@@ -572,7 +572,7 @@ class AgentConversationModuleTest {
 
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(createAgent()));
             when(conversationServiceClient.findOrCreateAgentConversation(
-                    AGENT_ID.toString(), TENANT_ID, "Test Agent"))
+                    eq(AGENT_ID.toString()), eq(TENANT_ID), eq("Test Agent"), any()))
                     .thenReturn("child-conv-1");
 
             Map<String, Object> backend = new LinkedHashMap<>();
@@ -626,7 +626,7 @@ class AgentConversationModuleTest {
 
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(createAgent()));
             when(conversationServiceClient.findOrCreateAgentConversation(
-                    AGENT_ID.toString(), TENANT_ID, "Test Agent"))
+                    eq(AGENT_ID.toString()), eq(TENANT_ID), eq("Test Agent"), any()))
                     .thenReturn("child-conv-1");
 
             Map<String, Object> backend = new LinkedHashMap<>();
@@ -738,9 +738,9 @@ class AgentConversationModuleTest {
             when(agentService.getAgent(agent1, TENANT_ID)).thenReturn(Optional.of(ae1));
             when(agentService.getAgent(agent2, TENANT_ID)).thenReturn(Optional.of(ae2));
             when(conversationServiceClient.findOrCreateAgentConversation(
-                    agent1.toString(), TENANT_ID, "A1")).thenReturn("conv-A1");
+                    eq(agent1.toString()), eq(TENANT_ID), eq("A1"), any())).thenReturn("conv-A1");
             when(conversationServiceClient.findOrCreateAgentConversation(
-                    agent2.toString(), TENANT_ID, "A2")).thenReturn("conv-A2");
+                    eq(agent2.toString()), eq(TENANT_ID), eq("A2"), any())).thenReturn("conv-A2");
 
             Map<String, Object> backend = new LinkedHashMap<>();
             backend.put("results", List.of(hit("USER")));

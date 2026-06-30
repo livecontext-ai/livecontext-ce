@@ -336,7 +336,7 @@ public class AgentConversationModule implements ToolModule {
                 if (entity.isEmpty()) continue; // skip stale allowlist entries
 
                 String convId = conversationServiceClient.findOrCreateAgentConversation(
-                        agentIdStr, tenantId, entity.get().getName());
+                        agentIdStr, tenantId, entity.get().getName(), entity.get().getOrganizationId());
                 if (convId != null && !convId.isBlank()) {
                     dest.add(convId);
                     appended++;
@@ -416,7 +416,7 @@ public class AgentConversationModule implements ToolModule {
             agentName = entity.getName();
 
             conversationId = conversationServiceClient.findOrCreateAgentConversation(
-                agentId.toString(), tenantId, agentName);
+                agentId.toString(), tenantId, agentName, entityOpt.get().getOrganizationId());
         } else {
             // Own conversation
             conversationId = getConversationId(context);
@@ -490,7 +490,7 @@ public class AgentConversationModule implements ToolModule {
             agentName = entity.getName();
 
             conversationId = conversationServiceClient.findOrCreateAgentConversation(
-                agentId.toString(), tenantId, agentName);
+                agentId.toString(), tenantId, agentName, entityOpt.get().getOrganizationId());
         } else {
             // Share own conversation
             conversationId = getConversationId(context);
@@ -559,7 +559,7 @@ public class AgentConversationModule implements ToolModule {
             if (entityOpt.isEmpty()) return ToolExecutionResult.failure(ToolErrorCode.AGENT_NOT_FOUND, "Agent not found: " + agentId);
             agentName = entityOpt.get().getName();
             conversationId = conversationServiceClient.findOrCreateAgentConversation(
-                agentId.toString(), tenantId, agentName);
+                agentId.toString(), tenantId, agentName, entityOpt.get().getOrganizationId());
         } else {
             conversationId = getConversationId(context);
             agentName = "self";
@@ -611,7 +611,7 @@ public class AgentConversationModule implements ToolModule {
             if (entityOpt.isEmpty()) return ToolExecutionResult.failure(ToolErrorCode.AGENT_NOT_FOUND, "Agent not found: " + agentId);
             agentName = entityOpt.get().getName();
             conversationId = conversationServiceClient.findOrCreateAgentConversation(
-                agentId.toString(), tenantId, agentName);
+                agentId.toString(), tenantId, agentName, entityOpt.get().getOrganizationId());
         } else {
             conversationId = getConversationId(context);
             agentName = "self";

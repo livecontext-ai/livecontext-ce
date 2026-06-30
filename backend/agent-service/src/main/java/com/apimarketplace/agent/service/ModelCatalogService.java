@@ -770,17 +770,43 @@ public class ModelCatalogService {
      * global view.
      */
     public List<Map<String, Object>> getEffectiveModelList(String category) {
-        // includeUnconfigured=true: the admin Models panel shows the FULL catalog
-        // (every provider, on every category tab, in cloud and CE alike) even when
-        // no API key is configured - admins rank/price/enable models BEFORE adding
-        // keys. The end-user picker (getModelsForCategory) keeps the strict filter.
-        Map<String, Object> base = getAvailableProvidersBase(null, true);
-        // Admins MUST see every bridge provider regardless of CLI install
-        // state so they can configure, price, and set access policies.
-        // Runtime availability (CLI installed yes/no) is surfaced per-row
-        // via the bridgeAvailable flag a few lines below - the picker on
-        // the user side still uses getModelsWithOverrides() which keeps
-        // the hard filter for end users.
+        return getEffectiveModelList(category, null);
+    }
+
+    /**
+     * Tenant-aware admin model list. The {@code tenantId} (the admin's
+     * {@code X-User-ID}) drives the SAME mode-aware provider filter as the
+     * end-user picker ({@link #getModelsForCategory(String, String)}), so the
+     * admin Models panel and the picker always agree on which providers are
+     * visible - "no provider, no model":
+     * <ul>
+     *   <li><b>Cloud-prod / CE BYOK</b> ({@code isCloudSelected==false}): only
+     *       providers with a usable key (env key or DB/BYOK key) are listed -
+     *       an unconfigured provider's models stay hidden until its key is
+     *       added. Bridges are re-added below regardless (admins must always be
+     *       able to see and configure them).</li>
+     *   <li><b>CE cloud-connect</b> ({@code isCloudSelected==true}): every
+     *       cloud-relay-supported API provider is listed without a local key
+     *       (the bound cloud account is the source of record for API models);
+     *       local CLI/bridge providers still follow their own availability.</li>
+     * </ul>
+     */
+    public List<Map<String, Object>> getEffectiveModelList(String category, String tenantId) {
+        // Same mode-aware filter the picker uses: cloud-prod / CE BYOK drop
+        // providers without a key; CE cloud-connect keeps relay-supported API
+        // providers (cloud account is the source). Admin and picker therefore
+        // stay in sync on visibility.
+        Map<String, Object> base = getAvailableProvidersBase(tenantId, false);
+        // Admins should see bridge providers regardless of CLI-install state so
+        // they can configure, price, and set access policies. A default-enabled
+        // bridge stub reports configured=true, so it already SURVIVES the key
+        // filter above (no env/DB key needed) - that is the primary guarantee.
+        // enrichWithBridgeProviders only ADDS any bridge not already present,
+        // and only when the bridge host is reachable; an explicitly-disabled
+        // bridge (configured=false) on an unreachable host is therefore not
+        // listed, consistent with "no provider, no model". Runtime availability
+        // (CLI installed yes/no) is surfaced per-row via the bridgeAvailable
+        // flag below - the user-side picker still hard-filters unavailable CLIs.
         if (isBridgeConnected()) {
             enrichWithBridgeProviders(base);
         }
@@ -908,16 +934,19 @@ public class ModelCatalogService {
             }
         }
 
-        // V156 - when a category tab is active, surface factory-seeded rows
-        // (is_custom=false, mode-matched, e.g. V157 image-gen rows) whose
-        // provider exists ONLY as DB rows (never declared in the YAML base):
-        // the loop above iterates the YAML/bridge base, so a provider with no
-        // YAML shell is otherwise invisible. The admin base now includes
-        // unconfigured providers (getAvailableProvidersBase(.., includeUnconfigured=true)),
-        // so a keyless YAML provider's models already surface via the loop
-        // above on every tab - this second pass remains the safety net for
-        // DB-only providers (and category-scoped so the global/chat view keeps
-        // its legacy injection path).
+        // V156 - when a category tab is active, surface is_custom=true LOCAL
+        // providers (admin-added servers - no API key needed) that have no YAML
+        // shell. This mirrors the picker's standalone-custom injection
+        // (getModelsForCategory), so admin and picker agree on visibility.
+        //
+        // Factory/sync rows (is_custom=false, e.g. V157 image-gen seeds) for a
+        // provider the mode-aware base filter DROPPED (no key in cloud-prod /
+        // CE BYOK) are intentionally NOT re-surfaced here: "no provider, no
+        // model" must hold on every tab. When that provider IS available - it
+        // has a key, or the install is cloud-connected and the provider is
+        // relay-supported - the base filter keeps its shell and the main loop
+        // above injects those rows, so they still appear. Only the keyless case
+        // is hidden, exactly as the picker hides it.
         if (category != null) {
             Set<String> alreadyEmittedProviders = new HashSet<>();
             for (Map<String, Object> p : providers) {
@@ -927,9 +956,13 @@ public class ModelCatalogService {
             for (var entry : customByProvider.entrySet()) {
                 String providerName = entry.getKey();
                 if (alreadyEmittedProviders.contains(providerName)) continue;
+                List<ModelConfigOverrideEntity> localCustoms = entry.getValue().stream()
+                        .filter(ModelConfigOverrideEntity::isCustom)
+                        .toList();
+                if (localCustoms.isEmpty()) continue;
                 String cliId = BridgeAvailabilityFilter.BRIDGE_PROVIDER_TO_CLI_ID.get(providerName);
                 Boolean bridgeAvailable = cliId != null ? bridgeInstalled.get(cliId) : null;
-                for (ModelConfigOverrideEntity custom : entry.getValue()) {
+                for (ModelConfigOverrideEntity custom : localCustoms) {
                     Map<String, Object> e = buildModelInfo(custom);
                     applyRateLimitFields(e, custom);
                     e.put("hasOverride", true);

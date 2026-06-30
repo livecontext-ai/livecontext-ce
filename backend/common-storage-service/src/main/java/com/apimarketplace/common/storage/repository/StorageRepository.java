@@ -287,6 +287,57 @@ public interface StorageRepository extends JpaRepository<StorageEntity, UUID> {
     @Query("UPDATE StorageEntity s SET s.status = 'DELETED' WHERE s.workflowId = :workflowId AND s.status = 'ACTIVE'")
     int softDeleteByWorkflowId(@Param("workflowId") String workflowId);
 
+    /**
+     * Strict org-scope soft-delete of a VIRTUAL workflow folder's contents (Files browser).
+     *
+     * <p>Deletes every active file row that the virtual {@code workflow → [run →] epoch → spawn →
+     * iteration} folder groups, so a user can remove a whole workflow folder (or a single
+     * epoch/spawn/iteration sub-folder) the same way they delete a manual folder. The address
+     * coordinates are "match-or-any": a {@code null} param leaves that level unconstrained, so a
+     * WORKFLOW-level delete ({@code runId/epoch/spawn/itemIndex} all null) wipes the workflow's whole
+     * subtree, while a deeper address narrows to one run/epoch/spawn/iteration.</p>
+     *
+     * <p>{@code parent_folder_id IS NULL} mirrors {@code searchVirtualScope}: a file moved into a
+     * MANUAL folder has left the virtual tree, so it is NOT part of this folder and is preserved.
+     * {@code file_name IS NOT NULL AND s3_key IS NOT NULL} matches the Files browser's
+     * {@code filesOnly + s3Only} view, so the delete removes exactly the files the folder shows (its
+     * displayed child count) and never touches the workflow's machine step-output blobs.</p>
+     */
+    @Modifying
+    @Query("UPDATE StorageEntity s SET s.status = 'DELETED' "
+         + "WHERE s.organizationId = :orgId AND s.status = 'ACTIVE' "
+         + "AND s.parentFolderId IS NULL AND s.workflowId = :workflowId "
+         + "AND s.fileName IS NOT NULL AND s.s3Key IS NOT NULL "
+         + "AND (:runId IS NULL OR s.runId = :runId) "
+         + "AND (:epoch IS NULL OR s.epoch = :epoch) "
+         + "AND (:spawn IS NULL OR s.spawn = :spawn) "
+         + "AND (:itemIndex IS NULL OR s.itemIndex = :itemIndex)")
+    int softDeleteByVirtualScope(@Param("orgId") String organizationId,
+                                 @Param("workflowId") String workflowId,
+                                 @Param("runId") String runId,
+                                 @Param("epoch") Integer epoch,
+                                 @Param("spawn") Integer spawn,
+                                 @Param("itemIndex") Integer itemIndex);
+
+    /** {@link #softDeleteByVirtualScope} variant that preserves restricted-member deny-listed ids. */
+    @Modifying
+    @Query("UPDATE StorageEntity s SET s.status = 'DELETED' "
+         + "WHERE s.organizationId = :orgId AND s.status = 'ACTIVE' "
+         + "AND s.parentFolderId IS NULL AND s.workflowId = :workflowId "
+         + "AND s.fileName IS NOT NULL AND s.s3Key IS NOT NULL "
+         + "AND s.id NOT IN (:excludedIds) "
+         + "AND (:runId IS NULL OR s.runId = :runId) "
+         + "AND (:epoch IS NULL OR s.epoch = :epoch) "
+         + "AND (:spawn IS NULL OR s.spawn = :spawn) "
+         + "AND (:itemIndex IS NULL OR s.itemIndex = :itemIndex)")
+    int softDeleteByVirtualScopeExcludingIds(@Param("orgId") String organizationId,
+                                             @Param("workflowId") String workflowId,
+                                             @Param("runId") String runId,
+                                             @Param("epoch") Integer epoch,
+                                             @Param("spawn") Integer spawn,
+                                             @Param("itemIndex") Integer itemIndex,
+                                             @Param("excludedIds") java.util.Collection<UUID> excludedIds);
+
     // ========== Run Context Queries (Epoch-Aware) ==========
 
     /**

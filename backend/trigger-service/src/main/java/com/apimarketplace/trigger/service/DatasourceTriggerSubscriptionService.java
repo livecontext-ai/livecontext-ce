@@ -55,6 +55,13 @@ public class DatasourceTriggerSubscriptionService {
         entity.setTriggerId(request.getTriggerId());
         entity.setDataSourceId(request.getDataSourceId());
         entity.setTenantId(request.getTenantId());
+        // Stamp the org explicitly from the workflow owner (carried on the request)
+        // so the org-scoped subscription row is never left to the orchestrator
+        // request's ambient org, which can diverge (cross-tenant bleed). When the
+        // request carries no org (legacy 7-arg path), leave it to the listener.
+        if (request.getOrganizationId() != null && !request.getOrganizationId().isBlank()) {
+            entity.setOrganizationId(request.getOrganizationId());
+        }
         entity.setEventTypes(request.getEventTypes());
         entity.setFilter(request.getFilter());
         entity.setActive(true);

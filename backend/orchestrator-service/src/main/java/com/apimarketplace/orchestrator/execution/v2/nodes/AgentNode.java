@@ -703,7 +703,8 @@ public class AgentNode extends BaseNode {
                 skipUserPrompt = true;
             } else {
                 conversationId = conversationManager.ensureConversation(
-                    agentConfig.agentConfigId(), context.tenantId(), agentConfig.label());
+                    agentConfig.agentConfigId(), context.tenantId(), agentConfig.label(),
+                    resolveOrgId(context));
                 skipUserPrompt = false;
             }
             if (conversationId != null) {
@@ -1047,7 +1048,7 @@ public class AgentNode extends BaseNode {
         } else {
             // Non-chat trigger: use agent entity conversation as fallback for streaming
             conversationId = conversationManager != null
-                ? conversationManager.ensureConversation(agentConfig.agentConfigId(), context.tenantId(), agentConfig.label())
+                ? conversationManager.ensureConversation(agentConfig.agentConfigId(), context.tenantId(), agentConfig.label(), resolveOrgId(context))
                 : null;
             skipUserPrompt = false;
         }
@@ -1966,6 +1967,40 @@ public class AgentNode extends BaseNode {
             credentials.put("__orgId__", orgId);
             if (orgRole != null) credentials.put("__orgRole__", orgRole);
         }
+    }
+
+    /**
+     * Resolve the authoritative OWNER org of this run: the {@link
+     * com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext}
+     * field (populated at tree-build time from
+     * {@code WorkflowRunEntity.organization_id}), falling back to a
+     * {@code WorkflowRunEntity} lookup for pre-PR15 in-flight runs whose tree was
+     * built before that propagation existed.
+     *
+     * <p>This is the org that MUST be passed explicitly when creating the agent
+     * conversation row: workflow agents run on async / non-servlet threads, so
+     * leaving the org to be inferred from the ambient thread context would let a
+     * stale org (another tenant's) get stamped onto the conversation - the
+     * cross-tenant bleed this guards against. Mirrors {@link #applyOrgContext}'s
+     * resolution so the conversation org and the credentials {@code __orgId__}
+     * always agree. Returns null only when neither source carries the org.
+     */
+    private String resolveOrgId(com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext context) {
+        if (context == null) return null;
+        String orgId = context.organizationId();
+        if (orgId != null && !orgId.isBlank()) return orgId;
+        if (workflowRunRepository != null && context.workflowRunId() != null) {
+            try {
+                java.util.UUID runUuid = java.util.UUID.fromString(context.workflowRunId());
+                var runOpt = workflowRunRepository.findById(runUuid);
+                if (runOpt.isPresent()) {
+                    return runOpt.get().getOrgId();
+                }
+            } catch (IllegalArgumentException e) {
+                // workflowRunId is not a valid UUID - skip
+            }
+        }
+        return orgId;
     }
 
     /**

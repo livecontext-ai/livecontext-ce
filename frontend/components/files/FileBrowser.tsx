@@ -288,6 +288,27 @@ export function FileBrowser() {
     }
   }, [selected, clearSelection, refresh, addToast, t]);
 
+  // ---- Virtual workflow-folder delete (removes every file the folder groups) ----
+  const [virtualFolderToDelete, setVirtualFolderToDelete] = React.useState<StorageExplorerEntry | null>(null);
+  const [deletingFolder, setDeletingFolder] = React.useState(false);
+  const handleConfirmDeleteVirtualFolder = React.useCallback(async () => {
+    const ref = virtualFolderToDelete?.virtualId;
+    if (!ref) return;
+    setDeletingFolder(true);
+    try {
+      const { deletedCount } = await storageApi.deleteVirtualFolder(ref);
+      setVirtualFolderToDelete(null);
+      clearSelection();
+      refresh();
+      addToast({ type: 'success', title: t('folderDeletedTitle'), message: t('folderDeletedMessage', { count: deletedCount }) });
+    } catch (err) {
+      console.error('Virtual folder delete failed:', err);
+      addToast({ type: 'error', title: t('deleteFolderFailedTitle'), message: t('deleteFolderFailedMessage') });
+    } finally {
+      setDeletingFolder(false);
+    }
+  }, [virtualFolderToDelete, clearSelection, refresh, addToast, t]);
+
   // ---- Folders (V313): drag-to-move, create, rename ----
   // dnd-kit: require a small drag distance before a pointer-drag starts so a plain
   // click still opens/selects a card (doesn't begin a move).
@@ -838,6 +859,7 @@ export function FileBrowser() {
                   enableFolders
                   tFiles={t}
                   onOpenFolder={enterFolder}
+                  onDeleteVirtualFolder={setVirtualFolderToDelete}
                   onOpenFile={setDetailEntry}
                   onDownloadFile={handleDownloadOne}
                   downloadLabel={tExp('download')}
@@ -969,6 +991,20 @@ export function FileBrowser() {
         onCancel={() => setShowDeleteModal(false)}
         onConfirm={handleConfirmDelete}
         isConfirming={deleting}
+      />
+
+      <BulkDeleteModal
+        isOpen={!!virtualFolderToDelete}
+        title={t('deleteFolderConfirmTitle')}
+        message={t('deleteFolderConfirmMessage', {
+          name: virtualFolderToDelete ? folderLabel(virtualFolderToDelete, t) : '',
+          count: virtualFolderToDelete?.childCount ?? 0,
+        })}
+        cancelLabel={tExp('cancel')}
+        confirmLabel={t('deleteFolder')}
+        onCancel={() => setVirtualFolderToDelete(null)}
+        onConfirm={handleConfirmDeleteVirtualFolder}
+        isConfirming={deletingFolder}
       />
 
       <input

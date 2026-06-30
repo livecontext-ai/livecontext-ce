@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Folder } from 'lucide-react';
+import { Folder, Trash2 } from 'lucide-react';
 import { useDroppable, useDraggable } from '@dnd-kit/core';
 import type { StorageExplorerEntry, StoragePreviewFile } from '@/lib/api/storage-api';
 import { getFileUrlById } from '@/lib/api/orchestrator/file.service';
@@ -152,20 +152,30 @@ interface VirtualFolderCardProps {
   label: string;
   /** Localized exact item count (built by the parent from {@code childCount}). */
   countLabel: string;
+  /**
+   * Delete this virtual folder (removes every file it groups). Omit to hide the delete affordance
+   * (e.g. a read-only surface). The parent owns the confirmation + refresh.
+   */
+  onDelete?: (entry: StorageExplorerEntry) => void;
+  /** Localized delete-button aria-label/title. */
+  deleteLabel?: string;
 }
 
 /**
  * iOS-style VIRTUAL workflow-folder tile (Phase 2b). A computed grouping
- * (workflow → epoch → spawn → iteration) - it has NO real row, so it is
- * NAVIGATION-ONLY: not a drop target, not draggable, and not selectable (no
- * checkbox). Clicking it navigates deeper via its {@code virtualId}. The same 3×3
- * preview mosaic + footer as {@link FolderCard}.
+ * (workflow → epoch → spawn → iteration) - it has NO real row, so it stays
+ * navigation-only for drag/drop + bulk selection (no checkbox). Clicking it navigates deeper via its
+ * {@code virtualId}. When {@code onDelete} is provided it gains a hover trash button so the whole
+ * folder (all the files it groups) can be removed - the same delete affordance manual folders have.
+ * Same 3×3 preview mosaic + footer as {@link FolderCard}.
  */
 export const VirtualFolderCard = React.memo(function VirtualFolderCard({
   entry,
   onOpen,
   label,
   countLabel,
+  onDelete,
+  deleteLabel,
 }: VirtualFolderCardProps) {
   const previewFiles = entry.previewFiles ?? [];
 
@@ -175,6 +185,21 @@ export const VirtualFolderCard = React.memo(function VirtualFolderCard({
       onClick={() => onOpen(entry)}
       title={label}
     >
+      {onDelete && (
+        <button
+          type="button"
+          aria-label={deleteLabel ?? 'Delete folder'}
+          title={deleteLabel ?? 'Delete folder'}
+          className="absolute top-2 right-2 z-10 rounded-md p-1 bg-theme-secondary/80 text-theme-muted opacity-0 group-hover:opacity-100 transition-opacity hover:text-red-500 hover:bg-theme-secondary"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(entry);
+          }}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
+      )}
       <FolderFace previewFiles={previewFiles} label={label} countLabel={countLabel} />
     </div>
   );

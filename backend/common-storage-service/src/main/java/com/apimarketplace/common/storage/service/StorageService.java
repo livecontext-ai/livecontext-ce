@@ -21,6 +21,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import com.apimarketplace.common.storage.dto.VirtualFolderAddress;
+
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -124,6 +126,9 @@ public class StorageService implements StorageOperations {
             checksum,
             expiresAt
         );
+        // Stamp the org explicitly (same value used for the quota check above) so the
+        // org-scoped row is never left to the ambient thread context.
+        storage.setOrganizationId(organizationId);
 
         // Set run context for direct querying
         if (runId != null) {
@@ -189,6 +194,7 @@ public class StorageService implements StorageOperations {
             checksum,
             expiresAt
         );
+        storage.setOrganizationId(organizationId);
 
         if (sourceType != null) {
             storage.setSourceType(sourceType);
@@ -246,6 +252,7 @@ public class StorageService implements StorageOperations {
 
         StorageEntity storage = new StorageEntity();
         storage.setTenantId(tenantId);
+        storage.setOrganizationId(organizationId);
         storage.setContentType(mimeType != null ? mimeType : "application/octet-stream");
         storage.setData("{}");
         storage.setStorageType("S3_FILE");
@@ -302,6 +309,7 @@ public class StorageService implements StorageOperations {
             checksum,
             expiresAt
         );
+        storage.setOrganizationId(organizationId);
 
         StorageEntity saved = storageRepository.save(storage);
         trackUsageBestEffort(tenantId, "FILES", sizeBytes, organizationId, saved.getId());
@@ -415,6 +423,37 @@ public class StorageService implements StorageOperations {
                 ? storageRepository.softDeleteByOrgIdAndDateRange(organizationId, dateFrom, dateTo)
                 : storageRepository.softDeleteByOrgIdAndDateRangeExcludingIds(
                         organizationId, dateFrom, dateTo, excludedIds);
+        if (count > 0) {
+            quotaService.updateOrganizationUsage(organizationId);
+        }
+        return count;
+    }
+
+    /**
+     * Strict org-scope soft-delete of a VIRTUAL workflow folder's contents (Files browser).
+     *
+     * <p>Lets a user delete a whole workflow folder, or a single {@code epoch/spawn/iteration}
+     * sub-folder, exactly like deleting a manual folder. The {@code address} levels are honoured as
+     * "match-or-any": a WORKFLOW-level address wipes the workflow's whole virtual subtree; a deeper
+     * address narrows the delete. Files moved out into a manual folder are preserved (they left the
+     * virtual tree). Returns the number of file rows removed.
+     *
+     * @throws IllegalArgumentException if {@code organizationId} is null/blank or {@code address}/its
+     *                                  {@code workflowId} is null.
+     */
+    public int deleteVirtualScopeForScope(String tenantId, String organizationId,
+                                          VirtualFolderAddress address, Collection<UUID> excludedIds) {
+        requireOrgId(organizationId);
+        if (address == null || address.workflowId() == null || address.workflowId().isBlank()) {
+            throw new IllegalArgumentException("A virtual workflow-folder address (wf:<id>...) is required");
+        }
+        int count = excludedIds == null || excludedIds.isEmpty()
+                ? storageRepository.softDeleteByVirtualScope(
+                        organizationId, address.workflowId(), address.runId(),
+                        address.epoch(), address.spawn(), address.itemIndex())
+                : storageRepository.softDeleteByVirtualScopeExcludingIds(
+                        organizationId, address.workflowId(), address.runId(),
+                        address.epoch(), address.spawn(), address.itemIndex(), excludedIds);
         if (count > 0) {
             quotaService.updateOrganizationUsage(organizationId);
         }

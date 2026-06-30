@@ -58,17 +58,28 @@ public class AgentConversationManager {
      * Find or create THE unique conversation for this agent entity.
      * Each agent entity has exactly one conversation - reused across all invocations.
      *
+     * <p>The {@code organizationId} (the OWNER org of this run/agent) MUST be passed
+     * explicitly: workflow agents run on async / non-servlet threads where there is
+     * no request-bound {@code X-Organization-ID} to recover. Without it the
+     * conversation row would be stamped from whatever org happens to be ambient on
+     * the thread (a cross-tenant bleed), instead of the workflow owner's org. The
+     * conversation-client honors "explicit beats inherited", so a non-blank org here
+     * is authoritative and the ambient fallback is never consulted.
+     *
      * @param agentConfigId the agent entity UUID
      * @param tenantId the tenant/user ID
      * @param agentLabel the agent label (used as title for new conversations)
+     * @param organizationId the OWNER org of this run/agent (from the execution context)
      * @return the conversation ID, or null if unavailable
      */
-    public String ensureConversation(String agentConfigId, String tenantId, String agentLabel) {
+    public String ensureConversation(String agentConfigId, String tenantId, String agentLabel,
+                                     String organizationId) {
         if (agentConfigId == null || conversationClient == null) {
             return null;
         }
         try {
-            return conversationClient.findOrCreateAgentConversation(agentConfigId, tenantId, agentLabel);
+            return conversationClient.findOrCreateAgentConversation(
+                agentConfigId, tenantId, agentLabel, organizationId);
         } catch (Exception e) {
             log.warn("Failed to ensure conversation for agent {}: {}", agentConfigId, e.getMessage());
             return null;
@@ -264,16 +275,18 @@ public class AgentConversationManager {
      * @param agentConfigId the agent entity UUID
      * @param tenantId the tenant/user ID
      * @param limit max number of messages to load
+     * @param organizationId the OWNER org of this run/agent (explicit; never ambient)
      * @return the conversation history, or null
      */
-    public List<Message> loadMemory(String agentConfigId, String tenantId, int limit) {
+    public List<Message> loadMemory(String agentConfigId, String tenantId, int limit,
+                                    String organizationId) {
         if (agentConfigId == null || conversationClient == null) {
             return null;
         }
 
         try {
             String conversationId = conversationClient.findOrCreateAgentConversation(
-                agentConfigId, tenantId, null);
+                agentConfigId, tenantId, null, organizationId);
 
             if (conversationId == null) {
                 log.debug("No conversation found for agent entity {}", agentConfigId);

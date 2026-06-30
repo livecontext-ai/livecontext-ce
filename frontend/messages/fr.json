@@ -4551,7 +4551,8 @@
       },
       "enterprise": {
         "name": "Enterprise",
-        "cta": "Contacter le service commercial"
+        "cta": "Nous contacter",
+        "contactMessage": "Bonjour, je souhaite échanger au sujet du plan Enterprise pour mon organisation."
       },
       "price": {
         "free": "Gratuit",
@@ -4880,6 +4881,13 @@
     "deletedMessage": "{count, plural, one {# fichier supprimé} other {# fichiers supprimés}}",
     "deleteFailedTitle": "Échec de la suppression",
     "deleteFailedMessage": "Impossible de supprimer les fichiers sélectionnés.",
+    "deleteFolder": "Supprimer le dossier",
+    "deleteFolderConfirmTitle": "Supprimer ce dossier ?",
+    "deleteFolderConfirmMessage": "{name} et {count, plural, one {# fichier} other {# fichiers}} qu'il contient seront supprimés définitivement.",
+    "folderDeletedTitle": "Dossier supprimé",
+    "folderDeletedMessage": "{count, plural, one {# fichier supprimé} other {# fichiers supprimés}}",
+    "deleteFolderFailedTitle": "Échec de la suppression",
+    "deleteFolderFailedMessage": "Impossible de supprimer le dossier.",
     "downloadFailedTitle": "Échec du téléchargement",
     "downloadFailedMessage": "Impossible de télécharger les fichiers sélectionnés.",
     "newFolder": "Nouveau dossier",
@@ -5530,6 +5538,7 @@
         "title": "SAML SSO",
         "description": "Connectez ce workspace à un fournisseur d'identité d'entreprise. Les utilisateurs SAML sont ajoutés comme membres à leur première connexion.",
         "lockedDescription": "SAML SSO est disponible pour les workspaces Team et Enterprise.",
+        "ceUnavailable": "Le SSO SAML est disponible uniquement sur LiveContext Cloud. Les installations auto-hébergées ne peuvent pas activer le SSO.",
         "ownerOnly": "Seuls les propriétaires et administrateurs du workspace peuvent gérer SAML SSO.",
         "displayName": "Nom du fournisseur",
         "displayNamePlaceholder": "SSO entreprise",

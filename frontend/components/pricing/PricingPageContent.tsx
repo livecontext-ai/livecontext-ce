@@ -649,6 +649,16 @@ export default function PricingPage() {
         return { success: false, error: 'Authentication required' };
       }
 
+      // Enterprise is "talk to us", NOT self-serve, in BOTH Cloud and CE: deep-link to the
+      // contact form with a predefined, localized subject. Handled BEFORE the CE branch so
+      // Enterprise routes to contact in CE too (Team and below keep self-serve: Cloud checkout,
+      // or the linked cloud account in CE).
+      if (planId === 'enterprise') {
+        const message = tCards('enterprise.contactMessage');
+        router.push(`/contact?category=other&message=${encodeURIComponent(message)}`);
+        return { success: true, message: 'Redirecting to contact' };
+      }
+
       // CE (#15): the plan that governs this install comes from the LINKED CLOUD ACCOUNT - there is
       // no local subscription checkout (the CE billing endpoint returns 503). Plan actions are
       // delegated to the cloud (open its pricing page) when linked, or to cloud-account to connect
@@ -668,12 +678,6 @@ export default function PricingPage() {
 
       const currentPlan = typedSubscription?.subscription?.planCode || 'FREE';
       const currentCadence = typedSubscription?.subscription?.cadence || 'yearly';
-
-      // Gestion speciale pour le plan enterprise - afficher le modal
-      if (planId === 'enterprise') {
-        setShowEnterpriseModal(true);
-        return { success: true, message: 'Enterprise modal opened' };
-      }
 
       // Gestion speciale pour le plan gratuit
       if (planId === 'free') {
@@ -782,7 +786,7 @@ export default function PricingPage() {
       showToast(errorMessage, 'error');
       return { success: false, error: errorMessage };
     }
-  }, [isAuthenticated, loginWithRedirect, typedSubscription?.subscription?.planCode, typedSubscription?.subscription?.cadence, typedSubscription?.subscription?.currentPeriodEnd, isUpgrade, isDowngrade, showToast, proceedWithPlanSelection, isCreditTierChanged, creditTierIndex, subscriptionCreditTierIndex, getPlanOrder, t, billingCycle, router, locale, cloudLinkStatus?.linked]);
+  }, [isAuthenticated, loginWithRedirect, typedSubscription?.subscription?.planCode, typedSubscription?.subscription?.cadence, typedSubscription?.subscription?.currentPeriodEnd, isUpgrade, isDowngrade, showToast, proceedWithPlanSelection, isCreditTierChanged, creditTierIndex, subscriptionCreditTierIndex, getPlanOrder, t, billingCycle, router, locale, cloudLinkStatus?.linked, tCards]);
 
   const closeNotification = React.useCallback(() => {
     setNotification(null);

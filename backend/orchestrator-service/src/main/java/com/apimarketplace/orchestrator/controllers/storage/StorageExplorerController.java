@@ -711,6 +711,32 @@ public class StorageExplorerController {
     }
 
     /**
+     * Delete a VIRTUAL workflow folder's contents - extends the manual-folder delete affordance to the
+     * computed {@code workflow → [run →] epoch → spawn → iteration} groupings, so a workflow folder
+     * (or one of its sub-folders) can be removed even though it has no real row. {@code folderRef} is
+     * the folder's navigation token ({@code wf:<id>[/r..][/e..][/s..][/i..]}): a WORKFLOW-level ref
+     * wipes the whole workflow folder, a deeper ref narrows to one run/epoch/spawn/iteration. Files
+     * that were moved into a manual folder are preserved (they left the virtual tree). Strict-isolation
+     * scoped; a restricted member's deny-listed files are never touched.
+     */
+    @PostMapping("/batch-delete-by-virtual")
+    public ResponseEntity<Map<String, Object>> deleteByVirtualFolder(
+            @RequestHeader("X-User-ID") String tenantId,
+            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole,
+            @RequestBody Map<String, String> body) {
+
+        VirtualFolderAddress address = VirtualFolderAddress.parse(body.get("folderRef"));
+        if (address == null) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "A virtual workflow-folder ref (wf:<id>...) is required"));
+        }
+        int deletedCount = storageService.deleteVirtualScopeForScope(
+                tenantId, organizationId, address, writeRestrictedFileIds(organizationId, tenantId, orgRole));
+        return ResponseEntity.ok(Map.of("deletedCount", deletedCount));
+    }
+
+    /**
      * Resolve display names for a batch of storage entry IDs in ONE request.
      *
      * Returns a {@code {id -> fileName}} map for the accessible, named entries only

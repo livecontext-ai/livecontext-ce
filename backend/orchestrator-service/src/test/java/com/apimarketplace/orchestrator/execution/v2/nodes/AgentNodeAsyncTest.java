@@ -696,11 +696,80 @@ class AgentNodeAsyncTest {
         }
 
         @Test
+        @DisplayName("Regression (org bleed) - agent conversation is created with the run OWNER org, never the ambient thread org")
+        void ensureConversationReceivesRunOwnerOrgNotAmbient() {
+            AgentNode node = buildNodeWithConversation("agent");
+            when(mockConversationManager.ensureConversation(
+                any(), any(), any(), any())).thenReturn("conv-owner-org");
+            when(mockConversationManager.startExecution(
+                any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean()))
+                .thenReturn(new com.apimarketplace.orchestrator.services.agent.AgentConversationManager.StreamSession(
+                    "conv-owner-org", "stream-owner"));
+
+            // The run is owned by org "org-owner-7". Before the fix, ensureConversation was called
+            // org-less (3-arg) and the conversation row was stamped from whatever org happened to be
+            // ambient on the worker thread - a cross-tenant bleed. It must now receive the resolved
+            // run OWNER org so the conversation row can never be stamped from another tenant.
+            node.execute(context.withOrganization("org-owner-7", "ADMIN"));
+
+            verify(mockConversationManager).ensureConversation(
+                org.mockito.ArgumentMatchers.eq("agent-config-1"),
+                org.mockito.ArgumentMatchers.eq("tenant-async-1"),
+                org.mockito.ArgumentMatchers.eq("Smart Assistant"),
+                org.mockito.ArgumentMatchers.eq("org-owner-7"));
+        }
+
+        @Test
+        @DisplayName("Regression (org bleed) - with no context org, the conversation org falls back to the run record, never ambient")
+        void ensureConversationFallsBackToRunRecordOrgNotAmbient() {
+            org.mockito.MockitoAnnotations.openMocks(this);
+            com.apimarketplace.orchestrator.repository.WorkflowRunRepository mockRunRepo =
+                mock(com.apimarketplace.orchestrator.repository.WorkflowRunRepository.class);
+            com.apimarketplace.orchestrator.domain.WorkflowRunEntity run =
+                mock(com.apimarketplace.orchestrator.domain.WorkflowRunEntity.class);
+            when(run.getOrgId()).thenReturn("org-from-run-record");
+            java.util.UUID runUuid = java.util.UUID.fromString("11111111-1111-1111-1111-111111111111");
+            when(mockRunRepo.findById(runUuid)).thenReturn(java.util.Optional.of(run));
+
+            Agent agent = agentWithConfigId("agent");
+            AgentNode node = new AgentNode("agent:smart_assistant", agent);
+            node.acceptServices(com.apimarketplace.orchestrator.execution.v2.engine.ServiceRegistry.builder()
+                .agentClient(mockAgentClient)
+                .pendingAgentRegistry(mockPendingAgentRegistry)
+                .agentConversationManager(mockConversationManager)
+                .workflowRunRepository(mockRunRepo)
+                .build());
+            node.setAsyncQueueEnabled(true);
+
+            when(mockConversationManager.ensureConversation(any(), any(), any(), any()))
+                .thenReturn("conv-fallback");
+            when(mockConversationManager.startExecution(
+                any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean()))
+                .thenReturn(new com.apimarketplace.orchestrator.services.agent.AgentConversationManager.StreamSession(
+                    "conv-fallback", "stream-fb"));
+
+            // Context carries NO org (no withOrganization), but the workflowRunId IS a real UUID,
+            // so resolveOrgId must recover the OWNER org from the WorkflowRunEntity rather than
+            // leaving the conversation to be stamped from the ambient thread context.
+            ExecutionContext noOrgCtx = ExecutionContext.create(
+                "run-fb", runUuid.toString(), "tenant-async-1", "item-0", 0,
+                Map.of("user_input", "Analyze"), mockPlan);
+
+            node.execute(noOrgCtx);
+
+            verify(mockConversationManager).ensureConversation(
+                org.mockito.ArgumentMatchers.eq("agent-config-1"),
+                org.mockito.ArgumentMatchers.eq("tenant-async-1"),
+                org.mockito.ArgumentMatchers.eq("Smart Assistant"),
+                org.mockito.ArgumentMatchers.eq("org-from-run-record"));
+        }
+
+        @Test
         @DisplayName("Regression - agent type: ensures the conversation, saves the user prompt, and starts a stream BEFORE yielding")
         void savesUserPromptAndStartsStreamForAgent() {
             AgentNode node = buildNodeWithConversation("agent");
             when(mockConversationManager.ensureConversation(
-                any(), any(), any())).thenReturn("conv-7730cebb");
+                any(), any(), any(), any())).thenReturn("conv-7730cebb");
             when(mockConversationManager.startExecution(
                 any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean()))
                 .thenReturn(new com.apimarketplace.orchestrator.services.agent.AgentConversationManager.StreamSession(
@@ -714,7 +783,8 @@ class AgentNodeAsyncTest {
             verify(mockConversationManager).ensureConversation(
                 org.mockito.ArgumentMatchers.eq("agent-config-1"),
                 org.mockito.ArgumentMatchers.eq("tenant-async-1"),
-                org.mockito.ArgumentMatchers.eq("Smart Assistant"));
+                org.mockito.ArgumentMatchers.eq("Smart Assistant"),
+                any());
             // skipUserPrompt is false here because no chat-trigger conversationId is in
             // triggerData - the helper must persist the resolved prompt.
             verify(mockConversationManager).startExecution(
@@ -749,7 +819,7 @@ class AgentNodeAsyncTest {
             // too, so async bridge runs stream live exactly like inline runs.
             AgentNode node = buildNodeWithConversation("agent");
             when(mockConversationManager.ensureConversation(
-                any(), any(), any())).thenReturn("conv-7730cebb");
+                any(), any(), any(), any())).thenReturn("conv-7730cebb");
             when(mockConversationManager.startExecution(
                 any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean()))
                 .thenReturn(new com.apimarketplace.orchestrator.services.agent.AgentConversationManager.StreamSession(
@@ -851,7 +921,7 @@ class AgentNodeAsyncTest {
 
             // ensureConversation must NOT be called when the trigger already supplies one -
             // matches the inline path's contract (AgentNode.executeAgent line 867).
-            verify(mockConversationManager, never()).ensureConversation(any(), any(), any());
+            verify(mockConversationManager, never()).ensureConversation(any(), any(), any(), any());
             verify(mockConversationManager).startExecution(
                 org.mockito.ArgumentMatchers.eq("conv-from-chat"),
                 any(),
@@ -885,7 +955,7 @@ class AgentNodeAsyncTest {
             node.setAsyncQueueEnabled(true);
 
             when(mockConversationManager.ensureConversation(
-                any(), any(), any())).thenReturn("conv-x");
+                any(), any(), any(), any())).thenReturn("conv-x");
             when(mockConversationManager.startExecution(
                 any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean()))
                 .thenReturn(new com.apimarketplace.orchestrator.services.agent.AgentConversationManager.StreamSession(

@@ -441,6 +441,19 @@ class StorageApiService {
       { ids }
     );
   }
+
+  /**
+   * Delete a VIRTUAL workflow folder (a computed grouping with no real id, e.g. `wf:<id>` or a
+   * deeper `wf:<id>/e<n>/...`). Removes every file the folder groups - the server scopes the delete
+   * to the workflow/epoch/spawn/iteration coordinates in the ref. Files moved into a manual folder
+   * are preserved. Pass the folder's `virtualId` as `folderRef`.
+   */
+  async deleteVirtualFolder(folderRef: string): Promise<{ deletedCount: number }> {
+    return await apiClient.post<{ deletedCount: number }>(
+      '/storage/explorer/batch-delete-by-virtual',
+      { folderRef }
+    );
+  }
 }
 
 export const storageApi = new StorageApiService();

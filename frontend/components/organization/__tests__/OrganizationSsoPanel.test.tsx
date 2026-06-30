@@ -8,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const getSamlConnectionMock = vi.hoisted(() => vi.fn());
 const saveSamlConnectionMock = vi.hoisted(() => vi.fn());
 const deleteSamlConnectionMock = vi.hoisted(() => vi.fn());
+// Live, per-test toggle for the edition flag the panel reads (IS_CE). Default Cloud (false).
+const edition = vi.hoisted(() => ({ IS_CE: false }));
 
 vi.mock('next-intl', () => ({
   useLocale: () => 'en',
@@ -16,6 +18,7 @@ vi.mock('next-intl', () => ({
       title: 'SAML SSO',
       description: 'Connect this workspace to an enterprise identity provider.',
       lockedDescription: 'SAML SSO is available on Team and Enterprise workspaces.',
+      ceUnavailable: "SAML SSO is only available on LiveContext Cloud. Self-hosted installs can't enable SSO.",
       ownerOnly: 'Only workspace owners and admins can manage SAML SSO.',
       displayName: 'Provider name',
       displayNamePlaceholder: 'Company SSO',
@@ -53,6 +56,18 @@ vi.mock('@/lib/api/organization-api', () => ({
     deleteSamlConnection: deleteSamlConnectionMock,
   },
 }));
+
+// Live binding: the panel reads IS_CE at render time, so the getter reflects the
+// current `edition.IS_CE` value per test. Keep the module's other real exports.
+vi.mock('@/lib/edition', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/edition')>();
+  return {
+    ...actual,
+    get IS_CE() {
+      return edition.IS_CE;
+    },
+  };
+});
 
 import OrganizationSsoPanel from '../OrganizationSsoPanel';
 
@@ -104,6 +119,7 @@ describe('OrganizationSsoPanel', () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    edition.IS_CE = false;
   });
 
   it('renders a collapsed SAML SSO configuration panel that expands from the audit-style header', async () => {
@@ -124,6 +140,22 @@ describe('OrganizationSsoPanel', () => {
 
     expect(screen.getByRole('heading', { name: 'SAML SSO' })).toBeInTheDocument();
     expect(screen.getByText('SAML SSO is available on Team and Enterprise workspaces.')).toBeInTheDocument();
+    expect(getSamlConnectionMock).not.toHaveBeenCalled();
+  });
+
+  it('locks the panel with a CE message in self-hosted mode, even when the plan supports teams', () => {
+    // CE (auth.mode=embedded) has no Keycloak, so the backend rejects SAML. The panel must
+    // NOT offer the form (the pre-fix bug: it unlocked whenever the plan supported teams).
+    edition.IS_CE = true;
+    renderPanel({ supportsTeam: true });
+
+    expect(screen.getByRole('heading', { name: 'SAML SSO' })).toBeInTheDocument();
+    expect(
+      screen.getByText("SAML SSO is only available on LiveContext Cloud. Self-hosted installs can't enable SSO."),
+    ).toBeInTheDocument();
+    // No SAML form, and no backend call (the query is disabled in CE).
+    expect(screen.queryByLabelText('Provider name')).not.toBeInTheDocument();
+    expect(screen.queryByText('SAML SSO is available on Team and Enterprise workspaces.')).not.toBeInTheDocument();
     expect(getSamlConnectionMock).not.toHaveBeenCalled();
   });
 });

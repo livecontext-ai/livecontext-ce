@@ -1,5 +1,6 @@
 package com.apimarketplace.agent.service;
 
+import com.apimarketplace.agent.cloud.CloudLlmRuntimeAccess;
 import com.apimarketplace.agent.credential.LlmCredentialRepository;
 import com.apimarketplace.agent.domain.ModelCategorySettingsEntity;
 import com.apimarketplace.agent.domain.ModelCategorySettingsId;
@@ -14,6 +15,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -54,6 +56,7 @@ class ModelCatalogServiceCategoryOverlayTest {
     @Mock private LlmCredentialRepository credentialRepository;
     @Mock private CachedModelRateLimitProvider cachedRateLimitProvider;
     @Mock private AuthPricingSyncClient authPricingSyncClient;
+    @Mock private CloudLlmRuntimeAccess cloudLlmRuntimeAccess;
 
     private ModelCatalogService service;
 
@@ -112,18 +115,17 @@ class ModelCatalogServiceCategoryOverlayTest {
     }
 
     @Test
-    @DisplayName("REGRESSION (user-reported \"No models configured\" persisting after restart): V157 image-gen rows surface in admin tab even when provider API key is NOT configured - admin sees the catalog BEFORE configuring keys, not after")
-    void v157RowsSurfaceEvenWithoutApiKeyConfigured() {
-        // Real-world scenario: fresh deploy, admin opens /settings/ai-providers,
-        // clicks the Image Generation tab. OpenAI/Google API keys haven't been
-        // entered yet. getAvailableProvidersBase() filters out openai+google
-        // (no configured key, no DB key). Without the V156 fallback-injection,
-        // V157 image-gen rows have no provider bucket → empty list → "No
-        // models configured" → admin can't see what's available, can't decide
-        // which key to configure first.
-        //
-        // Pin the post-fix invariant: factory-seeded image-gen rows always
-        // surface in the admin image_generation tab.
+    @DisplayName("BYOK/cloud-prod: V157 factory image-gen rows (is_custom=false) are HIDDEN when the provider has no key - no provider, no model (reverses prior keyless-surfacing per product decision)")
+    void v157RowsHiddenWithoutApiKeyInByok() {
+        // Product decision: the admin Models panel now applies the SAME key
+        // filter as the picker. In cloud-prod / CE BYOK, a provider with no key
+        // (env or DB) is dropped by getAvailableProvidersBase, and the V156
+        // second pass only re-surfaces is_custom=true LOCAL rows - never
+        // is_custom=false factory/sync seeds. So V157 image-gen rows for an
+        // unconfigured openai/google stay hidden until their key is added.
+        // (When the key IS configured they surface via the main loop - see
+        // getEffectiveModelListInjectsV157SeededImageGenRows; in cloud-connect
+        // they surface for relay-supported providers - see the test below.)
         ModelConfigOverrideEntity gptImage = entity(30L, "openai", "gpt-image-1.5-medium", 100, true);
         gptImage.setMode("image");
         ModelConfigOverrideEntity geminiImage = entity(31L, "google", "gemini-2.5-flash-image", 101, true);
@@ -136,14 +138,65 @@ class ModelCatalogServiceCategoryOverlayTest {
         Map<String, Object> emptyBase = new LinkedHashMap<>();
         emptyBase.put("providers", new java.util.ArrayList<>());
         when(llmProviderFactory.getAllModelsInfoAdmin()).thenReturn(emptyBase);
-        // hasDbKey doesn't get called because providers list is already empty.
 
         List<Map<String, Object>> rows = service.getEffectiveModelList("image_generation");
 
-        // Both V157 rows surface - admin sees them and can configure the key
-        // afterwards.
-        assertThat(rows).extracting(r -> r.get("id"))
-                .containsExactlyInAnyOrder("gpt-image-1.5-medium", "gemini-2.5-flash-image");
+        assertThat(rows).isEmpty();
+    }
+
+    @Test
+    @DisplayName("CE cloud-connect: V157 image-gen rows surface for a relay-supported provider WITHOUT a local key (cloud account is the source)")
+    void v157RowsSurfaceInCloudConnectForRelayProviderWithoutLocalKey() {
+        ReflectionTestUtils.setField(service, "cloudLlmRuntimeAccess", cloudLlmRuntimeAccess);
+        when(cloudLlmRuntimeAccess.isCloudSelected("tenant-cloud")).thenReturn(true);
+        // openai is relay-supported and has NO local key (configured=false). In
+        // cloud-connect the base filter KEEPS its shell, so the image-gen DB
+        // override lands in it via the main loop - the admin sees it without a
+        // local key, matching the picker.
+        ModelConfigOverrideEntity gptImage = entity(30L, "openai", "gpt-image-1.5-medium", 100, true);
+        gptImage.setMode("image");
+        when(repository.findAllByOrderByRankingAsc()).thenReturn(List.of(gptImage));
+
+        Map<String, Object> openaiProvider = new LinkedHashMap<>();
+        openaiProvider.put("name", "openai");
+        openaiProvider.put("configured", false);
+        // YAML carries only a chat model; the mode filter empties it but keeps
+        // the shell so the DB image-gen override can land in it.
+        openaiProvider.put("models", new java.util.ArrayList<>(List.of(model("gpt-5", 1))));
+        Map<String, Object> base = new LinkedHashMap<>();
+        base.put("providers", new java.util.ArrayList<>(List.of(openaiProvider)));
+        when(llmProviderFactory.getAllModelsInfoAdmin()).thenReturn(base);
+
+        List<Map<String, Object>> rows = service.getEffectiveModelList("image_generation", "tenant-cloud");
+
+        assertThat(rows).extracting(r -> r.get("id")).containsExactly("gpt-image-1.5-medium");
+    }
+
+    @Test
+    @DisplayName("second pass: an absent-provider is_custom=true LOCAL row surfaces; an is_custom=false factory row under an absent provider stays hidden")
+    void secondPassSurfacesOnlyLocalCustomForAbsentProvider() {
+        // Both providers are absent from the YAML base (no key in BYOK), so both
+        // rows reach the V156 second pass. Only the is_custom=true LOCAL one
+        // (admin-added server, no key needed) must surface; the is_custom=false
+        // factory/sync row stays hidden ("no provider, no model"). Locks BOTH
+        // halves of the second-pass is_custom filter - deleting the second pass
+        // would fail this (the local row would vanish).
+        ModelConfigOverrideEntity localCustom = entity(40L, "local-sd", "sd-xl", 100, true);
+        localCustom.setMode("image");
+        localCustom.setCustom(true);
+        ModelConfigOverrideEntity factoryRow = entity(41L, "openai", "gpt-image-1.5", 101, true);
+        factoryRow.setMode("image");
+        factoryRow.setCustom(false);
+        when(repository.findAllByOrderByRankingAsc()).thenReturn(List.of(localCustom, factoryRow));
+
+        // Empty YAML base: both providers are absent.
+        Map<String, Object> emptyBase = new LinkedHashMap<>();
+        emptyBase.put("providers", new java.util.ArrayList<>());
+        when(llmProviderFactory.getAllModelsInfoAdmin()).thenReturn(emptyBase);
+
+        List<Map<String, Object>> rows = service.getEffectiveModelList("image_generation");
+
+        assertThat(rows).extracting(r -> r.get("id")).containsExactly("sd-xl");
     }
 
     @Test

@@ -28,6 +28,7 @@ import {
 } from "@/lib/api/organization-api";
 import { cn } from "@/lib/utils";
 import { formatUtcDateTime } from "@/lib/utils/dateFormatters";
+import { IS_CE } from "@/lib/edition";
 
 type Props = {
   orgId: string;
@@ -121,7 +122,10 @@ export default function OrganizationSsoPanel({ orgId, currentUserRole, supportsT
   const samlQuery = useQuery({
     queryKey,
     queryFn: () => organizationApi.getSamlConnection(orgId),
-    enabled: supportsTeam && canManage,
+    // SAML SSO is backed by Keycloak, which only exists in the Cloud edition. A
+    // self-hosted (CE) install runs auth.mode=embedded and the backend rejects any
+    // SAML provisioning, so never query it there (the panel renders a CE-locked card).
+    enabled: supportsTeam && canManage && !IS_CE,
   });
 
   const connection = samlQuery.data;
@@ -202,6 +206,25 @@ export default function OrganizationSsoPanel({ orgId, currentUserRole, supportsT
       {copiedKey === key ? t("copied") : t("copy")}
     </Button>
   );
+
+  // CE (self-hosted) has no Keycloak, so SAML SSO can never be provisioned here. Lock the
+  // panel with a clear message even when the plan supports teams, so the UI never offers a
+  // form the backend would reject ("requires auth.mode=keycloak"). Cloud is unaffected.
+  if (IS_CE) {
+    return (
+      <section className="rounded-xl border border-theme bg-theme-secondary p-6">
+        <div className="flex items-start gap-4">
+          <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-theme-tertiary">
+            <Lock className="h-5 w-5 text-theme-primary" />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-lg font-semibold text-theme-primary">{t("title")}</h2>
+            <p className="mt-1 text-sm text-theme-secondary">{t("ceUnavailable")}</p>
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   if (!supportsTeam) {
     return (

@@ -101,7 +101,7 @@ public class DatasourceSubscriptionSyncService {
                 try {
                     triggerClient.createOrUpdateDatasourceSubscription(new DatasourceSubscriptionRequest(
                             workflow.getId(), planVersion, triggerId,
-                            dataSourceId, workflow.getTenantId(),
+                            dataSourceId, workflow.getTenantId(), workflow.getOrganizationId(),
                             eventTypes, filter));
                     currentTriggerIds.add(triggerId);
                     logger.info("[DatasourceSubSync] Synced subscription for workflow={} trigger={} ds={} events={}",

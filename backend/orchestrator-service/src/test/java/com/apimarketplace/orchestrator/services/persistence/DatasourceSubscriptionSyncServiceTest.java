@@ -64,6 +64,7 @@ class DatasourceSubscriptionSyncServiceTest {
         WorkflowEntity wf = new WorkflowEntity();
         wf.setId(WORKFLOW_ID);
         wf.setTenantId(TENANT_ID);
+        wf.setOrganizationId("org-ds-7");
         wf.setName("Test Workflow");
         wf.setPinnedVersion(pinnedVersion);
         return wf;
@@ -135,6 +136,9 @@ class DatasourceSubscriptionSyncServiceTest {
             assertThat(req.getPlanVersion()).isEqualTo(2);
             assertThat(req.getDataSourceId()).isEqualTo(42L);
             assertThat(req.getTenantId()).isEqualTo(TENANT_ID);
+            // Regression (org bleed): the OWNER org must be threaded into the DTO so the
+            // subscription row is stamped from the workflow owner, never the ambient org.
+            assertThat(req.getOrganizationId()).isEqualTo("org-ds-7");
             assertThat(req.getEventTypes())
                     .containsExactlyInAnyOrder("row_created", "row_updated");
             assertThat(req.getFilter())

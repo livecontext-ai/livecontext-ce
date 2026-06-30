@@ -332,12 +332,14 @@ public class SubAgentExecutionHandler {
             subCredentials.put("__inactivityTimeoutSeconds__", entity.getInactivityTimeout());
         }
 
-        // 8. Find or create conversation
-        String conversationId = organizationId != null
-            ? conversationServiceClient.findOrCreateAgentConversation(
-                agentId.toString(), tenantId, entity.getName(), organizationId)
-            : conversationServiceClient.findOrCreateAgentConversation(
-                agentId.toString(), tenantId, entity.getName());
+        // 8. Find or create conversation.
+        // Always pass an explicit owner org so the conversation row can never be
+        // stamped from a stale ambient thread context (cross-tenant bleed). Prefer
+        // the caller-supplied run org; fall back to the sub-agent entity's own org
+        // (the authoritative owner of this conversation), never the org-less variant.
+        String conversationOrgId = organizationId != null ? organizationId : entity.getOrganizationId();
+        String conversationId = conversationServiceClient.findOrCreateAgentConversation(
+            agentId.toString(), tenantId, entity.getName(), conversationOrgId);
 
         // Pass sub-agent's conversationId into credentials for chaining
         if (conversationId != null) {
