@@ -1,0 +1,1039 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://livecontext.ai/schemas/node-contracts.json",
+  "title": "Node Contracts Schema",
+  "description": "Single source of truth for workflow node parameters and outputs",
+  "version": "1.1.0",
+  "lastUpdated": "2026-03-06",
+
+  "definitions": {
+    "fieldType": {
+      "type": "string",
+      "enum": ["string", "number", "boolean", "datetime", "array", "object", "any"]
+    },
+
+    "fieldStatus": {
+      "type": "string",
+      "enum": ["aligned", "frontend_only", "backend_only", "misaligned", "deprecated"],
+      "description": "Sync status between frontend and backend"
+    },
+
+    "field": {
+      "type": "object",
+      "required": ["name", "type"],
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "$ref": "#/definitions/fieldType" },
+        "required": { "type": "boolean", "default": false },
+        "description": { "type": "string" },
+        "default": {},
+        "enum": { "type": "array", "items": { "type": "string" } },
+        "itemType": { "$ref": "#/definitions/fieldType" },
+        "status": { "$ref": "#/definitions/fieldStatus" },
+        "frontendName": { "type": "string", "description": "Name used in frontend if different" },
+        "backendName": { "type": "string", "description": "Name used in backend if different" },
+        "action": {
+          "type": "string",
+          "enum": ["keep", "add_frontend", "add_backend", "rename", "remove", "standardize"],
+          "description": "Required action to align"
+        },
+        "notes": { "type": "string" }
+      }
+    },
+
+    "nodeContract": {
+      "type": "object",
+      "required": ["id", "name", "category", "parameters", "outputs"],
+      "properties": {
+        "id": { "type": "string", "description": "Unique node type identifier" },
+        "name": { "type": "string", "description": "Human-readable name" },
+        "category": {
+          "type": "string",
+          "enum": ["trigger", "ai", "control_flow", "action", "ui", "documentation"]
+        },
+        "description": { "type": "string" },
+        "parameters": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/field" },
+          "description": "Configuration parameters for the node"
+        },
+        "outputs": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/field" },
+          "description": "Output fields produced by the node"
+        },
+        "nestedTypes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "$ref": "#/definitions/field" }
+          },
+          "description": "Nested type definitions used by this node"
+        }
+      }
+    }
+  },
+
+  "type": "object",
+  "properties": {
+    "nodes": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/nodeContract" }
+    }
+  },
+
+  "nodes": [
+    {
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "category": "trigger",
+      "description": "Triggered manually by user clicking a button",
+      "parameters": [
+        { "name": "label", "type": "string", "required": true, "status": "aligned" },
+        { "name": "customFields", "type": "array", "itemType": "object", "status": "aligned" }
+      ],
+      "outputs": [
+        { "name": "triggered_at", "type": "datetime", "status": "aligned", "action": "keep", "notes": "ISO timestamp when the workflow was triggered. Emitted snake_case by ManualTriggerResolver, matching node_type_documentation seed (V11)." },
+        { "name": "triggered_by", "type": "string", "status": "aligned", "action": "keep", "notes": "Display name of the user who triggered the workflow (resolved via AuthClient.getDisplayName). Empty string when no profile is available. Never the raw tenantId." },
+        { "name": "{customField.name}", "type": "any", "status": "aligned", "action": "keep", "notes": "Dynamic fields from trigger.params(), flattened at root" },
+        { "name": "trigger_id", "type": "string", "status": "aligned", "action": "keep", "notes": "Added by TriggerNode for all trigger types" },
+        { "name": "item_id", "type": "string", "status": "aligned", "action": "keep", "notes": "Added by TriggerNode for all trigger types" },
+        { "name": "item_index", "type": "number", "status": "aligned", "action": "keep", "notes": "Added by TriggerNode for all trigger types" },
+        { "name": "data", "type": "array", "status": "aligned", "action": "keep", "notes": "Single-item array with triggered_at + triggered_by + custom fields" },
+        { "name": "count", "type": "number", "status": "aligned", "action": "keep", "notes": "Always 1 for manual triggers" }
+      ],
+      "nestedTypes": {
+        "CustomField": [
+          { "name": "name", "type": "string", "required": true },
+          { "name": "value", "type": "string", "required": true }
+        ]
+      }
+    },
+
+    {
+      "id": "chat-trigger",
+      "name": "Chat Trigger",
+      "category": "trigger",
+      "description": "Triggered when user sends a message matching a pattern",
+      "parameters": [
+        { "name": "matchType", "type": "string", "enum": ["any", "startsWith", "endsWith", "contains", "equals", "regex", "command"], "default": "any", "status": "aligned" },
+        { "name": "pattern", "type": "string", "status": "aligned", "action": "keep", "notes": "Called 'value' internally in some places" },
+        { "name": "caseSensitive", "type": "boolean", "default": false, "status": "aligned" },
+        { "name": "trimPrefix", "type": "boolean", "default": true, "status": "aligned", "action": "keep" },
+        { "name": "trimSuffix", "type": "boolean", "default": true, "status": "aligned", "action": "keep" }
+      ],
+      "outputs": [
+        { "name": "message", "type": "string", "status": "aligned", "action": "keep", "notes": "Raw user message content" },
+        { "name": "extracted_message", "type": "string", "status": "aligned", "action": "keep", "notes": "Message with prefix/suffix trimmed based on trimPrefix/trimSuffix config" },
+        { "name": "conversation_id", "type": "string", "status": "aligned", "action": "keep", "notes": "Conversation identifier (snake_case)" },
+        { "name": "matched", "type": "boolean", "status": "aligned", "action": "keep", "notes": "Whether the message matched the pattern" },
+        { "name": "match_type", "type": "string", "status": "aligned", "action": "keep", "notes": "The match type used (any, starts_with, ends_with, contains, equals, regex)" },
+        { "name": "match_value", "type": "string", "status": "aligned", "action": "keep", "notes": "The configured pattern value" },
+        { "name": "attachments", "type": "array", "status": "aligned", "action": "keep", "notes": "File attachments sent with the message. Each item is a canonical FileRef: { _type:'file', path, name, mimeType, size }" },
+        { "name": "triggered_at", "type": "datetime", "status": "aligned", "action": "keep", "notes": "ISO timestamp when trigger fired (snake_case, unified across triggers)" },
+        { "name": "triggered_by", "type": "string", "status": "aligned", "action": "keep", "notes": "Display name of the user whose chat message fired the trigger (empty when unknown). Never tenantId." },
+        { "name": "trigger_id", "type": "string", "status": "aligned", "action": "keep", "notes": "Added by TriggerNode" },
+        { "name": "item_id", "type": "string", "status": "aligned", "action": "keep", "notes": "Added by TriggerNode" },
+        { "name": "item_index", "type": "number", "status": "aligned", "action": "keep", "notes": "Added by TriggerNode" },
+        { "name": "data", "type": "array", "status": "aligned", "action": "keep", "notes": "Single-item array with message, extracted_message, triggered_at, triggered_by, matched" },
+        { "name": "count", "type": "number", "status": "aligned", "action": "keep", "notes": "1 if matched, 0 if no match" }
+      ]
+    },
+
+    {
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "category": "trigger",
+      "description": "Triggered via HTTP request to a webhook URL. Body and query params are flattened at root level.",
+      "parameters": [
+        { "name": "httpMethod", "type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"], "default": "POST", "status": "aligned" },
+        { "name": "authType", "type": "string", "enum": ["none", "basic", "header", "jwt"], "default": "none", "status": "aligned" },
+        { "name": "basicUsername", "type": "string", "status": "aligned", "action": "keep", "notes": "UI stores in basicAuth.username, serializes to flat" },
+        { "name": "basicPassword", "type": "string", "status": "aligned", "action": "keep", "notes": "UI stores in basicAuth.password, serializes to flat" },
+        { "name": "authHeaderName", "type": "string", "status": "aligned", "action": "keep", "notes": "UI stores in headerAuth.headerName, serializes to flat" },
+        { "name": "authHeaderValue", "type": "string", "status": "aligned", "action": "keep", "notes": "UI stores in headerAuth.headerValue, serializes to flat" },
+        { "name": "jwtSecretKey", "type": "string", "status": "aligned", "action": "keep", "notes": "UI stores in jwtAuth.secretKey, serializes to flat" },
+        { "name": "jwtAlgorithm", "type": "string", "enum": ["HS256", "HS384", "HS512"], "default": "HS256", "status": "aligned", "action": "keep" }
+      ],
+      "outputs": [
+        { "name": "{body_field}", "type": "any", "status": "aligned", "action": "keep", "notes": "All HTTP body fields flattened at root level. For GET requests, query params are used instead." },
+        { "name": "{query_param}", "type": "any", "status": "aligned", "action": "keep", "notes": "Query string params merged into root (for non-GET, merged with body; for GET, query only)" },
+        { "name": "_webhookMethod", "type": "string", "status": "aligned", "action": "keep", "notes": "HTTP method used (GET, POST, etc.). Added by WebhookController." },
+        { "name": "_webhookTimestamp", "type": "string", "status": "aligned", "action": "keep", "notes": "ISO timestamp when webhook was received. Added by WebhookController." },
+        { "name": "triggered_at", "type": "datetime", "status": "aligned", "action": "keep", "notes": "ISO timestamp when the webhook fired (snake_case, unified across triggers)" },
+        { "name": "triggered_by", "type": "string", "status": "aligned", "action": "keep", "notes": "Display name of the workflow owner. Empty when the webhook is unauthenticated." },
+        { "name": "trigger_id", "type": "string", "status": "aligned", "action": "keep", "notes": "Added by TriggerNode" },
+        { "name": "item_id", "type": "string", "status": "aligned", "action": "keep", "notes": "Added by TriggerNode" },
+        { "name": "item_index", "type": "number", "status": "aligned", "action": "keep", "notes": "Added by TriggerNode" }
+      ]
+    },
+
+    {
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger",
+      "category": "trigger",
+      "description": "Triggered on a schedule defined by cron expression",
+      "parameters": [
+        { "name": "cron", "type": "string", "required": true, "status": "aligned" },
+        { "name": "timezone", "type": "string", "default": "UTC", "status": "aligned" },
+        { "name": "maxExecutions", "type": "number", "status": "aligned", "action": "keep", "notes": "Optional limit on executions" },
+        { "name": "enabled", "type": "boolean", "default": true, "status": "aligned", "action": "keep" }
+      ],
+      "outputs": [
+        { "name": "triggered_at", "type": "datetime", "status": "aligned", "action": "keep", "notes": "ISO timestamp of trigger. Raw: triggeredAt (camelCase), SchemaMapper normalizes to triggered_at." },
+        { "name": "triggered_by", "type": "string", "status": "aligned", "action": "keep", "notes": "Display name of the workflow owner. Schedule fires autonomously but still carries the owner identity for variable_mapping." },
+        { "name": "execution_count", "type": "number", "status": "aligned", "action": "keep", "notes": "Current execution number (1-based). Raw: executionCount (camelCase), SchemaMapper normalizes." },
+        { "name": "next_execution", "type": "datetime", "status": "aligned", "action": "keep", "notes": "Next scheduled execution time after this fire. Raw: nextExecution (camelCase), SchemaMapper normalizes." },
+        { "name": "cron", "type": "string", "status": "aligned", "action": "keep", "notes": "Cron expression from schedule config. From ScheduleExecutorService.buildPayload." },
+        { "name": "timezone", "type": "string", "status": "aligned", "action": "keep", "notes": "Timezone from schedule config. From ScheduleExecutorService.buildPayload." },
+        { "name": "scheduleId", "type": "string", "status": "aligned", "action": "keep", "notes": "UUID of the ScheduledExecutionEntity. From ScheduleExecutorService.buildPayload." },
+        { "name": "trigger_id", "type": "string", "status": "aligned", "action": "keep", "notes": "Added by TriggerNode" },
+        { "name": "item_id", "type": "string", "status": "aligned", "action": "keep", "notes": "Added by TriggerNode" },
+        { "name": "item_index", "type": "number", "status": "aligned", "action": "keep", "notes": "Added by TriggerNode" }
+      ]
+    },
+
+    {
+      "id": "form-trigger",
+      "name": "Form Trigger",
+      "category": "trigger",
+      "description": "Triggered when user submits a custom form",
+      "parameters": [
+        { "name": "formTitle", "type": "string", "status": "aligned" },
+        { "name": "formDescription", "type": "string", "status": "aligned" },
+        { "name": "submitButtonText", "type": "string", "default": "Submit", "status": "aligned" },
+        { "name": "authType", "type": "string", "enum": ["none", "basic"], "default": "none", "status": "aligned" },
+        { "name": "basicUsername", "type": "string", "status": "aligned" },
+        { "name": "basicPassword", "type": "string", "status": "aligned" },
+        { "name": "fields", "type": "array", "itemType": "object", "required": true, "status": "aligned" }
+      ],
+      "outputs": [
+        { "name": "submission_id", "type": "string", "status": "aligned", "action": "keep", "notes": "Form submission identifier (UUID), generated at submit time by FormDispatchService" },
+        { "name": "submitted_at", "type": "datetime", "status": "aligned", "action": "keep", "notes": "When the form was submitted (ISO timestamp). Set at dispatch time by FormDispatchService." },
+        { "name": "form_data", "type": "object", "status": "aligned", "action": "keep", "notes": "All submitted form fields grouped as object. Populated at dispatch time - never empty when a form is submitted." },
+        { "name": "triggered_at", "type": "datetime", "status": "aligned", "action": "keep", "notes": "Unified-trigger alias of submitted_at. Same ISO timestamp - use either." },
+        { "name": "triggered_by", "type": "string", "status": "aligned", "action": "keep", "notes": "Display name of the form submitter (empty when anonymous). Never the raw tenantId." },
+        { "name": "{field_name}", "type": "any", "status": "aligned", "action": "keep", "notes": "Dynamic per field definition, also at top level for easy SpEL access" },
+        { "name": "trigger_id", "type": "string", "status": "aligned", "action": "keep", "notes": "Added by TriggerNode" },
+        { "name": "item_id", "type": "string", "status": "aligned", "action": "keep", "notes": "Added by TriggerNode" },
+        { "name": "item_index", "type": "number", "status": "aligned", "action": "keep", "notes": "Added by TriggerNode" }
+      ],
+      "nestedTypes": {
+        "FormField": [
+          { "name": "name", "type": "string", "required": true },
+          { "name": "type", "type": "string", "required": true, "enum": ["text", "email", "password", "number", "textarea", "select", "multiselect", "checkbox", "checkboxGroup", "radio", "date", "datetime", "time", "file", "url", "tel", "hidden"] },
+          { "name": "label", "type": "string", "required": true },
+          { "name": "placeholder", "type": "string" },
+          { "name": "required", "type": "boolean", "default": false },
+          { "name": "options", "type": "array", "itemType": "object" }
+        ]
+      }
+    },
+
+    {
+      "id": "tables-trigger",
+      "name": "Datasource Trigger",
+      "category": "trigger",
+      "description": "Event-driven trigger: fires one run per row created/updated/deleted in a datasource. Replaces the legacy on-demand loader (use schedule + find for bulk scans).",
+      "parameters": [
+        { "name": "dataSourceId", "type": "number", "required": true, "status": "aligned", "action": "keep", "notes": "Datasource to subscribe to. Stored in trigger.id." },
+        { "name": "label", "type": "string", "status": "aligned" },
+        { "name": "event_types", "type": "array", "itemType": "string", "enum": ["row_created", "row_updated", "row_deleted"], "default": ["row_created"], "required": true, "status": "aligned", "action": "keep", "notes": "Which row events fire this trigger. Multi-select." },
+        { "name": "filter", "type": "object", "required": false, "status": "aligned", "action": "keep", "notes": "Optional single-condition filter {column, operator, value}. Operators: eq, neq, gt, gte, lt, lte, contains, starts_with, ends_with, is_null, is_not_null." }
+      ],
+      "outputs": [
+        { "name": "row", "type": "object", "status": "aligned", "action": "keep", "notes": "The row that triggered the event (current state for create/update, last-known state for delete)." },
+        { "name": "previous_row", "type": "object", "status": "aligned", "action": "keep", "notes": "Pre-change row. Populated for row_updated; null for row_created." },
+        { "name": "event_type", "type": "string", "enum": ["row_created", "row_updated", "row_deleted"], "status": "aligned", "action": "keep", "notes": "Which event fired this run." },
+        { "name": "row_id", "type": "number", "status": "aligned", "action": "keep", "notes": "ID of the row in data_source_items." },
+        { "name": "datasource_id", "type": "number", "status": "aligned", "action": "keep", "notes": "ID of the datasource emitting the event." },
+        { "name": "triggered_at", "type": "datetime", "status": "aligned", "action": "keep", "notes": "ISO timestamp when the event was emitted (after DB commit)." },
+        { "name": "triggered_by", "type": "string", "status": "aligned", "action": "keep", "notes": "Display name of the workflow owner. Empty when the row-event source is a system process." },
+        { "name": "{column}", "type": "any", "status": "aligned", "action": "keep", "notes": "Row columns are also flattened at top level for easy SpEL access ({{trigger.column_name}})." },
+        { "name": "trigger_id", "type": "string", "status": "aligned", "action": "keep", "notes": "Added by TriggerNode" },
+        { "name": "item_id", "type": "string", "status": "aligned", "action": "keep", "notes": "Added by TriggerNode" },
+        { "name": "item_index", "type": "number", "status": "aligned", "action": "keep", "notes": "Added by TriggerNode (always 0 - one event = one run)" }
+      ]
+    },
+
+    {
+      "id": "workflows-trigger",
+      "name": "Workflow Trigger",
+      "category": "trigger",
+      "description": "Triggered when parent workflow completes",
+      "parameters": [
+        { "name": "workflowId", "type": "string", "required": true, "status": "aligned", "action": "keep", "notes": "Stored in trigger.id" },
+        { "name": "workflowName", "type": "string", "status": "aligned", "action": "keep", "notes": "Stored in trigger.input for display" }
+      ],
+      "outputs": [
+        { "name": "triggered_at", "type": "datetime", "status": "aligned", "action": "keep", "notes": "ISO timestamp when the parent workflow fired this one (snake_case, unified across triggers)" },
+        { "name": "triggered_by", "type": "string", "status": "aligned", "action": "keep", "notes": "Display name of the workflow owner. Empty when the parent ran in a system context." },
+        { "name": "parentWorkflowId", "type": "string", "status": "aligned", "action": "keep", "notes": "Parent workflow ID" },
+        { "name": "parentRunId", "type": "string", "status": "aligned", "action": "keep", "notes": "Parent run ID" },
+        { "name": "parentStatus", "type": "string", "status": "aligned", "action": "keep", "notes": "Parent workflow completion status" },
+        { "name": "result", "type": "object", "status": "aligned", "action": "keep", "notes": "Merged step outputs from the parent workflow run." },
+        { "name": "parentStatistics", "type": "object", "status": "aligned", "action": "keep", "notes": "Execution statistics from the parent workflow run (completedSteps, failedSteps, totalSteps). Present only when the parent recorded statistics." },
+        { "name": "{parent_key}", "type": "any", "status": "aligned", "action": "keep", "notes": "Each output key from the parent's last completed node is also flattened at root level (e.g. {{trigger:child.output.my_parent_key}}). Names vary per parent configuration." },
+        { "name": "trigger_id", "type": "string", "status": "aligned", "action": "keep", "notes": "Added by TriggerNode" },
+        { "name": "item_id", "type": "string", "status": "aligned", "action": "keep", "notes": "Added by TriggerNode" },
+        { "name": "item_index", "type": "number", "status": "aligned", "action": "keep", "notes": "Added by TriggerNode" }
+      ]
+    },
+
+    {
+      "id": "ai-agent",
+      "name": "AI Agent",
+      "category": "ai",
+      "description": "AI-powered agent that can use tools",
+      "parameters": [
+        { "name": "prompt", "type": "string", "required": true, "status": "aligned" },
+        { "name": "model", "type": "string", "required": true, "status": "aligned" },
+        { "name": "provider", "type": "string", "status": "aligned" },
+        { "name": "temperature", "type": "number", "default": 0.7, "status": "aligned" },
+        { "name": "maxTokens", "type": "number", "status": "aligned" },
+        { "name": "maxIterations", "type": "number", "default": 10, "status": "aligned" },
+        { "name": "maxTools", "type": "number", "status": "aligned" },
+        { "name": "tools", "type": "array", "itemType": "string", "status": "aligned" },
+        { "name": "systemPrompt", "type": "string", "status": "aligned", "action": "keep", "notes": "Optional system prompt override" }
+      ],
+      "outputs": [
+        { "name": "response", "type": "string", "status": "aligned", "action": "keep", "notes": "Agent response text" },
+        { "name": "content", "type": "string", "status": "aligned", "action": "keep", "notes": "Alias for response (compatibility)" },
+        { "name": "model", "type": "string", "status": "aligned", "action": "keep" },
+        { "name": "provider", "type": "string", "status": "aligned", "action": "keep" },
+        { "name": "tokens_used", "type": "number", "status": "aligned", "action": "keep", "notes": "Total tokens used" },
+        { "name": "promptTokens", "type": "number", "status": "aligned", "action": "keep", "notes": "Prompt tokens used" },
+        { "name": "completionTokens", "type": "number", "status": "aligned", "action": "keep", "notes": "Completion tokens used" },
+        { "name": "iterations", "type": "number", "status": "aligned", "action": "keep" },
+        { "name": "tool_calls", "type": "number", "status": "aligned", "action": "keep", "notes": "Count of tool calls made by the agent" },
+        { "name": "tool_calls_detail", "type": "array", "itemType": "object", "status": "aligned", "action": "keep", "notes": "Detailed tool call info (name, input, output)" },
+        { "name": "durationMs", "type": "number", "status": "aligned", "action": "keep" }
+      ]
+    },
+
+    {
+      "id": "classify",
+      "name": "Classify",
+      "category": "ai",
+      "description": "AI-powered classification with multiple categories",
+      "parameters": [
+        { "name": "categories", "type": "array", "itemType": "object", "required": true, "status": "aligned" },
+        { "name": "input", "type": "string", "required": true, "status": "aligned", "action": "keep", "notes": "UI uses classifyInput internally, serializes to input" },
+        { "name": "model", "type": "string", "status": "aligned", "action": "keep" },
+        { "name": "provider", "type": "string", "status": "aligned", "action": "keep" }
+      ],
+      "outputs": [
+        { "name": "selected_category", "type": "string", "status": "aligned", "action": "keep", "notes": "The category label that was selected by the AI" },
+        { "name": "selected_category_index", "type": "number", "status": "aligned", "action": "keep", "notes": "Index of the selected category in the categories array" },
+        { "name": "confidence", "type": "number", "status": "aligned", "action": "keep" },
+        { "name": "reasoning", "type": "string", "status": "aligned", "action": "keep", "notes": "AI reasoning for the classification" },
+        { "name": "response", "type": "string", "status": "aligned", "action": "keep", "notes": "Human-readable classification result" },
+        { "name": "model", "type": "string", "status": "aligned", "action": "keep" },
+        { "name": "provider", "type": "string", "status": "aligned", "action": "keep" },
+        { "name": "tokens_used", "type": "number", "status": "aligned", "action": "keep" },
+        { "name": "durationMs", "type": "number", "status": "aligned", "action": "keep" }
+      ],
+      "nestedTypes": {
+        "Category": [
+          { "name": "label", "type": "string", "required": true },
+          { "name": "description", "type": "string" }
+        ]
+      }
+    },
+
+    {
+      "id": "guardrail",
+      "name": "Guardrail",
+      "category": "ai",
+      "description": "Content validation and safety checks",
+      "parameters": [
+        { "name": "rules", "type": "array", "itemType": "object", "required": true, "status": "aligned", "action": "keep", "notes": "UI uses guardrailRules internally, serializes to rules" },
+        { "name": "input", "type": "string", "required": true, "status": "aligned", "action": "keep", "notes": "UI uses guardrailInput internally, serializes to input" }
+      ],
+      "outputs": [
+        { "name": "passed", "type": "boolean", "status": "aligned", "action": "keep", "notes": "Whether content passed all checks" },
+        { "name": "violations", "type": "array", "itemType": "object", "status": "aligned", "action": "keep", "notes": "List of rule violations" },
+        { "name": "details", "type": "string", "status": "aligned", "action": "keep", "notes": "Detailed validation information" },
+        { "name": "sanitized", "type": "string", "status": "aligned", "action": "keep", "notes": "Sanitized version of input (if applicable)" },
+        { "name": "response", "type": "string", "status": "aligned", "action": "keep", "notes": "Human-readable result summary" },
+        { "name": "model", "type": "string", "status": "aligned", "action": "keep" },
+        { "name": "provider", "type": "string", "status": "aligned", "action": "keep" },
+        { "name": "tokens_used", "type": "number", "status": "aligned", "action": "keep" },
+        { "name": "durationMs", "type": "number", "status": "aligned", "action": "keep" }
+      ],
+      "nestedTypes": {
+        "GuardrailRule": [
+          { "name": "type", "type": "string", "required": true, "enum": ["pii_detection", "toxic_language", "prompt_injection", "keyword_filter", "topic_filter", "custom"] },
+          { "name": "action", "type": "string", "enum": ["block", "sanitize", "flag"] },
+          { "name": "config", "type": "object" }
+        ],
+        "Violation": [
+          { "name": "rule_type", "type": "string" },
+          { "name": "message", "type": "string" },
+          { "name": "severity", "type": "string" }
+        ]
+      }
+    },
+
+    {
+      "id": "decision",
+      "name": "Decision",
+      "category": "control_flow",
+      "description": "Conditional branching based on expressions",
+      "parameters": [
+        { "name": "decisionConditions", "type": "array", "itemType": "object", "required": true, "status": "aligned" }
+      ],
+      "outputs": [
+        { "name": "selected_branch", "type": "string", "status": "aligned", "action": "keep", "notes": "Branch type that matched: if, elsif, else" },
+        { "name": "selected_branch_index", "type": "number", "status": "aligned", "action": "keep", "notes": "Index of the selected branch (-1 if none)" },
+        { "name": "skipped_branches", "type": "array", "itemType": "string", "status": "aligned", "action": "keep", "notes": "Branch types that were skipped" },
+        { "name": "evaluations", "type": "array", "itemType": "object", "status": "aligned", "action": "keep", "notes": "Detailed evaluation results per branch" },
+        { "name": "condition_expression", "type": "string", "status": "aligned", "action": "keep", "notes": "Expression of the selected branch" },
+        { "name": "condition_result", "type": "boolean", "status": "aligned", "action": "keep", "notes": "Whether any branch matched" }
+      ],
+      "nestedTypes": {
+        "Condition": [
+          { "name": "type", "type": "string", "required": true, "enum": ["if", "elseif", "else"] },
+          { "name": "expression", "type": "string" },
+          { "name": "label", "type": "string" }
+        ]
+      }
+    },
+
+    {
+      "id": "loop",
+      "name": "Loop",
+      "category": "control_flow",
+      "description": "While loop with condition",
+      "parameters": [
+        { "name": "loopCondition", "type": "string", "required": true, "status": "aligned", "action": "keep" },
+        { "name": "maxIterations", "type": "number", "default": 50, "status": "aligned" },
+        { "name": "strategy", "type": "string", "enum": ["continue-anyway", "stop-on-error"], "status": "aligned", "action": "keep" }
+      ],
+      "outputs": [
+        { "name": "iteration", "type": "number", "status": "aligned", "action": "keep", "notes": "Current iteration number (0 on first entry)" },
+        { "name": "maxIterations", "type": "number", "status": "aligned", "action": "keep", "notes": "Configured max iterations (camelCase in backend)" },
+        { "name": "terminated", "type": "boolean", "status": "aligned", "action": "keep", "notes": "Whether the loop has terminated" },
+        { "name": "enter_body", "type": "boolean", "status": "aligned", "action": "keep", "notes": "Whether the loop body should be entered" },
+        { "name": "selected_path", "type": "string", "status": "aligned", "action": "keep", "notes": "body or exit" }
+      ]
+    },
+
+    {
+      "id": "split",
+      "name": "Split",
+      "category": "control_flow",
+      "description": "Iterate over a list of items in parallel",
+      "parameters": [
+        { "name": "list", "type": "string", "required": true, "status": "aligned", "notes": "SpEL expression for items to iterate. Alias: listExpression (deprecated)" },
+        { "name": "maxItems", "type": "number", "status": "aligned" },
+        { "name": "splitStrategy", "type": "string", "enum": ["continue-anyway", "stop-on-error"], "status": "aligned", "action": "keep", "notes": "FE uses strategy in UI, serializes to splitStrategy" }
+      ],
+      "outputs": [
+        { "name": "current_item", "type": "any", "description": "Current item in parallel branch (runtime context, body nodes only)", "runtimeOnly": true },
+        { "name": "current_index", "type": "number", "description": "0-based index of current item (runtime context, body nodes only)", "runtimeOnly": true },
+        { "name": "item_count", "type": "number", "status": "aligned", "action": "keep", "notes": "Number of items being split" },
+        { "name": "split_id", "type": "string", "status": "aligned", "action": "keep", "notes": "Node ID of the split" },
+        { "name": "split_strategy", "type": "string", "status": "aligned", "action": "keep", "notes": "The strategy used" },
+        { "name": "max_items", "type": "number", "status": "aligned", "action": "keep", "notes": "Configured max items" },
+        { "name": "terminated", "type": "boolean", "status": "aligned", "action": "keep", "notes": "Whether split has terminated" },
+        { "name": "exit_reason", "type": "string", "status": "aligned", "action": "keep", "notes": "empty_list, all_items_processed, or items_spawned" }
+      ]
+    },
+
+    {
+      "id": "merge",
+      "name": "Merge",
+      "category": "control_flow",
+      "description": "Merge multiple branches (AND wait - waits for ALL predecessors)",
+      "parameters": [
+        { "name": "mergeInputs", "type": "array", "itemType": "object", "required": true, "status": "aligned" }
+      ],
+      "outputs": [
+        { "name": "{strategy_output}", "type": "any", "status": "aligned", "action": "keep", "notes": "Dynamic output from merge strategy (QUEUE_1_TO_1, COMBINE_ALL, FIRST_AVAILABLE)" }
+      ],
+      "nestedTypes": {
+        "MergeInput": [
+          { "name": "id", "type": "string", "required": true },
+          { "name": "label", "type": "string", "required": true }
+        ]
+      }
+    },
+
+    {
+      "id": "fork",
+      "name": "Fork",
+      "category": "control_flow",
+      "description": "Parallel fork - ALL branches execute simultaneously (no conditions)",
+      "parameters": [
+        { "name": "forkOutputs", "type": "array", "itemType": "object", "required": true, "status": "aligned", "notes": "Defines parallel branches via :branch_N ports" }
+      ],
+      "outputs": [
+        { "name": "branch_count", "type": "number", "status": "aligned", "action": "keep", "notes": "Number of parallel branches" },
+        { "name": "branches", "type": "array", "status": "aligned", "action": "keep", "notes": "List of branch info objects with index, id, label, target_count" }
+      ],
+      "nestedTypes": {
+        "ForkOutput": [
+          { "name": "id", "type": "string", "required": true },
+          { "name": "label", "type": "string", "required": true },
+          { "name": "targetStep", "type": "string" }
+        ]
+      }
+    },
+
+    {
+      "id": "switch",
+      "name": "Switch",
+      "category": "control_flow",
+      "description": "Switch/case branching based on expression value",
+      "parameters": [
+        { "name": "switchExpression", "type": "string", "required": true, "status": "aligned", "notes": "Expression to evaluate for case matching" },
+        { "name": "switchCases", "type": "array", "itemType": "object", "required": true, "status": "aligned" }
+      ],
+      "outputs": [
+        { "name": "selected_case", "type": "string", "status": "aligned", "action": "keep", "notes": "The case type that matched (case_0, case_1, default)" },
+        { "name": "selected_case_index", "type": "number", "status": "aligned", "action": "keep", "notes": "Index of the selected case" },
+        { "name": "selected_case_label", "type": "string", "status": "aligned", "action": "keep", "notes": "Label of the selected case" },
+        { "name": "switch_value", "type": "any", "status": "aligned", "action": "keep", "notes": "The evaluated switch expression value" },
+        { "name": "matched_value", "type": "any", "status": "aligned", "action": "keep", "notes": "The value of the case that matched" },
+        { "name": "skipped_cases", "type": "array", "itemType": "string", "status": "aligned", "action": "keep", "notes": "Case types that were skipped" },
+        { "name": "skipped_case_labels", "type": "array", "itemType": "string", "status": "aligned", "action": "keep", "notes": "Labels of the skipped cases" },
+        { "name": "evaluations", "type": "array", "itemType": "object", "status": "aligned", "action": "keep", "notes": "Detailed evaluation results per case" }
+      ],
+      "nestedTypes": {
+        "SwitchCase": [
+          { "name": "id", "type": "string", "required": true },
+          { "name": "type", "type": "string", "required": true, "enum": ["case", "default"] },
+          { "name": "label", "type": "string" },
+          { "name": "value", "type": "string", "notes": "Value to match against switchExpression" }
+        ]
+      }
+    },
+
+    {
+      "id": "note",
+      "name": "Note",
+      "category": "documentation",
+      "description": "Documentation annotation on the workflow canvas",
+      "parameters": [
+        { "name": "text", "type": "string", "required": true, "status": "aligned" },
+        { "name": "color", "type": "string", "status": "aligned", "notes": "Background color" },
+        { "name": "borderColor", "type": "string", "status": "aligned" },
+        { "name": "textColor", "type": "string", "status": "aligned" },
+        { "name": "width", "type": "number", "status": "aligned" },
+        { "name": "height", "type": "number", "status": "aligned" },
+        { "name": "position", "type": "object", "status": "aligned" }
+      ],
+      "outputs": []
+    },
+
+    {
+      "id": "interface",
+      "name": "Interface",
+      "category": "ui",
+      "description": "UI interface reference for user interaction. Registers INTERFACE_SIGNAL and may block or auto-advance depending on __continue in actionMapping.",
+      "parameters": [
+        { "name": "label", "type": "string", "status": "aligned" },
+        { "name": "interfaceId", "type": "string", "status": "aligned", "notes": "ID of the interface to render" },
+        { "name": "actionMapping", "type": "object", "status": "aligned", "notes": "Map of button action names to workflow actions (__continue, step keys, etc.)" },
+        { "name": "position", "type": "object", "status": "aligned" }
+      ],
+      "outputs": [
+        { "name": "interface_id", "type": "string", "status": "aligned", "action": "keep", "notes": "ID of the interface being rendered" },
+        { "name": "action_mapping", "type": "object", "status": "aligned", "action": "keep", "notes": "The action mapping configuration" },
+        { "name": "is_entry_interface", "type": "boolean", "status": "aligned", "action": "keep", "notes": "Whether this is the first interface in the workflow" }
+      ]
+    },
+
+    {
+      "id": "transform",
+      "name": "Transform",
+      "category": "action",
+      "description": "Transform data using expressions",
+      "parameters": [
+        { "name": "transformMappings", "type": "array", "itemType": "object", "required": true, "status": "aligned" }
+      ],
+      "outputs": [
+        { "name": "{mapping.label}", "type": "any", "status": "aligned", "action": "keep", "notes": "Dynamic per mapping definition - each mapping label becomes an output key" }
+      ],
+      "nestedTypes": {
+        "Mapping": [
+          { "name": "label", "type": "string", "required": true },
+          { "name": "expression", "type": "string", "required": true }
+        ]
+      }
+    },
+
+    {
+      "id": "mcp-tool",
+      "name": "MCP Tool",
+      "category": "action",
+      "description": "Execute an MCP tool/API",
+      "parameters": [
+        { "name": "toolId", "type": "string", "required": true, "status": "aligned" },
+        { "name": "apiId", "type": "string", "required": true, "status": "aligned" },
+        { "name": "paramExpressions", "type": "object", "status": "aligned", "action": "keep", "notes": "Map of param name to SpEL expression, serializes to step.input" },
+        { "name": "credentials", "type": "object", "status": "aligned" }
+      ],
+      "outputs": [
+        { "name": "{dynamicSchema}", "type": "any", "status": "aligned", "action": "keep", "notes": "Dynamic per tool response schema. Output comes from ToolsGateway execution." }
+      ]
+    },
+
+    {
+      "id": "wait",
+      "name": "Wait",
+      "category": "control_flow",
+      "description": "Wait for a specified duration. Short waits (<=3s) use inline sleep, long waits register a WAIT_TIMER signal and yield.",
+      "parameters": [
+        { "name": "duration", "type": "number", "required": true, "status": "aligned", "notes": "Duration in milliseconds" }
+      ],
+      "outputs": [
+        { "name": "waited_ms", "type": "number", "status": "aligned", "action": "keep", "notes": "Duration waited in milliseconds (inline mode)" },
+        { "name": "status", "type": "string", "status": "aligned", "action": "keep", "notes": "completed (inline mode)" },
+        { "name": "started_at", "type": "string", "status": "aligned", "action": "keep", "notes": "ISO timestamp when wait started" },
+        { "name": "completed_at", "type": "string", "status": "aligned", "action": "keep", "notes": "ISO timestamp when wait completed" },
+        { "name": "duration_ms", "type": "number", "status": "aligned", "action": "keep", "notes": "Duration in ms (signal/yield mode)" },
+        { "name": "expires_at", "type": "string", "status": "aligned", "action": "keep", "notes": "ISO timestamp when wait expires (signal/yield mode)" }
+      ]
+    },
+
+    {
+      "id": "exit",
+      "name": "Exit",
+      "category": "control_flow",
+      "description": "Ends execution along this branch - terminal node. Other parallel branches (fork, split) continue normally.",
+      "parameters": [
+        { "name": "label", "type": "string", "status": "aligned" }
+      ],
+      "outputs": [
+        { "name": "exited", "type": "boolean", "status": "aligned", "action": "keep", "notes": "Always true" },
+        { "name": "reason", "type": "string", "status": "aligned", "action": "keep", "notes": "Exit reason text from node configuration" }
+      ]
+    },
+
+    {
+      "id": "stop_on_error",
+      "name": "Stop on Error",
+      "category": "control_flow",
+      "description": "Immediately stops the ENTIRE workflow (all branches) with an error. Unlike Exit (branch-only), this terminates everything and marks the run as FAILED.",
+      "parameters": [
+        { "name": "errorMessage", "type": "string", "required": true, "status": "aligned", "notes": "Error message (supports SpEL templates)" },
+        { "name": "errorCode", "type": "string", "required": false, "status": "aligned", "notes": "Optional error code for programmatic handling" }
+      ],
+      "outputs": [
+        { "name": "error_message", "type": "string", "status": "aligned", "action": "keep", "notes": "Resolved error message" },
+        { "name": "error_code", "type": "string", "status": "aligned", "action": "keep", "notes": "Optional error code" },
+        { "name": "stopped_at", "type": "datetime", "status": "aligned", "action": "keep", "notes": "ISO timestamp when stop was triggered" },
+        { "name": "status", "type": "string", "status": "aligned", "action": "keep", "notes": "Always 'failed'" }
+      ]
+    },
+
+    {
+      "id": "response",
+      "name": "Response",
+      "category": "control_flow",
+      "description": "Sends a message response to chat interface",
+      "parameters": [
+        { "name": "message", "type": "string", "required": true, "status": "aligned", "notes": "SpEL expression for the response message" }
+      ],
+      "outputs": [
+        { "name": "message", "type": "string", "status": "aligned", "action": "keep", "notes": "The resolved message that was sent" },
+        { "name": "sent_at", "type": "datetime", "status": "aligned", "action": "keep", "notes": "ISO timestamp when message was sent" }
+      ]
+    },
+
+    {
+      "id": "option",
+      "name": "Option",
+      "category": "control_flow",
+      "description": "Multiple choice branching - evaluates expressions in order, first true wins",
+      "parameters": [
+        { "name": "optionChoices", "type": "array", "itemType": "object", "required": true, "status": "aligned" }
+      ],
+      "outputs": [
+        { "name": "selected_choice", "type": "string", "status": "aligned", "action": "keep", "notes": "ID of the choice that matched" },
+        { "name": "selected_label", "type": "string", "status": "aligned", "action": "keep", "notes": "Label of the selected choice" },
+        { "name": "selected_choice_index", "type": "number", "status": "aligned", "action": "keep", "notes": "Index of the selected choice" },
+        { "name": "selected_branches", "type": "array", "itemType": "string", "status": "aligned", "action": "keep", "notes": "Array containing the selected branch label (or empty if none matched)" },
+        { "name": "skipped_branches", "type": "array", "itemType": "string", "status": "aligned", "action": "keep", "notes": "Labels of branches that were not selected" },
+        { "name": "evaluations", "type": "array", "itemType": "object", "status": "aligned", "action": "keep", "notes": "Detailed evaluation results (choice_id, choice_label, expression, resolved_expression, result, error?)" }
+      ],
+      "nestedTypes": {
+        "OptionChoice": [
+          { "name": "id", "type": "string", "required": true },
+          { "name": "label", "type": "string", "required": true },
+          { "name": "expression", "type": "string", "notes": "SpEL expression to evaluate" }
+        ]
+      }
+    },
+
+    {
+      "id": "aggregate",
+      "name": "Aggregate",
+      "category": "control_flow",
+      "description": "Aggregates data from parallel executions (ForEach) using field expressions",
+      "parameters": [
+        { "name": "aggregateFields", "type": "array", "itemType": "object", "required": true, "status": "aligned" }
+      ],
+      "outputs": [
+        { "name": "{field.label}", "type": "any", "status": "aligned", "action": "keep", "notes": "Dynamic per field definition - each field label becomes an array of collected values" },
+        { "name": "aggregated_count", "type": "number", "status": "aligned", "action": "keep", "notes": "Number of items aggregated" }
+      ],
+      "nestedTypes": {
+        "AggregateField": [
+          { "name": "label", "type": "string", "required": true },
+          { "name": "expression", "type": "string", "required": true }
+        ]
+      }
+    },
+
+    {
+      "id": "summarize",
+      "name": "Summarize",
+      "category": "control_flow",
+      "description": "Groups items by field(s) and applies aggregation functions (sum, avg, count, min, max, countDistinct, concatenate) per group.",
+      "parameters": [
+        { "name": "input", "type": "string", "required": true, "status": "aligned", "notes": "SpEL expression resolving to a list of objects to aggregate." },
+        { "name": "aggregations", "type": "array", "itemType": "object", "required": true, "status": "aligned", "notes": "Each entry: { field, operation, alias }. 'field' is blank for count. 'alias' defaults to operation_field." },
+        { "name": "groupBy", "type": "array", "itemType": "string", "required": false, "status": "aligned", "notes": "Optional field names to group by. Empty = single group over all items." }
+      ],
+      "outputs": [
+        { "name": "groups", "type": "array", "status": "aligned", "action": "keep", "notes": "Array of group objects. Each group has group_key, group_count, groupBy field values, and each aggregation alias." },
+        { "name": "total_groups", "type": "number", "status": "aligned", "action": "keep", "notes": "Number of distinct groups." },
+        { "name": "total_items", "type": "number", "status": "aligned", "action": "keep", "notes": "Total items processed." },
+        { "name": "aggregation_count", "type": "number", "status": "aligned", "action": "keep", "notes": "Number of aggregation operations applied." },
+        { "name": "{alias}", "type": "any", "status": "aligned", "action": "keep", "notes": "When no groupBy is configured, each aggregation alias is also stored at the top level for convenient SpEL access (e.g. {{core:summarize.output.total_salary}}). Alias names vary per configuration." }
+      ]
+    },
+
+    {
+      "id": "limit",
+      "name": "Limit",
+      "category": "core",
+      "description": "Passes through only the first or last N items from a collection, with optional offset",
+      "parameters": [
+        { "name": "input", "type": "string", "required": true, "status": "aligned", "notes": "SpEL expression referencing the list to limit, e.g. {{core:step.output.items}}" },
+        { "name": "count", "type": "number", "status": "aligned", "notes": "Maximum number of items to return (default: 10)" },
+        { "name": "from", "type": "string", "enum": ["first", "last"], "status": "aligned", "notes": "Take from the beginning or end of the list (default: first)" },
+        { "name": "offset", "type": "number", "status": "aligned", "notes": "Number of items to skip before applying the limit (default: 0)" }
+      ],
+      "outputs": [
+        { "name": "items", "type": "array", "itemType": "any", "status": "aligned", "action": "keep", "notes": "The limited subset of items" },
+        { "name": "count", "type": "number", "status": "aligned", "action": "keep", "notes": "Number of items in the limited result" },
+        { "name": "original_count", "type": "number", "status": "aligned", "action": "keep", "notes": "Number of items before limiting" },
+        { "name": "config", "type": "object", "status": "aligned", "action": "keep", "notes": "Limit configuration: { input, input_count, count, from, offset }" }
+      ]
+    },
+
+    {
+      "id": "download_file",
+      "name": "Download File",
+      "category": "action",
+      "description": "Downloads a file from a URL and stores it in object storage",
+      "parameters": [
+        { "name": "url", "type": "string", "required": true, "status": "aligned", "notes": "URL to download from (can be SpEL expression)" },
+        { "name": "filename", "type": "string", "status": "aligned", "notes": "Optional filename override" }
+      ],
+      "outputs": [
+        { "name": "file", "type": "object", "status": "aligned", "action": "keep", "notes": "Canonical FileRef {_type:'file', path, name, mimeType, size}. Reference via {{core:label.output.file}} to render in interfaces; marketplace + share previews recognise this shape (showcase HMAC rewriter)." },
+        { "name": "source_url", "type": "string", "status": "aligned", "action": "keep", "notes": "Original URL that was downloaded from" }
+      ]
+    },
+
+    {
+      "id": "compression",
+      "name": "Compression",
+      "category": "action",
+      "description": "Compresses or decompresses data. Compress produces a file stored in object storage; decompress returns the decompressed string.",
+      "parameters": [
+        { "name": "operation", "type": "string", "required": true, "enum": ["compress", "decompress"], "default": "compress", "status": "aligned", "notes": "Operation to perform" },
+        { "name": "format", "type": "string", "enum": ["gzip", "zip", "base64", "deflate"], "default": "gzip", "status": "aligned", "notes": "Compression format" },
+        { "name": "value", "type": "string", "required": true, "status": "aligned", "notes": "SpEL expression referencing the data to compress/decompress" },
+        { "name": "filename", "type": "string", "status": "aligned", "notes": "Optional output filename (compress only)" }
+      ],
+      "outputs": [
+        { "name": "result", "type": "string", "status": "aligned", "action": "keep", "notes": "The decompressed result (decompress operation only - compress emits `file` instead)." },
+        { "name": "file", "type": "object", "status": "aligned", "action": "keep", "notes": "Canonical FileRef {_type:'file', path, name, mimeType, size} (compress only). Reference via {{core:label.output.file}}; marketplace + share previews recognise this shape." },
+        { "name": "operation", "type": "string", "status": "aligned", "action": "keep", "notes": "The compression operation performed" },
+        { "name": "format", "type": "string", "status": "aligned", "action": "keep", "notes": "The compression format used" },
+        { "name": "success", "type": "boolean", "status": "aligned", "action": "keep", "notes": "Whether the operation was successful" }
+      ]
+    },
+
+    {
+      "id": "convert_to_file",
+      "name": "Convert to File",
+      "category": "action",
+      "description": "Converts data (list of maps) to a file format (CSV, Excel/XLSX, JSON, TXT) and stores it in object storage",
+      "parameters": [
+        { "name": "format", "type": "string", "enum": ["csv", "xlsx", "json", "txt"], "default": "csv", "status": "aligned", "notes": "Output file format" },
+        { "name": "value", "type": "string", "required": true, "status": "aligned", "notes": "SpEL expression referencing the list of maps to convert" },
+        { "name": "filename", "type": "string", "status": "aligned", "notes": "Output filename without extension (default: export)" },
+        { "name": "delimiter", "type": "string", "default": ",", "status": "aligned", "notes": "CSV delimiter (csv only)" },
+        { "name": "includeHeaders", "type": "string", "enum": ["yes", "no"], "default": "yes", "status": "aligned", "notes": "Include column headers in CSV/XLSX (yes or no)" }
+      ],
+      "outputs": [
+        { "name": "file", "type": "object", "status": "aligned", "action": "keep", "notes": "Canonical FileRef {_type:'file', path, name, mimeType, size}. Reference via {{core:label.output.file}}; marketplace + share previews recognise this shape." },
+        { "name": "format", "type": "string", "status": "aligned", "action": "keep", "notes": "Output file format used" },
+        { "name": "row_count", "type": "number", "status": "aligned", "action": "keep", "notes": "Number of rows written to the file" },
+        { "name": "success", "type": "boolean", "status": "aligned", "action": "keep", "notes": "Whether conversion was successful" }
+      ]
+    },
+
+    {
+      "id": "sftp",
+      "name": "SFTP",
+      "category": "action",
+      "description": "File operations on remote servers via SFTP: upload, download, list, delete, rename, mkdir",
+      "parameters": [
+        { "name": "host", "type": "string", "required": true, "status": "aligned", "notes": "SFTP server hostname or IP" },
+        { "name": "port", "type": "number", "default": 22, "status": "aligned", "notes": "SFTP server port (default: 22)" },
+        { "name": "username", "type": "string", "required": true, "status": "aligned" },
+        { "name": "authMethod", "type": "string", "enum": ["password", "privateKey"], "default": "password", "status": "aligned" },
+        { "name": "password", "type": "string", "status": "aligned", "notes": "Password (authMethod=password)" },
+        { "name": "privateKey", "type": "string", "status": "aligned", "notes": "PEM private key content (authMethod=privateKey)" },
+        { "name": "operation", "type": "string", "required": true, "enum": ["upload", "download", "list", "delete", "rename", "mkdir"], "default": "list", "status": "aligned" },
+        { "name": "remotePath", "type": "string", "required": true, "status": "aligned", "notes": "Remote file/directory path" },
+        { "name": "localContent", "type": "string", "status": "aligned", "notes": "SpEL expression for content to upload (upload only)" },
+        { "name": "newPath", "type": "string", "status": "aligned", "notes": "New remote path for rename operation" },
+        { "name": "timeout", "type": "number", "default": 30000, "status": "aligned", "notes": "Connection timeout in milliseconds" },
+        { "name": "credentialId", "type": "number", "status": "aligned", "notes": "Optional stored credential ID" }
+      ],
+      "outputs": [
+        { "name": "success", "type": "boolean", "status": "aligned", "action": "keep", "notes": "True if the SFTP operation succeeded" },
+        { "name": "operation", "type": "string", "status": "aligned", "action": "keep", "notes": "The SFTP operation performed" },
+        { "name": "remote_path", "type": "string", "status": "aligned", "action": "keep", "notes": "The remote file/directory path" },
+        { "name": "files", "type": "array", "status": "aligned", "action": "keep", "notes": "Array of file entries for list operation: {name, size, is_dir, modified}" },
+        { "name": "file_count", "type": "number", "status": "aligned", "action": "keep", "notes": "Number of file entries returned (list operation)" },
+        { "name": "file", "type": "object", "status": "aligned", "action": "keep", "notes": "Canonical FileRef {_type:'file', path, name, mimeType, size} (download operation). Reference via {{core:label.output.file}}; marketplace + share previews recognise this shape." },
+        { "name": "new_path", "type": "string", "status": "aligned", "action": "keep", "notes": "New file path after rename operation" },
+        { "name": "uploaded_size", "type": "number", "status": "aligned", "action": "keep", "notes": "Number of bytes written to the remote server (upload operation only)" },
+        { "name": "duration_ms", "type": "number", "status": "aligned", "action": "keep", "notes": "Total operation time in milliseconds" }
+      ]
+    },
+
+    {
+      "id": "http_request",
+      "name": "HTTP Request",
+      "category": "action",
+      "description": "Makes HTTP calls to external APIs. Supports GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS with various auth and body types.",
+      "parameters": [
+        { "name": "method", "type": "string", "required": true, "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"], "default": "GET", "status": "aligned" },
+        { "name": "url", "type": "string", "required": true, "status": "aligned", "notes": "URL expression (supports SpEL templates)" },
+        { "name": "authType", "type": "string", "enum": ["none", "basic", "bearer", "api-key", "custom-header"], "default": "none", "status": "aligned" },
+        { "name": "authConfig", "type": "object", "status": "aligned", "notes": "Auth configuration: username/password (basic), bearerToken, apiKeyName/apiKeyValue/apiKeyLocation, headerName/headerValue" },
+        { "name": "queryParams", "type": "array", "itemType": "object", "status": "aligned", "notes": "Array of {key, value} pairs for query string" },
+        { "name": "headers", "type": "array", "itemType": "object", "status": "aligned", "notes": "Array of {key, value} pairs for custom headers" },
+        { "name": "bodyType", "type": "string", "enum": ["none", "json", "form-data", "x-www-form-urlencoded", "raw"], "default": "none", "status": "aligned" },
+        { "name": "body", "type": "string", "status": "aligned", "notes": "Body expression (supports SpEL templates)" },
+        { "name": "contentType", "type": "string", "status": "aligned", "notes": "Custom Content-Type header override" },
+        { "name": "timeout", "type": "number", "status": "aligned", "notes": "Request timeout in milliseconds (max 300000)" }
+      ],
+      "outputs": [
+        { "name": "success", "type": "boolean", "status": "aligned", "action": "keep", "notes": "Whether the HTTP request succeeded (2xx) or failed (4xx/5xx). Workflow continues either way." },
+        { "name": "status", "type": "number", "status": "aligned", "action": "keep", "notes": "HTTP status code (200, 404, 500, etc.)" },
+        { "name": "statusText", "type": "string", "status": "aligned", "action": "keep", "notes": "HTTP status text" },
+        { "name": "headers", "type": "object", "status": "aligned", "action": "keep", "notes": "Response headers (single-value map)" },
+        { "name": "data", "type": "any", "status": "aligned", "action": "keep", "notes": "Response body (parsed JSON or raw string). Empty object if no body." },
+        { "name": "error", "type": "string", "status": "aligned", "action": "keep", "notes": "Error message (only on HTTP error responses)" },
+        { "name": "input_data", "type": "object", "status": "aligned", "action": "keep", "notes": "Snapshot of resolved request params (method, url, body, bodyType, authType) for inspector" }
+      ]
+    },
+
+    {
+      "id": "data_input",
+      "name": "Data Input",
+      "category": "action",
+      "description": "Provides multiple labeled text and/or file inputs to the workflow. Each item's label becomes an output key.",
+      "parameters": [
+        { "name": "items", "type": "array", "itemType": "object", "required": true, "status": "aligned", "notes": "Array of DataInputItem with label, type (text/file), text, file" }
+      ],
+      "outputs": [
+        { "name": "{item.label}", "type": "any", "status": "aligned", "action": "keep", "notes": "Dynamic per item - text items resolve SpEL, file items pass FileRef object" },
+        { "name": "input_data", "type": "object", "status": "aligned", "action": "keep", "notes": "Raw expressions before resolution, for inspector visibility" }
+      ],
+      "nestedTypes": {
+        "DataInputItem": [
+          { "name": "label", "type": "string", "required": true },
+          { "name": "type", "type": "string", "required": true, "enum": ["text", "file"] },
+          { "name": "text", "type": "string", "notes": "SpEL expression (for text type)" },
+          { "name": "file", "type": "object", "notes": "FileRef object (for file type)" }
+        ]
+      }
+    },
+
+    {
+      "id": "user_approval",
+      "name": "User Approval",
+      "category": "control_flow",
+      "description": "Branching node with ports: approved, rejected, timeout. Registers USER_APPROVAL signal and yields until resolved.",
+      "parameters": [
+        { "name": "approverRoles", "type": "array", "itemType": "string", "status": "aligned", "notes": "List of roles allowed to approve" },
+        { "name": "requiredApprovals", "type": "number", "default": 1, "status": "aligned", "notes": "Number of approvals required (multi-level)" },
+        { "name": "timeoutMs", "type": "number", "default": 86400000, "status": "aligned", "notes": "Timeout in milliseconds (default 24h). Triggers timeout port." },
+        { "name": "contextTemplate", "type": "string", "required": true, "status": "aligned", "notes": "Template (literal + {{...}} expressions) resolved at pause time and shown to the approver as approvalContext. Required (warning, non-blocking): the run still works if empty." }
+      ],
+      "outputs": [
+        { "name": "approver_roles", "type": "array", "itemType": "string", "status": "aligned", "action": "keep", "notes": "Configured approver roles (in AWAITING_SIGNAL output)" },
+        { "name": "required_approvals", "type": "number", "status": "aligned", "action": "keep", "notes": "Configured required approvals count" },
+        { "name": "expires_at", "type": "string", "status": "aligned", "action": "keep", "notes": "ISO timestamp when approval expires" },
+        { "name": "selected_port", "type": "string", "status": "aligned", "action": "keep", "notes": "approved, rejected, or timeout - set after signal resolution" }
+      ]
+    },
+
+    {
+      "id": "task",
+      "name": "Task",
+      "category": "action",
+      "description": "CRUD operations on agent-board tasks from a workflow: create_task, get_task, update_task, delete_task, list_tasks. create_task with agentId auto-triggers the assignee asynchronously (the DAG does NOT wait).",
+      "parameters": [
+        { "name": "operation", "type": "string", "required": true, "enum": ["create_task", "get_task", "update_task", "delete_task", "list_tasks"], "default": "list_tasks", "status": "aligned", "frontendName": "taskOperation" },
+        { "name": "taskId", "type": "string", "status": "aligned", "frontendName": "taskTaskId", "notes": "Template - UUID of existing task (required for get/update/delete)" },
+        { "name": "title", "type": "string", "status": "aligned", "frontendName": "taskTitle", "notes": "Template - task title (required for create, optional for update)" },
+        { "name": "instructions", "type": "string", "status": "aligned", "frontendName": "taskInstructions", "notes": "Template - task instructions (create/update)" },
+        { "name": "priority", "type": "string", "enum": ["low", "normal", "high", "urgent"], "status": "aligned", "frontendName": "taskPriority", "notes": "Priority for create/update, or filter for list" },
+        { "name": "agentId", "type": "string", "status": "aligned", "frontendName": "taskAgentId", "notes": "Template - assignee agent UUID. If set on create, the agent auto-fires asynchronously" },
+        { "name": "reviewerAgentId", "type": "string", "status": "aligned", "frontendName": "taskReviewerAgentId", "notes": "Template - reviewer agent UUID (create only)" },
+        { "name": "status", "type": "string", "enum": ["pending", "in_progress", "in_review", "completed", "failed", "cancelled"], "status": "aligned", "frontendName": "taskStatus", "notes": "New status for update, or filter for list" },
+        { "name": "search", "type": "string", "status": "aligned", "frontendName": "taskSearch", "notes": "Template - title search term (list only)" },
+        { "name": "limit", "type": "number", "default": 50, "status": "aligned", "frontendName": "taskLimit", "notes": "Max results for list (1-200)" },
+        { "name": "taskContext", "type": "object", "status": "aligned", "frontendName": "taskContextJson", "notes": "Arbitrary key/value context attached to the task (create only). String values support templates. Stored as a JSON string in the builder form, as an object in the plan" }
+      ],
+      "outputs": [
+        { "name": "node_type", "type": "string", "status": "aligned", "action": "keep", "notes": "Always 'TASK'" },
+        { "name": "operation", "type": "string", "status": "aligned", "action": "keep", "notes": "The operation that was executed" },
+        { "name": "success", "type": "boolean", "status": "aligned", "action": "keep", "notes": "Whether the operation succeeded" },
+        { "name": "task", "type": "object", "status": "aligned", "action": "keep", "notes": "The task object (create/get/update). status starts pending when agentId auto-triggers; result stays null until the agent finishes" },
+        { "name": "task_id", "type": "string", "status": "aligned", "action": "keep", "notes": "The cancelled task ID (delete_task only)" },
+        { "name": "tasks", "type": "array", "itemType": "object", "status": "aligned", "action": "keep", "notes": "Array of task objects (list_tasks only, workspace-scoped)" },
+        { "name": "count", "type": "number", "status": "aligned", "action": "keep", "notes": "Number of tasks in the current page (list_tasks only)" },
+        { "name": "total", "type": "number", "status": "aligned", "action": "keep", "notes": "Total matching tasks (list_tasks only)" },
+        { "name": "resolved_params", "type": "object", "status": "aligned", "action": "keep", "notes": "Snapshot of resolved request params for the inspector" }
+      ]
+    },
+
+    {
+      "id": "insert-row",
+      "name": "Insert Row",
+      "category": "action",
+      "description": "Insert new rows in a database table",
+      "parameters": [
+        { "name": "table_id", "type": "number", "required": true, "status": "aligned" },
+        { "name": "columns", "type": "object", "required": true, "status": "aligned", "notes": "Map of column name to value/expression" }
+      ],
+      "outputs": [
+        { "name": "operation", "type": "string", "status": "aligned", "action": "keep", "notes": "CRUD operation name (e.g. create-row)" },
+        { "name": "success", "type": "boolean", "status": "aligned", "action": "keep", "notes": "Whether the operation succeeded" },
+        { "name": "message", "type": "string", "status": "aligned", "action": "keep", "notes": "Human-readable result message" },
+        { "name": "row_id", "type": "string", "status": "aligned", "action": "keep" },
+        { "name": "created_at", "type": "datetime", "status": "aligned", "action": "keep" },
+        { "name": "inserted_count", "type": "number", "status": "aligned", "action": "keep", "notes": "Number of rows inserted" },
+        { "name": "inserted_values", "type": "object", "status": "aligned", "action": "keep", "notes": "Map of column names to inserted values" }
+      ]
+    },
+
+    {
+      "id": "get-rows",
+      "name": "Get Rows",
+      "category": "action",
+      "description": "Get rows from a database table with filters",
+      "parameters": [
+        { "name": "table_id", "type": "number", "required": true, "status": "aligned" },
+        { "name": "where", "type": "object", "status": "aligned", "notes": "Filter condition: {column, operator, value}" },
+        { "name": "limit", "type": "number", "status": "aligned" }
+      ],
+      "outputs": [
+        { "name": "operation", "type": "string", "status": "aligned", "action": "keep", "notes": "CRUD operation name (e.g. read-row)" },
+        { "name": "success", "type": "boolean", "status": "aligned", "action": "keep", "notes": "Whether the operation succeeded" },
+        { "name": "message", "type": "string", "status": "aligned", "action": "keep", "notes": "Human-readable result message" },
+        { "name": "rows", "type": "array", "itemType": "object", "status": "aligned", "action": "keep" },
+        { "name": "row_count", "type": "number", "status": "aligned", "action": "keep", "notes": "Number of rows returned" },
+        { "name": "rowCount", "type": "number", "status": "aligned", "action": "keep", "notes": "Alias for row_count (camelCase)" },
+        { "name": "has_more", "type": "boolean", "status": "aligned", "action": "keep", "notes": "Whether more rows exist beyond limit" },
+        { "name": "offset", "type": "number", "status": "aligned", "action": "keep", "notes": "Pagination offset used" }
+      ]
+    },
+
+    {
+      "id": "update-row",
+      "name": "Update Row",
+      "category": "action",
+      "description": "Update existing rows in a database table",
+      "parameters": [
+        { "name": "table_id", "type": "number", "required": true, "status": "aligned" },
+        { "name": "where", "type": "object", "required": true, "status": "aligned", "notes": "Filter condition: {column, operator, value}" },
+        { "name": "set", "type": "object", "required": true, "status": "aligned", "notes": "Map of column name to new value" }
+      ],
+      "outputs": [
+        { "name": "operation", "type": "string", "status": "aligned", "action": "keep", "notes": "CRUD operation name (e.g. update-row)" },
+        { "name": "success", "type": "boolean", "status": "aligned", "action": "keep", "notes": "Whether the operation succeeded" },
+        { "name": "message", "type": "string", "status": "aligned", "action": "keep", "notes": "Human-readable result message" },
+        { "name": "updated_count", "type": "number", "status": "aligned", "action": "keep" },
+        { "name": "rows_affected", "type": "number", "status": "aligned", "action": "keep" },
+        { "name": "updated_at", "type": "datetime", "status": "aligned", "action": "keep" }
+      ]
+    },
+
+    {
+      "id": "delete-row",
+      "name": "Delete Row",
+      "category": "action",
+      "description": "Delete rows from a database table",
+      "parameters": [
+        { "name": "table_id", "type": "number", "required": true, "status": "aligned" },
+        { "name": "where", "type": "object", "required": true, "status": "aligned", "notes": "Filter condition: {column, operator, value}" }
+      ],
+      "outputs": [
+        { "name": "operation", "type": "string", "status": "aligned", "action": "keep", "notes": "CRUD operation name (e.g. delete-row)" },
+        { "name": "success", "type": "boolean", "status": "aligned", "action": "keep", "notes": "Whether the operation succeeded" },
+        { "name": "message", "type": "string", "status": "aligned", "action": "keep", "notes": "Human-readable result message" },
+        { "name": "deleted_count", "type": "number", "status": "aligned", "action": "keep" },
+        { "name": "rows_affected", "type": "number", "status": "aligned", "action": "keep" },
+        { "name": "deleted_at", "type": "datetime", "status": "aligned", "action": "keep" }
+      ]
+    },
+
+    {
+      "id": "create-column",
+      "name": "Create Column",
+      "category": "action",
+      "description": "Create new columns in a database table",
+      "parameters": [
+        { "name": "table_id", "type": "number", "required": true, "status": "aligned" },
+        { "name": "columns", "type": "array", "required": true, "status": "aligned", "notes": "Array of {name, type, defaultValue?}" }
+      ],
+      "outputs": [
+        { "name": "operation", "type": "string", "status": "aligned", "action": "keep", "notes": "CRUD operation name (create-column)" },
+        { "name": "success", "type": "boolean", "status": "aligned", "action": "keep", "notes": "Whether the operation succeeded" },
+        { "name": "message", "type": "string", "status": "aligned", "action": "keep", "notes": "Human-readable result message" },
+        { "name": "createdColumns", "type": "array", "status": "aligned", "action": "keep", "notes": "List of column names created (camelCase, from CrudToolExecutor)" }
+      ]
+    },
+
+    {
+      "id": "find-row",
+      "name": "Find Row",
+      "category": "action",
+      "description": "Queries a data source and executes successor nodes in parallel for each found row. Combines CRUD read with split-like parallel execution.",
+      "parameters": [
+        { "name": "table_id", "type": "number", "required": true, "status": "aligned", "notes": "Datasource ID (alias: dataSourceId)" },
+        { "name": "where", "type": "object", "status": "aligned", "notes": "Filter condition: {column, operator, value}" },
+        { "name": "maxItems", "type": "number", "status": "aligned", "notes": "Maximum number of rows to process. Caps the result set." }
+      ],
+      "outputs": [
+        { "name": "current_item", "type": "object", "description": "Current row being processed in parallel branch (runtime context, body nodes only)", "runtimeOnly": true },
+        { "name": "current_index", "type": "number", "description": "0-based index of current row (runtime context, body nodes only)", "runtimeOnly": true },
+        { "name": "items", "type": "array", "itemType": "object", "status": "aligned", "action": "keep", "notes": "All found rows (after limit applied)" },
+        { "name": "item_count", "type": "number", "status": "aligned", "action": "keep", "notes": "Number of items found" },
+        { "name": "total_before_limit", "type": "number", "status": "aligned", "action": "keep", "notes": "Total rows before maxItems cap" },
+        { "name": "has_more", "type": "boolean", "status": "aligned", "action": "keep", "notes": "Whether more rows exist beyond the limit" },
+        { "name": "exit_reason", "type": "string", "status": "aligned", "action": "keep", "notes": "items_found or empty_result" },
+        { "name": "find_id", "type": "string", "status": "aligned", "action": "keep", "notes": "Node ID of the find node (used for split context)" },
+        { "name": "max_items", "type": "number", "status": "aligned", "action": "keep", "notes": "Configured max items cap" },
+        { "name": "split_strategy", "type": "string", "status": "aligned", "action": "keep", "notes": "Execution strategy for parallel items" },
+        { "name": "terminated", "type": "boolean", "status": "aligned", "action": "keep", "notes": "Whether find has terminated (all items processed or empty)" }
+      ]
+    }
+  ]
+}

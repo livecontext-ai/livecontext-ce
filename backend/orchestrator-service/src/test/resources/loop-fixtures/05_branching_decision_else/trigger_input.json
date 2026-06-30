@@ -1,0 +1,6 @@
+{
+  "__harness_directives": {
+    "comment": "MockToolsGateway returns kind='a' from mock/fetch so the 'if' branch fires and the 'else' branch is skipped. The merge must resolve with one COMPLETED predecessor (branch_a) and one SKIPPED predecessor (branch_b) per the implicit-merge contract.",
+    "mock_fetch_output": { "kind": "a", "value": 42 }
+  }
+}

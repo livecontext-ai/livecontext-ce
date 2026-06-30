@@ -1,0 +1,740 @@
+server:
+  port: 8090
+  # Finish in-flight HTTP requests before closing the connector on SIGTERM.
+  # Long-running agent executions are NOT covered by this (they run on the queue
+  # worker pools) - those drain via AgentQueueWorkerService's SmartLifecycle.stop()
+  # (phase Integer.MAX_VALUE, runs BEFORE this HTTP phase and before Lettuce stops).
+  shutdown: graceful
+
+# PostHog server-side product analytics (summarized "what agents do" events).
+# Safe defaults: OFF + blank key, so CE / self-hosted / local emit NOTHING - no
+# data leaves the box unless explicitly configured. Cloud enables it via env on
+# the box (POSTHOG_ENABLED=true + POSTHOG_API_KEY in env.conf). EU host for GDPR.
+posthog:
+  enabled: ${POSTHOG_ENABLED:false}
+  api-key: ${POSTHOG_API_KEY:}
+  host: ${POSTHOG_HOST:https://eu.i.posthog.com}
+
+spring:
+  application:
+    name: agent-service
+  lifecycle:
+    # Upper bound for each graceful-shutdown phase (HTTP requests). The queue worker
+    # pools manage their own (longer) drain SYNCHRONOUSLY in SmartLifecycle.stop()
+    # (phase Integer.MAX_VALUE - a synchronous stop blocks the close thread, so this
+    # per-phase ceiling does not truncate it) - see scaling.agent.queue.drain-timeout-seconds.
+    timeout-per-shutdown-phase: 60s
+  datasource:
+    url: jdbc:postgresql://localhost:5432/apimarketplace?currentSchema=agent
+    username: postgres
+    password: postgres
+    hikari:
+      maximum-pool-size: 30
+      minimum-idle: 5
+      connection-timeout: 20000
+      idle-timeout: 300000
+      max-lifetime: 600000
+      # Sets the HMAC secret read by the V109 audit trigger
+      # (compute_model_field_edit_hmac) on every newly-acquired physical
+      # connection. Empty value => trigger no-ops (dev / unset). The value is
+      # validated at startup by ModelAuditHmacConfig so it cannot contain
+      # characters that would break out of the SQL string literal.
+      connection-init-sql: "SELECT set_config('app.model_audit_hmac_key', '${MODEL_AUDIT_HMAC_KEY:}', false)"
+  jpa:
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        default_schema: agent
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: false
+  jackson:
+    time-zone: UTC
+    serialization:
+      write-dates-as-timestamps: false
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${SPRING_DATA_REDIS_PASSWORD:}
+
+# Gateway authentication
+gateway:
+  filter:
+    secret-key: ${GATEWAY_SECRET_KEY:}
+    verification-enabled: ${GATEWAY_VERIFICATION_ENABLED:true}
+    public-paths:
+      - /health
+      - /actuator
+      - /api/internal/
+      - /api/agent-tools
+      - /api/agents
+      - /api/skills/summary
+      - /api/agent/cli/
+
+# Inter-service communication
+services:
+  orchestrator-url: ${ORCHESTRATOR_SERVICE_URL:http://localhost:8099}
+  conversation-url: ${CONVERSATION_SERVICE_URL:http://localhost:8087}
+  datasource-url: ${DATASOURCE_SERVICE_URL:http://localhost:8088}
+  interface-url: ${INTERFACE_SERVICE_URL:http://localhost:8089}
+  catalog-url: ${CATALOG_SERVICE_URL:http://localhost:8081}
+  auth-service:
+    url: ${AUTH_SERVICE_URL:http://localhost:8083}
+  publication-url: ${PUBLICATION_SERVICE_URL:http://localhost:8092}
+
+# CE LLM relay - centralized (accrue→settle) billing for linked CE installs.
+# Full detail: the project docs
+ce-relay:
+  centralized-billing:
+    # Cloud kill-switch. true: honor a request's executionId and bill the CE execution as ONE
+    # aggregated CE_LLM_RELAY ledger line. false: ignore executionId and bill per forwarded call
+    # (legacy fallback - safe, unique sourceIds, only loses per-message aggregation). This is the
+    # documented rollback switch.
+    enabled: ${CE_RELAY_CENTRALIZED_BILLING_ENABLED:true}
+  reaper:
+    # Crash-recovery sweep that settles accruals abandoned by a CE install that crashed before
+    # sending its terminal /settle. Idempotent + ShedLock-guarded.
+    cron: ${CE_RELAY_REAPER_CRON:0 */5 * * * *}
+    grace-seconds: ${CE_RELAY_REAPER_GRACE_SECONDS:1800}
+    batch-size: ${CE_RELAY_REAPER_BATCH_SIZE:200}
+
+# Claude Code bridge
+conversation:
+  bridge:
+    enabled: ${CONVERSATION_BRIDGE_ENABLED:true}
+    url: ${BRIDGE_SERVICE_URL:http://localhost:8093}
+
+# Credential encryption (shared common-security module)
+credential:
+  encryption:
+    password: ${CREDENTIAL_ENCRYPTION_PASSWORD:}
+    salt: ${CREDENTIAL_ENCRYPTION_SALT:}
+
+# AI/LLM provider configuration (shared-agent-lib)
+# Note: models must be comma-separated for @Value annotation to work
+ai:
+  agent:
+    # default-model/default-provider removed: resolved dynamically from first AI provider
+    defaults:
+      temperature: 0.7
+      # Output-token budget per LLM turn. Sent to the model and clamped at runtime
+      # to the model's real ceiling via MaxTokensClamp, so this high default never
+      # 400s a low-cap model (DeepSeek-chat = 8192).
+      max-tokens: 16000
+      max-iterations: 100
+      execution-timeout: 3600
+      # Guard-threshold defaults (V100 unified cap) - per-agent override via AgentEntity.max_per_resource_per_turn
+      max-per-resource-per-turn: 5   # Uniform cap applied to each tracked resource type (agent/skill/sub_agent/interface/workflow/table)
+      loop-identical-stop: 15        # LoopDetector identical-call hard stop
+      loop-consecutive-stop: 40      # LoopDetector consecutive-call hard stop
+      # Catalog row fallbacks applied by CatalogMergeService when a feed
+      # does not supply rate limits. Every row MUST have non-null rate
+      # limits so the limiter enforces a ceiling - LiteLLM only populates
+      # rpm/tpm for ~1.8% of models, so these defaults catch the rest.
+      rate-limit-tpm: 60000
+      rate-limit-rpm: 500
+      rate-limit-tpm-per-tenant: 20000
+      rate-limit-rpm-per-tenant: 200
+    cli:
+      models:
+        opus: claude-opus-4-6
+        sonnet: claude-sonnet-4-6
+        haiku: claude-haiku-4-5
+    providers:
+      anthropic:
+        enabled: true
+        display-order: 1
+        api-key: ${ANTHROPIC_API_KEY:}
+        api-url: https://api.anthropic.com/v1/messages
+        models: claude-opus-4-6,claude-sonnet-4-6,claude-haiku-4-5
+      openai:
+        enabled: true
+        display-order: 2
+        api-key: ${OPENAI_API_KEY:}
+        api-url: https://api.openai.com/v1/chat/completions
+        models: gpt-5.4,gpt-5.4-mini,gpt-5.2,gpt-5,gpt-5-mini,o4-mini
+      google:
+        enabled: true
+        display-order: 3
+        api-key: ${GOOGLE_API_KEY:}
+        api-url: https://generativelanguage.googleapis.com/v1beta/models
+        models: gemini-3-pro-preview,gemini-3-flash-preview
+      mistral:
+        enabled: true
+        display-order: 4
+        api-key: ${MISTRAL_API_KEY:}
+        api-url: https://api.mistral.ai/v1/chat/completions
+        models: mistral-large-latest,mistral-medium-3,mistral-small-latest
+      deepseek:
+        enabled: true
+        display-order: 5
+        api-key: ${DEEPSEEK_API_KEY:}
+        api-url: https://api.deepseek.com/v1/chat/completions
+        models: deepseek-chat,deepseek-coder
+      # Bridge providers - CLI-based, no API key needed (OAuth subscription).
+      # Models MUST match BridgeAllowlist.MODELS in shared-agent-lib
+      # (backend/shared-agent-lib/.../bridge/BridgeAllowlist.java). V128 is the
+      # authoritative seed; the test `BridgeProvidersHavePricingTest` asserts
+      # yml↔allowlist↔V128 parity. The adapters (mcp/bridge/adapters/*.mjs)
+      # pass the model string verbatim to each CLI.
+      claude-code:
+        enabled: ${BRIDGE_CLAUDE_CODE_ENABLED:true}
+        display-order: 6
+        models: claude-opus-4-7,claude-opus-4-6,claude-sonnet-4-6,claude-sonnet-4-5,claude-haiku-4-5
+      codex:
+        enabled: ${BRIDGE_CODEX_ENABLED:true}
+        display-order: 7
+        models: gpt-5.4,gpt-5.4-mini,gpt-5.3-codex,gpt-5.2
+      gemini-cli:
+        enabled: ${BRIDGE_GEMINI_CLI_ENABLED:true}
+        display-order: 8
+        models: gemini-3.1-pro-preview,gemini-3-flash-preview,gemini-2.5-pro,gemini-2.5-flash
+      mistral-vibe:
+        enabled: ${BRIDGE_MISTRAL_VIBE_ENABLED:true}
+        display-order: 9
+        models: devstral-2,devstral-small-2
+      xai:
+        enabled: true
+        display-order: 10
+        api-key: ${XAI_API_KEY:}
+        api-url: https://api.x.ai/v1/chat/completions
+        models: grok-3-beta,grok-3-mini-beta
+      perplexity:
+        enabled: true
+        display-order: 11
+        api-key: ${PERPLEXITY_API_KEY:}
+        api-url: https://api.perplexity.ai/chat/completions
+        models: sonar-pro,sonar-reasoning-pro
+      cohere:
+        enabled: true
+        display-order: 12
+        api-key: ${COHERE_API_KEY:}
+        api-url: https://api.cohere.ai/compatibility/v1/chat/completions
+        models: command-r-plus-08-2024,command-r-08-2024
+      zai:
+        enabled: true
+        display-order: 13
+        api-key: ${ZAI_API_KEY:}
+        api-url: https://api.z.ai/api/coding/paas/v4/chat/completions
+        models: glm-5.1,glm-5,glm-5-turbo
+      openrouter:
+        enabled: true
+        display-order: 14
+        api-key: ${OPENROUTER_API_KEY:}
+        api-url: https://openrouter.ai/api/v1/chat/completions
+        models: anthropic/claude-sonnet-4-20250514,openai/gpt-5.4,google/gemini-3-pro-preview
+
+    # Model pricing configuration (USD per 1M tokens).
+    #
+    # AUTHORITATIVE SOURCE: the seed baked into V80/V112 migrations. The auth-service
+    # model_pricing table is populated from those seeds and is the ONLY source the
+    # billing path reads. This YAML block is DISPLAY-ONLY (admin catalog, tier labels).
+    # Keep it in lockstep with V112 - if the two drift, the admin UI shows one price
+    # and the user gets charged another. An audit-time regression test
+    # (ModelPricingConfigMatchesV112SeedTest) verifies this invariant on every build.
+    pricing:
+      # OpenAI Models (March 2026) - brackets needed for dots in keys
+      "[gpt-5.4]":
+        input: 2.50
+        output: 15.00
+      "[gpt-5.4-mini]":
+        input: 0.75
+        output: 4.50
+      "[gpt-5.2]":
+        input: 1.75
+        output: 14.00
+      gpt-5:
+        input: 1.25
+        output: 10.00
+      gpt-5-mini:
+        input: 0.25
+        output: 2.00
+      o4-mini:
+        input: 1.10
+        output: 4.40
+      # Anthropic Models (March 2026)
+      claude-opus-4-6:
+        input: 5.00
+        output: 25.00
+      claude-sonnet-4-6:
+        input: 3.00
+        output: 15.00
+      claude-haiku-4-5:
+        input: 1.00
+        output: 5.00
+      # Google Models
+      gemini-3-pro-preview:
+        input: 1.25
+        output: 10.00
+      gemini-3-flash-preview:
+        input: 0.50
+        output: 3.00
+      # Mistral Models (March 2026)
+      mistral-large-latest:
+        input: 2.00
+        output: 6.00
+      mistral-medium-3:
+        input: 1.00
+        output: 3.00
+      mistral-small-latest:
+        input: 0.20
+        output: 0.60
+      # DeepSeek Models (March 2026)
+      deepseek-chat:
+        input: 0.28
+        output: 0.42
+      deepseek-coder:
+        input: 0.28
+        output: 0.42
+      # Bridge models route through the local CLI. Since V130 (Product 2026-04)
+      # bridges carry the underlying cloud model's list price for reporting
+      # fairness, and CreditService.consumeForChat bills them verbatim from
+      # auth.model_pricing - see CreditService.consumeForChat Javadoc. Entries
+      # below are the yml mirror used by the catalog picker / display order;
+      # auth.model_pricing is the billing source of truth, seeded by Flyway
+      # and reconciled by AuthPricingSyncClient on admin edits.
+      "[gpt-5.3-codex]":
+        input: 2.00
+        output: 12.00
+      # Gemini CLI bridge models (brackets needed for dots in keys)
+      "[gemini-2.5-pro]":
+        input: 1.25
+        output: 10.00
+      "[gemini-2.5-flash]":
+        input: 0.30
+        output: 2.50
+      "[gemini-3.1-pro-preview]":
+        input: 2.00
+        output: 12.00
+      "[gemini-3.1-flash]":
+        input: 0.30
+        output: 2.50
+      # Mistral Vibe bridge models
+      devstral-2:
+        input: 0.40
+        output: 2.00
+      devstral-small-2:
+        input: 0.10
+        output: 0.30
+      # xAI Models (April 2026)
+      grok-3-beta:
+        input: 3.00
+        output: 15.00
+      grok-3-mini-beta:
+        input: 0.30
+        output: 0.50
+      # Perplexity Models (April 2026)
+      sonar-pro:
+        input: 3.00
+        output: 15.00
+      sonar-reasoning-pro:
+        input: 2.00
+        output: 8.00
+      # Cohere Models (April 2026)
+      command-r-plus-08-2024:
+        input: 2.50
+        output: 10.00
+      command-r-08-2024:
+        input: 0.15
+        output: 0.60
+      # Z.AI / Zhipu Models (April 2026)
+      "[glm-5.1]":
+        input: 1.40
+        output: 4.40
+      glm-5:
+        input: 1.00
+        output: 3.20
+      glm-5-turbo:
+        input: 1.20
+        output: 4.00
+      # OpenRouter Models (passes through underlying provider pricing)
+      "[anthropic/claude-sonnet-4-20250514]":
+        input: 3.00
+        output: 15.00
+      "[openai/gpt-5.4]":
+        input: 2.50
+        output: 15.00
+      "[google/gemini-3-pro-preview]":
+        input: 1.25
+        output: 10.00
+
+    # Rate limits per model (TPM / RPM - global platform + per-tenant)
+    # Fetched 2026-04-11 from provider docs:
+    # - Anthropic: Tier 3 - platform.claude.com/docs/en/api/rate-limits (official, verbatim)
+    # - OpenAI:    Tier 4 - scriptbyai.com + simonwillison.net gpt-5 announcement
+    # - Google:    Tier 2 paid - yingtu.ai Gemini 2026 guide (Google no longer publishes per-tier tables)
+    # - Mistral:   Pro tier - workspace-shared quota (admin.mistral.ai is source of truth, not public)
+    # - DeepSeek:  no provider cap - we cap ourselves (api-docs.deepseek.com says "does NOT constrain")
+    # Models marked "fallback" below have no public source and inherit values from the closest confirmed model.
+    # Anthropic uses itpm/otpm split (input vs output); other providers use a single tpm (combined).
+    # Per-tenant ≈ 5% of global → ~20 concurrent heavy tenants can run full-speed.
+    rate-limits:
+      # OpenAI Models - Tier 4
+      "[gpt-5.4]":
+        tpm: 4000000
+        rpm: 10000
+        tpm-per-tenant: 200000
+        rpm-per-tenant: 500
+      "[gpt-5.4-mini]":
+        tpm: 10000000
+        rpm: 10000
+        tpm-per-tenant: 500000
+        rpm-per-tenant: 500
+      "[gpt-5.2]":                  # fallback: not in scriptbyai 2026 table - mirrors gpt-5 family
+        tpm: 4000000
+        rpm: 10000
+        tpm-per-tenant: 200000
+        rpm-per-tenant: 500
+      gpt-5:
+        tpm: 4000000
+        rpm: 10000
+        tpm-per-tenant: 200000
+        rpm-per-tenant: 500
+      gpt-5-mini:
+        tpm: 10000000
+        rpm: 10000
+        tpm-per-tenant: 500000
+        rpm-per-tenant: 500
+      o4-mini:
+        tpm: 10000000
+        rpm: 10000
+        tpm-per-tenant: 500000
+        rpm-per-tenant: 500
+      # Anthropic Models - Tier 3 (verbatim from platform.claude.com)
+      # NB: Opus 4.x share a SINGLE family pool (combined with 4.5/4.1/4.0); same for Sonnet 4.x.
+      # ITPM only counts uncached input tokens - cache hits are free for rate limit purposes.
+      claude-opus-4-6:
+        itpm: 800000
+        otpm: 160000
+        rpm: 2000
+        tpm-per-tenant: 40000
+        rpm-per-tenant: 100
+      claude-sonnet-4-6:
+        itpm: 800000
+        otpm: 160000
+        rpm: 2000
+        tpm-per-tenant: 40000
+        rpm-per-tenant: 100
+      claude-haiku-4-5:
+        itpm: 1000000
+        otpm: 200000
+        rpm: 2000
+        tpm-per-tenant: 50000
+        rpm-per-tenant: 100
+      # Google Models - Tier 2 paid (conservative; preview models are throttled tighter)
+      # Retuned 2026-04-29 from prod incident (run_<id>):
+      # Google T1 preview enforces ~25 RPM project-wide. Internal limit must be BELOW
+      # so WAIT mode engages before Google 429s us.
+      gemini-3-pro-preview:
+        tpm: 1000000
+        rpm: 20
+        tpm-per-tenant: 50000
+        rpm-per-tenant: 5
+      gemini-3-flash-preview:
+        tpm: 1000000
+        rpm: 20
+        tpm-per-tenant: 50000
+        rpm-per-tenant: 5
+      # Mistral Models - Pro tier (workspace-shared pool; per-model split is logical, not enforced)
+      mistral-large-latest:         # fallback: Mistral only exposes limits via admin.mistral.ai dashboard
+        tpm: 500000
+        rpm: 60
+        tpm-per-tenant: 25000
+        rpm-per-tenant: 10
+      mistral-medium-3:             # fallback: mirrors mistral-large
+        tpm: 500000
+        rpm: 60
+        tpm-per-tenant: 25000
+        rpm-per-tenant: 10
+      mistral-small-latest:         # fallback: ~2x large (cheaper tier, higher volume expected)
+        tpm: 1000000
+        rpm: 120
+        tpm-per-tenant: 50000
+        rpm-per-tenant: 20
+      # DeepSeek Models - platform-imposed ceiling (DeepSeek itself has no hard cap)
+      deepseek-chat:
+        tpm: 2000000
+        rpm: 5000
+        tpm-per-tenant: 100000
+        rpm-per-tenant: 250
+      deepseek-coder:
+        tpm: 2000000
+        rpm: 5000
+        tpm-per-tenant: 100000
+        rpm-per-tenant: 250
+      # Claude Code bridge - OAuth session quota (Claude Max subscription).
+      # Ids follow BridgeAllowlist (no -cc suffix since V128). The cloud
+      # Anthropic entries above (claude-opus-4-6, claude-sonnet-4-6) already
+      # define limits for these ids; the rate limiter keys on model id only,
+      # so bridge calls inherit the cloud tier-3 ceiling. Only add new ids
+      # here (e.g. claude-opus-4-7) that have no cloud entry above.
+      claude-opus-4-7:              # fallback: CLI subscription quota not publicly documented
+        tpm: 500000
+        rpm: 50
+        tpm-per-tenant: 25000
+        rpm-per-tenant: 5
+      # Codex CLI bridge (ChatGPT Plus OAuth; draws from gpt-5/gpt-5.4 underlying pool)
+      "[gpt-5.3-codex]":            # fallback: ChatGPT Plus session quota not publicly documented
+        tpm: 500000
+        rpm: 50
+        tpm-per-tenant: 25000
+        rpm-per-tenant: 5
+      # Gemini CLI bridge (Gemini Advanced OAuth; draws from 2.5 pro/flash underlying pool)
+      # All gemini bridge aliases retuned 2026-04-29 to align with Google T1 preview ~25 RPM.
+      "[gemini-2.5-pro]":
+        tpm: 1000000
+        rpm: 20
+        tpm-per-tenant: 50000
+        rpm-per-tenant: 5
+      "[gemini-2.5-flash]":
+        tpm: 1000000
+        rpm: 20
+        tpm-per-tenant: 50000
+        rpm-per-tenant: 5
+      "[gemini-3.1-pro-preview]":
+        tpm: 1000000
+        rpm: 20
+        tpm-per-tenant: 50000
+        rpm-per-tenant: 5
+      "[gemini-3.1-flash]":
+        tpm: 1000000
+        rpm: 20
+        tpm-per-tenant: 50000
+        rpm-per-tenant: 5
+      # Mistral Vibe bridge (Mistral Pro OAuth; workspace quota shared)
+      devstral-2:                   # fallback: mirrors mistral-large-latest
+        tpm: 500000
+        rpm: 60
+        tpm-per-tenant: 25000
+        rpm-per-tenant: 10
+      devstral-small-2:             # fallback: mirrors mistral-small-latest
+        tpm: 1000000
+        rpm: 120
+        tpm-per-tenant: 50000
+        rpm-per-tenant: 20
+      # xAI Models - Tier 2 ($100+ spent; source: hypereal.cloud/a/grok-3-api-rate-limits)
+      grok-3-beta:
+        tpm: 500000
+        rpm: 200
+        tpm-per-tenant: 25000
+        rpm-per-tenant: 10
+      grok-3-mini-beta:
+        tpm: 500000
+        rpm: 200
+        tpm-per-tenant: 25000
+        rpm-per-tenant: 10
+      # Perplexity Models - Tier 2 (source: docs.perplexity.ai/guides/usage-tiers)
+      # Perplexity does not publish TPM - we cap ourselves at 1M
+      sonar-pro:
+        tpm: 1000000
+        rpm: 500
+        tpm-per-tenant: 50000
+        rpm-per-tenant: 25
+      sonar-reasoning-pro:
+        tpm: 1000000
+        rpm: 500
+        tpm-per-tenant: 50000
+        rpm-per-tenant: 25
+      # Cohere Models - Production key (source: docs.cohere.com/docs/rate-limits)
+      # Cohere does not publish TPM - we cap ourselves at 1M
+      command-r-plus-08-2024:
+        tpm: 1000000
+        rpm: 500
+        tpm-per-tenant: 50000
+        rpm-per-tenant: 25
+      command-r-08-2024:
+        tpm: 1000000
+        rpm: 500
+        tpm-per-tenant: 50000
+        rpm-per-tenant: 25
+      # Z.AI / Zhipu Models - no public rate limit docs; conservative platform-imposed ceiling
+      "[glm-5.1]":
+        tpm: 1000000
+        rpm: 300
+        tpm-per-tenant: 50000
+        rpm-per-tenant: 15
+      glm-5:
+        tpm: 1000000
+        rpm: 300
+        tpm-per-tenant: 50000
+        rpm-per-tenant: 15
+      glm-5-turbo:
+        tpm: 1000000
+        rpm: 300
+        tpm-per-tenant: 50000
+        rpm-per-tenant: 15
+      # OpenRouter - pass-through (upstream provider limits apply); generous platform ceiling
+      "[anthropic/claude-sonnet-4-20250514]":
+        tpm: 2000000
+        rpm: 1000
+        tpm-per-tenant: 100000
+        rpm-per-tenant: 50
+      "[openai/gpt-5.4]":
+        tpm: 2000000
+        rpm: 1000
+        tpm-per-tenant: 100000
+        rpm-per-tenant: 50
+      "[google/gemini-3-pro-preview]":           # Retuned 2026-04-29: OpenRouter pass-through to Google T1 ~25 RPM
+        tpm: 1000000
+        rpm: 20
+        tpm-per-tenant: 50000
+        rpm-per-tenant: 5
+
+    # Model rankings (lower = better, based on LMArena leaderboard March 2026)
+    # Used for display ordering in the model selector
+    rankings:
+      "[gpt-5.4]": 1
+      claude-opus-4-6: 2
+      "[gpt-5.2]": 3
+      claude-sonnet-4-6: 4
+      gpt-5: 5
+      gemini-3-pro-preview: 6
+      "[gpt-5.4-mini]": 7
+      o4-mini: 8
+      mistral-large-latest: 9
+      gpt-5-mini: 10
+      gemini-3-flash-preview: 11
+      claude-haiku-4-5: 12
+      mistral-medium-3: 13
+      deepseek-chat: 14
+      deepseek-coder: 15
+      mistral-small-latest: 16
+      claude-opus-4-7: 17
+      "[gpt-5.3-codex]": 20
+      "[gemini-2.5-pro]": 21
+      "[gemini-2.5-flash]": 22
+      "[gemini-3.1-pro-preview]": 23
+      "[gemini-3.1-flash]": 24
+      devstral-2: 25
+      devstral-small-2: 26
+      # OpenAI-compatible provider models
+      grok-3-beta: 27
+      sonar-pro: 28
+      sonar-reasoning-pro: 29
+      "[glm-5.1]": 30
+      glm-5: 31
+      glm-5-turbo: 32
+      command-r-plus-08-2024: 33
+      grok-3-mini-beta: 34
+      command-r-08-2024: 35
+      "[anthropic/claude-sonnet-4-20250514]": 36
+      "[openai/gpt-5.4]": 37
+      "[google/gemini-3-pro-preview]": 38
+
+    # Model tiers (top, high, mid, budget)
+    tiers:
+      "[gpt-5.4]": top
+      claude-opus-4-6: top
+      "[gpt-5.2]": top
+      claude-sonnet-4-6: high
+      gpt-5: high
+      gemini-3-pro-preview: high
+      "[gpt-5.4-mini]": high
+      o4-mini: high
+      mistral-large-latest: mid
+      gpt-5-mini: mid
+      gemini-3-flash-preview: mid
+      claude-haiku-4-5: mid
+      mistral-medium-3: mid
+      deepseek-chat: budget
+      deepseek-coder: budget
+      mistral-small-latest: budget
+      claude-opus-4-7: top
+      "[gpt-5.3-codex]": top
+      "[gemini-2.5-pro]": high
+      "[gemini-2.5-flash]": mid
+      "[gemini-3.1-pro-preview]": high
+      "[gemini-3.1-flash]": mid
+      devstral-2: high
+      devstral-small-2: mid
+      # OpenAI-compatible provider models
+      grok-3-beta: top
+      grok-3-mini-beta: mid
+      sonar-pro: high
+      sonar-reasoning-pro: high
+      "[glm-5.1]": high
+      glm-5: mid
+      glm-5-turbo: high
+      command-r-plus-08-2024: high
+      command-r-08-2024: mid
+      "[anthropic/claude-sonnet-4-20250514]": high
+      "[openai/gpt-5.4]": top
+      "[google/gemini-3-pro-preview]": high
+
+    # Recommended models (good quality/price ratio)
+    recommended:
+      - gpt-5.4-mini
+      - claude-sonnet-4-6
+      - gpt-5-mini
+
+# Agent tool execution
+agent:
+  webhook:
+    base-url: ${AGENT_WEBHOOK_BASE_URL:http://localhost:8080}
+  tool:
+    default-timeout-ms: 30000
+    parallel-execution: true
+  task:
+    # Task board "Deleted" column retention. TaskRetentionPurger hard-purges tasks
+    # soft-deleted (status='deleted') more than `days` ago, in batches of `batch-size`,
+    # once a day. Set days very high to keep trashed tasks indefinitely.
+    deleted-retention:
+      days: ${TASK_DELETED_RETENTION_DAYS:30}
+      batch-size: ${TASK_DELETED_RETENTION_BATCH_SIZE:200}
+
+app:
+  base-url: ${APP_PUBLIC_URL:${WEBHOOK_BASE_URL:http://localhost:3000}}
+
+# Horizontal scaling - async queue-based agent execution
+# Enable with scaling.agent.queue.enabled=true
+scaling:
+  agent:
+    queue:
+      enabled: true
+      # Shutdown drain window for the agent worker pool (loop executions run 1-65 min;
+      # 10 min lets most streams finish, survivors are finalized as INTERRUPTED with
+      # their partial content saved by conversation-service).
+      drain-timeout-seconds: 600
+    worker:
+      agent-pool-size: 8
+      classify-pool-size: 4
+      guardrail-pool-size: 4
+    consumer:
+      poll-interval-ms: 100
+
+# Credit consumption
+credit:
+  consumption:
+    enabled: ${CREDIT_CONSUMPTION_ENABLED:true}
+
+# Storage tracking
+storage:
+  s3:
+    enabled: ${S3_ENABLED:false}
+
+# Actuator health endpoint
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: always
+
+# Rate limiter wait-mode timeout - bumped 2026-04-29 from default 60s for split-aware
+# bursts (e.g. 30-item Gmail classify at gemini-3-pro-preview rpm-per-tenant=5 needs
+# 6 minutes to drain). Without this bump, queued items hit `rate_limit_timeout` at
+# 60s and turn into fake failures. Bound by RateLimitConfig.java:23 (prefix=rate-limit).
+rate-limit:
+  max-wait-time-seconds: 600
+
+logging:
+  level:
+    com.apimarketplace.agent: INFO
+  file:
+    name: logs/agent-service.log

@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Background rounded rectangle -->
+  <rect width="256" height="256" rx="40" ry="40" fill="#232F3E"/>
+
+  <!-- Outer glue/data-flow ring (purple) -->
+  <circle cx="128" cy="128" r="76" fill="none" stroke="#C925D1" stroke-width="8" stroke-dasharray="30 12" stroke-linecap="round"/>
+
+  <!-- ETL pipeline arrows: left data node → center → right data node -->
+  <!-- Left source cylinder -->
+  <ellipse cx="68" cy="118" rx="20" ry="8" fill="#C925D1" opacity="0.85"/>
+  <rect x="48" y="118" width="40" height="22" fill="#C925D1" opacity="0.85"/>
+  <ellipse cx="68" cy="140" rx="20" ry="8" fill="#9B1DAA" opacity="0.95"/>
+
+  <!-- Right target cylinder -->
+  <ellipse cx="188" cy="118" rx="20" ry="8" fill="#C925D1" opacity="0.85"/>
+  <rect x="168" y="118" width="40" height="22" fill="#C925D1" opacity="0.85"/>
+  <ellipse cx="188" cy="140" rx="20" ry="8" fill="#9B1DAA" opacity="0.95"/>
+
+  <!-- Center transform hexagon -->
+  <polygon points="128,96 148,107 148,129 128,140 108,129 108,107" fill="#C925D1"/>
+  <polygon points="128,104 142,112 142,128 128,136 114,128 114,112" fill="#232F3E"/>
+
+  <!-- Lightning bolt / transform icon inside hexagon -->
+  <polygon points="133,112 123,122 130,122 123,136 137,124 130,124" fill="#C925D1"/>
+
+  <!-- Arrow left to center -->
+  <line x1="90" y1="128" x2="105" y2="118" stroke="#FF80FF" stroke-width="3.5" stroke-linecap="round"/>
+  <polygon points="105,118 96,113 98,122" fill="#FF80FF"/>
+
+  <!-- Arrow center to right -->
+  <line x1="151" y1="118" x2="166" y2="128" stroke="#FF80FF" stroke-width="3.5" stroke-linecap="round"/>
+  <polygon points="166,128 157,119 161,128" fill="#FF80FF"/>
+
+  <!-- Decorative data-flow dots on ring -->
+  <circle cx="128" cy="52" r="5" fill="#C925D1"/>
+  <circle cx="196" cy="80" r="4" fill="#C925D1" opacity="0.7"/>
+  <circle cx="204" cy="160" r="4" fill="#C925D1" opacity="0.7"/>
+  <circle cx="128" cy="204" r="5" fill="#C925D1"/>
+  <circle cx="52" cy="160" r="4" fill="#C925D1" opacity="0.7"/>
+  <circle cx="60" cy="80" r="4" fill="#C925D1" opacity="0.7"/>
+
+  <!-- Label -->
+  <text x="128" y="222" font-family="Amazon Ember, Arial, sans-serif" font-size="19" font-weight="bold" fill="#FFFFFF" text-anchor="middle" letter-spacing="1">GLUE</text>
+</svg>

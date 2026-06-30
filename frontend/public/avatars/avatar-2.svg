@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="a2bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3B82F6"/>
+      <stop offset="100%" stop-color="#1D4ED8"/>
+    </linearGradient>
+    <clipPath id="a2clip">
+      <circle cx="50" cy="50" r="50"/>
+    </clipPath>
+  </defs>
+  <circle cx="50" cy="50" r="50" fill="url(#a2bg)"/>
+
+  <!-- === DRIFTING SHARDS === -->
+  <g clip-path="url(#a2clip)">
+    <!-- Shard 1: triangle drifting right-down -->
+    <g opacity="0.18">
+      <animateTransform attributeName="transform" type="translate" values="-5,20;10,30;-5,20" dur="14s" repeatCount="indefinite"/>
+      <polygon points="0,0 8,2 3,9" fill="white">
+        <animateTransform attributeName="transform" type="rotate" from="0" to="18" dur="14s" repeatCount="indefinite"/>
+      </polygon>
+    </g>
+    <!-- Shard 2: hexagon drifting up-left -->
+    <g opacity="0.14">
+      <animateTransform attributeName="transform" type="translate" values="70,80;60,65;70,80" dur="17s" repeatCount="indefinite"/>
+      <polygon points="0,-5 4,-2.5 4,2.5 0,5 -4,2.5 -4,-2.5" fill="white">
+        <animateTransform attributeName="transform" type="rotate" from="0" to="-12" dur="17s" repeatCount="indefinite"/>
+      </polygon>
+    </g>
+    <!-- Shard 3: small triangle drifting right -->
+    <g opacity="0.2">
+      <animateTransform attributeName="transform" type="translate" values="15,75;28,72;15,75" dur="12s" repeatCount="indefinite"/>
+      <polygon points="0,0 6,3 1,6" fill="white">
+        <animateTransform attributeName="transform" type="rotate" from="10" to="25" dur="12s" repeatCount="indefinite"/>
+      </polygon>
+    </g>
+    <!-- Shard 4: hexagon drifting down-right -->
+    <g opacity="0.12">
+      <animateTransform attributeName="transform" type="translate" values="80,18;90,30;80,18" dur="18s" repeatCount="indefinite"/>
+      <polygon points="0,-4 3.5,-2 3.5,2 0,4 -3.5,2 -3.5,-2" fill="white">
+        <animateTransform attributeName="transform" type="rotate" from="0" to="20" dur="18s" repeatCount="indefinite"/>
+      </polygon>
+    </g>
+    <!-- Shard 5: thin triangle drifting left -->
+    <g opacity="0.16">
+      <animateTransform attributeName="transform" type="translate" values="40,12;28,18;40,12" dur="15s" repeatCount="indefinite"/>
+      <polygon points="0,0 7,1 2,7" fill="white">
+        <animateTransform attributeName="transform" type="rotate" from="-5" to="-20" dur="15s" repeatCount="indefinite"/>
+      </polygon>
+    </g>
+  </g>
+
+  <!-- Tall oval eyes -->
+  <ellipse cx="40" cy="44" rx="4" ry="7" fill="white" opacity="0.9">
+    <animate attributeName="ry" values="7;7;0.5;7;7" keyTimes="0;0.86;0.9;0.94;1" dur="4.5s" repeatCount="indefinite"/>
+  </ellipse>
+  <ellipse cx="60" cy="44" rx="4" ry="7" fill="white" opacity="0.9">
+    <animate attributeName="ry" values="7;7;0.5;7;7" keyTimes="0;0.86;0.9;0.94;1" dur="4.5s" repeatCount="indefinite"/>
+  </ellipse>
+  <!-- Knowing smile -->
+  <path d="M40,59 Q50,65 60,59" stroke="white" stroke-width="2" fill="none" stroke-linecap="round" opacity="0.8"/>
+</svg>

@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Background: AWS dark rounded square -->
+  <rect width="256" height="256" rx="32" ry="32" fill="#232F3E"/>
+
+  <!-- Container stack base (bottom layer) -->
+  <rect x="44" y="162" width="168" height="34" rx="6" ry="6" fill="#FF9900" opacity="0.35"/>
+
+  <!-- Container stack middle layer -->
+  <rect x="44" y="118" width="168" height="34" rx="6" ry="6" fill="#FF9900" opacity="0.6"/>
+
+  <!-- Container stack top layer (foreground) -->
+  <rect x="44" y="74" width="168" height="34" rx="6" ry="6" fill="#FF9900"/>
+
+  <!-- Top layer detail lines (representing layers/files) -->
+  <line x1="76" y1="74" x2="76" y2="108" stroke="#232F3E" stroke-width="3" stroke-linecap="round"/>
+  <line x1="108" y1="74" x2="108" y2="108" stroke="#232F3E" stroke-width="3" stroke-linecap="round"/>
+  <line x1="140" y1="74" x2="140" y2="108" stroke="#232F3E" stroke-width="3" stroke-linecap="round"/>
+  <line x1="172" y1="74" x2="172" y2="108" stroke="#232F3E" stroke-width="3" stroke-linecap="round"/>
+
+  <!-- Stacking indicator arrows on right side -->
+  <polyline points="212,96 222,91 222,101" fill="none" stroke="#FF9900" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="196" y1="91" x2="222" y2="91" stroke="#FF9900" stroke-width="3.5" stroke-linecap="round"/>
+
+  <!-- Registry label tag shape on bottom -->
+  <rect x="72" y="208" width="112" height="26" rx="5" ry="5" fill="none" stroke="#FF9900" stroke-width="3"/>
+  <circle cx="92" cy="221" r="4" fill="#FF9900"/>
+  <line x1="104" y1="221" x2="168" y2="221" stroke="#FF9900" stroke-width="3" stroke-linecap="round"/>
+</svg>

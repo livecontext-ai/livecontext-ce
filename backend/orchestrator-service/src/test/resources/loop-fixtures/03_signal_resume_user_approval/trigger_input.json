@@ -1,0 +1,11 @@
+{
+  "__harness_directives": {
+    "comment": "After the initial fire pauses on the interface signal (blocking because '__continue' is in actionMapping), the harness clicks the approve button to deliver the signal and resume execution.",
+    "interface_resume": {
+      "interface_label": "approve",
+      "trigger_label": "approve",
+      "action_type": "__continue",
+      "payload": {}
+    }
+  }
+}

@@ -1,0 +1,478 @@
+{
+  "version": 1,
+  "issuer": "model-catalog-seed",
+  "models": [
+    {
+      "provider": "openai",
+      "modelId": "gpt-5.4",
+      "displayName": "gpt-5.4",
+      "enabled": true,
+      "priceInput": "2.50",
+      "priceOutput": "15.00"
+    },
+    {
+      "provider": "openai",
+      "modelId": "gpt-5.4-mini",
+      "displayName": "gpt-5.4-mini",
+      "enabled": true,
+      "priceInput": "0.75",
+      "priceOutput": "4.50"
+    },
+    {
+      "provider": "openai",
+      "modelId": "gpt-5.2",
+      "displayName": "gpt-5.2",
+      "enabled": true,
+      "priceInput": "1.75",
+      "priceOutput": "14.00"
+    },
+    {
+      "provider": "openai",
+      "modelId": "gpt-5",
+      "displayName": "gpt-5",
+      "enabled": true,
+      "priceInput": "1.25",
+      "priceOutput": "10.00"
+    },
+    {
+      "provider": "openai",
+      "modelId": "gpt-5-mini",
+      "displayName": "gpt-5-mini",
+      "enabled": true,
+      "priceInput": "0.25",
+      "priceOutput": "2.00"
+    },
+    {
+      "provider": "openai",
+      "modelId": "gpt-5.3-codex",
+      "displayName": "gpt-5.3-codex",
+      "enabled": true,
+      "priceInput": "2.00",
+      "priceOutput": "12.00"
+    },
+    {
+      "provider": "openai",
+      "modelId": "o4-mini",
+      "displayName": "o4-mini",
+      "enabled": true,
+      "priceInput": "1.10",
+      "priceOutput": "4.40"
+    },
+    {
+      "provider": "openai",
+      "modelId": "gpt-4o",
+      "displayName": "gpt-4o",
+      "enabled": true,
+      "priceInput": "2.50",
+      "priceOutput": "10.00"
+    },
+    {
+      "provider": "openai",
+      "modelId": "gpt-4o-mini",
+      "displayName": "gpt-4o-mini",
+      "enabled": true,
+      "priceInput": "0.15",
+      "priceOutput": "0.60"
+    },
+    {
+      "provider": "openai",
+      "modelId": "gpt-4.1",
+      "displayName": "gpt-4.1",
+      "enabled": true,
+      "priceInput": "2.00",
+      "priceOutput": "8.00"
+    },
+    {
+      "provider": "openai",
+      "modelId": "gpt-4.1-mini",
+      "displayName": "gpt-4.1-mini",
+      "enabled": true,
+      "priceInput": "0.40",
+      "priceOutput": "1.60"
+    },
+    {
+      "provider": "openai",
+      "modelId": "gpt-4.1-nano",
+      "displayName": "gpt-4.1-nano",
+      "enabled": true,
+      "priceInput": "0.10",
+      "priceOutput": "0.40"
+    },
+    {
+      "provider": "openai",
+      "modelId": "gpt-4-turbo",
+      "displayName": "gpt-4-turbo",
+      "enabled": true,
+      "priceInput": "10.00",
+      "priceOutput": "30.00"
+    },
+    {
+      "provider": "openai",
+      "modelId": "o3",
+      "displayName": "o3",
+      "enabled": true,
+      "priceInput": "10.00",
+      "priceOutput": "40.00"
+    },
+    {
+      "provider": "openai",
+      "modelId": "o3-mini",
+      "displayName": "o3-mini",
+      "enabled": true,
+      "priceInput": "1.10",
+      "priceOutput": "4.40"
+    },
+    {
+      "provider": "anthropic",
+      "modelId": "claude-opus-4-6",
+      "displayName": "claude-opus-4-6",
+      "enabled": true,
+      "priceInput": "5.00",
+      "priceOutput": "25.00"
+    },
+    {
+      "provider": "anthropic",
+      "modelId": "claude-sonnet-4-6",
+      "displayName": "claude-sonnet-4-6",
+      "enabled": true,
+      "priceInput": "3.00",
+      "priceOutput": "15.00"
+    },
+    {
+      "provider": "anthropic",
+      "modelId": "claude-haiku-4-5",
+      "displayName": "claude-haiku-4-5",
+      "enabled": true,
+      "priceInput": "1.00",
+      "priceOutput": "5.00"
+    },
+    {
+      "provider": "anthropic",
+      "modelId": "claude-opus-4-6-cc",
+      "displayName": "claude-opus-4-6-cc",
+      "enabled": true,
+      "priceInput": "5.00",
+      "priceOutput": "25.00"
+    },
+    {
+      "provider": "anthropic",
+      "modelId": "claude-sonnet-4-6-cc",
+      "displayName": "claude-sonnet-4-6-cc",
+      "enabled": true,
+      "priceInput": "3.00",
+      "priceOutput": "15.00"
+    },
+    {
+      "provider": "anthropic",
+      "modelId": "claude-3-5-sonnet-20241022",
+      "displayName": "claude-3-5-sonnet-20241022",
+      "enabled": true,
+      "priceInput": "3.00",
+      "priceOutput": "15.00"
+    },
+    {
+      "provider": "anthropic",
+      "modelId": "claude-3-opus-20240229",
+      "displayName": "claude-3-opus-20240229",
+      "enabled": true,
+      "priceInput": "15.00",
+      "priceOutput": "75.00"
+    },
+    {
+      "provider": "anthropic",
+      "modelId": "claude-3-sonnet-20240229",
+      "displayName": "claude-3-sonnet-20240229",
+      "enabled": true,
+      "priceInput": "3.00",
+      "priceOutput": "15.00"
+    },
+    {
+      "provider": "anthropic",
+      "modelId": "claude-3-haiku-20240307",
+      "displayName": "claude-3-haiku-20240307",
+      "enabled": true,
+      "priceInput": "0.25",
+      "priceOutput": "1.25"
+    },
+    {
+      "provider": "google",
+      "modelId": "gemini-2.5-pro",
+      "displayName": "gemini-2.5-pro",
+      "enabled": true,
+      "priceInput": "1.25",
+      "priceOutput": "10.00"
+    },
+    {
+      "provider": "google",
+      "modelId": "gemini-2.5-flash",
+      "displayName": "gemini-2.5-flash",
+      "enabled": true,
+      "priceInput": "0.30",
+      "priceOutput": "2.50"
+    },
+    {
+      "provider": "google",
+      "modelId": "gemini-3.1-pro-preview",
+      "displayName": "gemini-3.1-pro-preview",
+      "enabled": true,
+      "priceInput": "2.00",
+      "priceOutput": "12.00"
+    },
+    {
+      "provider": "google",
+      "modelId": "gemini-3.1-flash",
+      "displayName": "gemini-3.1-flash",
+      "enabled": true,
+      "priceInput": "0.30",
+      "priceOutput": "2.50"
+    },
+    {
+      "provider": "google",
+      "modelId": "gemini-3.1-flash-lite",
+      "displayName": "gemini-3.1-flash-lite",
+      "enabled": true,
+      "priceInput": "0.25",
+      "priceOutput": "1.50"
+    },
+    {
+      "provider": "google",
+      "modelId": "gemini-2.5-pro-preview",
+      "displayName": "gemini-2.5-pro-preview",
+      "enabled": true,
+      "priceInput": "1.25",
+      "priceOutput": "10.00"
+    },
+    {
+      "provider": "google",
+      "modelId": "gemini-2.5-flash-preview",
+      "displayName": "gemini-2.5-flash-preview",
+      "enabled": true,
+      "priceInput": "0.30",
+      "priceOutput": "2.50"
+    },
+    {
+      "provider": "google",
+      "modelId": "gemini-3-pro-preview",
+      "displayName": "gemini-3-pro-preview",
+      "enabled": true,
+      "priceInput": "1.25",
+      "priceOutput": "10.00"
+    },
+    {
+      "provider": "google",
+      "modelId": "gemini-3-flash-preview",
+      "displayName": "gemini-3-flash-preview",
+      "enabled": true,
+      "priceInput": "0.50",
+      "priceOutput": "3.00"
+    },
+    {
+      "provider": "google",
+      "modelId": "gemini-2.0-flash",
+      "displayName": "gemini-2.0-flash",
+      "enabled": true,
+      "priceInput": "0.10",
+      "priceOutput": "0.40"
+    },
+    {
+      "provider": "google",
+      "modelId": "gemini-1.5-pro",
+      "displayName": "gemini-1.5-pro",
+      "enabled": true,
+      "priceInput": "1.25",
+      "priceOutput": "5.00"
+    },
+    {
+      "provider": "google",
+      "modelId": "gemini-1.5-flash",
+      "displayName": "gemini-1.5-flash",
+      "enabled": true,
+      "priceInput": "0.075",
+      "priceOutput": "0.30"
+    },
+    {
+      "provider": "google",
+      "modelId": "gemini-pro",
+      "displayName": "gemini-pro",
+      "enabled": true,
+      "priceInput": "0.50",
+      "priceOutput": "1.50"
+    },
+    {
+      "provider": "mistral",
+      "modelId": "mistral-large-latest",
+      "displayName": "mistral-large-latest",
+      "enabled": true,
+      "priceInput": "2.00",
+      "priceOutput": "6.00"
+    },
+    {
+      "provider": "mistral",
+      "modelId": "mistral-medium-3",
+      "displayName": "mistral-medium-3",
+      "enabled": true,
+      "priceInput": "1.00",
+      "priceOutput": "3.00"
+    },
+    {
+      "provider": "mistral",
+      "modelId": "mistral-small-latest",
+      "displayName": "mistral-small-latest",
+      "enabled": true,
+      "priceInput": "0.20",
+      "priceOutput": "0.60"
+    },
+    {
+      "provider": "mistral",
+      "modelId": "codestral-latest",
+      "displayName": "codestral-latest",
+      "enabled": true,
+      "priceInput": "0.30",
+      "priceOutput": "0.90"
+    },
+    {
+      "provider": "mistral",
+      "modelId": "devstral-2",
+      "displayName": "devstral-2",
+      "enabled": true,
+      "priceInput": "0.40",
+      "priceOutput": "2.00"
+    },
+    {
+      "provider": "mistral",
+      "modelId": "devstral-small-2",
+      "displayName": "devstral-small-2",
+      "enabled": true,
+      "priceInput": "0.10",
+      "priceOutput": "0.30"
+    },
+    {
+      "provider": "mistral",
+      "modelId": "mistral-medium-latest",
+      "displayName": "mistral-medium-latest",
+      "enabled": true,
+      "priceInput": "1.00",
+      "priceOutput": "3.00"
+    },
+    {
+      "provider": "deepseek",
+      "modelId": "deepseek-chat",
+      "displayName": "deepseek-chat",
+      "enabled": true,
+      "priceInput": "0.28",
+      "priceOutput": "0.42"
+    },
+    {
+      "provider": "deepseek",
+      "modelId": "deepseek-coder",
+      "displayName": "deepseek-coder",
+      "enabled": true,
+      "priceInput": "0.28",
+      "priceOutput": "0.42"
+    },
+    {
+      "provider": "deepseek",
+      "modelId": "deepseek-reasoner",
+      "displayName": "deepseek-reasoner",
+      "enabled": true,
+      "priceInput": "0.28",
+      "priceOutput": "0.42"
+    },
+    {
+      "provider": "xai",
+      "modelId": "grok-3-beta",
+      "displayName": "grok-3-beta",
+      "enabled": true,
+      "priceInput": "3.00",
+      "priceOutput": "15.00"
+    },
+    {
+      "provider": "xai",
+      "modelId": "grok-3-mini-beta",
+      "displayName": "grok-3-mini-beta",
+      "enabled": true,
+      "priceInput": "0.30",
+      "priceOutput": "0.50"
+    },
+    {
+      "provider": "perplexity",
+      "modelId": "sonar-pro",
+      "displayName": "sonar-pro",
+      "enabled": true,
+      "priceInput": "3.00",
+      "priceOutput": "15.00"
+    },
+    {
+      "provider": "perplexity",
+      "modelId": "sonar-reasoning-pro",
+      "displayName": "sonar-reasoning-pro",
+      "enabled": true,
+      "priceInput": "2.00",
+      "priceOutput": "8.00"
+    },
+    {
+      "provider": "cohere",
+      "modelId": "command-r-plus-08-2024",
+      "displayName": "command-r-plus-08-2024",
+      "enabled": true,
+      "priceInput": "2.50",
+      "priceOutput": "10.00"
+    },
+    {
+      "provider": "cohere",
+      "modelId": "command-r-08-2024",
+      "displayName": "command-r-08-2024",
+      "enabled": true,
+      "priceInput": "0.15",
+      "priceOutput": "0.60"
+    },
+    {
+      "provider": "zai",
+      "modelId": "glm-5.1",
+      "displayName": "glm-5.1",
+      "enabled": true,
+      "priceInput": "1.40",
+      "priceOutput": "4.40"
+    },
+    {
+      "provider": "zai",
+      "modelId": "glm-5",
+      "displayName": "glm-5",
+      "enabled": true,
+      "priceInput": "1.00",
+      "priceOutput": "3.20"
+    },
+    {
+      "provider": "zai",
+      "modelId": "glm-5-turbo",
+      "displayName": "glm-5-turbo",
+      "enabled": true,
+      "priceInput": "1.20",
+      "priceOutput": "4.00"
+    },
+    {
+      "provider": "openrouter",
+      "modelId": "anthropic/claude-sonnet-4-20250514",
+      "displayName": "anthropic/claude-sonnet-4-20250514",
+      "enabled": true,
+      "priceInput": "3.00",
+      "priceOutput": "15.00"
+    },
+    {
+      "provider": "openrouter",
+      "modelId": "openai/gpt-5.4",
+      "displayName": "openai/gpt-5.4",
+      "enabled": true,
+      "priceInput": "2.50",
+      "priceOutput": "15.00"
+    },
+    {
+      "provider": "openrouter",
+      "modelId": "google/gemini-3-pro-preview",
+      "displayName": "google/gemini-3-pro-preview",
+      "enabled": true,
+      "priceInput": "1.25",
+      "priceOutput": "10.00"
+    }
+  ]
+}

@@ -1,0 +1,701 @@
+# ============================================================
+# LiveContext Community Edition - Single JAR + PostgreSQL
+# ============================================================
+# This profile activates when running the monolith.
+# All services share one port, one database, one JVM.
+# No Keycloak, no Piston required.
+# ============================================================
+
+server:
+  port: ${PORT:8080}
+
+spring:
+  application:
+    name: livecontext-ce
+  main:
+    allow-bean-definition-overriding: true
+
+  datasource:
+    # PR14 (2026-05-13) - ported from PR13 (migration-service application.yml). V196
+    # (TIMESTAMP→TIMESTAMPTZ promotion) fail-fasts at migrate-time unless the GUC
+    # `lc.migration.source_timezone` is set on the session. CE Monolith runs Flyway
+    # in-process via MonolithApplication, so the same protection that ships with
+    # the standalone migration-service jar must be ported here.
+    #
+    # Layer A - JDBC URL `?options=-c lc.migration.source_timezone=UTC` (libpq
+    # startup option, server-side at session start). Without this, V196 fails on
+    # the first migrate. CE customers run their own PG so UTC is the only safe
+    # default - if a customer restores from a non-UTC backup they must override
+    # this value before `docker compose up` (set DB_OPTIONS or edit the URL).
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:livecontext}?options=-c%20lc.migration.source_timezone%3DUTC
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1200000
+      connection-test-query: SELECT 1
+      # Pre-existing - `search_path` makes Hibernate find tables in any schema without explicit prefix.
+      # Layer B (PR14) - `SET lc.migration.source_timezone = 'UTC'` is belt-and-braces against the
+      # Layer A URL `?options=` path being dropped by a future SPRING_DATASOURCE_URL env override.
+      # Hikari runs connection-init-sql per physical connection creation (incl. pre-warmed
+      # `minimum-idle`). Multi-statement form is delimited by `;` and forwarded as a single
+      # JDBC `execute()` call; pgjdbc routes it through PostgreSQL's `simple_query` protocol
+      # (the default - `preferQueryMode=simple`), which splits on `;` and runs the statements
+      # sequentially. If a customer ever overrides `preferQueryMode` to `extended` /
+      # `extendedForPrepared`, multi-statement init breaks silently - out of scope for PR14,
+      # but noted here so a future regression can locate the assumption.
+      connection-init-sql: "SET search_path TO orchestrator,auth,agent,datasource,conversation,catalog,interface,trigger,publication,storage,public; SET lc.migration.source_timezone = 'UTC'"
+
+  jpa:
+    hibernate:
+      ddl-auto: none
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: false
+        default_schema:
+        jdbc:
+          time_zone: UTC
+
+  jackson:
+    time-zone: UTC
+    serialization:
+      write-dates-as-timestamps: false
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    # CE monolith runs the same migration set in-process. Keep this aligned
+    # with migration-service: V204+ files intentionally combine transactional
+    # DDL/DML with CREATE INDEX CONCURRENTLY under executeInTransaction=false.
+    mixed: true
+    # CREATE INDEX CONCURRENTLY waits for older transaction snapshots. Flyway's
+    # default PostgreSQL transactional advisory lock keeps an idle transaction
+    # open during the migration and can block its own concurrent indexes.
+    postgresql:
+      transactional-lock: false
+    ignore-missing-migrations: true
+    # V74.1 is a historical backfill for pgvector schema placement. It must run
+    # on upgraded CE volumes that already applied V75+ as well as on fresh installs.
+    out-of-order: true
+    locations: classpath:db/migration
+    schemas: orchestrator, storage, agent, "trigger", interface, publication, auth, datasource, catalog, conversation
+    default-schema: orchestrator
+    table: flyway_schema_history_orchestrator
+
+  # Redis: used for EventBus (Pub/Sub), KeyValueStore (cache), and streaming state
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: 5s
+      lettuce:
+        pool:
+          # CE runs all services in one JVM. Queue workers use blocking BRPOP
+          # calls, so keep the Redis pool above the worker count plus app traffic.
+          max-active: ${REDIS_POOL_MAX_ACTIVE:24}
+          max-idle: ${REDIS_POOL_MAX_IDLE:12}
+          min-idle: ${REDIS_POOL_MIN_IDLE:2}
+          max-wait: 3s
+
+  # Disable Keycloak OAuth2 (CE uses embedded auth)
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ""
+
+  mail:
+    host: ${MAIL_HOST:localhost}
+    port: ${MAIL_PORT:1025}
+
+# App configuration (auth-service needs these)
+app:
+  mail:
+    from: ${MAIL_FROM:noreply@livecontext.local}
+    from-name: LiveContext
+    console-fallback-enabled: ${MAIL_CONSOLE_FALLBACK_ENABLED:true}
+  base-url: ${APP_BASE_URL:http://localhost:8080}
+  # Public FRONTEND origin for opaque file URLs (PublicFileUrlBuilder). Distinct from base-url, which
+  # is the GATEWAY origin used by auth-service mail / Keycloak links - the opaque
+  # /api/proxy/files/by-id/{id}/raw route lives on the Next.js frontend, not the gateway.
+  public-url: ${APP_PUBLIC_URL:http://localhost:3000}
+  security:
+    keycloak:
+      audience: livecontext-frontend
+
+# Keycloak config (unused in CE, but placeholders need defaults)
+keycloak:
+  issuer-uri: ""
+  audience: livecontext-frontend
+  jwks-uri: ""
+  admin:
+    server-url: ""
+    realm: livecontext
+    username: ""
+    password: ""
+
+# CORS: disable credentials so @CrossOrigin(origins="*") on controllers is valid
+cors:
+  allow-credentials: false
+  allowed-origins: "*"
+
+# CE monolith worker sizing. Cloud defaults start 16 blocking Redis queue
+# workers across agent/classify/guardrail pools, which is excessive for the
+# single-container CE profile and can exhaust the default Redis pool.
+scaling:
+  agent:
+    queue:
+      enabled: true
+    worker:
+      agent-pool-size: ${AGENT_WORKER_POOL_SIZE:2}
+      classify-pool-size: ${CLASSIFY_WORKER_POOL_SIZE:1}
+      guardrail-pool-size: ${GUARDRAIL_WORKER_POOL_SIZE:1}
+    consumer:
+      poll-interval-ms: ${AGENT_WORKER_POLL_INTERVAL_MS:250}
+
+# OAuth2 callback URLs
+oauth2:
+  callback-url: ${OAUTH2_CALLBACK_URL:http://localhost:8080/api/credentials/oauth2/callback}
+  frontend-url: ${OAUTH2_FRONTEND_URL:http://localhost:3000}
+
+# ============================================================
+# CE Mode Toggles
+# ============================================================
+
+# Monolith mode: disables GatewayAuthenticationFilter, enables MonolithSecurityFilter
+deployment:
+  mode: monolith
+
+# Embedded auth: enables JwtKeyPairManager, PasswordAuthService, EmbeddedAuthController
+auth:
+  mode: embedded
+  jwt:
+    issuer: ${AUTH_JWT_ISSUER:livecontext}
+    keys-path: ${AUTH_JWT_KEYS_PATH:./data/keys}
+
+# S3/MinIO file storage
+storage:
+  type: s3
+  s3:
+    endpoint: ${STORAGE_S3_ENDPOINT:http://localhost:9000}
+    access-key: ${STORAGE_S3_ACCESS_KEY:minioadmin}
+    secret-key: ${STORAGE_S3_SECRET_KEY:minioadmin}
+    bucket: ${STORAGE_S3_BUCKET:workflow-files}
+    path-style: true
+
+# Embedded code execution instead of Piston API
+piston:
+  embedded: true
+
+# WebSearch disabled in CE (requires external websearch-service + Redis)
+websearch:
+  enabled: false
+
+# Marketplace: remote mode fetches publications from cloud, clones locally
+marketplace:
+  mode: ${MARKETPLACE_MODE:remote}
+  cloud-api-url: ${MARKETPLACE_CLOUD_API_URL:https://livecontext.ai/api}
+  # CE CONSUMES the cloud's /api/ce-marketplace/** endpoints (snapshot +
+  # acquire-with-auth) - it never serves them. The cloud default (publication-
+  # service application.yml) is true; pin OFF here so the CeDownloadController
+  # bean never loads in a CE monolith.
+  ce-download:
+    enabled: false
+
+# Cloud account linking (OAuth to LiveContext cloud for paid marketplace operations)
+cloud-link:
+  keycloak-url: ${CLOUD_KEYCLOAK_URL:https://auth.livecontext.ai/realms/livecontext}
+  client-id: ${CLOUD_LINK_CLIENT_ID:livecontext-frontend}
+  redirect-uri: ${CLOUD_LINK_REDIRECT_URI:http://localhost:8080/api/cloud-link/callback}
+  encryption-key: ${CLOUD_LINK_ENCRYPTION_KEY:}
+  ip-hash:
+    key-v1: ${CLOUD_LINK_IP_HASH_KEY_V1:${IP_HASH_HMAC_KEY_V1:}}
+    key-v2: ${CLOUD_LINK_IP_HASH_KEY_V2:${IP_HASH_HMAC_KEY_V2:}}
+    current-version: ${CLOUD_LINK_IP_HASH_CURRENT_VERSION:${KEY_HMAC_CURRENT_VERSION:1}}
+
+# JWT configuration
+# CE access-token TTL = 14 days (vs the cloud/EE 15-min default in auth-service
+# application.yml). Rationale: CE is a single-user / small-team self-hosted monolith,
+# so a long-lived access token is an acceptable trade-off and it avoids the
+# refresh-token rotation race - two near-simultaneous refreshes (multi-tab, Next dev
+# Fast Refresh) make the loser present an already-rotated token, which
+# PasswordAuthService treats as reuse and responds to by revoking the WHOLE token
+# family, logging the user out. A 14-day access token means the proactive refresh
+# (fired 60s before expiry) almost never runs during a session, so the race is moot.
+# Still env-overridable: set JWT_ACCESS_TOKEN_EXPIRATION to tighten it if needed.
+jwt:
+  secret: ${JWT_SECRET:}
+  access-token:
+    expiration: ${JWT_ACCESS_TOKEN_EXPIRATION:1209600000}  # 14 days (14*24*60*60*1000)
+  refresh-token:
+    expiration: ${JWT_REFRESH_TOKEN_EXPIRATION:2592000000}  # 30 days (must stay >= access)
+
+# ============================================================
+# Service URLs (loopback to self in monolith mode)
+# ============================================================
+services:
+  orchestrator-url: http://localhost:${PORT:8080}
+  agent-url: http://localhost:${PORT:8080}
+  auth-service:
+    url: http://localhost:${PORT:8080}
+  agent-service:
+    url: http://localhost:${PORT:8080}
+  datasource-service:
+    url: http://localhost:${PORT:8080}
+  interface-service:
+    url: http://localhost:${PORT:8080}
+  trigger-service:
+    url: http://localhost:${PORT:8080}
+  conversation-service:
+    url: http://localhost:${PORT:8080}
+  catalog-url: http://localhost:${PORT:8080}
+  catalog-service:
+    url: http://localhost:${PORT:8080}
+  conversation-url: http://localhost:${PORT:8080}
+  datasource-url: http://localhost:${PORT:8080}
+  interface-url: http://localhost:${PORT:8080}
+  trigger-url: http://localhost:${PORT:8080}
+  publication-url: http://localhost:${PORT:8080}
+  storage-url: http://localhost:${PORT:8080}
+
+# Override service URLs used by conversation-service CoreToolsProvider/ToolServiceRouter
+# Note: CoreToolsProvider uses `agent.service.url` (NOT `services.agent-service.url`)
+orchestrator:
+  mock:
+    enabled: false
+  catalog:
+    enabled: true
+    base-url: http://localhost:${PORT:8080}
+  service:
+    url: http://localhost:${PORT:8080}
+  conversation:
+    base-url: http://localhost:${PORT:8080}
+agent:
+  service:
+    url: http://localhost:${PORT:8080}
+  conversation:
+    base-url: http://localhost:${PORT:8080}
+
+# Gateway filter: disabled in monolith (MonolithSecurityFilter handles auth)
+gateway:
+  filter:
+    verification-enabled: false
+    secret-key: not-used-in-monolith
+
+# Plan limits: disabled in CE (all resources are unlimited)
+plan-limits:
+  enabled: false
+
+# Rate limit: disabled in CE. RateLimitConfig defaults to true; without this
+# override a CE deployer who configures a provider limit env var would
+# accidentally activate per-provider rate limiting that conflicts with the
+# "tout illimité" CE contract.
+rate-limit:
+  enabled: false
+
+# Workflow node billing: the flat per-node platform fee is a CLOUD monetization (the platform
+# runs the orchestrator for the user). CE self-hosts the orchestrator → it's free, so NO
+# WORKFLOW_NODE ledger row is written at all (not even $0). LLM/token costs are still tracked via
+# credit.consumption below, so users still see their real $ spend; only the per-node fee is off.
+workflow:
+  node-billing:
+    enabled: false
+
+# Credits: unlimited in CE (consumption is tracked for metrics/analytics but balance is always infinite)
+credit:
+  consumption:
+    enabled: true
+  unlimited: true
+  # Model pricing seed - same as auth-service.
+  # Rate = USD per 1M tokens. Formula: credits = rate × tokens / 1000 (1 credit = $0.001).
+  pricing:
+    seed:
+      # OpenAI
+      - { provider: openai, model: gpt-5.4,       inputRate: 2.50, outputRate: 15.00 }
+      - { provider: openai, model: gpt-5.4-mini,  inputRate: 0.75, outputRate: 4.50 }
+      - { provider: openai, model: gpt-5.2,       inputRate: 1.75, outputRate: 14.00 }
+      - { provider: openai, model: gpt-5,         inputRate: 1.25, outputRate: 10.00 }
+      - { provider: openai, model: gpt-5-mini,    inputRate: 0.25, outputRate: 2.00 }
+      - { provider: openai, model: gpt-5.3-codex, inputRate: 2.00, outputRate: 12.00 }
+      - { provider: openai, model: o4-mini,        inputRate: 1.10, outputRate: 4.40 }
+      - { provider: openai, model: gpt-4o,         inputRate: 2.50, outputRate: 10.00 }
+      - { provider: openai, model: gpt-4o-mini,    inputRate: 0.15, outputRate: 0.60 }
+      - { provider: openai, model: gpt-4.1,        inputRate: 2.00, outputRate: 8.00 }
+      - { provider: openai, model: gpt-4.1-mini,   inputRate: 0.40, outputRate: 1.60 }
+      - { provider: openai, model: gpt-4.1-nano,   inputRate: 0.10, outputRate: 0.40 }
+      - { provider: openai, model: gpt-4-turbo,    inputRate: 10.00, outputRate: 30.00 }
+      - { provider: openai, model: o3,             inputRate: 10.00, outputRate: 40.00 }
+      - { provider: openai, model: o3-mini,        inputRate: 1.10, outputRate: 4.40 }
+      # Anthropic
+      - { provider: anthropic, model: claude-opus-4-6,    inputRate: 5.00, outputRate: 25.00 }
+      - { provider: anthropic, model: claude-sonnet-4-6,  inputRate: 3.00, outputRate: 15.00 }
+      - { provider: anthropic, model: claude-haiku-4-5,   inputRate: 1.00, outputRate: 5.00 }
+      - { provider: anthropic, model: claude-3-5-sonnet-20241022, inputRate: 3.00, outputRate: 15.00 }
+      - { provider: anthropic, model: claude-3-opus-20240229,     inputRate: 15.00, outputRate: 75.00 }
+      - { provider: anthropic, model: claude-3-sonnet-20240229,   inputRate: 3.00, outputRate: 15.00 }
+      - { provider: anthropic, model: claude-3-haiku-20240307,    inputRate: 0.25, outputRate: 1.25 }
+      # Google
+      - { provider: google, model: gemini-2.5-pro,          inputRate: 1.25, outputRate: 10.00 }
+      - { provider: google, model: gemini-2.5-flash,        inputRate: 0.30, outputRate: 2.50 }
+      - { provider: google, model: gemini-3.1-pro-preview,  inputRate: 2.00, outputRate: 12.00 }
+      - { provider: google, model: gemini-3.1-flash,        inputRate: 0.30, outputRate: 2.50 }
+      - { provider: google, model: gemini-3.1-flash-lite,   inputRate: 0.25, outputRate: 1.50 }
+      - { provider: google, model: gemini-2.5-pro-preview,  inputRate: 1.25, outputRate: 10.00 }
+      - { provider: google, model: gemini-2.5-flash-preview, inputRate: 0.30, outputRate: 2.50 }
+      - { provider: google, model: gemini-3-pro-preview,    inputRate: 1.25, outputRate: 10.00 }
+      - { provider: google, model: gemini-3-flash-preview,  inputRate: 0.50, outputRate: 3.00 }
+      - { provider: google, model: gemini-2.0-flash,        inputRate: 0.10, outputRate: 0.40 }
+      - { provider: google, model: gemini-1.5-pro,          inputRate: 1.25, outputRate: 5.00 }
+      - { provider: google, model: gemini-1.5-flash,        inputRate: 0.075, outputRate: 0.30 }
+      - { provider: google, model: gemini-pro,              inputRate: 0.50, outputRate: 1.50 }
+      # Mistral
+      - { provider: mistral, model: mistral-large-latest,  inputRate: 2.00, outputRate: 6.00 }
+      - { provider: mistral, model: mistral-medium-3,      inputRate: 1.00, outputRate: 3.00 }
+      - { provider: mistral, model: mistral-small-latest,  inputRate: 0.20, outputRate: 0.60 }
+      - { provider: mistral, model: codestral-latest,      inputRate: 0.30, outputRate: 0.90 }
+      - { provider: mistral, model: devstral-2,            inputRate: 0.40, outputRate: 2.00 }
+      - { provider: mistral, model: devstral-small-2,      inputRate: 0.10, outputRate: 0.30 }
+      - { provider: mistral, model: mistral-medium-latest, inputRate: 1.00, outputRate: 3.00 }
+      # DeepSeek
+      - { provider: deepseek, model: deepseek-chat,     inputRate: 0.28, outputRate: 0.42 }
+      - { provider: deepseek, model: deepseek-coder,    inputRate: 0.28, outputRate: 0.42 }
+      - { provider: deepseek, model: deepseek-reasoner, inputRate: 0.28, outputRate: 0.42 }
+
+# Billing: disabled in CE (no Stripe). A self-hosted CE install bills at the REAL
+# provider price - NO gross margin. The managed-cloud 1.8x LLM multiplier
+# (billing.llm.cloud-multiplier, ModelPricingService) and the platform-credential
+# markup are cloud REVENUE levers; they must NOT apply to a self-hosted install, so
+# here they default to neutral (1.0 / off) and the recorded/displayed consumption is
+# the true provider cost. The per-provider cache weights in ModelPricingService are
+# left at their defaults on purpose - they mirror the providers' REAL cache pricing
+# (e.g. Anthropic cache-read 0.1x), so keeping them makes recorded consumption the
+# true cache-weighted provider cost, not a flat per-token approximation. Both levers
+# stay env-overridable for a CE operator who deliberately resells with a margin.
+billing:
+  provider: none
+  llm:
+    cloud-multiplier: ${BILLING_LLM_CLOUD_MULTIPLIER:1.0}
+  stripe:
+    secretKey: ""
+    webhookSecret: ""
+    successUrl: http://localhost:8080
+    cancelUrl: http://localhost:8080
+    currency: usd
+    prices:
+      FREE: ""
+      STARTER: ""
+      PRO: ""
+      ENTERPRISE: ""
+      PAYG: ""
+
+# Platform-credential markup OFF in CE: no reseller margin on platform-provided
+# credentials (mirrors billing.llm.cloud-multiplier=1.0 above - real cost only).
+credentials:
+  platform:
+    markup:
+      enabled: ${CREDENTIALS_PLATFORM_MARKUP_ENABLED:false}
+
+# Catalog seed: import OpenAPI specs from directory at boot
+catalog:
+  seed:
+    enabled: ${CATALOG_SEED_ENABLED:true}
+    path: ${CATALOG_SEED_PATH:./catalog-seeds}
+    owner-id: ${CATALOG_SEED_OWNER_ID:SYSTEM}
+  # Shared Ed25519 trust root for ALL signed bundles fetched from the cloud
+  # (LLM model bundle AND API catalog bundle). Format: keyId=base64X509;...
+  # The cloud's PUBLIC key is baked as the default so a fresh CE / git clone
+  # trusts cloud-signed bundles out of the box (no manual config). This is a
+  # public key - the cloud serves the same value at /api/catalog-bundles/signing-key;
+  # it is NOT a secret. An empty default would make every sync tick record
+  # TRUST_UNCONFIGURED. Operators can override or extend (`;`-separated, e.g. for
+  # key rotation) via CATALOG_BUNDLE_TRUSTED_KEYS.
+  bundle:
+    trusted-keys: ${CATALOG_BUNDLE_TRUSTED_KEYS:livecontext-prod-v1=MCowBQYDK2VwAyEAS0Q7EwzPEhGRu2hKzsMeHQqPfQJKpbK7ohjpvnDmmvM=}
+    # LLM model-catalog bundle sync (cloud -> CE): keeps the CE model catalog (which
+    # models exist + pricing) in step with the cloud's latest signed bundle, on a cron
+    # plus once on startup. GATED behind an active cloud link: the scheduler authenticates
+    # the download with this install's cloud-link credentials and skips entirely when the
+    # install is not linked (records NOT_LINKED) - catalog freshness is a benefit of being
+    # connected, never an anonymous fetch. Safe to enable for every CE: an unlinked install
+    # simply keeps its seeded catalog. The cloud itself never runs this (default disabled).
+    cloud-url: ${CATALOG_BUNDLE_CLOUD_URL:https://livecontext.ai}
+    sync:
+      enabled: ${CATALOG_BUNDLE_SYNC_ENABLED:true}
+      cron: ${CATALOG_BUNDLE_SYNC_CRON:0 */15 * * * *}
+
+# API catalog bundle sync (cloud → CE): the scheduler fetches the signed,
+# gzipped API-catalog snapshot from the cloud, verifies the Ed25519 signature
+# against catalog.bundle.trusted-keys above, and UPSERT-applies it into
+# catalog.* (user-created custom APIs are never touched). Disabled by default
+# in the service itself (cloud never syncs); enabled here for CE installs.
+api-catalog:
+  bundle:
+    cloud-url: ${API_CATALOG_BUNDLE_CLOUD_URL:https://livecontext.ai}
+    sync:
+      enabled: ${API_CATALOG_BUNDLE_SYNC_ENABLED:true}
+      cron: ${API_CATALOG_BUNDLE_SYNC_CRON:0 */15 * * * *}
+
+# Skill bundle sync (cloud → CE): the scheduler fetches the signed snapshot of the cloud's
+# admin-managed GLOBAL skills, verifies the Ed25519 signature against catalog.bundle.trusted-keys
+# above (one shared trust root for every cloud bundle), and UPSERT-applies them into agent.skills
+# as read-only, cloud-owned global rows (is_global=true). The cloud marks them is_default_active so
+# they auto-activate in new chats for every user; each user hides one for themselves via the
+# per-user override. GATED behind an active cloud link (same as the catalog bundle): an unlinked
+# install records NOT_LINKED and keeps whatever it has. The cloud itself never runs this (default
+# disabled in agent-service); enabled here for CE installs.
+skill:
+  bundle:
+    cloud-url: ${SKILL_BUNDLE_CLOUD_URL:https://livecontext.ai}
+    sync:
+      enabled: ${SKILL_BUNDLE_SYNC_ENABLED:true}
+      cron: ${SKILL_BUNDLE_SYNC_CRON:0 */15 * * * *}
+
+# Model-catalog SEED (boot-time, CE-only): ModelSeedBootstrapService inserts the
+# curated models shipped in the agent-service classpath resource
+# model-catalog/models.json into agent.model_config_overrides on startup. Edit
+# that JSON + commit to ship new models - no new Flyway migration needed. Insert-
+# only/additive (never updates or deprecates existing rows); mutations to existing
+# models flow via the signed cloud bundle. The cloud never runs this (property
+# absent there) - it is the authoritative source of the catalog.
+model-catalog:
+  seed:
+    enabled: ${MODEL_CATALOG_SEED_ENABLED:true}
+  # Model execution links (decouple billed identity from CLI-bridge execution) are
+  # a CLOUD-only monetization feature. OFF by default in the self-hosted monolith;
+  # env-overridable (e.g. for an isolated e2e slot that needs to exercise it).
+  execution-links:
+    enabled: ${MODEL_EXECUTION_LINKS_ENABLED:false}
+
+# Claude Code bridge - runs on the host machine (needs CLI access)
+# In Docker: host.docker.internal resolves to the Docker host
+conversation:
+  service:
+    url: http://localhost:${PORT:8080}
+  bridge:
+    enabled: ${BRIDGE_ENABLED:true}
+    url: ${BRIDGE_SERVICE_URL:http://host.docker.internal:8093}
+
+# Model picker: a CLI-routed provider (claude-code/codex/gemini-cli/mistral-vibe)
+# is only offered when the bridge confirms its CLI is installed AND authenticated.
+# Strict (default) hides a CLI provider whose availability cannot be verified
+# (bridge unreachable / URL unset / CLI not authed). Set false for the legacy
+# lenient behaviour (keep CLI providers visible when the bridge is briefly down).
+models:
+  bridge-availability:
+    strict: ${MODELS_BRIDGE_AVAILABILITY_STRICT:true}
+
+# Credential encryption
+credential:
+  encryption:
+    password: ${CREDENTIAL_ENCRYPTION_PASSWORD:}
+    salt: ${CREDENTIAL_ENCRYPTION_SALT:}
+
+# ============================================================
+# Logging
+# ============================================================
+logging:
+  level:
+    com.apimarketplace: INFO
+    org.springframework.security: WARN
+  pattern:
+    console: "%d{HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+  file:
+    name: ${LOGGING_FILE_NAME:/app/logs/livecontext-ce.log}
+
+# ============================================================
+# Actuator
+# ============================================================
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  metrics:
+    enable:
+      http.server.requests: false
+  endpoint:
+    health:
+      # when-authorized (not always): /actuator/health is reachable unauthenticated
+      # on the published port and must not leak component internals (db/diskSpace/…)
+      # to anyone who can reach it. The liveness status (UP/DOWN) is still returned.
+      show-details: when-authorized
+  health:
+    mail:
+      enabled: false
+    redis:
+      enabled: false
+
+# ============================================================
+# JVM tuning for CE (target: 800MB RAM)
+# Set via JAVA_OPTS: -Xms256m -Xmx512m -XX:+UseZGC
+# ============================================================
+
+# ============================================================
+# AI Provider configuration (copied from agent-service)
+# ============================================================
+ai:
+  agent:
+    # default-model/default-provider removed: resolved dynamically from first AI provider
+    cli:
+      models:
+        opus: claude-opus-4-6
+        sonnet: claude-sonnet-4-6
+        haiku: claude-haiku-4-5
+    providers:
+      anthropic:
+        enabled: true
+        display-order: 1
+        api-key: ${ANTHROPIC_API_KEY:}
+        api-url: https://api.anthropic.com/v1/messages
+        models: claude-opus-4-6,claude-sonnet-4-6,claude-haiku-4-5
+      openai:
+        enabled: true
+        display-order: 2
+        api-key: ${OPENAI_API_KEY:}
+        api-url: https://api.openai.com/v1/chat/completions
+        models: gpt-5.4,gpt-5.4-mini,gpt-5.2,gpt-5,gpt-5-mini,o4-mini
+      google:
+        enabled: true
+        display-order: 3
+        api-key: ${GOOGLE_API_KEY:}
+        api-url: https://generativelanguage.googleapis.com/v1beta/models
+        models: gemini-3-pro-preview,gemini-3-flash-preview
+      mistral:
+        enabled: true
+        display-order: 4
+        api-key: ${MISTRAL_API_KEY:}
+        api-url: https://api.mistral.ai/v1/chat/completions
+        models: mistral-large-latest,mistral-medium-3,mistral-small-latest
+      deepseek:
+        enabled: true
+        display-order: 5
+        api-key: ${DEEPSEEK_API_KEY:}
+        api-url: https://api.deepseek.com/v1/chat/completions
+        models: deepseek-chat,deepseek-coder
+      claude-code:
+        enabled: ${BRIDGE_CLAUDE_CODE_ENABLED:true}
+        display-order: 6
+        models: claude-opus-4-7,claude-opus-4-6,claude-sonnet-4-6,claude-sonnet-4-5,claude-haiku-4-5
+      codex:
+        enabled: ${BRIDGE_CODEX_ENABLED:true}
+        display-order: 7
+        models: gpt-5.4,gpt-5.4-mini,gpt-5.3-codex
+      gemini-cli:
+        enabled: ${BRIDGE_GEMINI_CLI_ENABLED:true}
+        display-order: 8
+        models: gemini-2.5-pro,gemini-2.5-flash,gemini-3.1-pro-preview,gemini-3.1-flash
+      mistral-vibe:
+        enabled: ${BRIDGE_MISTRAL_VIBE_ENABLED:true}
+        display-order: 9
+        models: devstral-2,devstral-small-2
+    pricing:
+      # OpenAI Models
+      "[gpt-5.4]":
+        input: 2.50
+        output: 15.00
+      "[gpt-5.4-mini]":
+        input: 0.75
+        output: 4.50
+      "[gpt-5.2]":
+        input: 1.75
+        output: 14.00
+      gpt-5:
+        input: 1.25
+        output: 10.00
+      gpt-5-mini:
+        input: 0.25
+        output: 2.00
+      o4-mini:
+        input: 1.10
+        output: 4.40
+      # Anthropic Models
+      claude-opus-4-6:
+        input: 5.00
+        output: 25.00
+      claude-sonnet-4-6:
+        input: 3.00
+        output: 15.00
+      claude-haiku-4-5:
+        input: 1.00
+        output: 5.00
+      # Google Models
+      gemini-3-pro-preview:
+        input: 1.25
+        output: 10.00
+      gemini-3-flash-preview:
+        input: 0.30
+        output: 2.50
+      # Mistral Models
+      mistral-large-latest:
+        input: 2.00
+        output: 6.00
+      mistral-medium-3:
+        input: 0.40
+        output: 2.00
+      mistral-small-latest:
+        input: 0.10
+        output: 0.30
+      # DeepSeek Models
+      deepseek-chat:
+        input: 0.28
+        output: 0.42
+      deepseek-coder:
+        input: 0.28
+        output: 0.42
+      # Bridge models route through the local CLI. Since V130 (Product 2026-04)
+      # bridges carry the underlying cloud model's list price for reporting
+      # fairness; billing is driven by auth.model_pricing (Flyway-seeded +
+      # reconciled by AuthPricingSyncClient on admin edits).
+      "[gpt-5.3-codex]":
+        input: 2.00
+        output: 12.00
+      "[gemini-2.5-pro]":
+        input: 1.25
+        output: 10.00
+      "[gemini-2.5-flash]":
+        input: 0.30
+        output: 2.50
+      "[gemini-3.1-pro-preview]":
+        input: 1.25
+        output: 10.00
+      "[gemini-3.1-flash]":
+        input: 0.30
+        output: 2.50
+      # Mistral Vibe bridge models
+      devstral-2:
+        input: 0.40
+        output: 2.00
+      devstral-small-2:
+        input: 0.10
+        output: 0.30
+    rankings:
+      claude-opus-4-6: 1
+      claude-sonnet-4-6: 2
+      "[gpt-5.4]": 3
+      gemini-3-pro-preview: 4
+      "[gpt-5.4-mini]": 5
+      claude-haiku-4-5: 6
+      gemini-3-flash-preview: 7
+      mistral-large-latest: 8
+      "[gpt-5.2]": 9
+      gpt-5: 10
+      gpt-5-mini: 11
+      o4-mini: 12
+      mistral-medium-3: 13
+      mistral-small-latest: 14
+      deepseek-chat: 15
+      deepseek-coder: 16
+      claude-opus-4-7: 17
+      "[gpt-5.3-codex]": 20
+      "[gemini-2.5-pro]": 21
+      "[gemini-2.5-flash]": 22
+      "[gemini-3.1-pro-preview]": 23
+      "[gemini-3.1-flash]": 24
+      devstral-2: 25
+      devstral-small-2: 26

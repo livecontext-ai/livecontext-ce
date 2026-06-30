@@ -1,0 +1,18 @@
+{
+  "version": "1.0",
+  "specs": [
+    {
+      "id": "openweathermap",
+      "file": "openweathermap.yaml",
+      "version": "2.5",
+      "category": "Weather",
+      "subcategory": "Forecasts",
+      "credentialName": "openweathermap",
+      "authType": "apiKey",
+      "authHeaderName": "appid",
+      "authIn": "query",
+      "credentialMode": "user_key",
+      "iconSlug": "cloud-sun"
+    }
+  ]
+}

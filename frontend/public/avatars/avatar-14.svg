@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="a14bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#06B6D4"/>
+      <stop offset="100%" stop-color="#0E7490"/>
+    </linearGradient>
+    <clipPath id="a14clip">
+      <circle cx="50" cy="50" r="50"/>
+    </clipPath>
+  </defs>
+  <circle cx="50" cy="50" r="50" fill="url(#a14bg)"/>
+  <!-- Ripples: three concentric rings expanding outward, staggered -->
+  <g clip-path="url(#a14clip)">
+    <circle cx="50" cy="50" r="15" fill="none" stroke="white" stroke-width="0.8">
+      <animate attributeName="r" values="15;40" dur="4.5s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.22;0" dur="4.5s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="50" cy="50" r="15" fill="none" stroke="white" stroke-width="0.8">
+      <animate attributeName="r" values="15;40" dur="4.5s" begin="1.5s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.22;0" dur="4.5s" begin="1.5s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="50" cy="50" r="15" fill="none" stroke="white" stroke-width="0.8">
+      <animate attributeName="r" values="15;40" dur="4.5s" begin="3s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.22;0" dur="4.5s" begin="3s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+  <!-- Almond/leaf shaped eyes -->
+  <ellipse cx="38" cy="44" rx="6.5" ry="4" fill="white" opacity="0.9">
+    <animate attributeName="ry" values="4;4;0.3;4;4" keyTimes="0;0.88;0.92;0.96;1" dur="4.5s" repeatCount="indefinite"/>
+  </ellipse>
+  <ellipse cx="62" cy="44" rx="6.5" ry="4" fill="white" opacity="0.9">
+    <animate attributeName="ry" values="4;4;0.3;4;4" keyTimes="0;0.88;0.92;0.96;1" dur="4.5s" repeatCount="indefinite"/>
+  </ellipse>
+  <!-- Cheeky asymmetric smile -->
+  <path d="M39,58 Q50,64 63,56" stroke="white" stroke-width="2" fill="none" stroke-linecap="round" opacity="0.8"/>
+</svg>

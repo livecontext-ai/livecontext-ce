@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <defs>
+    <linearGradient id="leonardo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#8B5CF6"/>
+      <stop offset="50%" style="stop-color:#D946EF"/>
+      <stop offset="100%" style="stop-color:#F43F5E"/>
+    </linearGradient>
+  </defs>
+  <circle fill="url(#leonardo-grad)" cx="12" cy="12" r="10"/>
+  <path fill="#FFFFFF" d="M8 7h2v7h4v2H8V7z"/>
+</svg>

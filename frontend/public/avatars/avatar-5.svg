@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="a5bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#EC4899"/>
+      <stop offset="100%" stop-color="#BE185D"/>
+    </linearGradient>
+    <clipPath id="a5clip">
+      <circle cx="50" cy="50" r="50"/>
+    </clipPath>
+  </defs>
+  <circle cx="50" cy="50" r="50" fill="url(#a5bg)"/>
+
+  <!-- === SOFT BOKEH === -->
+  <g clip-path="url(#a5clip)">
+    <!-- Bokeh 1: top-left -->
+    <circle cx="22" cy="24" r="16" fill="white" opacity="0.08">
+      <animate attributeName="r" values="16;19;16" dur="9s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.08;0.12;0.08" dur="9s" repeatCount="indefinite"/>
+      <animate attributeName="cx" values="22;25;22" dur="9s" repeatCount="indefinite"/>
+    </circle>
+    <!-- Bokeh 2: top-right -->
+    <circle cx="78" cy="30" r="14" fill="white" opacity="0.1">
+      <animate attributeName="r" values="14;17;14" dur="11s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.1;0.14;0.1" dur="11s" repeatCount="indefinite"/>
+      <animate attributeName="cy" values="30;34;30" dur="11s" repeatCount="indefinite"/>
+    </circle>
+    <!-- Bokeh 3: bottom-right -->
+    <circle cx="74" cy="76" r="20" fill="white" opacity="0.07">
+      <animate attributeName="r" values="20;23;20" dur="12s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.07;0.11;0.07" dur="12s" repeatCount="indefinite"/>
+      <animate attributeName="cx" values="74;70;74" dur="12s" repeatCount="indefinite"/>
+    </circle>
+    <!-- Bokeh 4: bottom-left -->
+    <circle cx="24" cy="78" r="12" fill="white" opacity="0.1">
+      <animate attributeName="r" values="12;15;12" dur="8s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.1;0.13;0.1" dur="8s" repeatCount="indefinite"/>
+      <animate attributeName="cy" values="78;74;78" dur="8s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <!-- Happy squint eyes ^^ -->
+  <path d="M33,44 Q38,38 43,44" stroke="white" stroke-width="2.5" fill="none" stroke-linecap="round" opacity="0.9">
+    <animate attributeName="d" values="M33,44 Q38,38 43,44;M33,44 Q38,38 43,44;M33,44 Q38,44 43,44;M33,44 Q38,38 43,44;M33,44 Q38,38 43,44" keyTimes="0;0.88;0.92;0.96;1" dur="5s" repeatCount="indefinite"/>
+  </path>
+  <path d="M57,44 Q62,38 67,44" stroke="white" stroke-width="2.5" fill="none" stroke-linecap="round" opacity="0.9">
+    <animate attributeName="d" values="M57,44 Q62,38 67,44;M57,44 Q62,38 67,44;M57,44 Q62,44 67,44;M57,44 Q62,38 67,44;M57,44 Q62,38 67,44" keyTimes="0;0.88;0.92;0.96;1" dur="5s" repeatCount="indefinite"/>
+  </path>
+  <!-- Cat mouth w -->
+  <path d="M41,57 Q45.5,62 50,58 Q54.5,62 59,57" stroke="white" stroke-width="1.8" fill="none" stroke-linecap="round" opacity="0.75"/>
+</svg>

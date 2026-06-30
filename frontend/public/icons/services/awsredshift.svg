@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Background: #232F3E rounded rectangle -->
+  <rect width="256" height="256" rx="32" ry="32" fill="#232F3E"/>
+
+  <!-- Data warehouse cylinder (top ellipse) -->
+  <ellipse cx="128" cy="80" rx="72" ry="22" fill="#C925D1"/>
+
+  <!-- Cylinder body sides -->
+  <rect x="56" y="80" width="144" height="80" fill="#9B1DA0"/>
+
+  <!-- Cylinder bottom ellipse -->
+  <ellipse cx="128" cy="160" rx="72" ry="22" fill="#8B189F"/>
+
+  <!-- Top ellipse highlight -->
+  <ellipse cx="128" cy="80" rx="72" ry="22" fill="#C925D1"/>
+
+  <!-- Horizontal data layer lines inside cylinder (schema layers) -->
+  <ellipse cx="128" cy="107" rx="72" ry="22" fill="none" stroke="#E060E8" stroke-width="2" opacity="0.6"/>
+  <ellipse cx="128" cy="133" rx="72" ry="22" fill="none" stroke="#E060E8" stroke-width="2" opacity="0.6"/>
+
+  <!-- Small data flow arrows pointing downward below the cylinder -->
+  <!-- Left arrow -->
+  <polygon points="96,188 88,200 104,200" fill="#C925D1"/>
+  <rect x="93" y="175" width="6" height="15" fill="#C925D1"/>
+
+  <!-- Center arrow -->
+  <polygon points="128,188 120,200 136,200" fill="#C925D1"/>
+  <rect x="125" y="175" width="6" height="15" fill="#C925D1"/>
+
+  <!-- Right arrow -->
+  <polygon points="160,188 152,200 168,200" fill="#C925D1"/>
+  <rect x="157" y="175" width="6" height="15" fill="#C925D1"/>
+
+  <!-- Gloss / highlight on top ellipse -->
+  <ellipse cx="110" cy="75" rx="30" ry="8" fill="white" opacity="0.12"/>
+</svg>

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="14" fill="#0092e0"/>
+  <g fill="none" stroke="white" stroke-linecap="round">
+    <!-- Code angle brackets -->
+    <path d="M12 24 L6 32 L12 40" stroke-width="2.8" stroke-linejoin="round"/>
+    <path d="M52 24 L58 32 L52 40" stroke-width="2.8" stroke-linejoin="round"/>
+    <!-- Voice waveform bars inside -->
+    <line x1="22" y1="27" x2="22" y2="37" stroke-width="3.2"/>
+    <line x1="28" y1="22" x2="28" y2="42" stroke-width="3.2"/>
+    <line x1="34" y1="18" x2="34" y2="46" stroke-width="3.2"/>
+    <line x1="40" y1="24" x2="40" y2="40" stroke-width="3.2"/>
+  </g>
+</svg>

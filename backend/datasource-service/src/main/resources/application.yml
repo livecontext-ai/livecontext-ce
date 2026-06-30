@@ -1,0 +1,82 @@
+server:
+  port: 8088
+
+spring:
+  application:
+    name: datasource-service
+  datasource:
+    url: jdbc:postgresql://localhost:5432/apimarketplace?currentSchema=datasource
+    username: postgres
+    password: postgres
+    hikari:
+      maximum-pool-size: 30
+      minimum-idle: 5
+      connection-timeout: 20000
+      idle-timeout: 300000
+      max-lifetime: 600000
+  jpa:
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        default_schema: datasource
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: false
+  jackson:
+    time-zone: UTC
+    serialization:
+      write-dates-as-timestamps: false
+
+# Gateway authentication
+gateway:
+  filter:
+    secret-key: ${GATEWAY_SECRET_KEY:}
+    verification-enabled: ${GATEWAY_VERIFICATION_ENABLED:true}
+    public-paths:
+      - /health
+      - /actuator
+      - /api/internal/
+      - /api/agent-tools
+
+# Credential encryption (same keys as orchestrator for decryption compatibility)
+credential:
+  encryption:
+    password: ${CREDENTIAL_ENCRYPTION_PASSWORD:}
+    salt: ${CREDENTIAL_ENCRYPTION_SALT:}
+
+services:
+  # services.orchestrator-url removed 2026-05-08 - fed the deleted ActivityLogClient
+  # cross-service callback. No remaining consumer in datasource-service.
+  auth-service:
+    url: ${AUTH_SERVICE_URL:http://localhost:8083}
+
+# Storage tracking
+storage:
+  s3:
+    enabled: ${S3_ENABLED:false}
+
+# Agent guard defaults - datasource-service reads the unified per-resource cap (V100).
+# Mirrors the same prefix used by agent-service / conversation-service / interface-service.
+ai:
+  agent:
+    defaults:
+      max-per-resource-per-turn: 5   # Uniform cap on table(action='create') per turn; resolved via caller-agent credential
+
+# Actuator health endpoint
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    com.apimarketplace.datasource: INFO
+  file:
+    name: logs/datasource-service.log

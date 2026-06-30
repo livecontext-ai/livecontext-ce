@@ -1,0 +1,50 @@
+# Integration Test Configuration - Auth Service
+# Uses H2 in-memory database with PostgreSQL compatibility mode
+spring:
+  datasource:
+    url: jdbc:h2:mem:integrationdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;MODE=PostgreSQL;INIT=CREATE SCHEMA IF NOT EXISTS auth\;CREATE SCHEMA IF NOT EXISTS storage
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+  flyway:
+    enabled: false
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: https://test-issuer.example.com
+          jwk-set-uri: https://test-issuer.example.com/.well-known/jwks.json
+
+# cloud-link.ip-hash - IpHashService @PostConstruct requires key-v1 when current-version=1 (default).
+# Fixed test value; never used to hash real IPs.
+cloud-link:
+  ip-hash:
+    key-v1: integration-test-ip-hash-key-v1-do-not-use-in-prod
+    current-version: 1
+
+# Stripe configuration for tests (fake keys)
+stripe:
+  api-key: sk_test_fake_key_for_integration_tests
+  webhook-secret: whsec_test_fake_secret_for_integration_tests
+
+billing:
+  stripe:
+    secretKey: sk_test_fake_key_for_integration_tests
+    webhookSecret: whsec_test_fake_secret_for_integration_tests
+
+# MockMvc integration tests call auth-service directly, outside the gateway.
+gateway:
+  filter:
+    verification-enabled: false
+
+logging:
+  level:
+    com.apimarketplace: DEBUG
+    org.springframework.security: WARN

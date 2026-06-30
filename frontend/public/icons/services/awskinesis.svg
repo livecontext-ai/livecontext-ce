@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Background with rounded corners -->
+  <rect width="256" height="256" rx="32" ry="32" fill="#232F3E"/>
+
+  <!-- Streaming wave lines (purple, representing Kinesis data streams) -->
+  <!-- Wave 1 - top -->
+  <path d="M 36 88 C 60 68, 84 108, 108 88 C 132 68, 156 108, 180 88 C 196 74, 208 80, 220 88"
+        fill="none" stroke="#C925D1" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Wave 2 - middle -->
+  <path d="M 36 128 C 60 108, 84 148, 108 128 C 132 108, 156 148, 180 128 C 196 114, 208 120, 220 128"
+        fill="none" stroke="#C925D1" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Wave 3 - bottom -->
+  <path d="M 36 168 C 60 148, 84 188, 108 168 C 132 148, 156 188, 180 168 C 196 154, 208 160, 220 168"
+        fill="none" stroke="#C925D1" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Left input arrow/funnel indicator -->
+  <circle cx="36" cy="88" r="6" fill="#C925D1"/>
+  <circle cx="36" cy="128" r="6" fill="#C925D1"/>
+  <circle cx="36" cy="168" r="6" fill="#C925D1"/>
+
+  <!-- Right output arrow indicators -->
+  <circle cx="220" cy="88" r="6" fill="#C925D1"/>
+  <circle cx="220" cy="128" r="6" fill="#C925D1"/>
+  <circle cx="220" cy="168" r="6" fill="#C925D1"/>
+
+  <!-- Right-pointing arrow head at the end of center stream -->
+  <polygon points="228,122 228,134 242,128" fill="#C925D1"/>
+</svg>

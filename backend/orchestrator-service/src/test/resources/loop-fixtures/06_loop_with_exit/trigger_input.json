@@ -1,0 +1,7 @@
+{
+  "__harness_directives": {
+    "comment": "Loop with exit: condition `iteration < 3` exits at iteration=3 (3 body passes). The harness pins the iteration counter via core:loop's loop state so the body sees iteration=0,1,2 across passes. expected_iterations_observed pins the trace contract.",
+    "expected_iterations_observed": [0, 1, 2],
+    "expected_loop_exits_at_iteration": 3
+  }
+}

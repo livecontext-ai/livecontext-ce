@@ -1,0 +1,52 @@
+{
+  "id": "fixture-03-signal-resume-user-approval",
+  "triggers": [
+    {
+      "id": "t1",
+      "type": "manual",
+      "label": "Start",
+      "position": { "x": 100, "y": 200 }
+    }
+  ],
+  "mcps": [
+    {
+      "id": "mock/gather_data",
+      "type": "mcp",
+      "label": "Gather Data",
+      "position": { "x": 300, "y": 200 },
+      "params": {}
+    },
+    {
+      "id": "mock/execute",
+      "type": "mcp",
+      "label": "Execute",
+      "position": { "x": 700, "y": 200 },
+      "params": {
+        "summary": "{{mcp:gather_data.output.summary}}"
+      }
+    }
+  ],
+  "tables": [],
+  "agents": [],
+  "cores": [],
+  "edges": [
+    { "from": "trigger:start", "to": "mcp:gather_data" },
+    { "from": "mcp:gather_data", "to": "interface:approve" },
+    { "from": "interface:approve", "to": "mcp:execute" }
+  ],
+  "notes": [],
+  "interfaces": [
+    {
+      "id": "if1",
+      "label": "Approve",
+      "interfaceId": "550e8400-e29b-41d4-a716-446655440003",
+      "variableMapping": {
+        "summary": "{{mcp:gather_data.output.summary}}"
+      },
+      "actionMapping": {
+        "button#approve": "__continue"
+      },
+      "position": { "x": 500, "y": 200 }
+    }
+  ]
+}

@@ -1,0 +1,263 @@
+package com.apimarketplace.orchestrator.tools.interface_;
+
+import com.apimarketplace.orchestrator.utils.LabelNormalizer;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.stream.Collectors;
+
+/**
+ * Type-safe configuration for interface nodes in workflow builder.
+ * Centralizes all string key access for interface node parameters,
+ * eliminating scattered Map<String, Object> key lookups.
+ *
+ * Used by:
+ * - UtilityNodeCreator (or future InterfaceNodeCreator) when adding interface nodes
+ * - WorkflowBuilderProvider when modifying interface nodes
+ * - NodeParamsValidator when validating interface node params
+ *
+ * Supported keys extracted from raw parameters:
+ * - interface_id / id: UUID of the interface entity
+ * - variable_mapping: generic template var -> workflow expression
+ * - action_mapping: CSS selector -> trigger binding (trigger:label:actiontype)
+ * - is_entry_interface / isEntryInterface: boolean - show this interface first
+ * - generate_screenshot / generateScreenshot: boolean - emit `screenshot` FileRef output
+ * - expose_rendered_source / exposeRenderedSource: boolean - emit `rendered_html`/`rendered_css`/`rendered_js`
+ */
+public record InterfaceNodeConfig(
+    String interfaceId,
+    Map<String, String> variableMapping,
+    Map<String, String> actionMapping,
+    Boolean isEntryInterface,
+    Boolean generateScreenshot,
+    Boolean exposeRenderedSource
+) {
+
+    // ==================== Known Parameter Keys ====================
+
+    /** All known parameter keys for interface nodes (for validation). */
+    public static final java.util.Set<String> KNOWN_PARAMS = java.util.Set.of(
+        "interface_id", "id", "variable_mapping", "action_mapping",
+        "is_entry_interface", "isEntryInterface",
+        "generate_screenshot", "generateScreenshot",
+        "expose_rendered_source", "exposeRenderedSource"
+    );
+
+    // ==================== Factory ====================
+
+    /**
+     * Extract InterfaceNodeConfig from raw parameters map.
+     * Supports multiple key aliases (interface_id / id) and snake_case / camelCase
+     * pairs for boolean toggles (so MCP agents can use either convention).
+     */
+    @SuppressWarnings("unchecked")
+    public static InterfaceNodeConfig fromParams(Map<String, Object> params) {
+        // Extract interface_id with alias support
+        String interfaceId = getFirstString(params, "interface_id", "id");
+
+        // Extract variable_mapping
+        Map<String, String> variableMapping = extractStringMap(params, "variable_mapping");
+
+        // Extract action_mapping
+        Map<String, String> actionMapping = extractStringMap(params, "action_mapping");
+
+        // Extract isEntryInterface (snake_case and camelCase)
+        Boolean isEntryInterface = getFirstBoolean(params, "is_entry_interface", "isEntryInterface");
+
+        // Extract generateScreenshot toggle (snake_case + camelCase). Default null → omitted from
+        // the plan, parser will default to false. Setting true emits a `screenshot` FileRef output.
+        Boolean generateScreenshot = getFirstBoolean(params, "generate_screenshot", "generateScreenshot");
+
+        // Extract exposeRenderedSource toggle (snake_case + camelCase). Default null → omitted,
+        // parser defaults to false. Setting true emits rendered_html/rendered_css/rendered_js.
+        Boolean exposeRenderedSource = getFirstBoolean(params, "expose_rendered_source", "exposeRenderedSource");
+
+        return new InterfaceNodeConfig(interfaceId, variableMapping, actionMapping,
+            isEntryInterface, generateScreenshot, exposeRenderedSource);
+    }
+
+    // ==================== Conversion ====================
+
+    /**
+     * Build the node map stored in WorkflowBuilderSession.interfaces.
+     * Boolean toggles are emitted as camelCase keys to match {@code WorkflowPlanParser.parseInterfaces}.
+     */
+    public Map<String, Object> toNodeMap(String label, Map<String, Integer> position) {
+        Map<String, Object> node = new LinkedHashMap<>();
+        node.put("id", interfaceId);
+        node.put("label", label);
+        node.put("type", "interface");
+        if (isEntryInterface != null) {
+            node.put("isEntryInterface", isEntryInterface);
+        }
+        if (generateScreenshot != null) {
+            node.put("generateScreenshot", generateScreenshot);
+        }
+        if (exposeRenderedSource != null) {
+            node.put("exposeRenderedSource", exposeRenderedSource);
+        }
+        if (variableMapping != null && !variableMapping.isEmpty()) {
+            node.put("variableMapping", variableMapping);
+        }
+        if (actionMapping != null && !actionMapping.isEmpty()) {
+            node.put("actionMapping", actionMapping);
+        }
+        node.put("position", position);
+        return node;
+    }
+
+    /**
+     * Build the savedParams map returned in the success response.
+     */
+    public Map<String, Object> toSavedParams() {
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("interface_id", interfaceId);
+        if (isEntryInterface != null) {
+            params.put("is_entry_interface", isEntryInterface);
+        }
+        if (generateScreenshot != null) {
+            params.put("generate_screenshot", generateScreenshot);
+        }
+        if (exposeRenderedSource != null) {
+            params.put("expose_rendered_source", exposeRenderedSource);
+        }
+        if (variableMapping != null && !variableMapping.isEmpty()) {
+            params.put("variable_mapping", variableMapping);
+        }
+        if (actionMapping != null && !actionMapping.isEmpty()) {
+            params.put("action_mapping", actionMapping);
+        }
+        return params;
+    }
+
+    /**
+     * Build the extras map for the success response (interface_id + mappings).
+     */
+    public Map<String, Object> toExtras() {
+        Map<String, Object> extras = new LinkedHashMap<>();
+        extras.put("interface_id", interfaceId);
+        if (isEntryInterface != null) {
+            extras.put("is_entry_interface", isEntryInterface);
+        }
+        if (generateScreenshot != null) {
+            extras.put("generate_screenshot", generateScreenshot);
+        }
+        if (exposeRenderedSource != null) {
+            extras.put("expose_rendered_source", exposeRenderedSource);
+        }
+        if (variableMapping != null && !variableMapping.isEmpty()) {
+            extras.put("variable_mapping", variableMapping);
+        }
+        if (actionMapping != null && !actionMapping.isEmpty()) {
+            extras.put("action_mapping", actionMapping);
+        }
+        return extras;
+    }
+
+    // ==================== Helpers ====================
+
+    private static String getFirstString(Map<String, Object> params, String... keys) {
+        for (String key : keys) {
+            Object value = params.get(key);
+            if (value instanceof String s && !s.isBlank()) return s;
+        }
+        return null;
+    }
+
+    private static Boolean getFirstBoolean(Map<String, Object> params, String... keys) {
+        for (String key : keys) {
+            Object value = params.get(key);
+            if (value instanceof Boolean b) return b;
+            if (value instanceof String s && !s.isBlank()) return Boolean.parseBoolean(s);
+        }
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, String> extractStringMap(Map<String, Object> params, String key) {
+        Object raw = params.get(key);
+        if (raw instanceof Map<?, ?> map) {
+            boolean isVariableMapping = "variable_mapping".equals(key);
+            boolean isActionMapping = "action_mapping".equals(key);
+            return ((Map<String, Object>) map).entrySet().stream()
+                .filter(e -> e.getValue() != null)
+                .collect(Collectors.toMap(
+                    e -> isActionMapping ? stripSurroundingQuotes(e.getKey()) : e.getKey(),
+                    e -> {
+                        Object rawValue = e.getValue();
+                        if (isActionMapping) {
+                            assertActionMappingValueIsString(e.getKey(), rawValue);
+                        }
+                        String val = rawValue.toString();
+                        // Normalize variable references in variable_mapping values
+                        // e.g., {{mcp:Fetch Profile.output.data}} → {{mcp:fetch_profile.output.data}}
+                        return isVariableMapping ? LabelNormalizer.normalizeVariableReferences(val) : val;
+                    },
+                    (a, b) -> b,
+                    LinkedHashMap::new
+                ));
+        }
+        return null;
+    }
+
+    /**
+     * Reject non-String values in {@code action_mapping}.
+     *
+     * <p>An object value (Map / List) is the canonical sign that the agent invented a
+     * non-existent field-renaming feature. We surface a loud, actionable error instead of
+     * silently swallowing the value via {@code Map.toString()} - the latter has historically
+     * stored {@code "{trigger=…, mapping={…}}"} strings in DB that the runtime later treats
+     * as junk and silently ignores.
+     *
+     * <p>Public+static so the same contract is enforced from both code paths that accept
+     * {@code action_mapping} input ({@link #fromParams} for add_node, and the modify-flow
+     * harmoniser).
+     *
+     * @throws IllegalArgumentException with a self-contained, agent-actionable message when
+     *         the value is not a String.
+     */
+    public static void assertActionMappingValueIsString(Object selectorKey, Object rawValue) {
+        if (rawValue instanceof String) return;
+        throw new IllegalArgumentException(
+            "action_mapping value for key '" + selectorKey +
+            "' must be a single string token (got " +
+            (rawValue == null ? "null" : rawValue.getClass().getSimpleName()) +
+            "). Allowed: 'trigger:<label>:submit|click|message', " +
+            "'interface:<label>:navigate', '__continue', " +
+            "'__pagination:next|prev|first|last'. " +
+            "Field renaming inside action_mapping is NOT supported - either align " +
+            "<input name=...> in the HTML to the trigger field name, or remap " +
+            "downstream in a code node. " +
+            "See workflow(action='help', topics=['interface']) for the full grammar."
+        );
+    }
+
+    /**
+     * Apply {@link #assertActionMappingValueIsString} to every entry of a candidate
+     * action_mapping map. Convenience for callers that already hold the Map (e.g.
+     * the modify-flow harmoniser, before {@code NodeFieldMerger} mutates the node).
+     *
+     * @param actionMapping the candidate map (possibly null or non-Map - both no-op)
+     * @throws IllegalArgumentException if any value is not a String
+     */
+    public static void assertActionMappingValuesAreStrings(Object actionMapping) {
+        if (!(actionMapping instanceof Map<?, ?> map)) return;
+        for (Map.Entry<?, ?> e : map.entrySet()) {
+            if (e.getValue() == null) continue;
+            assertActionMappingValueIsString(e.getKey(), e.getValue());
+        }
+    }
+
+    /**
+     * Strip surrounding single or double quotes from a string.
+     * LLMs sometimes wrap CSS selectors in quotes: '#btn' → #btn
+     */
+    private static String stripSurroundingQuotes(String value) {
+        if (value == null || value.length() < 2) return value;
+        if ((value.startsWith("'") && value.endsWith("'")) ||
+            (value.startsWith("\"") && value.endsWith("\""))) {
+            return value.substring(1, value.length() - 1);
+        }
+        return value;
+    }
+}

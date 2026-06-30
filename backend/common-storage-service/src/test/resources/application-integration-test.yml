@@ -1,0 +1,26 @@
+# Integration Test Configuration - Common Storage Service
+# Uses H2 in-memory database with PostgreSQL compatibility mode
+spring:
+  datasource:
+    url: jdbc:h2:mem:integrationdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;MODE=PostgreSQL;INIT=CREATE SCHEMA IF NOT EXISTS storage
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+        default_schema: storage
+
+# Disable mapping resolution for integration tests
+storage:
+  mapping:
+    enabled: false
+    catalog-base-url: http://localhost:8081
+
+logging:
+  level:
+    com.apimarketplace: DEBUG

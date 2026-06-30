@@ -1,0 +1,7 @@
+# Force LF line endings for shell scripts - they run on Linux servers only
+*.sh text eol=lf
+
+# CE export manifests are parsed by POSIX shell loops. Keep them LF so a
+# Windows checkout cannot append CR bytes to path/pattern entries.
+deploy/ce-export/*.txt text eol=lf
+deploy/ce-export/*.toml text eol=lf

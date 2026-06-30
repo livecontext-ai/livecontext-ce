@@ -1,0 +1,41 @@
+# Integration Test Configuration - Storage Service
+# Uses H2 in-memory database with PostgreSQL compatibility mode
+
+# Disable gateway authentication filter in tests (no real gateway running)
+gateway:
+  filter:
+    verification-enabled: false
+
+spring:
+  datasource:
+    url: jdbc:h2:mem:storage_integration;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;MODE=PostgreSQL
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+  flyway:
+    enabled: false
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 10MB
+  cloud:
+    discovery:
+      enabled: false
+
+# Storage configuration for integration tests
+storage:
+  local:
+    path: ./test-uploads
+  max-file-size: 10485760
+  allowed-types: image/*,application/pdf,text/*,application/json,application/xml
+
+logging:
+  level:
+    com.apimarketplace: DEBUG

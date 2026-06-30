@@ -1,0 +1,66 @@
+server:
+  port: 8089
+
+spring:
+  application:
+    name: interface-service
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:apimarketplace}?currentSchema=interface
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+    hikari:
+      maximum-pool-size: 30
+      minimum-idle: 5
+      connection-timeout: 20000
+      idle-timeout: 300000
+      max-lifetime: 600000
+  jpa:
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        default_schema: interface
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: false
+  jackson:
+    time-zone: UTC
+    serialization:
+      write-dates-as-timestamps: false
+
+gateway:
+  filter:
+    secret-key: ${GATEWAY_SECRET_KEY:}
+    verification-enabled: ${GATEWAY_VERIFICATION_ENABLED:true}
+    public-paths:
+      - /health
+      - /actuator
+      - /api/internal/
+      - /api/agent-tools
+
+services:
+  orchestrator-url: ${ORCHESTRATOR_SERVICE_URL:http://localhost:8099}
+  auth-service:
+    url: ${AUTH_SERVICE_URL:http://localhost:8083}
+
+# Agent guard defaults - interface-service only reads the unified per-resource cap (V100).
+# Mirrors the same prefix used by agent-service / conversation-service / datasource-service.
+ai:
+  agent:
+    defaults:
+      max-per-resource-per-turn: 5   # Uniform cap on interface(action='create') per turn; resolved via caller-agent credential
+
+logging:
+  file:
+    name: logs/interface-service.log
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: always

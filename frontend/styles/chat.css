@@ -1,0 +1,105 @@
+/* Chat Page Styles - Extracted from ChatPage.tsx for better performance */
+
+/* HomePage styles for consistency */
+.bg-theme-primary {
+  background-color: var(--bg-primary);
+}
+
+.bg-theme-secondary {
+  background-color: var(--bg-secondary);
+}
+
+.bg-theme-tertiary {
+  background-color: var(--bg-tertiary);
+}
+
+.text-theme-primary {
+  color: var(--text-primary);
+}
+
+.text-theme-secondary {
+  color: var(--text-secondary);
+}
+
+.border-theme {
+  border-color: var(--border-color);
+}
+
+.shadow-theme {
+  box-shadow: 0 4px 6px -1px var(--shadow-color);
+}
+
+/* Composer button styles */
+.composer-btn {
+  transition: all 0.2s ease-in-out;
+  border-radius: 12px;
+  position: relative;
+  overflow: hidden;
+}
+
+.composer-btn:hover {
+  transform: scale(1.05);
+}
+
+.composer-btn:active {
+  transform: scale(0.95);
+}
+
+.composer-submit-btn {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: 12px;
+  position: relative;
+  overflow: hidden;
+}
+
+.composer-submit-btn:hover {
+  transform: translateY(-1px);
+}
+
+.composer-submit-btn:active {
+  transform: translateY(0);
+}
+
+/* Improved scrollbar for textarea */
+.composer-textarea::-webkit-scrollbar {
+  width: 4px;
+}
+
+.composer-textarea::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.composer-textarea::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 2px;
+}
+
+.composer-textarea::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+/* Dark mode scrollbar */
+.dark .composer-textarea::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.dark .composer-textarea::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* Text wrapping and overflow handling */
+.chat-message-content {
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  hyphens: auto;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+/* Ensure chat container doesn't expand beyond viewport */
+.chat-messages-container {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="12" fill="#00122E"/>
+  <g fill="none" stroke="#FFFFFF" stroke-width="2.5" stroke-linecap="round">
+    <!-- Phone handset -->
+    <path d="M18 24c0-3.5 2.5-6 6-6h2c1.1 0 2 .9 2 2v5c0 1.1-.9 2-2 2h-2c-1.1 0-2 .9-2 2v6c0 1.1.9 2 2 2h2c1.1 0 2 .9 2 2v5c0 1.1-.9 2-2 2h-2c-3.5 0-6-2.5-6-6V24z" fill="#FFFFFF" stroke="none"/>
+    <!-- Sound waves -->
+    <path d="M34 26c2 2 2 6 0 8"/>
+    <path d="M38 22c4 4.5 4 13 0 18"/>
+    <path d="M42 18c6 7 6 19.5 0 26.5"/>
+  </g>
+</svg>

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <rect width="64" height="64" rx="8" fill="#232F3E"/>
+  <g transform="translate(12, 12)">
+    <!-- Eye shape (monitoring) -->
+    <path d="M20 10C12 10 5.5 16 2 20C5.5 24 12 30 20 30C28 30 34.5 24 38 20C34.5 16 28 10 20 10Z" fill="none" stroke="#FF9900" stroke-width="2.5"/>
+    <!-- Iris -->
+    <circle cx="20" cy="20" r="6" fill="#FF9900"/>
+    <!-- Pupil -->
+    <circle cx="20" cy="20" r="2.5" fill="#232F3E"/>
+    <!-- Graph line (metrics) -->
+    <polyline points="4 34 12 30 18 36 26 28 34 32 38 26" stroke="#FF9900" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <!-- Tick marks -->
+    <line x1="4" y1="6" x2="4" y2="8" stroke="#FF9900" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="36" y1="6" x2="36" y2="8" stroke="#FF9900" stroke-width="1.5" stroke-linecap="round"/>
+  </g>
+</svg>

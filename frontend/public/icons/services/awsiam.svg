@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Background rounded rectangle -->
+  <rect width="256" height="256" rx="36" ry="36" fill="#232F3E"/>
+
+  <!-- Shield body -->
+  <path d="M128 38 L192 62 L192 126 C192 168 162 202 128 218 C94 202 64 168 64 126 L64 62 Z" fill="#DD344C"/>
+
+  <!-- Shield highlight / inner lighter shade -->
+  <path d="M128 52 L180 72 L180 126 C180 161 155 191 128 205 C101 191 76 161 76 126 L76 72 Z" fill="#E85068"/>
+
+  <!-- Key shape centered on shield -->
+  <!-- Key ring (circle) -->
+  <circle cx="114" cy="118" r="22" fill="none" stroke="#FFFFFF" stroke-width="10"/>
+  <!-- Key stem -->
+  <rect x="130" y="113" width="42" height="10" rx="5" fill="#FFFFFF"/>
+  <!-- Key first tooth -->
+  <rect x="155" y="123" width="10" height="13" rx="3" fill="#FFFFFF"/>
+  <!-- Key second tooth -->
+  <rect x="139" y="123" width="10" height="9" rx="3" fill="#FFFFFF"/>
+
+  <!-- Small "IAM" label text at bottom -->
+  <text x="128" y="228" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700" fill="#DD344C" text-anchor="middle" letter-spacing="3">IAM</text>
+</svg>

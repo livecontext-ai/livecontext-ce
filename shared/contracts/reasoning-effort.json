@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "description": "Source of truth for reasoning-effort levels (CLI/bridge providers: claude-code, codex). Consumed by Java backend (agent-common ReasoningEffort), Node bridge (mcp/bridge/lib/reasoningEffort.mjs), and frontend (frontend/lib/ai-providers/reasoningEffort.ts). Do NOT edit the generated files directly - edit this JSON then re-run scripts/generate-reasoning-effort.js. ReasoningEffortResolver.java (precedence logic) is hand-written and NOT generated.",
+  "levels": [
+    { "name": "minimal", "claudeThinkingBudget": 1024 },
+    { "name": "low",     "claudeThinkingBudget": 4096 },
+    { "name": "medium",  "claudeThinkingBudget": 8192 },
+    { "name": "high",    "claudeThinkingBudget": 16384 },
+    { "name": "xhigh",   "claudeThinkingBudget": 32000, "codexMaxOnly": true }
+  ],
+  "bridgeProviders": ["claude-code", "codex", "gemini-cli", "mistral-vibe"],
+  "effortProviders": ["claude-code", "codex"],
+  "codexMaxModelPattern": "codex-max"
+}

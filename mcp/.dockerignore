@@ -1,0 +1,5 @@
+**/node_modules/
+**/.npm/
+**/*.log
+.git/
+

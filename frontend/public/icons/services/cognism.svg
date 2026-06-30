@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 216 216" width="24" height="24">
+  <title>Cognism</title>
+  <circle cx="108" cy="108" fill="#282850" r="108"/>
+  <g fill="#8886ff">
+    <path d="m72 72h72v72h-72z"/>
+    <path clip-rule="evenodd" d="m118 215.5c55-5 98-51.3 98-107.5 0-56.3-43-102.5-98-107.5z" fill-rule="evenodd"/>
+  </g>
+</svg>

@@ -1,0 +1,28 @@
+-- Stage 1b.1 - per-conversation pinned thinkingLevel for Claude providers.
+--
+-- Purpose: Anthropic's prompt cache is invalidated by a flipping `thinking`
+-- parameter on system+messages (tools cache is preserved). The adaptive
+-- resolver in AgentLoopExecutor otherwise picks LOW for "hi" and HIGH for
+-- a long follow-up within the same conversation - every flip would burn
+-- the cached prefix we just paid for.
+--
+-- Mitigation: the first MAIN turn's resolved level is pinned here; all
+-- subsequent MAIN turns on this conversation reuse the pinned value. Non-
+-- Claude providers don't write this column (Gemini's thinkingConfig lives
+-- in generationConfig and does not invalidate cachedContent; OpenAI has no
+-- equivalent knob). CLASSIFY / GUARDRAIL sub-conversations also don't pin
+-- - they're short-lived side calls and their cache state is independent
+-- of the MAIN conversation's cache.
+--
+-- Shape: a short VARCHAR that maps 1:1 to ThinkingLevel enum names:
+--   "LOW"    - fast-path (short prompt, ≤2 tools)
+--   "MEDIUM" - reserved; MAIN paths pin LOW or HIGH only today
+--   "HIGH"   - full reasoning
+-- Null = not yet pinned (first MAIN turn on Claude will populate it).
+--
+-- No CHECK constraint here: the pin writer validates against the Java enum
+-- before inserting; an invalid value would indicate an upstream bug, not
+-- a user-provided string to guard against. Keeping the column loose lets
+-- future tiers (e.g. ULTRA) land without a migration.
+ALTER TABLE conversation.conversations
+  ADD COLUMN thinking_level_pinned VARCHAR(16) DEFAULT NULL;

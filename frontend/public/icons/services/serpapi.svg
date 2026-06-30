@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="serpapi-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0F9D58"/>
+      <stop offset="100%" style="stop-color:#34A853"/>
+    </linearGradient>
+  </defs>
+  <circle cx="100" cy="100" r="85" fill="none" stroke="url(#serpapi-gradient)" stroke-width="24"/>
+  <line x1="165" y1="165" x2="240" y2="240" stroke="url(#serpapi-gradient)" stroke-width="24" stroke-linecap="round"/>
+  <text x="100" y="120" font-family="Arial, sans-serif" font-size="80" font-weight="bold" fill="url(#serpapi-gradient)" text-anchor="middle">S</text>
+</svg>

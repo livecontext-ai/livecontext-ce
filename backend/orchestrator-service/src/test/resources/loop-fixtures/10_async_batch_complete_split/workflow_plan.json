@@ -1,0 +1,86 @@
+{
+  "id": "fixture-10-async-batch-complete-split",
+  "triggers": [
+    {
+      "id": "t1",
+      "type": "manual",
+      "label": "Start",
+      "position": { "x": 100, "y": 200 }
+    }
+  ],
+  "mcps": [
+    {
+      "id": "mock/fetch",
+      "type": "mcp",
+      "label": "Fetch",
+      "position": { "x": 300, "y": 200 },
+      "params": {}
+    },
+    {
+      "id": "mock/apply",
+      "type": "mcp",
+      "label": "Apply",
+      "position": { "x": 900, "y": 200 },
+      "params": {
+        "category": "{{agent:async_classify.output.selected_category_label}}",
+        "id": "{{item.id}}"
+      }
+    }
+  ],
+  "tables": [],
+  "agents": [
+    {
+      "id": "a1",
+      "type": "classify",
+      "label": "Async Classify",
+      "provider": "anthropic",
+      "model": "claude-3-haiku",
+      "classifyParams": "{{item.text}}",
+      "classifyCategories": [
+        { "id": "cat-0", "label": "Positive" },
+        { "id": "cat-1", "label": "Neutral" },
+        { "id": "cat-2", "label": "Negative" }
+      ],
+      "position": { "x": 700, "y": 200 }
+    }
+  ],
+  "cores": [
+    {
+      "id": "c1",
+      "type": "split",
+      "label": "Per Item",
+      "position": { "x": 500, "y": 200 },
+      "list": "{{mcp:fetch.output.items}}",
+      "maxItems": 10,
+      "splitStrategy": "continue-anyway"
+    },
+    {
+      "id": "c2",
+      "type": "merge",
+      "label": "Aggregate",
+      "position": { "x": 1100, "y": 200 }
+    }
+  ],
+  "edges": [
+    { "from": "trigger:start", "to": "mcp:fetch" },
+    { "from": "mcp:fetch", "to": "core:per_item" },
+    { "from": "core:per_item", "to": "agent:async_classify" },
+    { "from": "agent:async_classify", "to": "mcp:apply" },
+    { "from": "mcp:apply", "to": "core:aggregate" }
+  ],
+  "notes": [
+    {
+      "id": "n1",
+      "type": "note",
+      "label": "Per-item barrier (all-success)",
+      "text": "All 10 items succeed through the async batch. Tests the happy path of the per-item barrier in AgentAsyncCompletionService.deliverSplitItem against a fully successful batch (contrast with fixture 04 partial-failure variant).",
+      "color": "#d1fae5",
+      "borderColor": "#10b981",
+      "textColor": "#064e3b",
+      "width": 320,
+      "height": 100,
+      "position": { "x": 50, "y": 50 }
+    }
+  ],
+  "interfaces": []
+}

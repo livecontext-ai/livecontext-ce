@@ -1,0 +1,73 @@
+{
+  "$schema": "./agent-stop-reason.schema.json",
+  "version": 1,
+  "description": "Source of truth for AgentStopReason enum. Used by Java backend (shared-agent-lib), Node bridge (mcp/bridge), and frontend (Next.js). Do not edit generated files directly - re-run scripts/generate-stop-reason.js after editing this file.",
+  "terminalCategories": {
+    "success": "Agent finished as expected. Counts as a successful run.",
+    "partial": "Agent terminated cleanly but did not complete the task as planned. Output is usable but truncated/early.",
+    "failure": "Agent did not produce usable output. Counts as a failed run."
+  },
+  "values": [
+    {
+      "name": "COMPLETED",
+      "terminal": "success",
+      "description": "LLM produced a final response without further tool calls.",
+      "userVisible": "Completed"
+    },
+    {
+      "name": "MAX_ITERATIONS",
+      "terminal": "partial",
+      "description": "Agent reached the configured iteration limit before completing the task.",
+      "userVisible": "Iteration limit reached"
+    },
+    {
+      "name": "TIMEOUT",
+      "terminal": "partial",
+      "description": "Agent execution exceeded the configured wall-clock timeout.",
+      "userVisible": "Timed out"
+    },
+    {
+      "name": "BUDGET_EXHAUSTED",
+      "terminal": "partial",
+      "description": "Credit budget was exhausted before the task completed. The metrics map carries `budgetScope` (\"tenant\", \"agent\", \"parent_reservation\", or \"browser\") to indicate which level was hit. `parent_reservation` means an ancestor agent in the caller chain refused the cascade budget reservation required to spawn this sub-agent. `browser` means the per-user browser-agent quota (concurrent sessions or steps/day) was exceeded.",
+      "userVisible": "Credit budget exhausted",
+      "scopes": ["tenant", "agent", "parent_reservation", "browser"]
+    },
+    {
+      "name": "LOOP_DETECTED",
+      "terminal": "partial",
+      "description": "The loop detector found N identical or consecutive tool calls and stopped the agent before it could spiral.",
+      "userVisible": "Tool loop detected"
+    },
+    {
+      "name": "STOPPED_BY_USER",
+      "terminal": "partial",
+      "description": "A human explicitly cancelled the run (REST cancel endpoint, UI stop button).",
+      "userVisible": "Stopped by user"
+    },
+    {
+      "name": "CANCELLED",
+      "terminal": "failure",
+      "description": "The system cancelled the run (deploy, scale-down, internal supervisor). Distinct from STOPPED_BY_USER.",
+      "userVisible": "Cancelled by system"
+    },
+    {
+      "name": "NO_TOOLS",
+      "terminal": "failure",
+      "description": "Tool discovery returned an empty set; the agent cannot operate.",
+      "userVisible": "No tools available"
+    },
+    {
+      "name": "ERROR",
+      "terminal": "failure",
+      "description": "Unrecoverable execution error (provider failure, invalid response, exception).",
+      "userVisible": "Execution error"
+    },
+    {
+      "name": "INACTIVITY_TIMEOUT",
+      "terminal": "failure",
+      "description": "Agent was force-stopped by the inactivity watchdog after producing no activity (no token, thinking, tool call, or tool result) for the configured inactivity window. Distinct from TIMEOUT, which means the agent was actively working but exceeded its total wall-clock budget: INACTIVITY_TIMEOUT means the agent went silent/stalled (e.g. a hung provider or downstream call) and had to be killed.",
+      "userVisible": "Stopped (inactivity)"
+    }
+  ]
+}

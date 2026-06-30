@@ -1,0 +1,24 @@
+{
+  "__harness_directives": {
+    "comment": "Async classify enabled via global agentQueueEnabled flag. All 10 batch items succeed (no failures). Validates the per-item barrier all-success completion path - sibling fixture to 04 (partial failure).",
+    "async_agents": ["async_classify"],
+    "mock_agent_backend": {
+      "kind": "anthropic-batch",
+      "fail_item_indices": []
+    },
+    "mock_fetch_output": {
+      "items": [
+        { "id": "r-0", "text": "great service" },
+        { "id": "r-1", "text": "ok" },
+        { "id": "r-2", "text": "terrible" },
+        { "id": "r-3", "text": "love it" },
+        { "id": "r-4", "text": "meh" },
+        { "id": "r-5", "text": "amazing" },
+        { "id": "r-6", "text": "broken" },
+        { "id": "r-7", "text": "fine" },
+        { "id": "r-8", "text": "fantastic" },
+        { "id": "r-9", "text": "awful" }
+      ]
+    }
+  }
+}

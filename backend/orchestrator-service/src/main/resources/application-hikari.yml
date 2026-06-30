@@ -1,0 +1,21 @@
+spring:
+  datasource:
+    hikari:
+      # Pool size - sized for horizontal scaling (10 instances × 15 = 150 connections)
+      # PgBouncer (transaction pooling) multiplexes these across ~40 real PG connections
+      maximum-pool-size: 15
+      minimum-idle: 3
+
+      # Connection management
+      connection-timeout: 30000      # 30s timeout to obtain a connection from the pool
+      idle-timeout: 600000           # 10 minutes before an idle connection is closed
+      max-lifetime: 1800000          # 30 minutes max lifetime for a connection
+
+      # Performance tuning
+      leak-detection-threshold: 60000  # Detect connection leaks after 60s
+
+      # Pool name for logging
+      pool-name: OrchestratorHikariCP
+
+      # Health check - ping connections to avoid PostgreSQL timeouts
+      keepalive-time: 300000         # Ping every 5 minutes to keep connections alive

@@ -1,0 +1,33 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:integrationdb;DB_CLOSE_DELAY=-1;MODE=PostgreSQL;INIT=CREATE SCHEMA IF NOT EXISTS orchestrator\;CREATE SCHEMA IF NOT EXISTS trigger\;SET SCHEMA orchestrator
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+        default_schema: orchestrator
+  flyway:
+    enabled: false
+  sql:
+    init:
+      mode: never
+
+credential:
+  encryption:
+    password: test-password
+    salt: 0123456789abcdef
+
+orchestrator:
+  webhook:
+    base-url: http://localhost:8080
+    max-per-user: 10
+
+# Disable gateway HMAC verification for integration tests
+gateway:
+  filter:
+    verification-enabled: false

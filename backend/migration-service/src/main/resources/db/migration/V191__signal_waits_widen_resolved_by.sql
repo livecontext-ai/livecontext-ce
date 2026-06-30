@@ -1,0 +1,31 @@
+-- V191: widen workflow_signal_waits.resolved_by from VARCHAR(100) to VARCHAR(255).
+-- (Renumbered from V188 - collided with V188__pending_credit_upgrades from parallel work.)
+--
+-- Bug F9 (severity 5/10) in the F1-F10 silent-drop sweep.
+--
+-- Symptom: a user-approval signal stays in CLAIMED status forever; the
+-- workflow remains blocked at the awaiting-signal node; the user sees no
+-- error in the UI, just an unresolved approval. Indistinguishable from a
+-- legitimately unresolved approval.
+--
+-- Cause: WorkflowSignalController.resolveSignal sets resolvedBy from the
+-- X-User-ID header or request body. Both upstream-controlled. The column
+-- was VARCHAR(100). Keycloak federated IDs of the form
+-- "b:long-org-id:long-user-id" can exceed 100 characters (~120 chars
+-- observed in prod for federated SSO tenants). Hibernate's
+-- @Transactional flush surfaces DataIntegrityViolationException when the
+-- string overflows; the signal-resolve transaction rolls back; the row
+-- stays CLAIMED; the next user click hits the same overflow.
+--
+-- Fix: widen the column to VARCHAR(255), matching the rest of the
+-- orchestrator schema's identifier-string convention (tenant_id, run_id,
+-- etc. all use VARCHAR(255)). The entity setter also gains a defensive
+-- substring(0, 255) cap so a 5-line Keycloak refactor change cannot
+-- re-introduce the overflow path.
+--
+-- Postgres ALTER COLUMN VARCHAR(100) → VARCHAR(255) is metadata-only on
+-- versions ≥ 9.2 (no rewrite, no scan, sub-second AccessExclusiveLock).
+-- Safe on the live workflow_signal_waits table even at scale.
+
+ALTER TABLE orchestrator.workflow_signal_waits
+    ALTER COLUMN resolved_by TYPE VARCHAR(255);

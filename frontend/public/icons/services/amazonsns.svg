@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <rect width="64" height="64" rx="8" fill="#232F3E"/>
+  <g transform="translate(16, 12)">
+    <!-- Bell body -->
+    <path d="M16 0C16 0 17.5 0 17.5 1.5V4.5C22 5.5 25 9.5 25 14V24L30 28V30H2V28L7 24V14C7 9.5 10 5.5 14.5 4.5V1.5C14.5 0 16 0 16 0Z" fill="#FF9900"/>
+    <!-- Bell clapper -->
+    <ellipse cx="16" cy="33" rx="3.5" ry="3" fill="#FF9900"/>
+    <!-- Notification lines (broadcast) -->
+    <path d="M31 12C33 14.5 34 17.5 34 21" stroke="#FF9900" stroke-width="2" stroke-linecap="round" fill="none"/>
+    <path d="M1 12C-1 14.5 -2 17.5 -2 21" stroke="#FF9900" stroke-width="2" stroke-linecap="round" fill="none"/>
+    <!-- Small notification dots -->
+    <circle cx="35" cy="10" r="1.5" fill="#FF9900" opacity="0.7"/>
+    <circle cx="-3" cy="10" r="1.5" fill="#FF9900" opacity="0.7"/>
+  </g>
+</svg>

@@ -1,0 +1,73 @@
+{
+  "id": "fixture-02-split-classify-apply",
+  "triggers": [
+    {
+      "id": "t1",
+      "type": "manual",
+      "label": "Start",
+      "position": { "x": 100, "y": 200 }
+    }
+  ],
+  "mcps": [
+    {
+      "id": "mock/fetch_emails",
+      "type": "mcp",
+      "label": "Fetch Emails",
+      "position": { "x": 300, "y": 200 },
+      "params": {}
+    },
+    {
+      "id": "mock/apply_label",
+      "type": "mcp",
+      "label": "Apply Label",
+      "position": { "x": 900, "y": 200 },
+      "params": {
+        "messageId": "{{item.id}}",
+        "label": "{{agent:classify_email.output.selected_category_label}}"
+      }
+    }
+  ],
+  "tables": [],
+  "agents": [
+    {
+      "id": "a1",
+      "type": "classify",
+      "label": "Classify Email",
+      "provider": "anthropic",
+      "model": "claude-3-haiku",
+      "classifyParams": "{{item.subject}} {{item.body}}",
+      "classifyCategories": [
+        { "id": "cat-0", "label": "Work" },
+        { "id": "cat-1", "label": "Personal" },
+        { "id": "cat-2", "label": "Promo" }
+      ],
+      "position": { "x": 700, "y": 200 }
+    }
+  ],
+  "cores": [
+    {
+      "id": "c1",
+      "type": "split",
+      "label": "Per Email",
+      "position": { "x": 500, "y": 200 },
+      "list": "{{mcp:fetch_emails.output.items}}",
+      "maxItems": 100,
+      "splitStrategy": "continue-anyway"
+    },
+    {
+      "id": "c2",
+      "type": "merge",
+      "label": "Aggregate",
+      "position": { "x": 1100, "y": 200 }
+    }
+  ],
+  "edges": [
+    { "from": "trigger:start", "to": "mcp:fetch_emails" },
+    { "from": "mcp:fetch_emails", "to": "core:per_email" },
+    { "from": "core:per_email", "to": "agent:classify_email" },
+    { "from": "agent:classify_email", "to": "mcp:apply_label" },
+    { "from": "mcp:apply_label", "to": "core:aggregate" }
+  ],
+  "notes": [],
+  "interfaces": []
+}

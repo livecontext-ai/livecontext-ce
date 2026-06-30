@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="a11bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F43F5E"/>
+      <stop offset="100%" stop-color="#E11D48"/>
+    </linearGradient>
+    <clipPath id="a11clip">
+      <circle cx="50" cy="50" r="50"/>
+    </clipPath>
+  </defs>
+  <circle cx="50" cy="50" r="50" fill="url(#a11bg)"/>
+  <!-- Aurora ribbons: three drifting wavy bands morphing their paths -->
+  <g clip-path="url(#a11clip)">
+    <path d="M -5 25 Q 20 18 50 25 T 105 25" fill="none" stroke="white" stroke-width="4" stroke-linecap="round" opacity="0.1">
+      <animate attributeName="d"
+               values="M -5 25 Q 20 18 50 25 T 105 25;
+                       M -5 25 Q 20 32 50 25 T 105 25;
+                       M -5 25 Q 20 18 50 25 T 105 25"
+               dur="7s" repeatCount="indefinite"/>
+    </path>
+    <path d="M -5 50 Q 25 44 50 50 T 105 50" fill="none" stroke="white" stroke-width="5" stroke-linecap="round" opacity="0.08">
+      <animate attributeName="d"
+               values="M -5 50 Q 25 44 50 50 T 105 50;
+                       M -5 50 Q 25 56 50 50 T 105 50;
+                       M -5 50 Q 25 44 50 50 T 105 50"
+               dur="8s" repeatCount="indefinite"/>
+    </path>
+    <path d="M -5 78 Q 22 84 50 78 T 105 78" fill="none" stroke="white" stroke-width="4" stroke-linecap="round" opacity="0.12">
+      <animate attributeName="d"
+               values="M -5 78 Q 22 84 50 78 T 105 78;
+                       M -5 78 Q 22 72 50 78 T 105 78;
+                       M -5 78 Q 22 84 50 78 T 105 78"
+               dur="6s" repeatCount="indefinite"/>
+    </path>
+  </g>
+  <!-- Sweet round eyes -->
+  <ellipse cx="39" cy="44" rx="5" ry="5.5" fill="white" opacity="0.9">
+    <animate attributeName="ry" values="5.5;5.5;0.5;5.5;5.5" keyTimes="0;0.88;0.92;0.96;1" dur="5s" repeatCount="indefinite"/>
+  </ellipse>
+  <ellipse cx="61" cy="44" rx="5" ry="5.5" fill="white" opacity="0.9">
+    <animate attributeName="ry" values="5.5;5.5;0.5;5.5;5.5" keyTimes="0;0.88;0.92;0.96;1" dur="5s" repeatCount="indefinite"/>
+  </ellipse>
+  <!-- Sweet curved smile -->
+  <path d="M40,58 Q50,66 60,58" stroke="white" stroke-width="2" fill="none" stroke-linecap="round" opacity="0.8"/>
+</svg>

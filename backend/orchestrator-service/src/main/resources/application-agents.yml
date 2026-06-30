@@ -1,0 +1,99 @@
+# AI Agent Configuration
+# This file configures the AI agent system for workflow execution
+
+ai:
+  agent:
+    # Agent defaults (applied when creating new agents or as fallback)
+    defaults:
+      provider: openai
+      model: gpt-5-mini
+      temperature: 0.7
+      # Mirror of agent-service ai.agent.defaults.max-tokens. Clamped at runtime to
+      # the model's real output ceiling (MaxTokensClamp), so this high default never
+      # 400s a low-cap model (DeepSeek-chat = 8192). Keep the two in sync.
+      max-tokens: 16000
+      max-iterations: 100
+      execution-timeout: 3600
+      max-per-resource-per-turn: 5   # Uniform cap on workflow(action='finish'|'create') per turn; resolved via caller-agent credential
+
+    # Tool discovery settings
+    tool-discovery:
+      max-tools: 5          # Maximum tools to suggest to LLM
+      min-score: 0.02       # Minimum RRF score for tool inclusion
+
+    # Execution limits
+    max-iterations: 50      # Maximum tool call iterations before stopping
+
+    # Provider configurations
+    providers:
+      openai:
+        enabled: true
+        api-key: ${OPENAI_API_KEY:}
+        api-url: https://api.openai.com/v1/chat/completions
+        models:
+          # GPT-5 family (August 2025) - Latest flagship
+          - gpt-5.2
+          - gpt-5.1
+          - gpt-5
+          - gpt-5-mini
+          - gpt-5-nano
+          - gpt-5-pro
+          # GPT-4.1 family (April 2025)
+          - gpt-4.1
+          - gpt-4.1-mini
+          - gpt-4.1-nano
+          # Reasoning models (o-series)
+          - o3
+          - o4-mini
+          - o3-mini
+          # GPT-4o family (legacy)
+          - gpt-4o
+          - gpt-4o-mini
+      
+      anthropic:
+        enabled: true
+        api-key: ${ANTHROPIC_API_KEY:}
+        api-url: https://api.anthropic.com/v1/messages
+        models:
+          - claude-3-5-sonnet-20241022
+          - claude-3-opus-20240229
+          - claude-3-sonnet-20240229
+          - claude-3-haiku-20240307
+      
+      google:
+        enabled: true
+        api-key: ${GOOGLE_API_KEY:}
+        api-url: https://generativelanguage.googleapis.com/v1beta/models
+        models:
+          - gemini-1.5-pro
+          - gemini-1.5-flash
+          - gemini-pro
+      
+      mistral:
+        enabled: true
+        api-key: ${MISTRAL_API_KEY:}
+        api-url: https://api.mistral.ai/v1/chat/completions
+        models:
+          - mistral-large-latest
+          - mistral-medium-latest
+          - mistral-small-latest
+          - codestral-latest
+      
+      deepseek:
+        enabled: true
+        api-key: ${DEEPSEEK_API_KEY:}
+        api-url: https://api.deepseek.com/v1/chat/completions
+        models:
+          - deepseek-chat
+          - deepseek-coder
+          - deepseek-reasoner
+
+# Catalog service URL for tool discovery
+catalog:
+  service:
+    url: ${CATALOG_SERVICE_URL:http://localhost:8081}
+
+# MCP Gateway URL for tool execution
+mcp:
+  gateway:
+    url: ${MCP_GATEWAY_URL:http://localhost:8083}

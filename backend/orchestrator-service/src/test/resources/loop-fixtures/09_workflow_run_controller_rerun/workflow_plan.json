@@ -1,0 +1,69 @@
+{
+  "id": "fixture-09-workflow-run-controller-rerun",
+  "triggers": [
+    {
+      "id": "t1",
+      "type": "manual",
+      "label": "Start",
+      "position": { "x": 100, "y": 200 }
+    }
+  ],
+  "mcps": [
+    {
+      "id": "mock/fetch",
+      "type": "mcp",
+      "label": "Fetch",
+      "position": { "x": 300, "y": 200 },
+      "params": {}
+    },
+    {
+      "id": "mock/item_op",
+      "type": "mcp",
+      "label": "Item Op",
+      "position": { "x": 700, "y": 200 },
+      "params": {
+        "id": "{{item.id}}"
+      }
+    }
+  ],
+  "tables": [],
+  "agents": [],
+  "cores": [
+    {
+      "id": "c1",
+      "type": "split",
+      "label": "Per Item",
+      "position": { "x": 500, "y": 200 },
+      "list": "{{mcp:fetch.output.items}}",
+      "maxItems": 5,
+      "splitStrategy": "continue-anyway"
+    },
+    {
+      "id": "c2",
+      "type": "merge",
+      "label": "Done",
+      "position": { "x": 900, "y": 200 }
+    }
+  ],
+  "edges": [
+    { "from": "trigger:start", "to": "mcp:fetch" },
+    { "from": "mcp:fetch", "to": "core:per_item" },
+    { "from": "core:per_item", "to": "mcp:item_op" },
+    { "from": "mcp:item_op", "to": "core:done" }
+  ],
+  "notes": [
+    {
+      "id": "n1",
+      "type": "note",
+      "label": "Controller-driven rerun",
+      "text": "Initial fire processes 5 items through split/merge. Harness then issues a rerun via WorkflowRunController.rerunFromNode (the call site at WorkflowRunController.java:816 that collects ready nodes from result.readyNodes() against the ResultBackedReady oracle). Validates the controller-driven rerun adapter call site.",
+      "color": "#dbeafe",
+      "borderColor": "#3b82f6",
+      "textColor": "#1e3a8a",
+      "width": 320,
+      "height": 120,
+      "position": { "x": 50, "y": 50 }
+    }
+  ],
+  "interfaces": []
+}

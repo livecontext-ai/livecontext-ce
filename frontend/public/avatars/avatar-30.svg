@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="a30bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FDE047"/>
+      <stop offset="100%" stop-color="#EAB308"/>
+    </linearGradient>
+  </defs>
+  <circle cx="50" cy="50" r="50" fill="url(#a30bg)"/>
+  <!-- Warm orbital motes: 3 small circles orbiting center at 3 radii with different speeds/directions -->
+  <g>
+    <g>
+      <animateTransform attributeName="transform" type="rotate" from="0 50 50" to="360 50 50" dur="8s" repeatCount="indefinite"/>
+      <circle cx="70" cy="50" r="1.6" fill="white" opacity="0.35"/>
+    </g>
+    <g>
+      <animateTransform attributeName="transform" type="rotate" from="360 50 50" to="0 50 50" dur="14s" repeatCount="indefinite"/>
+      <circle cx="50" cy="20" r="1.8" fill="white" opacity="0.3"/>
+    </g>
+    <g>
+      <animateTransform attributeName="transform" type="rotate" from="0 50 50" to="360 50 50" dur="22s" repeatCount="indefinite"/>
+      <circle cx="10" cy="50" r="2" fill="white" opacity="0.25"/>
+    </g>
+  </g>
+  <!-- Happy squint eyes (^^ arcs) -->
+  <path d="M33,44 Q38,37 43,44" stroke="white" stroke-width="2.5" fill="none" stroke-linecap="round" opacity="0.9">
+    <animate attributeName="d" values="M33,44 Q38,37 43,44;M33,44 Q38,37 43,44;M33,44 Q38,44 43,44;M33,44 Q38,37 43,44;M33,44 Q38,37 43,44" keyTimes="0;0.9;0.93;0.96;1" dur="6s" repeatCount="indefinite"/>
+  </path>
+  <path d="M57,44 Q62,37 67,44" stroke="white" stroke-width="2.5" fill="none" stroke-linecap="round" opacity="0.9">
+    <animate attributeName="d" values="M57,44 Q62,37 67,44;M57,44 Q62,37 67,44;M57,44 Q62,44 67,44;M57,44 Q62,37 67,44;M57,44 Q62,37 67,44" keyTimes="0;0.9;0.93;0.96;1" dur="6s" repeatCount="indefinite"/>
+  </path>
+  <!-- Big radiant grin -->
+  <path d="M35,56 Q50,70 65,56" stroke="white" stroke-width="2.2" fill="none" stroke-linecap="round" opacity="0.85"/>
+</svg>

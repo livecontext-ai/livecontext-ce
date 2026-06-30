@@ -1,0 +1,31 @@
+-- Stage 1a.2 - per-conversation skills-tree snapshot.
+--
+-- Purpose: avoid re-rendering (and re-fetching over HTTP) the [SKILLS] block
+-- on every turn. Conversation-service caches the rendered tree + a derivation
+-- key here; subsequent turns on the same conversation reuse the snapshot as
+-- long as the key still matches, which keeps the Anthropic/Claude prompt-cache
+-- prefix byte-identical across the horizontal fleet.
+--
+-- Shape of skills_snapshot_json (written by SkillsSnapshotService): a map
+-- keyed by derivation-key so the two call sites in AgentContextBuilder
+-- (agent-skills path and request-skills path) coexist without clobbering
+-- each other. Example:
+-- {
+--   "<agentId>|<sha1(empty)>": {
+--     "rendered_text": "[SKILLS]\n...",        -- exact bytes to splice into the system prompt
+--     "cached_at":     "2026-04-20T10:00:00Z"  -- ISO-8601 UTC
+--   },
+--   "|<sha1(sorted user skill ids)>": {
+--     "rendered_text": "[SKILLS]\n...",
+--     "cached_at":     "2026-04-20T10:00:05Z"
+--   }
+-- }
+--
+-- Writes use native jsonb `||` merge so concurrent writers on the same row
+-- but different keys both land atomically.
+--
+-- Invalidation today is TTL-based (SkillsSnapshotService.TTL). Event-driven
+-- invalidation (R37: Redis pub/sub + agentSkillTreeVersion) is a follow-up -
+-- until then, the TTL bounds the staleness window on skill-tree edits.
+ALTER TABLE conversation.conversations
+  ADD COLUMN skills_snapshot_json jsonb DEFAULT NULL;

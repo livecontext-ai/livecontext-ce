@@ -1,0 +1,286 @@
+# Service CLOUD UNIQUEMENT. Le monolith CE charge ce JAR via dépendance Maven; les beans KC restent
+# inactifs en CE via @ConditionalOnProperty(auth.mode=keycloak, matchIfMissing=false).
+# Voir CLAUDE.md section "Règle architecturale CE / Cloud".
+server:
+  port: 8083
+
+
+# Audit subsystem (Phase 2)
+# - hmac-key: base64-encoded 32+ byte secret used to sign each audit event
+# - ua-pepper: base64-encoded 32+ byte secret used to fingerprint user agents
+# Both MUST be set in production via env vars AUDIT_HMAC_KEY and AUDIT_UA_PEPPER.
+audit:
+  hmac-key: ${AUDIT_HMAC_KEY:}
+  ua-pepper: ${AUDIT_UA_PEPPER:}
+
+spring:
+  application:
+    name: auth-service
+  
+  datasource:
+    url: jdbc:postgresql://localhost:5432/apimarketplace?currentSchema=auth
+    username: postgres
+    password: postgres
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      # Connection pool settings
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1200000  # 20 minutes (shorter than default 30min)
+      leak-detection-threshold: 60000
+      
+      # Connection validation
+      connection-test-query: SELECT 1
+      validation-timeout: 5000
+      
+      # PostgreSQL specific settings
+      data-source-properties:
+        socketTimeout: 30
+        loginTimeout: 10
+        connectTimeout: 10
+        tcpKeepAlive: true
+        applicationName: auth-service
+  
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+        default_schema: auth
+        jdbc:
+          time_zone: UTC
+
+  jackson:
+    time-zone: UTC
+    serialization:
+      write-dates-as-timestamps: false
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+  mail:
+    host: ${SMTP_HOST:localhost}
+    port: ${SMTP_PORT:1025}
+    username: ${SMTP_USER:}
+    password: ${SMTP_PASSWORD:}
+    properties:
+      # Security defaults flipped to true (S-3). MailTransportSecurityValidator
+      # fail-fasts at boot if SMTP_STARTTLS=false against a non-local host -
+      # local dev (Mailhog on localhost:1025) keeps working by host-allowlist.
+      mail.smtp.auth: ${SMTP_AUTH:true}
+      mail.smtp.starttls.enable: ${SMTP_STARTTLS:true}
+
+  flyway:
+    enabled: false
+  
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:8180/realms/livecontext}
+
+# Configuration Keycloak
+app:
+  mail:
+    from: ${SMTP_FROM:noreply@livecontext.ai}
+    from-name: LiveContext
+  security:
+    keycloak:
+      audience: ${KEYCLOAK_AUDIENCE:livecontext-frontend}
+
+gateway:
+  filter:
+    secret-key: ${GATEWAY_SECRET_KEY:}
+    verification-enabled: ${GATEWAY_VERIFICATION_ENABLED:true}
+    public-paths:
+      - /actuator/
+      - /api/internal/
+      - /api/users/health
+      - /api/auth/health
+      - /public/
+      - /webhooks/
+      - /.well-known/
+      - /v1/authorize
+      - /api/billing/plans
+      - /api/billing/checkout/finalize
+      - /api/billing/checkout/success
+      - /api/credits/
+      - /api/credentials/oauth2/callback
+      - /api/contact
+      - /api/auth/register
+      - /api/auth/login
+      - /api/auth/refresh
+      - /api/auth/logout
+      - /api/auth/openid-configuration
+    hmac-required-paths:
+      - /api/credits/
+      - /api/internal/credentials/access-token
+      - /api/internal/credentials/data-map
+      - /api/internal/credentials/force-refresh-token
+      - /api/internal/credentials/refresh-token
+      - /api/internal/credentials/by-integration
+      - /api/internal/credentials/platform
+      # FOLLOW-UP (CRED-1, parity audit 2026-06-16): the lookup resolvers /all, /default, /{id},
+      # /scopes return DECRYPTED Credential objects but are NOT HMAC-gated here. Widening to the
+      # whole /api/internal/credentials/ prefix is the right end-state, but several in-cluster
+      # callers still hit them UNSIGNED (conversation-service findExistingCredential -> /default;
+      # catalog-import -> /pricing-versions/bootstrap), so it must be done AFTER those callers sign.
+      # External access is already blocked (gateway does not route /api/internal/**); this is
+      # in-cluster defense-in-depth only.
+      - /api/internal/auth/workspace/
+
+oauth2:
+  callback-url: ${OAUTH2_CALLBACK_URL:http://localhost:8083/api/credentials/oauth2/callback}
+  frontend-url: ${OAUTH2_FRONTEND_URL:http://localhost:3000}
+
+services:
+  auth-service:
+    url: ${AUTH_SERVICE_URL:http://localhost:8083}
+  catalog-url: ${CATALOG_SERVICE_URL:http://localhost:8081}
+  # PR1: GatewayCacheClient calls /api/gateway/cache/invalidate/{providerId}
+  # on the gateway after a set-default flip to bust the 5-min QuotaCacheService
+  # entry (otherwise users see stale active-org for up to 5 minutes).
+  gateway-url: ${GATEWAY_URL:http://localhost:8080}
+
+keycloak:
+  issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:8180/realms/livecontext}
+  audience: ${KEYCLOAK_AUDIENCE:livecontext-frontend}
+  admin:
+    server-url: ${KEYCLOAK_ADMIN_URL:http://localhost:8180}
+    realm: ${KEYCLOAK_REALM:livecontext}
+    username: ${KEYCLOAK_ADMIN_USERNAME:admin}
+    password: ${KEYCLOAK_ADMIN_PASSWORD:admin}
+    # cloud-link Phase 1 - service-account client created by configure-keycloak.sh §4b.
+    # KcAdminLogoutService uses these for client_credentials grant to call /users/{id}/logout
+    # after a ce_link revoke. Deploy mounts the secret via KC_ADMIN_CLIENT_SECRET (Doppler/Vault).
+    client-id: ${KC_ADMIN_CLIENT_ID:livecontext-admin-api}
+    client-secret: ${KC_ADMIN_CLIENT_SECRET:}
+
+# Credential encryption (AES-256)
+credential:
+  encryption:
+    password: ${CREDENTIAL_ENCRYPTION_PASSWORD:}
+    salt: ${CREDENTIAL_ENCRYPTION_SALT:}
+
+# Platform credential/API-tool markup (third-party tool-call accounting) + credit
+# metering kill-switch. Defaults equal the historical CreditService constants; the
+# PROD-effective values are pinned in deploy/helm/livecontext/values-prod.yaml
+# (services.auth.env). credit.unlimited MUST stay false in cloud prod (true =
+# consumption tracked but balance infinite = NO billing). See the project docs.
+credentials:
+  platform:
+    markup:
+      enabled: ${CREDENTIALS_PLATFORM_MARKUP_ENABLED:true}
+      shadow: ${CREDENTIALS_PLATFORM_MARKUP_SHADOW:false}
+credit:
+  unlimited: ${CREDIT_UNLIMITED:false}
+
+# Configuration de facturation
+billing:
+  provider: stripe
+  # --- Unit-economics levers: internal pricing configuration ---
+  # 1 credit = $0.001 of provider LIST price; every LLM call is billed
+  # providerCost × llm.cloud-multiplier. The cache multipliers weight cached tokens
+  # DOWN to what providers actually charge, BEFORE the cloud multiplier, so
+  # cloud-multiplier is the pricing multiplier. Defaults equal the historical
+  # ModelPricingService constants; PROD-effective values pinned in values-prod.yaml
+  # (services.auth.env) so margin is declared & diff-tracked. See the project docs.
+  llm:
+    cloud-multiplier: ${BILLING_LLM_CLOUD_MULTIPLIER:1.8}
+    anthropic-cache-write-multiplier: ${BILLING_LLM_ANTHROPIC_CACHE_WRITE_MULTIPLIER:1.25}
+    anthropic-cache-read-multiplier: ${BILLING_LLM_ANTHROPIC_CACHE_READ_MULTIPLIER:0.1}
+    openai-cached-multiplier: ${BILLING_LLM_OPENAI_CACHED_MULTIPLIER:0.5}
+    gemini-cached-multiplier: ${BILLING_LLM_GEMINI_CACHED_MULTIPLIER:0.25}
+    deepseek-cached-multiplier: ${BILLING_LLM_DEEPSEEK_CACHED_MULTIPLIER:0.1}
+  websearch:
+    credits-per-search: ${BILLING_WEBSEARCH_CREDITS_PER_SEARCH:1}
+    credits-per-fetch: ${BILLING_WEBSEARCH_CREDITS_PER_FETCH:1}
+  stripe:
+    secretKey: ${STRIPE_SECRET_KEY}
+    webhookSecret: ${STRIPE_WEBHOOK_SECRET}
+    # Fall back to APP_PUBLIC_URL (the value the k3s helm chart already injects for every
+    # public link, e.g. https://livecontext.ai) when STRIPE_SUCCESS_URL/STRIPE_CANCEL_URL
+    # are not set explicitly - otherwise prod checkout redirects leak http://localhost:3000.
+    # Mirrors the orchestrator.{chat,form}-endpoint.base-url pattern in trigger-service.
+    successUrl: ${STRIPE_SUCCESS_URL:${APP_PUBLIC_URL:http://localhost:3000}/app/settings/pricing?checkout=success}
+    cancelUrl: ${STRIPE_CANCEL_URL:${APP_PUBLIC_URL:http://localhost:3000}/app/settings/pricing?checkout=cancelled}
+    currency: usd
+    prices:
+      FREE: ${STRIPE_FREE_PRICE_ID:price_free}
+      STARTER: ${STRIPE_STARTER_PRICE_ID:price_starter}
+      PRO: ${STRIPE_PRO_PRICE_ID:price_pro}
+      ENTERPRISE: ${STRIPE_ENTERPRISE_PRICE_ID:price_enterprise}
+      PAYG: ${STRIPE_PAYG_PRICE_ID:price_payg}
+
+# Embedded auth (CE mode) - set auth.mode=embedded to enable
+auth:
+  mode: ${AUTH_MODE:keycloak}
+  jwt:
+    issuer: ${AUTH_JWT_ISSUER:livecontext}
+    keys-path: ${AUTH_JWT_KEYS_PATH:./data/keys}
+  # PR11d-b - per-user cooldown (seconds) between setDefaultOrganization flips.
+  # Audit B 2026-05-12 MUST-FIX #2: rapid workspace flips could be scripted to
+  # bypass per-member quota caps that are keyed on the default workspace at
+  # consume time.
+  #
+  # Default lowered from 60s → 5s on 2026-05-12 after prod feedback: 60s was
+  # audit-defensive but unacceptable UX for a human user switching between
+  # their 2 orgs (e.g. personal Free ↔ Team for billing context). 5s still
+  # caps scripted abuse at ~12 flips/min (vs 600/min unprotected) - adequate
+  # given each flip also triggers a cache fan-out + audit row.
+  #
+  # Idempotent re-flips to the SAME org are exempt regardless of cooldown.
+  organization:
+    set-default:
+      cooldown-seconds: ${AUTH_ORG_SETDEFAULT_COOLDOWN_SECONDS:5}
+
+jwt:
+  secret: ${JWT_SECRET:}
+  access-token:
+    expiration: ${JWT_ACCESS_TOKEN_EXPIRATION:900000}
+  refresh-token:
+    expiration: ${JWT_REFRESH_TOKEN_EXPIRATION:2592000000}
+
+# Model pricing seed moved to migration-service (V80 + V112 Flyway migrations).
+# ModelCatalogService (agent-service) is the runtime source of truth; any admin
+# edits flow through /api/internal/auth/model-pricing/sync - no YAML seeding here.
+
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+  file:
+    name: logs/auth-service.log
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      slo:
+        http.server.requests: 100ms, 500ms, 1s, 3s, 5s
+
+
+# Organization invitation rate limits (S-2). Rolling-hour windows on persisted
+# invitation rows. Defaults are conservative - bump for high-volume HR/onboarding
+# workflows. Override per env via ORG_INVITE_PER_INVITER / ORG_INVITE_PER_ORG.
+# Audit trail of rate-limited attempts: see ORG_INVITE_RATE_LIMITED in
+# organization_audit_event (queryable via /api/organizations/{id}/audit-log).
+org:
+  invite:
+    rate-limit:
+      per-inviter-per-hour: ${ORG_INVITE_PER_INVITER:20}
+      per-org-per-hour: ${ORG_INVITE_PER_ORG:50}

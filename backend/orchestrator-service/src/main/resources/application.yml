@@ -1,0 +1,376 @@
+server:
+  port: 8099
+  tomcat:
+    max-http-form-post-size: 52428800
+  # Graceful shutdown - Tomcat stops accepting new HTTP requests at context-close start
+  # and waits up to spring.lifecycle.timeout-per-shutdown-phase for in-flight requests
+  # to finish. Pairs with AgentDrainCoordinator @PreDestroy which waits for in-flight
+  # async work (Redis pub/sub agents, RUNNING workflow runs). Post-2026-05-22 21:01 UTC
+  # OOM hardening - see OrchestratorLifecycleGate.
+  shutdown: graceful
+
+# PostHog server-side product analytics (summarized "what agents/workflows do").
+# Safe defaults: OFF + blank key, so CE / self-hosted / local emit NOTHING - no
+# data leaves the box unless explicitly configured. Cloud enables it via env on
+# the box (POSTHOG_ENABLED=true + POSTHOG_API_KEY in env.conf). EU host for GDPR.
+posthog:
+  enabled: ${POSTHOG_ENABLED:false}
+  api-key: ${POSTHOG_API_KEY:}
+  host: ${POSTHOG_HOST:https://eu.i.posthog.com}
+
+# Lifecycle gate configuration (post-2026-05-22 OOM hardening).
+#  - warming-duration: how long after @PostConstruct the gate stays in WARMING state.
+#    During WARMING, ScheduleExecutorService skips ticks and OrchestrationRecoveryService
+#    skips the zombie scan - gives AgentRecoveryService.replayInFlightEntries time to
+#    re-deliver any in-flight ack records orphaned by a crash. 60 s matches the observed
+#    17 s startup-recovery time of the 2026-05-22 incident with 3× safety margin.
+#  - drain-timeout: how long AgentDrainCoordinator @PreDestroy waits for in-flight work
+#    to settle before logging the orphan list and exiting. 60 s pairs with the 90 s
+#    Spring lifecycle phase ceiling above.
+# Piston code execution engine
+piston:
+  url: ${PISTON_URL:http://localhost:2000}
+  run-timeout: ${PISTON_RUN_TIMEOUT:120000}
+  memory-limit: ${PISTON_MEMORY_LIMIT:2147483648}
+  # Bounded retry for transient CONNECT failures ("Connection refused") to the shared Piston edge
+  # container - rides over its daily restart window and brief co-tenant-load unavailability instead of
+  # hard-failing the code node. Connect failures are idempotent (request body never sent, nothing ran).
+  # Read timeouts and non-200 responses are NOT retried. Back-off: base*2^n capped at max.
+  # NOTE: each retry blocks the calling exec-queue worker thread for the back-off (worst case with
+  # the defaults below ~3.5s). That is fine for brief blips; if Piston is hard-down for minutes, drop
+  # connect-max-attempts to 1 (env) to restore fast-fail and avoid parking workers on every call.
+  connect-max-attempts: ${PISTON_CONNECT_MAX_ATTEMPTS:4}
+  connect-retry-base-backoff-ms: ${PISTON_CONNECT_RETRY_BASE_BACKOFF_MS:500}
+  connect-retry-max-backoff-ms: ${PISTON_CONNECT_RETRY_MAX_BACKOFF_MS:3000}
+
+# Gateway authentication filter - prevents X-User-ID spoofing via direct access
+gateway:
+  filter:
+    secret-key: ${GATEWAY_SECRET_KEY:}
+    verification-enabled: ${GATEWAY_VERIFICATION_ENABLED:true}
+    public-paths:
+      - /health
+      - /actuator
+      - /api/v2/monitoring/health
+      - /api/internal/
+      - /api/websearch/screenshots
+      - /api/credentials/oauth2/callback
+      - /api/agent-tools
+      - /api/agent-prompts
+      - /api/workflows/
+      - /api/workflow-builder/sessions/
+      - /api/credentials/by-integration/
+
+logging:
+  level:
+    com.apimarketplace.orchestrator: DEBUG
+    com.zaxxer.hikari: INFO  # HikariCP connection pool monitoring
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%logger{36}] - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%logger{36}] - %msg%n"
+  file:
+    name: logs/orchestrator-service.log
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      slo:
+        http.server.requests: 100ms, 500ms, 1s, 3s, 5s
+
+spring:
+  # Graceful shutdown phase ceiling. Spring waits up to this long per SmartLifecycle
+  # phase during context close. 90 s = AgentDrainCoordinator drain-timeout (60 s) +
+  # headroom for HTTP request drain + Hikari pool close + Redis listener teardown.
+  lifecycle:
+    timeout-per-shutdown-phase: 90s
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+  application:
+    name: orchestrator-service
+  task:
+    scheduling:
+      pool:
+        size: 3  # Allow multiple @Scheduled jobs to run concurrently (signal polling)
+  profiles:
+    active: dev  # Force PostgreSQL in development by default
+    include: agents, hikari  # Include AI agent configuration + HikariCP pool config
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${SPRING_DATA_REDIS_PASSWORD:}
+      timeout: 5000ms
+      connect-timeout: 3000ms
+      database: ${SPRING_DATA_REDIS_DATABASE:0}
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 2
+          max-wait: 3000ms
+  jackson:
+    time-zone: UTC
+    serialization:
+      WRITE_DATES_AS_TIMESTAMPS: false
+  mvc:
+    async:
+      request-timeout: 300000  # 5 minutes timeout for async requests (long-running workflows)
+  datasource:
+    # PostgreSQL configuration for production/development
+    # H2 is only available for tests (test scope)
+    url: jdbc:postgresql://localhost:5432/apimarketplace?currentSchema=orchestrator
+    username: postgres
+    password: postgres
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: none
+    show-sql: false
+    open-in-view: false  # Disable to prevent connection leaks during async streaming
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+        default_schema: orchestrator
+        jdbc:
+          time_zone: UTC
+          lob:
+            non_contextual_creation: true
+    # Configuration for common-storage-service
+    # Note: Entities are defined in @EntityScan of the Application class
+    # Hibernate automatically scans only @Entity classes
+
+  flyway:
+    enabled: false
+
+# Orchestrator configuration
+orchestrator:
+  # Graceful lifecycle: warmup window (allow already-firing schedules to finish before
+  # accepting new work) + drain timeout (PreDestroy waits for in-flight settle).
+  lifecycle:
+    warming-duration: ${ORCHESTRATOR_WARMING_DURATION:PT60S}
+    drain-timeout: ${ORCHESTRATOR_DRAIN_TIMEOUT:PT60S}
+  mock:
+    enabled: false   # Enable mock by default
+  cache:
+    redis:
+      execution-graph-ttl: 30m
+      snapshot-ttl: 1h
+      workflow-state-ttl: 24h
+      lock-ttl: 10m
+  step-by-step:
+    cache:
+      state-ttl: PT2H      # How long to cache step-by-step state (2 hours)
+      pending-ttl: PT30M   # How long pending nodes wait before timeout (30 min)
+  showcase:
+    max-snapshot-items: 50   # Max items to snapshot at publish time for showcase cache
+  catalog:
+    enabled: true   # Enable catalog service
+    base-url: http://localhost:8081
+    timeout:
+      connect: 5000
+      read: 600000
+    retry:
+      max-attempts: 1
+      delay-ms: 1000
+  conversation:
+    base-url: http://localhost:8087
+    timeout:
+      connect: 5000
+      read: 10000
+  webhook:
+    base-url: ${WEBHOOK_BASE_URL:http://localhost:8080}  # Gateway URL for external webhook access
+  chat-endpoint:
+    base-url: ${CHAT_ENDPOINT_BASE_URL:http://localhost:8080}
+  form-endpoint:
+    base-url: ${FORM_ENDPOINT_BASE_URL:http://localhost:8080}
+  # Plan v4 optim flags - defaults to ON unless noted. To roll back set the matching env var.
+  # - async-publish #8 ON instantiates the bean + bounded executor.
+  # - cas-state-snapshot #1+#3 ON instantiates the RunCoalescingService bean and
+  #   enables applyPatchesCas; markNodeCompleted/Failed/... take the lock-free CAS
+  #   path. Whether a coalescing SESSION is opened around the split fan-out is
+  #   gated SEPARATELY by coalesce-split below (default OFF).
+  # - coalesce-split (default OFF) opens a RunCoalescingService session around the
+  #   SplitAwareNodeExecutor per-item completion region so the N per-item writes
+  #   of one run coalesce into fewer state_snapshot flushes (same-path ASSIGNs
+  #   compose via re-mutate-on-flush). OFF → exactly today's per-item direct-CAS
+  #   behavior. Toggle at runtime via ORCH_OPTIM_COALESCE_SPLIT without a rebuild.
+  # - heartbeat-failover ON activates bootstrap UPSERT + 10s heartbeat (real
+  #   value), but stealStaleSignals/releaseSignalAsStale are not yet wired into
+  #   the signal-resume path. Test profile overrides heartbeat-failover=false.
+  optim:
+    async-publish: ${ORCH_OPTIM_ASYNC_PUBLISH:true}
+    heartbeat-failover: ${ORCH_OPTIM_HEARTBEAT_FAILOVER:true}
+    cas-state-snapshot: ${ORCH_OPTIM_CAS_STATE_SNAPSHOT:true}
+    coalesce-split: ${ORCH_OPTIM_COALESCE_SPLIT:false}
+    step-data-bulk-insert: ${ORCH_OPTIM_STEP_DATA_BULK_INSERT:true}
+    advisory-lock: ${ORCH_OPTIM_ADVISORY_LOCK:true}
+    pg-stat-watcher: ${ORCH_OPTIM_PG_STAT_WATCHER:true}
+  # Redis scaling config (only used when scaling.backend=redis):
+  # recovery:
+  #   zombie-threshold-minutes: 5   # RUNNING runs idle longer than this are failed
+  #   scan-interval-ms: 30000       # How often to scan for zombies
+
+workflow:
+  execution-queue:
+    # "memory" is single-pod only. In prod horizontal scaling, SCALING_BACKEND=redis
+    # derives this to "redis" unless WORKFLOW_EXECUTION_QUEUE_BACKEND overrides it.
+    backend: ${WORKFLOW_EXECUTION_QUEUE_BACKEND:${SCALING_BACKEND:redis}}
+    worker-threads: ${WORKFLOW_EXECUTION_QUEUE_WORKER_THREADS:20}
+    global-worker-permits: ${WORKFLOW_EXECUTION_QUEUE_GLOBAL_WORKER_PERMITS:${WORKFLOW_EXECUTION_QUEUE_WORKER_THREADS:20}}
+    timeout-seconds: ${WORKFLOW_EXECUTION_QUEUE_TIMEOUT_SECONDS:300}
+    claim-retention-hours: ${WORKFLOW_EXECUTION_QUEUE_CLAIM_RETENTION_HOURS:168}
+    claim-cleanup-batch-size: ${WORKFLOW_EXECUTION_QUEUE_CLAIM_CLEANUP_BATCH_SIZE:1000}
+    claim-cleanup-interval-ms: ${WORKFLOW_EXECUTION_QUEUE_CLAIM_CLEANUP_INTERVAL_MS:3600000}
+    claim-cleanup-initial-delay-ms: ${WORKFLOW_EXECUTION_QUEUE_CLAIM_CLEANUP_INITIAL_DELAY_MS:300000}
+    redis:
+      namespace: ${WORKFLOW_EXECUTION_QUEUE_REDIS_NAMESPACE:orch:queue:exec}
+      poll-idle-ms: ${WORKFLOW_EXECUTION_QUEUE_REDIS_POLL_IDLE_MS:50}
+      reclaim-idle-ms: ${WORKFLOW_EXECUTION_QUEUE_REDIS_RECLAIM_IDLE_MS:60000}
+      ledger-ttl-seconds: ${WORKFLOW_EXECUTION_QUEUE_LEDGER_TTL_SECONDS:86400}
+      result-ttl-seconds: ${WORKFLOW_EXECUTION_QUEUE_RESULT_TTL_SECONDS:900}
+      worker-permit-ttl-seconds: ${WORKFLOW_EXECUTION_QUEUE_WORKER_PERMIT_TTL_SECONDS:120}
+      execution-lease-ttl-seconds: ${WORKFLOW_EXECUTION_QUEUE_EXECUTION_LEASE_TTL_SECONDS:120}
+  builder:
+    allow-create-without-validation: false  # When false, agent cannot create workflows with validation errors
+  execution:
+    max-execution-minutes: 60
+    step-timeout-ms: 60000
+
+# OAuth2 settings (platform credentials are managed in DB via Settings UI)
+oauth2:
+  callback-url: http://localhost:8099/api/credentials/oauth2/callback
+  frontend-url: http://localhost:3000
+
+# WebSearch service (SearXNG + nodriver)
+websearch:
+  service:
+    url: ${WEBSEARCH_SERVICE_URL:http://localhost:8085}
+    gateway-secret: ${WEBSEARCH_GATEWAY_SECRET:}
+    timeout:
+      connect: 5000
+      read: 60000
+  # Public base URL the user's browser uses to upgrade
+  # `wss://<base>/cdp/{sid}?token=...` for the live-view bridge. In prod
+  # this points at the public site (e.g. https://livecontext.ai) where
+  # Caddy's `/cdp/*` route reverse-proxies into the VLAN-only websearch.
+  # When unset, the backend falls back to `service.url` so dev/local
+  # setups (where service URL = host URL) keep working unchanged.
+  public:
+    ws-base: ${WEBSEARCH_PUBLIC_WS_BASE:}
+
+# Image generation tool (OpenAI gpt-image-1.5/mini, Google Gemini 2.5 Flash Image / 3 Pro Image)
+# Routes through the platform API catalog (CatalogToolsGateway). Requires
+# `orchestrator.catalog.enabled=true` and platform_credentials llm_openai /
+# llm_google to be configured (or BYOK via user-side credentials).
+image-generation:
+  enabled: ${IMAGE_GENERATION_ENABLED:true}
+
+# Credential Encryption Configuration
+# Used to encrypt sensitive credential data (OAuth secrets, tokens) before storing in database
+# IMPORTANT: Set these environment variables in production with strong values
+credential:
+  encryption:
+    password: ${CREDENTIAL_ENCRYPTION_PASSWORD:}
+    salt: ${CREDENTIAL_ENCRYPTION_SALT:}
+
+# HTTP configuration for catalog service calls
+http:
+  client:
+    timeout:
+      connect: 5000
+      read: 600000
+    retry:
+      max-attempts: 1
+      delay-ms: 1000
+    logging:
+      enabled: true
+      level: DEBUG
+
+# Horizontal scaling backend: "memory" (single instance) or "redis" (multi-instance)
+# When set to "redis", activates distributed scaling primitives. The orchestrator
+# execution queue derives workflow.execution-queue.backend from this value unless
+# WORKFLOW_EXECUTION_QUEUE_BACKEND explicitly overrides it.
+scaling:
+  backend: ${SCALING_BACKEND:redis}
+  agent:
+    queue:
+      enabled: ${SCALING_AGENT_QUEUE_ENABLED:true}
+  # HikariCP max pool size in redis scaling mode (OrchestratorScalingConfig):
+  #   env SCALING_HIKARI_MAX_POOL_SIZE (property scaling.hikari.max-pool-size).
+  # Leave UNSET (default) → derived as max(40, worker-threads + 30) so the pool tracks
+  # worker-threads (the per-pod execution permit count) and never starves the workers
+  # (pool<workers → HikariCP 5s acquire-timeout → HTTP 500 under load). Set explicitly to pin a value matched to
+  # PgBouncer default_pool_size / Postgres max_connections for the fleet (effective
+  # server demand ≈ pods × this value, multiplexed by PgBouncer). Intentionally not
+  # declared as a key here so an unset env resolves to null (the @Value default),
+  # not an empty string.
+
+# Phase 2 jsonb_set patch path. When true, the 9 wired hot mutators use a
+# jsonb_set native UPDATE instead of full-row Jackson rewrite (markNodeCompleted/
+# Failed/Skipped/AwaitingSignal/CompletedEpochOnly/FailedEpochOnly/PartialFailure/
+# resolveAwaitingSignal/incrementNodeCountsOnly + recordNodeCompletionAndGetCounts
+# dispatch). The other ~13 mutators stay on full rewrite by design.
+#
+# Default flipped to TRUE on 2026-05-09 after E2E validation against real
+# Postgres (5 paths runtime-confirmed; 4 paths covered by unit + dispatch tests
+# + code symmetry). The legacy full-rewrite remains as automatic fallback for
+# 5 exception paths (builder fallback, builder exception, executor unwired,
+# zero rows updated, patch update exception) - surveiller via metric
+# state_snapshot_patch_fallback_count{reason} ; alert if ratio > 2% absolute.
+#
+# To roll back per-environment without re-deploying: set
+# STATE_SNAPSHOT_USE_JSONB_PATCH=false in env.
+state-snapshot:
+  use-jsonb-patch: ${STATE_SNAPSHOT_USE_JSONB_PATCH:true}
+
+# Public frontend origin for user-facing links (absolute, opaque file URLs).
+# Same APP_PUBLIC_URL the agent/trigger services use (e.g. https://livecontext.ai).
+app:
+  base-url: ${APP_PUBLIC_URL:${WEBHOOK_BASE_URL:http://localhost:3000}}
+
+# Plan-based resource limits (workflow/schedule quotas per plan). Kill-switch:
+# false = NO quota enforcement (CE sets it false in application-ce.yml). MUST stay
+# true in cloud prod; pinned in values-prod.yaml (services.orchestrator.env). See the project docs.
+plan-limits:
+  enabled: ${PLAN_LIMITS_ENABLED:true}
+
+# Auth service for credit consumption
+services:
+  auth-service:
+    url: ${AUTH_SERVICE_URL:http://localhost:8083}
+  datasource-url: ${DATASOURCE_SERVICE_URL:http://localhost:8088}
+  agent-url: ${AGENT_SERVICE_URL:http://localhost:8090}
+  interface-url: ${INTERFACE_SERVICE_URL:http://localhost:8089}
+  trigger-url: ${TRIGGER_SERVICE_URL:http://localhost:8091}
+  publication-url: ${PUBLICATION_SERVICE_URL:http://localhost:8092}
+  storage-url: ${STORAGE_SERVICE_URL:http://localhost:8082}
+  # Playwright sidecar for interface-node screenshot capture. Blank → skip capture (best-effort, no error).
+  screenshot-renderer-url: ${SCREENSHOT_RENDERER_URL:}
+  # Backpressure on the screenshot sidecar. The sidecar serialises on a single warm browser,
+  # so unbounded concurrent calls just pile RestTemplate threads. Cap = max concurrent capture()
+  # in-flight per orchestrator instance (cross-replica when Redis-mode is enabled). Exceeded →
+  # skip silently, workflow continues without a `screenshot` field. Default 4 is a safe baseline
+  # for the single-CPU sidecar; raise it if the sidecar is sized up.
+  screenshot-renderer:
+    max-concurrent: ${SCREENSHOT_RENDERER_MAX_CONCURRENT:4}
+
+  # Plan validation (boot-time)
+  plan-validation:
+    alias-uniqueness:
+      # When true, refuses to start a run whose plan has alias collisions
+      # (two nodes whose labels normalize to the same alias).
+      # Default false (warn-only) - flip to true after 7 days of clean prod logs.
+      strict: ${PLAN_ALIAS_VALIDATION_STRICT:false}
+

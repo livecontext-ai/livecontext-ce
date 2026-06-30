@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <rect width="256" height="256" rx="24" fill="#232F3E"/>
+  <g transform="translate(128,120)" fill="none" stroke="#DD344C" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Shield -->
+    <path d="M0-60 L50-40 L50 10 C50 45 25 65 0 75 C-25 65 -50 45 -50 10 L-50-40 Z" fill="none"/>
+    <!-- User head -->
+    <circle cx="0" cy="-20" r="16" fill="#DD344C"/>
+    <!-- User body -->
+    <path d="M-24 25 C-24 8 -14 0 0 0 C14 0 24 8 24 25" fill="#DD344C"/>
+  </g>
+</svg>

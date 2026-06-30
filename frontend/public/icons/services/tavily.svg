@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="tavilyGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366F1"/>
+      <stop offset="100%" style="stop-color:#4F46E5"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="48" fill="url(#tavilyGrad)"/>
+  <g fill="#FFFFFF">
+    <circle cx="112" cy="112" r="48" fill="none" stroke="#FFFFFF" stroke-width="20"/>
+    <line x1="148" y1="148" x2="200" y2="200" stroke="#FFFFFF" stroke-width="20" stroke-linecap="round"/>
+    <circle cx="112" cy="112" r="20" fill="#FFFFFF" opacity="0.3"/>
+  </g>
+</svg>

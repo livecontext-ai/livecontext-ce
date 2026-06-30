@@ -1,0 +1,48 @@
+{
+  "id": "fixture-01-simple-chain",
+  "triggers": [
+    {
+      "id": "t1",
+      "type": "manual",
+      "label": "Start",
+      "position": { "x": 100, "y": 200 }
+    }
+  ],
+  "mcps": [
+    {
+      "id": "mock/fetch",
+      "type": "mcp",
+      "label": "Fetch",
+      "position": { "x": 300, "y": 200 },
+      "params": {}
+    },
+    {
+      "id": "mock/transform",
+      "type": "mcp",
+      "label": "Transform",
+      "position": { "x": 500, "y": 200 },
+      "params": {
+        "input": "{{mcp:fetch.output.body}}"
+      }
+    },
+    {
+      "id": "mock/save",
+      "type": "mcp",
+      "label": "Save",
+      "position": { "x": 700, "y": 200 },
+      "params": {
+        "payload": "{{mcp:transform.output.result}}"
+      }
+    }
+  ],
+  "tables": [],
+  "agents": [],
+  "cores": [],
+  "edges": [
+    { "from": "trigger:start", "to": "mcp:fetch" },
+    { "from": "mcp:fetch", "to": "mcp:transform" },
+    { "from": "mcp:transform", "to": "mcp:save" }
+  ],
+  "notes": [],
+  "interfaces": []
+}

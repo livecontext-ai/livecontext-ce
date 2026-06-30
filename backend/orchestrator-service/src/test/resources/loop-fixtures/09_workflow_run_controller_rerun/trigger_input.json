@@ -1,0 +1,17 @@
+{
+  "__harness_directives": {
+    "comment": "After initial run completes, harness invokes WorkflowRunController.rerunFromNode targeting mcp:item_op for item index 2. The rerun path collects ready nodes from result.readyNodes() (ResultBackedReady oracle) - distinct from the StepByStepExecutor rerun path tested in fixture 08.",
+    "rerun_via": "WorkflowRunController",
+    "rerun_node": "mcp:item_op",
+    "rerun_item_index": 2
+  },
+  "mock_fetch_output": {
+    "items": [
+      { "id": "i-0" },
+      { "id": "i-1" },
+      { "id": "i-2" },
+      { "id": "i-3" },
+      { "id": "i-4" }
+    ]
+  }
+}

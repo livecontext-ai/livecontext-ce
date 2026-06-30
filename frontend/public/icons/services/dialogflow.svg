@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <rect width="256" height="256" fill="#ffffff"/>
+  <!-- Chat bubble body -->
+  <path d="M128 40 C80 40 44 72 44 112 C44 140 60 164 86 178 L80 216 L118 192 C121 192 124 193 128 193 C176 193 212 161 212 121 C212 81 176 40 128 40 Z" fill="#FF9800"/>
+  <!-- Dots inside bubble -->
+  <circle cx="98" cy="116" r="10" fill="#ffffff"/>
+  <circle cx="128" cy="116" r="10" fill="#ffffff"/>
+  <circle cx="158" cy="116" r="10" fill="#ffffff"/>
+</svg>

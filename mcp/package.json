@@ -1,0 +1,20 @@
+{
+  "name": "agent-cli-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "license": "BUSL-1.1",
+  "type": "module",
+  "scripts": {
+    "test": "npm --prefix bridge test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@playwright/mcp": "^0.0.75",
+    "@upstash/context7-mcp": "^2.2.5",
+    "diff": "9.0.0",
+    "undici": "^6.27.0"
+  },
+  "overrides": {
+    "undici": "^6.27.0"
+  }
+}

@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="a10bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#EF4444"/>
+      <stop offset="100%" stop-color="#B91C1C"/>
+    </linearGradient>
+  </defs>
+  <circle cx="50" cy="50" r="50" fill="url(#a10bg)"/>
+  <!-- Heartbeat echoes: two concentric rings expanding and fading on staggered pulses -->
+  <circle cx="50" cy="50" r="22" fill="none" stroke="white" stroke-width="1.2" opacity="0">
+    <animate attributeName="r" values="22;28" dur="2.5s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.25;0" dur="2.5s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="50" cy="50" r="30" fill="none" stroke="white" stroke-width="1.2" opacity="0">
+    <animate attributeName="r" values="30;36" dur="2.5s" begin="1.25s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.25;0" dur="2.5s" begin="1.25s" repeatCount="indefinite"/>
+  </circle>
+  <!-- Excited round eyes -->
+  <ellipse cx="38" cy="42" rx="6" ry="6.5" fill="white" opacity="0.9">
+    <animate attributeName="ry" values="6.5;6.5;0.5;6.5;6.5" keyTimes="0;0.85;0.89;0.93;1" dur="3.5s" repeatCount="indefinite"/>
+  </ellipse>
+  <ellipse cx="62" cy="42" rx="6" ry="6.5" fill="white" opacity="0.9">
+    <animate attributeName="ry" values="6.5;6.5;0.5;6.5;6.5" keyTimes="0;0.85;0.89;0.93;1" dur="3.5s" repeatCount="indefinite"/>
+  </ellipse>
+  <!-- Wide excited open mouth -->
+  <ellipse cx="50" cy="60" rx="8" ry="5.5" fill="white" fill-opacity="0.2" stroke="white" stroke-width="1.8" opacity="0.85"/>
+</svg>

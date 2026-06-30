@@ -1,0 +1,35 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;MODE=PostgreSQL;INIT=CREATE SCHEMA IF NOT EXISTS auth\;CREATE SCHEMA IF NOT EXISTS storage
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+  flyway:
+    enabled: false
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: https://test-issuer.example.com
+          jwk-set-uri: https://test-issuer.example.com/.well-known/jwks.json
+
+stripe:
+  api-key: sk_test_fake_key_for_tests
+  webhook-secret: whsec_test_fake_secret
+
+billing:
+  stripe:
+    secretKey: sk_test_fake_key_for_tests
+    webhookSecret: whsec_test_fake_secret
+
+logging:
+  level:
+    com.apimarketplace: DEBUG
+    org.springframework.security: DEBUG

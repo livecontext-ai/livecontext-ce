@@ -1,0 +1,275 @@
+{
+  "$schema": "Cross-language test fixtures for the V162 budget guard formula.",
+  "description": "Single source of truth used by both BudgetGuardParityTest (Java JUnit) and budgetGuards.parity.test.mjs (JS Jest). When the formula changes, update this file - both runners will then enforce the new behavior. Pattern mirrors agent-stop-reason.json.",
+  "formulaVersion": "V162-2026-05-01",
+  "formula": "projectedNext = max(growthProj, lastDeltaProj × LAST_DELTA_SAFETY_FACTOR, worstCaseSingleIter); deny iff (runCostSoFar + projectedNext > balance) OR (runCostSoFar >= balance)",
+  "constants": {
+    "LAST_DELTA_SAFETY_FACTOR": 2.0,
+    "RATE_DIVISOR": 1000,
+    "ROUND_DECIMALS": 6
+  },
+  "cases": [
+    {
+      "name": "regression_minus11305_step_function_burst",
+      "description": "The actual bug: 31 cruise iters at ~70k prompt tokens each, balance ~2308 left. WorstCase for V162-seeded claude-code/claude-opus-4-6 (200K ctx + 64K out at 15/75 USD per 1M) = 200×15 + 64×75 = 3000 + 4800 = 7800 credits. consumed + worstCase >> balance → DENY before iter 32 burst lands.",
+      "input": {
+        "balance": 2308,
+        "promptTokens": 100000,
+        "completionTokens": 5000,
+        "iterations": 31,
+        "lastPromptTokens": 90000,
+        "lastCompletionTokens": 4500,
+        "provider": "claude-code",
+        "model": "claude-opus-4-6",
+        "inputRate": 15.0,
+        "outputRate": 75.0,
+        "fixedCost": 0.0,
+        "contextWindow": 200000,
+        "maxOutputTokens": 64000
+      },
+      "expected": { "proceed": false, "reason_contains": "would be exceeded" }
+    },
+    {
+      "name": "first_iteration_no_history_proceeds",
+      "description": "On iter 1, lastDelta is 0 and avg over 0 iters is 0. Without worstCase, projection is 0 and the guard must allow the first call (otherwise no run can ever start).",
+      "input": {
+        "balance": 1000,
+        "promptTokens": 0,
+        "completionTokens": 0,
+        "iterations": 0,
+        "lastPromptTokens": 0,
+        "lastCompletionTokens": 0,
+        "provider": "openai",
+        "model": "gpt-4o",
+        "inputRate": 2.5,
+        "outputRate": 10.0,
+        "fixedCost": 0.0,
+        "contextWindow": null,
+        "maxOutputTokens": null
+      },
+      "expected": { "proceed": true }
+    },
+    {
+      "name": "balance_exhausted_proceeds_false_immediately",
+      "description": "consumed >= balance must short-circuit even before projection kicks in.",
+      "input": {
+        "balance": 50,
+        "promptTokens": 30000,
+        "completionTokens": 1000,
+        "iterations": 5,
+        "lastPromptTokens": 6000,
+        "lastCompletionTokens": 200,
+        "provider": "openai",
+        "model": "gpt-4o",
+        "inputRate": 2.5,
+        "outputRate": 10.0,
+        "fixedCost": 0.0,
+        "contextWindow": 128000,
+        "maxOutputTokens": 16384
+      },
+      "expected": { "proceed": false, "reason_contains": "exhausted" }
+    },
+    {
+      "name": "step_function_burst_caught_by_lastDelta_safety_factor",
+      "description": "Cruise at ~5k/iter for 5 iters, then iter 5 spikes to +50k delta. lastDelta×2 = 100k tokens × 0.005 ≈ 500 credits. Balance 600 left → projected next > balance → DENY without needing worstCase.",
+      "input": {
+        "balance": 700,
+        "promptTokens": 100000,
+        "completionTokens": 1000,
+        "iterations": 5,
+        "lastPromptTokens": 50000,
+        "lastCompletionTokens": 500,
+        "provider": "openai",
+        "model": "gpt-4o",
+        "inputRate": 5.0,
+        "outputRate": 15.0,
+        "fixedCost": 0.0,
+        "contextWindow": null,
+        "maxOutputTokens": null
+      },
+      "expected": { "proceed": false, "reason_contains": "would be exceeded" }
+    },
+    {
+      "name": "comfortable_balance_with_known_worstCase_proceeds",
+      "description": "Balance >> worstCase so the run can proceed normally. Sonnet 200K ctx + 8K out at 3/15 ≈ 720 credits worstCase; balance 5000 → headroom.",
+      "input": {
+        "balance": 5000,
+        "promptTokens": 30000,
+        "completionTokens": 1000,
+        "iterations": 3,
+        "lastPromptTokens": 12000,
+        "lastCompletionTokens": 400,
+        "provider": "anthropic",
+        "model": "claude-3-5-sonnet-20241022",
+        "inputRate": 3.0,
+        "outputRate": 15.0,
+        "fixedCost": 0.0,
+        "contextWindow": 200000,
+        "maxOutputTokens": 8192
+      },
+      "expected": { "proceed": true }
+    },
+    {
+      "name": "gemini_2m_below_window_proceeds",
+      "description": "Gemini 2.0 Pro 2M context. PromptTokens 1.8M is under 95% of window - guard must NOT deny based on a hard 2M global cap (the v1 mistake). worstCase ≈ 2M × 1.25/1M + 65K × 5/1M = 2500 + 325 = 2825 credits; balance 10000 → proceed.",
+      "input": {
+        "balance": 10000,
+        "promptTokens": 1800000,
+        "completionTokens": 30000,
+        "iterations": 8,
+        "lastPromptTokens": 250000,
+        "lastCompletionTokens": 4000,
+        "provider": "google",
+        "model": "gemini-2.0-pro",
+        "inputRate": 1.25,
+        "outputRate": 5.0,
+        "fixedCost": 0.0,
+        "contextWindow": 2000000,
+        "maxOutputTokens": 8192
+      },
+      "expected": { "proceed": true }
+    },
+    {
+      "name": "missing_ctx_window_legacy_falls_back_to_growth_only",
+      "description": "Pre-V162 row has null contextWindow / maxOutputTokens. Without the requireCtxWindow flag, guard must fall back to growth-only projection (legacy behavior - don't break existing snapshots). With balance 1000 and small growth proj, proceed.",
+      "input": {
+        "balance": 1000,
+        "promptTokens": 20000,
+        "completionTokens": 800,
+        "iterations": 4,
+        "lastPromptTokens": 6000,
+        "lastCompletionTokens": 250,
+        "provider": "anthropic",
+        "model": "legacy-model-not-seeded",
+        "inputRate": 3.0,
+        "outputRate": 15.0,
+        "fixedCost": 0.0,
+        "contextWindow": null,
+        "maxOutputTokens": null,
+        "requireCtxWindow": false
+      },
+      "expected": { "proceed": true }
+    },
+    {
+      "name": "missing_ctx_window_with_flag_fails_closed",
+      "description": "Same legacy row, but requireCtxWindow=true (Phase 1C flag-on). Guard must DENY rather than silently let an unbounded model through. P1.3 fix.",
+      "input": {
+        "balance": 1000,
+        "promptTokens": 20000,
+        "completionTokens": 800,
+        "iterations": 4,
+        "lastPromptTokens": 6000,
+        "lastCompletionTokens": 250,
+        "provider": "anthropic",
+        "model": "legacy-model-not-seeded",
+        "inputRate": 3.0,
+        "outputRate": 15.0,
+        "fixedCost": 0.0,
+        "contextWindow": null,
+        "maxOutputTokens": null,
+        "requireCtxWindow": true
+      },
+      "expected": { "proceed": false, "reason_contains": "missing_ctx_window" }
+    },
+    {
+      "name": "low_balance_high_worstCase_denies_early",
+      "description": "Balance 500, but Opus worstCase = 200K × 15/1k + 64K × 75/1k = 7800 credits. Even with tiny actual usage so far, projection trips the guard immediately. This is the key invariant that closes -11305.",
+      "input": {
+        "balance": 500,
+        "promptTokens": 5000,
+        "completionTokens": 200,
+        "iterations": 2,
+        "lastPromptTokens": 3000,
+        "lastCompletionTokens": 100,
+        "provider": "anthropic",
+        "model": "claude-opus-4-6",
+        "inputRate": 15.0,
+        "outputRate": 75.0,
+        "fixedCost": 0.0,
+        "contextWindow": 200000,
+        "maxOutputTokens": 64000
+      },
+      "expected": { "proceed": false, "reason_contains": "would be exceeded" }
+    },
+    {
+      "name": "exact_equal_consumed_balance_denies",
+      "description": "Edge: consumed exactly equals balance. The guard uses >= for the exhaust check so this denies (any further iter would over-spend by definition).",
+      "input": {
+        "balance": 100,
+        "promptTokens": 40000,
+        "completionTokens": 0,
+        "iterations": 4,
+        "lastPromptTokens": 10000,
+        "lastCompletionTokens": 0,
+        "provider": "openai",
+        "model": "gpt-4o",
+        "inputRate": 2.5,
+        "outputRate": 10.0,
+        "fixedCost": 0.0,
+        "contextWindow": 128000,
+        "maxOutputTokens": 16384
+      },
+      "expected": { "proceed": false, "reason_contains": "exhausted" }
+    },
+    {
+      "name": "lastDelta_dominant_with_no_worstCase_ceiling",
+      "description": "Model has null contextWindow → no worstCase ceiling. growth proj is small (avg over 6 iters of mostly-cheap calls), but lastDelta×2 catches the recent burst. Proves the lastDelta branch is non-redundant when worstCase is unavailable. Cumulative 200k @ 5/15 = ~1003 credits used. avg ≈ 33k×5+0.6k×15 = ~174 credits. lastDelta = 80k×5+0.5k×15 = ~407 → ×2 = ~815. Balance 1500 → consumed (~1003) + 815 = 1818 > 1500 → DENY via lastDelta.",
+      "input": {
+        "balance": 1500,
+        "promptTokens": 200000,
+        "completionTokens": 3500,
+        "iterations": 6,
+        "lastPromptTokens": 80000,
+        "lastCompletionTokens": 500,
+        "provider": "anthropic",
+        "model": "legacy-no-ctx-window",
+        "inputRate": 5.0,
+        "outputRate": 15.0,
+        "fixedCost": 0.0,
+        "contextWindow": null,
+        "maxOutputTokens": null
+      },
+      "expected": { "proceed": false, "reason_contains": "would be exceeded" }
+    },
+    {
+      "name": "growth_dominant_when_lastDelta_is_zero",
+      "description": "lastDelta is zero (a free-cache hit on the previous iter), but cumulative growth+upcoming-avg projection trips the guard. Proves growth branch is non-redundant. cumulative=400k×5+5k×15 = 2075 credits. avg = 80k×5+1k×15 = 415 credits. lastDelta=0×2=0. worstCase=null. consumed (2075) + growth (415) = 2490 > 2400 balance → DENY via growth.",
+      "input": {
+        "balance": 2400,
+        "promptTokens": 400000,
+        "completionTokens": 5000,
+        "iterations": 5,
+        "lastPromptTokens": 0,
+        "lastCompletionTokens": 0,
+        "provider": "anthropic",
+        "model": "legacy-no-ctx-window",
+        "inputRate": 5.0,
+        "outputRate": 15.0,
+        "fixedCost": 0.0,
+        "contextWindow": null,
+        "maxOutputTokens": null
+      },
+      "expected": { "proceed": false, "reason_contains": "would be exceeded" }
+    },
+    {
+      "name": "byok_zero_rates_proceeds_when_under_balance",
+      "description": "BYOK case: rates are 0 (provider key, platform doesn't bill). consumed = 0, projection = 0 even with worstCase since worstCase is also 0. Guard proceeds - the platform doesn't bill BYOK calls, but the bridge guard also shouldn't block them.",
+      "input": {
+        "balance": 100,
+        "promptTokens": 500000,
+        "completionTokens": 5000,
+        "iterations": 10,
+        "lastPromptTokens": 50000,
+        "lastCompletionTokens": 500,
+        "provider": "anthropic-byok",
+        "model": "claude-opus-4-6",
+        "inputRate": 0.0,
+        "outputRate": 0.0,
+        "fixedCost": 0.0,
+        "contextWindow": 200000,
+        "maxOutputTokens": 64000
+      },
+      "expected": { "proceed": true }
+    }
+  ]
+}

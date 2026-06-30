@@ -1,0 +1,68 @@
+{
+  "id": "fixture-05-branching-decision-else",
+  "triggers": [
+    {
+      "id": "t1",
+      "type": "manual",
+      "label": "Start",
+      "position": { "x": 100, "y": 200 }
+    }
+  ],
+  "mcps": [
+    {
+      "id": "mock/fetch",
+      "type": "mcp",
+      "label": "Fetch",
+      "position": { "x": 300, "y": 200 },
+      "params": {}
+    },
+    {
+      "id": "mock/branch_a",
+      "type": "mcp",
+      "label": "Branch A",
+      "position": { "x": 700, "y": 100 },
+      "params": {
+        "value": "{{mcp:fetch.output.value}}"
+      }
+    },
+    {
+      "id": "mock/branch_b",
+      "type": "mcp",
+      "label": "Branch B",
+      "position": { "x": 700, "y": 300 },
+      "params": {
+        "value": "{{mcp:fetch.output.value}}"
+      }
+    }
+  ],
+  "tables": [],
+  "agents": [],
+  "cores": [
+    {
+      "id": "c1",
+      "type": "decision",
+      "label": "Pick Branch",
+      "position": { "x": 500, "y": 200 },
+      "decisionConditions": [
+        { "id": "cond-if", "type": "if", "label": "is_a", "expression": "{{mcp:fetch.output.kind}} == 'a'" },
+        { "id": "cond-else", "type": "else", "label": "default" }
+      ]
+    },
+    {
+      "id": "c2",
+      "type": "merge",
+      "label": "Join",
+      "position": { "x": 900, "y": 200 }
+    }
+  ],
+  "edges": [
+    { "from": "trigger:start", "to": "mcp:fetch" },
+    { "from": "mcp:fetch", "to": "core:pick_branch" },
+    { "from": "core:pick_branch:if", "to": "mcp:branch_a" },
+    { "from": "core:pick_branch:else", "to": "mcp:branch_b" },
+    { "from": "mcp:branch_a", "to": "core:join" },
+    { "from": "mcp:branch_b", "to": "core:join" }
+  ],
+  "notes": [],
+  "interfaces": []
+}

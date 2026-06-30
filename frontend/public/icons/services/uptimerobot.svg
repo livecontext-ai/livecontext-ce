@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <circle cx="32" cy="32" r="28" fill="#3BD671"/>
+  <circle cx="32" cy="32" r="16" fill="white"/>
+  <circle cx="32" cy="32" r="6" fill="#034C7F"/>
+  <rect x="30" y="16" width="4" height="16" rx="2" fill="#034C7F" transform="rotate(-45 32 32)"/>
+</svg>

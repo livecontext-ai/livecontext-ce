@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50" width="24" height="24">
+  <title>Clearbit</title>
+  <defs>
+    <linearGradient id="cb-a" gradientTransform="matrix(12.5 25 -25 12.5 37.5 25)" gradientUnits="userSpaceOnUse" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0" stop-color="#def2fe"/>
+      <stop offset="1" stop-color="#dbf1fe"/>
+    </linearGradient>
+    <linearGradient id="cb-b" gradientTransform="matrix(12.5 25 -25 12.5 25 0)" gradientUnits="userSpaceOnUse" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0" stop-color="#57bcfd"/>
+      <stop offset="1" stop-color="#51b5fd"/>
+    </linearGradient>
+    <linearGradient id="cb-c" gradientTransform="matrix(6.25 50 -50 6.25 9.375 0)" gradientUnits="userSpaceOnUse" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0" stop-color="#1ca7fd"/>
+      <stop offset="1" stop-color="#148cfc"/>
+    </linearGradient>
+  </defs>
+  <path d="m50 25v11.646l-.003.602c-.041 4.191-.521 5.801-1.388 7.423-.908 1.698-2.24 3.03-3.938 3.938l-.226.118c-1.627.832-3.362 1.273-7.799 1.273h-11.646v-25z" fill="url(#cb-a)"/>
+  <path d="m44.671 1.391c1.698.908 3.03 2.24 3.938 3.938l.118.226c.832 1.627 1.273 3.362 1.273 7.799v11.646h-25v-25h11.646c4.644 0 6.328.483 8.025 1.391z" fill="url(#cb-b)"/>
+  <path d="m25 0v50h-11.646l-.602-.003c-4.191-.041-5.801-.521-7.423-1.388-1.698-.908-3.03-2.24-3.938-3.938l-.118-.226c-.832-1.627-1.273-3.362-1.273-7.799v-23.292c0-4.644.483-6.328 1.391-8.025.908-1.698 2.24-3.03 3.938-3.938l.226-.118c1.627-.832 3.362-1.273 7.799-1.273z" fill="url(#cb-c)"/>
+</svg>

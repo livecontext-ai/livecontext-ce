@@ -1,0 +1,236 @@
+server:
+  port: 8087
+
+spring:
+  application:
+    name: conversation-service
+
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 10MB
+
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration
+  
+  datasource:
+    url: jdbc:postgresql://localhost:5432/apimarketplace?currentSchema=conversation
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      # Connection pool settings
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1200000  # 20 minutes (shorter than default 30min)
+      leak-detection-threshold: 60000
+      
+      # Connection validation
+      connection-test-query: SELECT 1
+      validation-timeout: 5000
+      
+      # PostgreSQL specific settings
+      data-source-properties:
+        socketTimeout: 30
+        loginTimeout: 10
+        connectTimeout: 10
+        tcpKeepAlive: true
+        applicationName: conversation-service
+  
+  flyway:
+    enabled: false
+
+  jpa:
+    # OFF: with open-in-view=true (Spring default) the JPA Session + its JDBC connection stay
+    # bound to the whole HTTP request. /api/internal/chat/sync blocks on the agent/LLM call for
+    # tens of seconds, so the connection was held that long → HikariCP "Apparent connection
+    # leak" warnings + pool-exhaustion risk under load. Safe to disable here: every lazy
+    # association (Conversation.messages, Message.conversation, Stream.conversation) is only
+    # ever accessed inside a @Transactional service method, or guarded by
+    # Hibernate.isInitialized, or touched proxy-id-only (getConversation().getId()) - none is
+    # lazily loaded during view rendering. orchestrator-service already runs open-in-view=false.
+    # Audit 2026-06-14.
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+        default_schema: conversation
+        jdbc:
+          time_zone: UTC
+
+  jackson:
+    time-zone: UTC
+    serialization:
+      write-dates-as-timestamps: false
+
+# Gateway authentication
+gateway:
+  filter:
+    secret-key: ${GATEWAY_SECRET_KEY:}
+    verification-enabled: ${GATEWAY_VERIFICATION_ENABLED:true}
+    public-paths:
+      - /health
+      - /actuator
+      - /api/internal/
+      - /api/v3/chat/models
+      - /api/shared/
+      - /api/conversations       # Backend-to-backend: orchestrator saves messages/creates conversations
+      - /api/tool-results       # Backend-to-backend: orchestrator saves tool results
+
+logging:
+  level:
+    # Production-ready log levels (use DEBUG only for troubleshooting specific areas)
+    com.apimarketplace.conversation: INFO
+    com.apimarketplace.agent: INFO
+    # Streaming-specific debugging - enable these when troubleshooting stream issues
+    com.apimarketplace.conversation.controller.v3: INFO
+    com.apimarketplace.conversation.streaming: INFO
+    org.springframework.web: INFO
+    org.hibernate.SQL: WARN
+    org.hibernate.type.descriptor.sql.BasicBinder: WARN
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%logger{36}] - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%logger{36}] - %msg%n"
+  file:
+    name: logs/conversation-service.log
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      slo:
+        http.server.requests: 100ms, 500ms, 1s, 3s, 5s
+
+# Conversation Agent configuration
+conversation:
+  agent:
+    # system-prompt not set → uses DefaultSystemPrompts.VERSATILE_AGENT with routing logic
+    max-iterations: 100
+    execution-timeout-seconds: 3600
+    # Default output-token budget for general chat; clamped at runtime to the
+    # resolved model's real ceiling (MaxTokensClamp) so it never 400s a low-cap model.
+    max-tokens: 16000
+  service:
+    url: ${CONVERSATION_SERVICE_URL:http://localhost:8087}
+  bridge:
+    enabled: ${CONVERSATION_BRIDGE_ENABLED:true}
+    url: ${BRIDGE_SERVICE_URL:http://localhost:8093}
+  # Stage 4a.2 - Just-In-Time tools-schema routing per model tier. Read by
+  # ModelTierMapper. mode-by-tier applies to every model with that tier; an
+  # entry in model-overrides wins over the tier lookup. unknown-model-default
+  # is the fail-safe fallback (FULL) so a new/misconfigured model never
+  # silently regresses tool accuracy.
+  jit:
+    schemas:
+      mode-by-tier:
+        top: SLIM
+        high: SLIM
+        mid: SLIM
+        budget: FULL
+      model-overrides:
+        # Weak-at-tool-use model carrying a high quality tier. The code-level
+        # steering guards (see TASK_TEST_ERRORS.md #8/#9) aren't enough -
+        # glm-5-turbo cannot reliably bootstrap from a `help` directive, so
+        # it keeps the full schema even though its `high` tier would
+        # otherwise route it through the SLIM path.
+        glm-5-turbo: FULL
+      unknown-model-default: FULL
+    # Stage 4a.3 - security-sensitive always-FULL exclusions. Read by
+    # SchemaSlimExclusionPolicy. Any match forces FULL for the tool or
+    # tool:action pair even when the model tier would otherwise pick SLIM.
+    # Fail-safe: an unparseable positive-list regex makes every call report
+    # excluded (wrong guess toward FULL just wastes tokens; wrong guess
+    # toward SLIM risks the LLM skipping a confirmation or fabricating a
+    # credential name).
+    exclusions:
+      always-full-tools:
+        - request_credential
+      always-full-tool-actions:
+        - agent:publish
+        - skill:publish
+        - interface:publish
+        - table:publish
+        - application:publish
+        - workflow:pin
+        - credential:force_replace
+        - credential:rotate
+        - task:approve
+        - task:reject_review
+      positive-list-pattern: "(?i)\\b(publish|credential|secret|api[_-]?key|revoke|force|rotate|production|execute.*prod|merge|approve|pay|charge|delete[_-]*all)\\b"
+    # Stage 4a.4 - help-seen freshness gate. Read by HelpSeenRegistry.
+    # A (tool, action) is considered "already helped" only if a help response
+    # has been observed within the last `hot-warm-turn-budget` turns - the
+    # gate is derived from the stored lastSeenTurn, never persisted as a
+    # boolean (which would contradict itself across restarts / compaction).
+    help-seen:
+      hot-warm-turn-budget: 20
+      ttl-hours: 24
+
+# Auth service for credit consumption
+services:
+  auth-service:
+    url: ${AUTH_SERVICE_URL:http://localhost:8083}
+  agent-service:
+    url: ${AGENT_SERVICE_URL:http://localhost:8090}
+  datasource-service:
+    url: ${DATASOURCE_SERVICE_URL:http://localhost:8088}
+  interface-service:
+    url: ${INTERFACE_SERVICE_URL:http://localhost:8089}
+  catalog-service:
+    url: ${CATALOG_SERVICE_URL:http://localhost:8081}
+
+# Orchestrator service (for workflow/credential calls)
+orchestrator:
+  service:
+    url: ${ORCHESTRATOR_SERVICE_URL:http://localhost:8099}
+
+# Stream TTL configuration
+stream:
+  ttl:
+    timeout-minutes: 10  # Streams timeout after X minutes of inactivity
+    cleanup-days: 10     # Delete streams older than X days
+    scan-interval-minutes: 5  # TTL scan runs every X minutes
+  sse:
+    connection-timeout-minutes: 10  # SSE connection timeout (same as TTL)
+  # chunk configuration removed - no more chunk-based saving
+
+# Redis configuration for distributed streaming
+spring.data.redis:
+  host: ${REDIS_HOST:localhost}
+  port: ${REDIS_PORT:6379}
+  timeout: 5000ms
+  lettuce:
+    pool:
+      max-active: 50
+      max-idle: 10
+      min-idle: 2
+
+# Streaming configuration (V3 - Redis Pub/Sub architecture)
+streaming:
+  connection-timeout: 10s
+  read-timeout: 5m
+  heartbeat-interval: 30s
+  max-content-chunks: 1000
+  max-chunk-size: 4096
+  stream-ttl: 30m
+  content-ttl: 30m
+  backpressure-buffer-size: 100
+  rate-limit:
+    requests-per-second: 10
+    burst-capacity: 20
+

@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration scan="true" scanPeriod="60 seconds">
+
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+
+    <property name="AUDIT_LOG_PATH" value="${AUDIT_LOG_PATH:-${java.io.tmpdir}/livecontext-audit}"/>
+    <property name="APP_NAME" value="auth-service"/>
+
+    <appender name="AUDIT_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+            <!-- The message is already a complete JSON object built by AuditLogger -->
+            <pattern>%msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <springProfile name="k8s">
+        <appender name="AUDIT_CONSOLE_ASYNC" class="ch.qos.logback.classic.AsyncAppender">
+            <appender-ref ref="AUDIT_CONSOLE"/>
+            <queueSize>1024</queueSize>
+            <discardingThreshold>0</discardingThreshold>
+            <neverBlock>false</neverBlock>
+            <includeCallerData>false</includeCallerData>
+        </appender>
+
+        <!-- In Kubernetes, audit events must be collected from stdout/stderr. -->
+        <logger name="AUDIT" level="INFO" additivity="false">
+            <appender-ref ref="AUDIT_CONSOLE_ASYNC"/>
+        </logger>
+    </springProfile>
+
+    <springProfile name="!k8s">
+        <!--
+            Dedicated audit appender. Writes one JSON line per event to a separate
+            file, isolated from application logs. Rolling daily, kept 90 days,
+            20GB total cap.
+        -->
+        <appender name="AUDIT_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+            <file>${AUDIT_LOG_PATH}/${APP_NAME}-audit.json</file>
+            <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+                <!-- The message is already a complete JSON object built by AuditLogger -->
+                <pattern>%msg%n</pattern>
+                <charset>UTF-8</charset>
+            </encoder>
+            <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+                <fileNamePattern>${AUDIT_LOG_PATH}/${APP_NAME}-audit.%d{yyyy-MM-dd}.%i.json.gz</fileNamePattern>
+                <maxFileSize>100MB</maxFileSize>
+                <maxHistory>90</maxHistory>
+                <totalSizeCap>20GB</totalSizeCap>
+            </rollingPolicy>
+        </appender>
+
+        <!--
+            Async wrapper. discardingThreshold=0 means we never drop events, even
+            under pressure. queueSize=1024 is enough headroom for spikes; if the
+            queue ever fills the calling thread blocks, which is the right
+            behavior for audit (correctness > latency).
+        -->
+        <appender name="AUDIT_ASYNC" class="ch.qos.logback.classic.AsyncAppender">
+            <appender-ref ref="AUDIT_FILE"/>
+            <queueSize>1024</queueSize>
+            <discardingThreshold>0</discardingThreshold>
+            <neverBlock>false</neverBlock>
+            <includeCallerData>false</includeCallerData>
+        </appender>
+
+        <!--
+            AUDIT logger is isolated: additivity=false so events do NOT bleed into
+            the regular console/app logs.
+        -->
+        <logger name="AUDIT" level="INFO" additivity="false">
+            <appender-ref ref="AUDIT_ASYNC"/>
+        </logger>
+    </springProfile>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+
+</configuration>

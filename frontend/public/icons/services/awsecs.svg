@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Background with rounded corners -->
+  <rect width="256" height="256" rx="32" ry="32" fill="#232F3E"/>
+
+  <!-- Main container/cube - front face -->
+  <rect x="72" y="96" width="112" height="88" rx="6" ry="6" fill="#FF9900"/>
+
+  <!-- Container lid / top face (parallelogram) -->
+  <polygon points="72,96 128,68 184,96 128,124" fill="#FFBB4D"/>
+
+  <!-- Container right face (darker orange) -->
+  <polygon points="184,96 184,184 128,212 128,124" fill="#CC7A00"/>
+
+  <!-- Inner grid lines on front face to suggest container layers -->
+  <!-- Horizontal dividers -->
+  <line x1="72" y1="125" x2="184" y2="125" stroke="#232F3E" stroke-width="2.5" stroke-opacity="0.35"/>
+  <line x1="72" y1="154" x2="184" y2="154" stroke="#232F3E" stroke-width="2.5" stroke-opacity="0.35"/>
+
+  <!-- Vertical divider -->
+  <line x1="128" y1="96" x2="128" y2="184" stroke="#232F3E" stroke-width="2.5" stroke-opacity="0.35"/>
+
+  <!-- Small highlight dots in each cell to suggest running containers -->
+  <circle cx="100" cy="111" r="5" fill="#232F3E" fill-opacity="0.4"/>
+  <circle cx="156" cy="111" r="5" fill="#232F3E" fill-opacity="0.4"/>
+  <circle cx="100" cy="140" r="5" fill="#232F3E" fill-opacity="0.4"/>
+  <circle cx="156" cy="140" r="5" fill="#232F3E" fill-opacity="0.4"/>
+  <circle cx="100" cy="169" r="5" fill="#232F3E" fill-opacity="0.4"/>
+  <circle cx="156" cy="169" r="5" fill="#232F3E" fill-opacity="0.4"/>
+
+  <!-- Top face grid lines -->
+  <line x1="100" y1="82" x2="156" y2="110" stroke="#232F3E" stroke-width="2" stroke-opacity="0.25"/>
+</svg>

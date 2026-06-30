@@ -1,0 +1,68 @@
+{
+  "id": "fixture-06-loop-with-exit",
+  "triggers": [
+    {
+      "id": "t1",
+      "type": "manual",
+      "label": "Start",
+      "position": { "x": 100, "y": 200 }
+    }
+  ],
+  "mcps": [
+    {
+      "id": "mock/init",
+      "type": "mcp",
+      "label": "Init",
+      "position": { "x": 300, "y": 200 },
+      "params": {}
+    },
+    {
+      "id": "mock/iterate",
+      "type": "mcp",
+      "label": "Iterate",
+      "position": { "x": 700, "y": 200 },
+      "params": {
+        "iteration": "{{core:retry.output.iteration}}"
+      }
+    },
+    {
+      "id": "mock/next",
+      "type": "mcp",
+      "label": "Next",
+      "position": { "x": 900, "y": 200 },
+      "params": {
+        "from_iterate": "{{mcp:iterate.output.value}}"
+      }
+    },
+    {
+      "id": "mock/finalize",
+      "type": "mcp",
+      "label": "Finalize",
+      "position": { "x": 700, "y": 400 },
+      "params": {}
+    }
+  ],
+  "tables": [],
+  "agents": [],
+  "cores": [
+    {
+      "id": "c1",
+      "type": "loop",
+      "label": "Retry",
+      "position": { "x": 500, "y": 200 },
+      "loopCondition": "{{core:retry.output.iteration}} < 3",
+      "maxIterations": 3,
+      "strategy": "continue-anyway"
+    }
+  ],
+  "edges": [
+    { "from": "trigger:start", "to": "mcp:init" },
+    { "from": "mcp:init", "to": "core:retry" },
+    { "from": "core:retry:body", "to": "mcp:iterate" },
+    { "from": "mcp:iterate", "to": "mcp:next" },
+    { "from": "mcp:next", "to": "core:retry:iterate" },
+    { "from": "core:retry:exit", "to": "mcp:finalize" }
+  ],
+  "notes": [],
+  "interfaces": []
+}

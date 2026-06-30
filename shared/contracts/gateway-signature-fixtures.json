@@ -1,0 +1,38 @@
+{
+  "_comment": "Cross-language parity fixtures for the gateway HMAC signature. Consumed by the JS twin mcp/bridge/lib/__tests__/gatewayAuth.test.mjs AND the Java GatewaySignatureParityTest. The signature MUST stay byte-identical across both: data = providerId|userId|orgId|timestamp ; sig = 'gw_' + base64url-nopadding(HMAC_SHA256(secretKey, data)). When the scheme changes, regenerate the expectedSignature values once and both runners re-validate.",
+  "secretKey": "test-gateway-hmac-key-for-unit-tests",
+  "cases": [
+    {
+      "name": "internal-credit-client / numeric user / no org",
+      "providerId": "internal-credit-client",
+      "userId": "42",
+      "organizationId": "",
+      "timestamp": "1700000000000",
+      "expectedSignature": "gw_hbR-zylpyABVGt4b8lMikf_s_L7eCfh4Kfrv63EuIA8"
+    },
+    {
+      "name": "internal-credit-client / numeric user / org",
+      "providerId": "internal-credit-client",
+      "userId": "42",
+      "organizationId": "org_7",
+      "timestamp": "1700000000000",
+      "expectedSignature": "gw_GG7NWkJqUq6b_6oCEQYaBbHS75dHAGVXtc2lOoGZOdU"
+    },
+    {
+      "name": "empty user empty org",
+      "providerId": "internal-credit-client",
+      "userId": "",
+      "organizationId": "",
+      "timestamp": "1700000000000",
+      "expectedSignature": "gw_9WEYp9oZMjuWo_0-bUzJAb2HOC_G3pr2utdvkc_BxIA"
+    },
+    {
+      "name": "different provider / user + org",
+      "providerId": "some-provider",
+      "userId": "1001",
+      "organizationId": "acme",
+      "timestamp": "1699999999999",
+      "expectedSignature": "gw_e0knEpQohuzY90JwQf8NG07DreG9BgDCvMzTSPJk14w"
+    }
+  ]
+}

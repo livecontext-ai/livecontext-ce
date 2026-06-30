@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="a21bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8B9D4A"/>
+      <stop offset="100%" stop-color="#6B7A30"/>
+    </linearGradient>
+  </defs>
+  <circle cx="50" cy="50" r="50" fill="url(#a21bg)"/>
+  <!-- Slow-drift polygons (hexagon outlines) -->
+  <g fill="none" stroke="white" stroke-width="0.7">
+    <g opacity="0.15">
+      <polygon points="22,66 30,62 38,66 38,74 30,78 22,74" transform="translate(0,0)">
+        <animateTransform attributeName="transform" type="rotate" from="0 30 70" to="360 30 70" dur="20s" repeatCount="indefinite"/>
+      </polygon>
+      <animate attributeName="opacity" values="0.1;0.2;0.1" dur="7s" repeatCount="indefinite"/>
+    </g>
+    <g opacity="0.12">
+      <polygon points="66,22 78,16 90,22 90,32 78,38 66,32">
+        <animateTransform attributeName="transform" type="rotate" from="0 78 27" to="-360 78 27" dur="32s" repeatCount="indefinite"/>
+      </polygon>
+      <animate attributeName="opacity" values="0.2;0.1;0.2" dur="9s" repeatCount="indefinite"/>
+    </g>
+    <g opacity="0.18">
+      <polygon points="70,72 80,68 90,72 90,82 80,86 70,82">
+        <animateTransform attributeName="transform" type="rotate" from="0 80 77" to="360 80 77" dur="45s" repeatCount="indefinite"/>
+      </polygon>
+      <animate attributeName="opacity" values="0.1;0.2;0.15;0.1" dur="11s" repeatCount="indefinite"/>
+    </g>
+  </g>
+  <!-- Fresh bright eyes -->
+  <ellipse cx="39" cy="44" rx="5" ry="5.5" fill="white" opacity="0.9">
+    <animate attributeName="ry" values="5.5;5.5;0.5;5.5;5.5" keyTimes="0;0.89;0.93;0.97;1" dur="5.2s" repeatCount="indefinite"/>
+  </ellipse>
+  <ellipse cx="61" cy="44" rx="5" ry="5.5" fill="white" opacity="0.9">
+    <animate attributeName="ry" values="5.5;5.5;0.5;5.5;5.5" keyTimes="0;0.89;0.93;0.97;1" dur="5.2s" repeatCount="indefinite"/>
+  </ellipse>
+  <!-- Refreshing smile -->
+  <path d="M40,58 Q50,65 60,58" stroke="white" stroke-width="2" fill="none" stroke-linecap="round" opacity="0.8"/>
+</svg>

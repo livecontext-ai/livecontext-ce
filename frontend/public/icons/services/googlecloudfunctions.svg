@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- White background -->
+  <rect width="256" height="256" fill="#ffffff"/>
+
+  <!-- Outer hexagon shape (Cloud Functions badge style) -->
+  <polygon
+    points="128,18 218,68 218,188 128,238 38,188 38,68"
+    fill="#4285F4"
+    opacity="0.12"
+  />
+  <polygon
+    points="128,26 212,72 212,184 128,230 44,184 44,72"
+    fill="none"
+    stroke="#4285F4"
+    stroke-width="3"
+    opacity="0.35"
+  />
+
+  <!-- Lambda / function symbol -->
+  <!-- Left diagonal stroke: top-left to center-bottom -->
+  <line x1="84" y1="80" x2="128" y2="176" stroke="#4285F4" stroke-width="18" stroke-linecap="round"/>
+  <!-- Right diagonal stroke: center to top-right -->
+  <line x1="128" y1="176" x2="172" y2="80" stroke="#4285F4" stroke-width="18" stroke-linecap="round"/>
+  <!-- Small horizontal tick at top of left arm (lambda style) -->
+  <line x1="84" y1="80" x2="112" y2="80" stroke="#4285F4" stroke-width="18" stroke-linecap="round"/>
+
+  <!-- Subtle cloud arc above the lambda to hint at "cloud" -->
+  <path
+    d="M 96,62 Q 128,44 160,62"
+    fill="none"
+    stroke="#4285F4"
+    stroke-width="5"
+    stroke-linecap="round"
+    opacity="0.5"
+  />
+</svg>

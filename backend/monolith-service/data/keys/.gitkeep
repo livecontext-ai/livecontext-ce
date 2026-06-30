@@ -1,0 +1,1 @@
+# JWT keys are generated at first boot by ce-entrypoint.sh. Do not commit real keys.

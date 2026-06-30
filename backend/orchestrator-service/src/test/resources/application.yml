@@ -1,0 +1,16 @@
+# ============================================================================
+# GLOBAL TEST OVERRIDE - applies to ALL tests regardless of @ActiveProfiles
+# ============================================================================
+# Safety net: block all external service calls during tests.
+# Points to an invalid port so any real HTTP call fails immediately
+# with "connection refused" instead of silently calling OpenAI/external APIs.
+# Individual test profiles (test, e2e, integration-test) can override these
+# but the default is ALWAYS blocked.
+# ============================================================================
+
+services:
+  agent-url: http://localhost:1
+  datasource-url: http://localhost:1
+  interface-url: http://localhost:1
+  trigger-url: http://localhost:1
+  publication-url: http://localhost:1

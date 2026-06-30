@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="a17bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#D946EF"/>
+      <stop offset="100%" stop-color="#A21CAF"/>
+    </linearGradient>
+    <clipPath id="a17clip">
+      <circle cx="50" cy="50" r="50"/>
+    </clipPath>
+  </defs>
+  <circle cx="50" cy="50" r="50" fill="url(#a17bg)"/>
+  <!-- Diamonds: sparse 3x3 grid rotating slowly as one unit, individual opacity pulses -->
+  <g clip-path="url(#a17clip)">
+    <g transform="rotate(0 50 50)">
+      <animateTransform attributeName="transform" type="rotate" from="0 50 50" to="360 50 50" dur="45s" repeatCount="indefinite"/>
+      <rect x="27" y="27" width="4" height="4" fill="white" transform="rotate(45 29 29)">
+        <animate attributeName="opacity" values="0.1;0.25;0.1" dur="5s" repeatCount="indefinite"/>
+      </rect>
+      <rect x="48" y="25" width="4" height="4" fill="white" transform="rotate(45 50 27)">
+        <animate attributeName="opacity" values="0.15;0.25;0.15" dur="6.5s" repeatCount="indefinite"/>
+      </rect>
+      <rect x="69" y="27" width="4" height="4" fill="white" transform="rotate(45 71 29)">
+        <animate attributeName="opacity" values="0.1;0.2;0.1" dur="4.5s" repeatCount="indefinite"/>
+      </rect>
+      <rect x="25" y="48" width="4" height="4" fill="white" transform="rotate(45 27 50)">
+        <animate attributeName="opacity" values="0.15;0.25;0.15" dur="5.5s" repeatCount="indefinite"/>
+      </rect>
+      <rect x="48" y="48" width="4" height="4" fill="white" transform="rotate(45 50 50)">
+        <animate attributeName="opacity" values="0.1;0.25;0.1" dur="7s" repeatCount="indefinite"/>
+      </rect>
+      <rect x="69" y="48" width="4" height="4" fill="white" transform="rotate(45 71 50)">
+        <animate attributeName="opacity" values="0.15;0.2;0.15" dur="5s" repeatCount="indefinite"/>
+      </rect>
+      <rect x="27" y="69" width="4" height="4" fill="white" transform="rotate(45 29 71)">
+        <animate attributeName="opacity" values="0.1;0.25;0.1" dur="6s" repeatCount="indefinite"/>
+      </rect>
+      <rect x="48" y="71" width="4" height="4" fill="white" transform="rotate(45 50 73)">
+        <animate attributeName="opacity" values="0.15;0.25;0.15" dur="4.8s" repeatCount="indefinite"/>
+      </rect>
+      <rect x="69" y="69" width="4" height="4" fill="white" transform="rotate(45 71 71)">
+        <animate attributeName="opacity" values="0.1;0.2;0.1" dur="6.2s" repeatCount="indefinite"/>
+      </rect>
+    </g>
+  </g>
+  <!-- Sparkling diamond-shaped eyes -->
+  <rect x="35.5" y="40.5" width="8" height="8" rx="1" fill="white" opacity="0.9" transform="rotate(45 39.5 44.5)">
+    <animate attributeName="opacity" values="0.9;0.9;0.1;0.9;0.9" keyTimes="0;0.87;0.91;0.95;1" dur="5s" repeatCount="indefinite"/>
+  </rect>
+  <rect x="56.5" y="40.5" width="8" height="8" rx="1" fill="white" opacity="0.9" transform="rotate(45 60.5 44.5)">
+    <animate attributeName="opacity" values="0.9;0.9;0.1;0.9;0.9" keyTimes="0;0.87;0.91;0.95;1" dur="5s" repeatCount="indefinite"/>
+  </rect>
+  <!-- Playful grin -->
+  <path d="M38,58 Q50,67 62,58" stroke="white" stroke-width="2" fill="none" stroke-linecap="round" opacity="0.8"/>
+</svg>

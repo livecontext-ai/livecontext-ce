@@ -1,0 +1,34 @@
+spring:
+  main:
+    allow-bean-definition-overriding: true
+  datasource:
+    url: jdbc:h2:mem:integrationdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;MODE=PostgreSQL;INIT=CREATE SCHEMA IF NOT EXISTS orchestrator
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+        default_schema: orchestrator
+    show-sql: false
+  flyway:
+    enabled: false
+
+app:
+  security:
+    gateway:
+      verification:
+        enabled: false
+
+# Disable gateway HMAC verification for integration tests
+gateway:
+  filter:
+    verification-enabled: false
+
+logging:
+  level:
+    com.apimarketplace: WARN
+    org.hibernate.SQL: WARN

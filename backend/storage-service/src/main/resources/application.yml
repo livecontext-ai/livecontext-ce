@@ -1,0 +1,115 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: storage-service
+  
+  datasource:
+    url: jdbc:postgresql://localhost:5432/apimarketplace
+    username: postgres
+    password: postgres
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      # Connection pool settings
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1200000  # 20 minutes (shorter than default 30min)
+      leak-detection-threshold: 60000
+      
+      # Connection validation
+      connection-test-query: SELECT 1
+      validation-timeout: 5000
+      
+      # PostgreSQL specific settings
+      data-source-properties:
+        socketTimeout: 30
+        loginTimeout: 10
+        connectTimeout: 10
+        tcpKeepAlive: true
+        applicationName: storage-service
+  
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+        jdbc:
+          time_zone: UTC
+
+  jackson:
+    time-zone: UTC
+    serialization:
+      write-dates-as-timestamps: false
+
+  flyway:
+    enabled: false
+  
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+
+# Public frontend origin for user-facing links. storage-service component-scans
+# com.apimarketplace.common.storage, so PublicFileUrlBuilder is instantiated here - set the
+# property so any future minting from this service emits prod URLs, not the localhost default.
+app:
+  base-url: ${APP_PUBLIC_URL:${WEBHOOK_BASE_URL:http://localhost:3000}}
+
+storage:
+  local:
+    path: ./uploads
+  max-file-size: 52428800  # 50MB in bytes
+  allowed-types: image/*,application/pdf,text/*,application/json,application/xml
+  s3:
+    endpoint: ${STORAGE_S3_ENDPOINT:http://localhost:9000}
+    region: ${STORAGE_S3_REGION:us-east-1}
+    access-key: ${STORAGE_S3_ACCESS_KEY:minioadmin}
+    secret-key: ${STORAGE_S3_SECRET_KEY:minioadmin}
+    bucket: ${STORAGE_S3_BUCKET:workflow-files}
+    path-style-access: ${STORAGE_S3_PATH_STYLE:true}
+  # Marketplace showcase file proxy signing. Shared HMAC secret with publication-service.
+  # Drift between the two services would silently break every marketplace card image.
+  showcase:
+    hmac-secret: ${STORAGE_SHOWCASE_HMAC_SECRET:}
+
+gateway:
+  filter:
+    secret-key: ${GATEWAY_SECRET_KEY:}
+    verification-enabled: ${GATEWAY_VERIFICATION_ENABLED:true}
+    public-paths:
+      - /health
+      - /actuator
+      - /api/internal/
+      # HMAC-signed marketplace showcase file proxy. The path is reachable
+      # without a JWT (signature is the auth) AND must skip the gateway-secret
+      # check downstream - both ends must allowlist it.
+      - /api/files/proxy-signed
+
+logging:
+  level:
+    com.apimarketplace.storage: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+  file:
+    name: logs/storage-service.log
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      slo:
+        http.server.requests: 100ms, 500ms, 1s, 3s, 5s

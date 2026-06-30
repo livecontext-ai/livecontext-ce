@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://livecontext.ai/contracts/ce-link-heartbeat.schema.json",
+  "title": "CeLinkHeartbeatRequest",
+  "description": "Body of POST /api/ce-link/{installId}/heartbeat. Sent by a CE install every few minutes (doc/CLOUD_LINK_ONBOARDING.md §3.5). The installId is taken from the URL path so it can't be tampered with in the body. Mirrors `com.apimarketplace.auth.dto.CeLinkHeartbeatRequest` (Java).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ceVersion"],
+  "properties": {
+    "ceVersion": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "description": "Current CE distribution version. Surfaces in `lastSeenCeVersion` on GET /mine and on the §1 #27 audit cadence rows."
+    }
+  },
+  "examples": [
+    {
+      "ceVersion": "1.4.0"
+    },
+    {
+      "ceVersion": "1.4.2"
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+-- Stage 5.1 - async COLD summary cache per conversation.
+--
+-- Purpose: the COLD zone of the token-weighted context (Stage 3) holds
+-- turns too old to fit in HOT/WARM but still referenced by later turns.
+-- Regenerating a structured JSON summary of those turns every time is
+-- expensive; we cache the most recent summary on the conversation row
+-- so subsequent turns splice it into the prompt without paying for
+-- a new summariser call.
+--
+-- Shape of summary_cold (written by ColdSummarizerService):
+-- {
+--   "decisions":        [{"turn": 12, "decision": "chose Fork over Split because ..."}],
+--   "ids_resolved":     {"workflow_name_a": "wf_abc123", "agent_foo": "ag_xyz"},
+--   "errors_resolved":  [{"error": "...", "resolution": "..."}],
+--   "user_intents":     ["build CRM workflow", "add webhook trigger"],
+--   "helped_actions":   ["agent.create", "workflow.save"],
+--   "generated_at":     "2026-04-20T12:00:00Z",
+--   "model":            "anthropic/claude-haiku-4-5",
+--   "cold_tokens_at_generation": 4820,
+--   "turns_covered":    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+-- }
+--
+-- Regeneration is gated by ColdSummaryGate (size > max(2k, 0.15 × model.cold_cap))
+-- AND cadence-or-keyword (5 new turns OR ColdSummaryInvalidationKeywords match).
+-- See CONTEXT_OPTIMIZATION_PLAN Stage 5.3.
+--
+-- Rollback path: Stage 5.5 flag-off (batched UPDATE SET summary_cold = NULL)
+-- keeps the column for forward-compat. A true schema rollback would be a
+-- separate forward-migration that DROPs the column.
+ALTER TABLE conversation.conversations
+  ADD COLUMN summary_cold jsonb DEFAULT NULL;

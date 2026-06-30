@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="a24bg" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#1E3A5F"/>
+      <stop offset="100%" stop-color="#142840"/>
+    </linearGradient>
+  </defs>
+  <circle cx="50" cy="50" r="50" fill="url(#a24bg)"/>
+  <!-- Drifting specks in depth -->
+  <g fill="#9FC4EA">
+    <circle cx="20" cy="25" r="0.8" opacity="0.2">
+      <animate attributeName="cx" values="20;34;20" dur="14s" repeatCount="indefinite"/>
+      <animate attributeName="cy" values="25;27;25" dur="5s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="72" cy="32" r="1" opacity="0.22">
+      <animate attributeName="cx" values="72;58;72" dur="17s" repeatCount="indefinite"/>
+      <animate attributeName="cy" values="32;34;32" dur="6s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="30" cy="60" r="0.7" opacity="0.18">
+      <animate attributeName="cx" values="30;44;30" dur="12s" repeatCount="indefinite"/>
+      <animate attributeName="cy" values="60;58;60" dur="4.5s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="78" cy="62" r="0.9" opacity="0.25">
+      <animate attributeName="cx" values="78;64;78" dur="20s" repeatCount="indefinite"/>
+      <animate attributeName="cy" values="62;64;62" dur="7s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="50" cy="80" r="0.8" opacity="0.2">
+      <animate attributeName="cx" values="50;36;50" dur="16s" repeatCount="indefinite"/>
+      <animate attributeName="cy" values="80;82;80" dur="5.5s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+  <!-- Deep intelligent round eyes -->
+  <ellipse cx="39" cy="42" rx="5" ry="6" fill="white" opacity="0.9">
+    <animate attributeName="ry" values="6;6;0.5;6;6" keyTimes="0;0.88;0.92;0.96;1" dur="5.5s" repeatCount="indefinite"/>
+  </ellipse>
+  <ellipse cx="61" cy="42" rx="5" ry="6" fill="white" opacity="0.9">
+    <animate attributeName="ry" values="6;6;0.5;6;6" keyTimes="0;0.88;0.92;0.96;1" dur="5.5s" repeatCount="indefinite"/>
+  </ellipse>
+  <!-- Confident knowing smile -->
+  <path d="M40,56 Q50,63 60,56" stroke="white" stroke-width="2" fill="none" stroke-linecap="round" opacity="0.8"/>
+</svg>

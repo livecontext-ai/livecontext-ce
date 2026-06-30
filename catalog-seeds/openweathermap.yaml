@@ -1,0 +1,152 @@
+openapi: "3.0.3"
+info:
+  title: OpenWeatherMap API
+  description: Access current weather data and 5-day forecasts for any location worldwide. Provides temperature, humidity, wind speed, and weather conditions.
+  version: "2.5"
+servers:
+  - url: https://api.openweathermap.org/data/2.5
+
+paths:
+  /weather:
+    get:
+      operationId: getCurrentWeather
+      summary: Get current weather
+      description: Returns current weather data for a city including temperature, humidity, wind, and conditions.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: "City name, optionally with state code and country code (e.g. London,uk)"
+          schema:
+            type: string
+        - name: units
+          in: query
+          required: false
+          description: Units of measurement
+          schema:
+            type: string
+            enum:
+              - standard
+              - metric
+              - imperial
+        - name: lang
+          in: query
+          required: false
+          description: Language code for weather descriptions
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Successful response with current weather data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  coord:
+                    type: object
+                    properties:
+                      lon:
+                        type: number
+                      lat:
+                        type: number
+                  weather:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                        main:
+                          type: string
+                        description:
+                          type: string
+                  main:
+                    type: object
+                    properties:
+                      temp:
+                        type: number
+                      feels_like:
+                        type: number
+                      humidity:
+                        type: integer
+                  wind:
+                    type: object
+                    properties:
+                      speed:
+                        type: number
+                      deg:
+                        type: integer
+                  name:
+                    type: string
+
+  /forecast:
+    get:
+      operationId: get5DayForecast
+      summary: Get 5-day weather forecast
+      description: Returns a 5-day forecast with 3-hour intervals for a city.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: "City name, optionally with state code and country code"
+          schema:
+            type: string
+        - name: units
+          in: query
+          required: false
+          description: Units of measurement
+          schema:
+            type: string
+            enum:
+              - standard
+              - metric
+              - imperial
+        - name: cnt
+          in: query
+          required: false
+          description: Number of forecast entries to return (max 40)
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Successful response with 5-day forecast data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cnt:
+                    type: integer
+                  list:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        dt:
+                          type: integer
+                        main:
+                          type: object
+                          properties:
+                            temp:
+                              type: number
+                            humidity:
+                              type: integer
+                        weather:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              main:
+                                type: string
+                              description:
+                                type: string
+                        dt_txt:
+                          type: string
+                  city:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      country:
+                        type: string

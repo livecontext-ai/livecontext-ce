@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="a20bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4AEDC4"/>
+      <stop offset="100%" stop-color="#2BC9A4"/>
+    </linearGradient>
+  </defs>
+  <circle cx="50" cy="50" r="50" fill="url(#a20bg)"/>
+  <!-- Float-up motes -->
+  <g fill="white">
+    <circle cx="22" cy="82" r="0.9" opacity="0">
+      <animate attributeName="cy" values="82;15" dur="7s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0;0.4;0.4;0" keyTimes="0;0.2;0.8;1" dur="7s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="35" cy="88" r="1.1" opacity="0">
+      <animate attributeName="cy" values="88;18" dur="9s" begin="1.2s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0;0.35;0.35;0" keyTimes="0;0.2;0.8;1" dur="9s" begin="1.2s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="48" cy="84" r="0.8" opacity="0">
+      <animate attributeName="cy" values="84;14" dur="6s" begin="0.5s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0;0.4;0.4;0" keyTimes="0;0.2;0.8;1" dur="6s" begin="0.5s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="58" cy="90" r="1" opacity="0">
+      <animate attributeName="cy" values="90;20" dur="8s" begin="2s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0;0.3;0.3;0" keyTimes="0;0.2;0.8;1" dur="8s" begin="2s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="70" cy="82" r="0.7" opacity="0">
+      <animate attributeName="cy" values="82;16" dur="7.5s" begin="3s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0;0.38;0.38;0" keyTimes="0;0.2;0.8;1" dur="7.5s" begin="3s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="78" cy="86" r="0.9" opacity="0">
+      <animate attributeName="cy" values="86;18" dur="9s" begin="0.8s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0;0.32;0.32;0" keyTimes="0;0.2;0.8;1" dur="9s" begin="0.8s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="28" cy="90" r="0.7" opacity="0">
+      <animate attributeName="cy" values="90;22" dur="6.5s" begin="2.5s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0;0.35;0.35;0" keyTimes="0;0.2;0.8;1" dur="6.5s" begin="2.5s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="65" cy="88" r="0.8" opacity="0">
+      <animate attributeName="cy" values="88;17" dur="8.5s" begin="4s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0;0.36;0.36;0" keyTimes="0;0.2;0.8;1" dur="8.5s" begin="4s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+  <!-- Bright round eyes -->
+  <ellipse cx="38" cy="43" rx="5.5" ry="6" fill="white" opacity="0.9">
+    <animate attributeName="ry" values="6;6;0.5;6;6" keyTimes="0;0.86;0.9;0.94;1" dur="4s" repeatCount="indefinite"/>
+  </ellipse>
+  <ellipse cx="62" cy="43" rx="5.5" ry="6" fill="white" opacity="0.9">
+    <animate attributeName="ry" values="6;6;0.5;6;6" keyTimes="0;0.86;0.9;0.94;1" dur="4s" repeatCount="indefinite"/>
+  </ellipse>
+  <!-- Joyful open mouth -->
+  <ellipse cx="50" cy="60" rx="7" ry="5" fill="white" fill-opacity="0.2" stroke="white" stroke-width="1.8" opacity="0.85"/>
+</svg>

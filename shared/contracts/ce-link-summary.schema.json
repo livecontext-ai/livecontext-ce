@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://livecontext.ai/contracts/ce-link-summary.schema.json",
+  "title": "CeLinkSummary",
+  "description": "One row of GET /api/ce-link/mine - the cloud-side cloud-link Phase 1 install registry as seen by the owner (doc/CLOUD_LINK_ONBOARDING.md §6). Mirrors `com.apimarketplace.auth.dto.CeLinkSummary` (Java record). Frontend renders this on /app/settings/cloud-link.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["installId", "status", "scopes", "createdAt"],
+  "properties": {
+    "installId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "label": {
+      "type": ["string", "null"],
+      "maxLength": 128
+    },
+    "status": {
+      "type": "string",
+      "enum": ["ACTIVE", "REVOKED"],
+      "description": "Mirror of the auth.ce_link.status CHECK constraint."
+    },
+    "scopes": {
+      "type": "string",
+      "maxLength": 256,
+      "description": "Comma-separated scope list (e.g. \"catalog,marketplace\")."
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "lastSeenAt": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "Last heartbeat timestamp. Null until the CE side has POSTed at least one heartbeat."
+    },
+    "lastSeenCeVersion": {
+      "type": ["string", "null"],
+      "maxLength": 32
+    }
+  },
+  "examples": [
+    {
+      "installId": "11111111-2222-3333-4444-555555555555",
+      "label": "Office desktop",
+      "status": "ACTIVE",
+      "scopes": "catalog,marketplace",
+      "createdAt": "2026-05-19T14:00:00Z",
+      "lastSeenAt": "2026-05-19T14:05:00Z",
+      "lastSeenCeVersion": "1.4.0"
+    },
+    {
+      "installId": "22222222-3333-4444-5555-666666666666",
+      "label": null,
+      "status": "ACTIVE",
+      "scopes": "catalog,marketplace",
+      "createdAt": "2026-05-19T13:50:00Z",
+      "lastSeenAt": null,
+      "lastSeenCeVersion": null
+    }
+  ]
+}

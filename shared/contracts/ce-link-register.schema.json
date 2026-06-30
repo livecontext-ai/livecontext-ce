@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://livecontext.ai/contracts/ce-link-register.schema.json",
+  "title": "CeLinkRegisterRequest",
+  "description": "Body of POST /api/ce-link/register. Sent by a CE install (cloud-link Phase 1, doc/CLOUD_LINK_ONBOARDING.md §3.2). Mirrors `com.apimarketplace.auth.dto.CeLinkRegisterRequest` (Java) and the TS request type. Keep all three in lockstep.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["installId", "ceVersion"],
+  "properties": {
+    "installId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Stable UUID generated CE-side at first launch. Becomes the auth.ce_link PK on the cloud."
+    },
+    "ceVersion": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "description": "CE distribution version (e.g. \"1.4.0\"). Stamped on the REGISTER audit row metadata."
+    },
+    "label": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "User-supplied display name for this install (\"My laptop\", \"Office server\"). Blank or omitted falls back to the default \"CE install\"."
+    }
+  },
+  "examples": [
+    {
+      "installId": "11111111-2222-3333-4444-555555555555",
+      "ceVersion": "1.4.0",
+      "label": "Office desktop"
+    },
+    {
+      "installId": "11111111-2222-3333-4444-555555555555",
+      "ceVersion": "1.4.0"
+    }
+  ]
+}

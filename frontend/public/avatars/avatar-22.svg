@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="a22bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6C7EB7"/>
+      <stop offset="100%" stop-color="#4E60A0"/>
+    </linearGradient>
+  </defs>
+  <circle cx="50" cy="50" r="50" fill="url(#a22bg)"/>
+  <!-- Shifting stars (4-point stars rotating and twinkling) -->
+  <g fill="white">
+    <g opacity="0.3" transform="translate(22,25)">
+      <polygon points="0,-3 0.7,-0.7 3,0 0.7,0.7 0,3 -0.7,0.7 -3,0 -0.7,-0.7">
+        <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="14s" repeatCount="indefinite"/>
+      </polygon>
+      <animate attributeName="opacity" values="0.2;0.45;0.2" dur="3.5s" repeatCount="indefinite"/>
+    </g>
+    <g opacity="0.25" transform="translate(78,22)">
+      <polygon points="0,-4 1,-1 4,0 1,1 0,4 -1,1 -4,0 -1,-1">
+        <animateTransform attributeName="transform" type="rotate" from="0" to="-360" dur="18s" repeatCount="indefinite"/>
+      </polygon>
+      <animate attributeName="opacity" values="0.25;0.4;0.3;0.2" dur="4.8s" repeatCount="indefinite"/>
+    </g>
+    <g opacity="0.35" transform="translate(18,70)">
+      <polygon points="0,-2.5 0.5,-0.5 2.5,0 0.5,0.5 0,2.5 -0.5,0.5 -2.5,0 -0.5,-0.5">
+        <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="12s" repeatCount="indefinite"/>
+      </polygon>
+      <animate attributeName="opacity" values="0.3;0.2;0.45;0.3" dur="5.5s" repeatCount="indefinite"/>
+    </g>
+    <g opacity="0.28" transform="translate(82,72)">
+      <polygon points="0,-3.5 0.9,-0.9 3.5,0 0.9,0.9 0,3.5 -0.9,0.9 -3.5,0 -0.9,-0.9">
+        <animateTransform attributeName="transform" type="rotate" from="0" to="-360" dur="20s" repeatCount="indefinite"/>
+      </polygon>
+      <animate attributeName="opacity" values="0.2;0.4;0.25" dur="4.2s" repeatCount="indefinite"/>
+    </g>
+    <g opacity="0.22" transform="translate(50,18)">
+      <polygon points="0,-2 0.4,-0.4 2,0 0.4,0.4 0,2 -0.4,0.4 -2,0 -0.4,-0.4">
+        <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="24s" repeatCount="indefinite"/>
+      </polygon>
+      <animate attributeName="opacity" values="0.2;0.45;0.2" dur="6.3s" repeatCount="indefinite"/>
+    </g>
+    <g opacity="0.3" transform="translate(50,85)">
+      <polygon points="0,-3 0.7,-0.7 3,0 0.7,0.7 0,3 -0.7,0.7 -3,0 -0.7,-0.7">
+        <animateTransform attributeName="transform" type="rotate" from="0" to="-360" dur="16s" repeatCount="indefinite"/>
+      </polygon>
+      <animate attributeName="opacity" values="0.35;0.2;0.45;0.3" dur="5s" repeatCount="indefinite"/>
+    </g>
+  </g>
+  <!-- Dreamy soft oval eyes -->
+  <ellipse cx="39" cy="44" rx="5.5" ry="5" fill="white" opacity="0.85">
+    <animate attributeName="ry" values="5;5;0.5;5;5" keyTimes="0;0.9;0.93;0.96;1" dur="6s" repeatCount="indefinite"/>
+  </ellipse>
+  <ellipse cx="61" cy="44" rx="5.5" ry="5" fill="white" opacity="0.85">
+    <animate attributeName="ry" values="5;5;0.5;5;5" keyTimes="0;0.9;0.93;0.96;1" dur="6s" repeatCount="indefinite"/>
+  </ellipse>
+  <!-- Soft gentle smile -->
+  <path d="M42,58 Q50,63 58,58" stroke="white" stroke-width="1.5" fill="none" stroke-linecap="round" opacity="0.7"/>
+</svg>

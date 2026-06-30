@@ -1,0 +1,121 @@
+# Node & package managers
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Next.js
+.next/
+.turbo/
+out/                 # si tu utilises `next export`
+
+# Build / TS caches
+dist/
+*.tsbuildinfo
+.eslintcache
+.cache/
+
+# Java / Maven
+target/
+*.class
+*.jar
+!**/src/main/**
+BOOT-INF/
+*.hprof
+*.jfr
+
+# Python (catalog migration tooling)
+__pycache__/
+*.pyc
+
+# Stray root build dir (orchestrator sources live in backend/orchestrator-service)
+/src/
+
+# Environnements locaux (garde un .env.example committe)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+deploy/.env.deploy
+
+# Outils / IDE
+.vscode/
+.idea/
+.claude/
+.claude_settings.json
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+**/logs/
+*.log
+
+# Vercel / autres
+.vercel/
+claude-dev.bat
+
+# Windows artifacts
+NUL
+nul
+*.stackdump
+
+# Playwright MCP screenshots
+.playwright-mcp/
+
+# Backup files
+*.bak
+
+# Test output artifacts
+test_split.txt
+test_nested*.txt
+test_result.txt
+test_err_full.txt
+test_full.txt
+test-results/
+frontend/test-results/
+frontend/playwright-report/
+frontend/e2e/.auth/
+
+# Runtime upload dirs created by storage-service / publication-client / trigger-client
+# integration tests - populated on test runs, never committed.
+backend/*/uploads/
+
+# Local dev scratch (heap dumps, deploy logs, ws-events captures, systemd unit edits)
+tmp/
+
+# Per-session test-run logs (worktree scratch, never committed)
+.testlogs/
+
+# JWT signing keys - generated at first boot (JwtKeyPairManager / ce-entrypoint.sh).
+# A real private key was historically committed here; never commit key material.
+backend/monolith-service/data/keys/*.key
+
+# Local TLS-interception CA for Docker builds (per-machine, see monolith Dockerfile)
+backend/build-ca.pem
+
+# Root-level dev scratch - one-off analysis scripts, API/response dumps, test
+# screenshots, prod backfill/e2e SQL, foreign-code backups. Regenerated locally,
+# never committed (removed wholesale in chore/repo-clutter-cleanup). Anchored to the
+# repo root so legitimate same-named files under scripts/ etc. stay tracked.
+/analyze_*.py
+/final_analysis.py
+/final_report.py
+/jit_feasibility.py
+/help_form.json
+/marketplace-response.json
+/avatar-response-body.bin
+/avatar-user-*.png
+/otter.png
+/seal.png
+/mcp_image_*.png
+/backfill_*.sql
+/delete_nonnumeric_orphans.sql
+/e2e-epoch-refresh.sql
+/.claude_e2e_*.sql
+/audit/

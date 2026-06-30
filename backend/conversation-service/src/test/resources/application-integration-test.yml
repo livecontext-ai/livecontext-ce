@@ -1,0 +1,67 @@
+# Integration Test Configuration - Conversation Service
+# Uses H2 in-memory database with PostgreSQL compatibility mode
+spring:
+  main:
+    allow-bean-definition-overriding: true
+  datasource:
+    url: jdbc:h2:mem:integrationdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;MODE=PostgreSQL;INIT=CREATE SCHEMA IF NOT EXISTS conversation\;CREATE SCHEMA IF NOT EXISTS storage
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+        default_schema: conversation
+  flyway:
+    enabled: false
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisReactiveAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+# Mock mode for integration tests
+mock:
+  mode: true
+  streaming:
+    enabled: false
+
+# Conversation Agent configuration (disabled for integration tests)
+conversation:
+  agent:
+    enabled: false
+
+# AI Agent Configuration (disabled for integration tests)
+ai:
+  agent:
+    default-provider: openai
+    default-model: gpt-5-mini
+
+# Stream TTL configuration
+stream:
+  ttl:
+    timeout-minutes: 1
+    cleanup-days: 1
+    scan-interval-minutes: 999
+
+# Rate limit disabled for integration tests
+rate-limit:
+  enabled: false
+
+# Disable gateway HMAC verification for integration tests
+gateway:
+  filter:
+    verification-enabled: false
+
+logging:
+  level:
+    com.apimarketplace: DEBUG

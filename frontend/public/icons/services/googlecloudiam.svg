@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- White background -->
+  <rect width="256" height="256" fill="#ffffff"/>
+
+  <!-- Shield shape in Google Blue (#4285F4) -->
+  <path d="M128 24 L208 56 L208 128 C208 174 172 212 128 228 C84 212 48 174 48 128 L48 56 Z"
+        fill="#4285F4"/>
+
+  <!-- Inner shield highlight (lighter blue) -->
+  <path d="M128 44 L192 70 L192 128 C192 166 164 198 128 212 C92 198 64 166 64 128 L64 70 Z"
+        fill="#5a95f5"/>
+
+  <!-- Key body (horizontal bar) -->
+  <rect x="104" y="122" width="68" height="18" rx="9" fill="#ffffff"/>
+
+  <!-- Key head (circle) -->
+  <circle cx="96" cy="131" r="22" fill="#ffffff"/>
+  <circle cx="96" cy="131" r="14" fill="#4285F4"/>
+
+  <!-- Key teeth -->
+  <rect x="148" y="140" width="10" height="10" rx="2" fill="#ffffff"/>
+  <rect x="164" y="140" width="10" height="10" rx="2" fill="#ffffff"/>
+
+  <!-- Lock shackle arc -->
+  <path d="M112 108 A22 22 0 0 1 154 108" stroke="#ffffff" stroke-width="10" fill="none" stroke-linecap="round"/>
+
+  <!-- Lock body -->
+  <rect x="100" y="118" width="66" height="46" rx="6" fill="#ffffff"/>
+
+  <!-- Lock keyhole -->
+  <circle cx="133" cy="135" r="8" fill="#4285F4"/>
+  <rect x="129" y="140" width="8" height="12" rx="2" fill="#4285F4"/>
+</svg>

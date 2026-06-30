@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="a28bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F472B6"/>
+      <stop offset="100%" stop-color="#DB2777"/>
+    </linearGradient>
+  </defs>
+  <circle cx="50" cy="50" r="50" fill="url(#a28bg)"/>
+  <!-- Swelling radials: 4 soft circles at compass positions, scaling and fading on different cycles -->
+  <g>
+    <circle cx="50" cy="14" r="8" fill="white" opacity="0.1">
+      <animate attributeName="r" values="6;10;6" dur="5s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.08;0.14;0.08" dur="5s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="86" cy="50" r="7" fill="white" opacity="0.12">
+      <animate attributeName="r" values="5;9;5" dur="4s" begin="-1s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.1;0.14;0.1" dur="4s" begin="-1s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="50" cy="86" r="8" fill="white" opacity="0.11">
+      <animate attributeName="r" values="6;10;6" dur="6s" begin="-2s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.09;0.13;0.09" dur="6s" begin="-2s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="14" cy="50" r="7" fill="white" opacity="0.1">
+      <animate attributeName="r" values="5;9;5" dur="7s" begin="-3s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.08;0.13;0.08" dur="7s" begin="-3s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+  <!-- Huge cute eyes (biggest of all avatars) -->
+  <ellipse cx="37" cy="42" rx="7" ry="7.5" fill="white" opacity="0.9">
+    <animate attributeName="ry" values="7.5;7.5;0.5;7.5;7.5" keyTimes="0;0.86;0.9;0.94;1" dur="4s" repeatCount="indefinite"/>
+  </ellipse>
+  <ellipse cx="63" cy="42" rx="7" ry="7.5" fill="white" opacity="0.9">
+    <animate attributeName="ry" values="7.5;7.5;0.5;7.5;7.5" keyTimes="0;0.86;0.9;0.94;1" dur="4s" repeatCount="indefinite"/>
+  </ellipse>
+  <!-- Wide cheerful smile -->
+  <path d="M35,58 Q50,72 65,58" stroke="white" stroke-width="2.2" fill="none" stroke-linecap="round" opacity="0.85"/>
+</svg>

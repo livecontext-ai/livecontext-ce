@@ -1,0 +1,10 @@
+{
+  "__harness_directives": {
+    "comment": "Drives the schedule trigger 3 times in rapid succession. The harness invokes ReusableTriggerService.fire(...) three times with these timestamps. Each fire opens a new epoch on the trigger's DagState; epoch reset is deferred until the prior epoch completes. Run reaches WAITING_TRIGGER after the last work step completes (no phantom epoch lingers).",
+    "fires": [
+      { "fireAt": "2026-05-07T09:00:00Z" },
+      { "fireAt": "2026-05-07T09:05:00Z" },
+      { "fireAt": "2026-05-07T09:10:00Z" }
+    ]
+  }
+}

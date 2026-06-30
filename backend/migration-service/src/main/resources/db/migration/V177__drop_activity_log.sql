@@ -1,0 +1,27 @@
+-- V177: Drop the orchestrator.activity_log table.
+--
+-- Context: the right-side-panel ActivityFeed UI was deleted on 2026-05-08
+-- along with its full backend stack: read endpoint (ActivityController),
+-- write endpoint (InternalActivityController), domain (ActivityLogEntity +
+-- ActivityLogRepository), service (ActivityLogService), and the cross-service
+-- write client (datasource-service ActivityLogClient). The 3 in-process
+-- writers in orchestrator-service (WorkflowRunPersistenceService,
+-- WorkflowManagementService, WorkflowPersistenceService) had their
+-- activityLogService.log* calls stripped in the same change.
+--
+-- With zero readers and zero writers, the table is dead data. Dropping it
+-- frees ~storage that scales with workflow + table CRUD volume historically
+-- (one row per workflow created/updated/executed + per table created/updated/
+-- deleted) and removes a cross-service coupling point that no longer exists.
+--
+-- Atomicity: Postgres supports transactional DDL. Flyway runs each migration
+-- in a single transaction; if DROP fails the migration aborts cleanly.
+--
+-- Recovery: this is destructive - the audit-trail rows are not preserved.
+-- If forensic access to historical activity is required, it must be done
+-- BEFORE this migration runs (e.g. pg_dump of orchestrator.activity_log on
+-- the previous schema). No `IF EXISTS` cushion: any deployment ordering bug
+-- that runs V177 against a schema that already lost the table is a real
+-- migration drift and should fail loudly.
+
+DROP TABLE orchestrator.activity_log;

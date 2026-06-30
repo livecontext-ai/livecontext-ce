@@ -1,0 +1,229 @@
+spring:
+  application:
+    name: catalog-service
+  
+  datasource:
+    url: jdbc:postgresql://localhost:5432/apimarketplace?currentSchema=catalog
+    username: postgres
+    password: postgres
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      # Connection pool settings.
+      # Prod profile uses 30 (audit 2026-05-13: peak active = 4/h, mean ~0.5; was 100,
+      # overcommitting backend conns). Override per-env via CATALOG_HIKARI_MAX if a
+      # parallel re-import campaign needs more head-room (catalog-service-import opens
+      # its own pool, this is for runtime traffic only).
+      maximum-pool-size: ${CATALOG_HIKARI_MAX:30}
+      minimum-idle: 10
+      connection-timeout: 60000
+      idle-timeout: 600000
+      max-lifetime: 1200000  # 20 minutes (shorter than default 30min)
+      leak-detection-threshold: 60000
+      
+      # Connection validation
+      connection-test-query: SELECT 1
+      validation-timeout: 5000
+      
+      # PostgreSQL specific settings
+      data-source-properties:
+        socketTimeout: 120
+        loginTimeout: 30
+        connectTimeout: 30
+        tcpKeepAlive: true
+        applicationName: catalog-service
+  
+  
+  jpa:
+    hibernate:
+      ddl-auto: none
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+        default_schema: catalog
+        jdbc:
+          time_zone: UTC
+          lob:
+            non_contextual_creation: true
+
+  jackson:
+    time-zone: UTC
+    serialization:
+      write-dates-as-timestamps: false
+
+  flyway:
+    enabled: false
+
+# Credential encryption (AES-256)
+credential:
+  encryption:
+    password: ${CREDENTIAL_ENCRYPTION_PASSWORD:}
+    salt: ${CREDENTIAL_ENCRYPTION_SALT:}
+
+# Gateway authentication filter - prevents X-User-ID spoofing via direct access
+gateway:
+  filter:
+    secret-key: ${GATEWAY_SECRET_KEY:}
+    verification-enabled: ${GATEWAY_VERIFICATION_ENABLED:true}
+    public-paths:
+      - /health
+      - /actuator
+      - /api/internal/
+      - /api/agent-tools        # Backend-to-backend: conversation/agent-service fetch & execute catalog tool
+      - /api/tools              # Backend-to-backend: orchestrator searches/executes tools
+      - /api/catalog            # Backend-to-backend: orchestrator fetches tool info
+      - /api/v1                 # Backend-to-backend: orchestrator fetches tool schemas
+      - /catalog/v1             # Backend-to-backend: orchestrator executes tools
+      - /api/tool-responses     # Backend-to-backend: orchestrator fetches default responses
+      - /api/mcp                # Backend-to-backend: MCP tool operations
+      - /api/tool-categories    # Backend-to-backend: tool category lookups
+      - /api/apis               # Backend-to-backend: API listings
+
+services:
+  orchestrator-url: ${ORCHESTRATOR_SERVICE_URL:http://localhost:8099}
+  auth-service:
+    url: ${AUTH_SERVICE_URL:http://localhost:8083}
+
+http:
+  client:
+    connect-timeout: 5000
+    read-timeout: 600000
+
+# Configuration des tâches planifiees
+scheduling:
+  server-monitoring-interval: 30000  # 30 secondes
+  tool-score-update-interval: 60000   # 1 minute
+  tool-discovery-interval: 300000     # 5 minutes
+  server-cleanup-interval: 300000     # 5 minutes
+
+# Configuration du serveur
+server:
+  port: 8081
+
+# Configuration des logs
+logging:
+  level:
+    root: INFO
+    com.apimarketplace.catalog: INFO
+    org.springframework.scheduling: INFO
+    org.springframework.data.jdbc: INFO
+    org.springframework.jdbc: INFO
+    org.springframework.web: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%logger{36}] - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%logger{36}] - %msg%n"
+  file:
+    name: logs/catalog-service.log
+
+# Configuration des metriques
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      slo:
+        http.server.requests: 100ms, 500ms, 1s, 3s, 5s
+
+# Configuration AI pour mapping et descriptions
+ai:
+  mapping:
+    enabled: true
+    provider: deepinfra  # Using DeepInfra for AI mapping
+    deepinfra:
+      token: ${DEEPINFRA_TOKEN:}  # Token d'API DeepInfra (defini via variable d'environnement)
+      url: https://api.deepinfra.com/v1/openai/chat/completions
+      model: Qwen/Qwen2.5-72B-Instruct
+      # Parametres DeTERMINISTES pour la generation de mapping
+      temperature: 0.0           # Temperature ZeRO pour maximum de deterministe
+      top_p: 0.9                # Top-p plus restrictif pour coherence
+      top_k: 40                  # Top-k plus bas pour moins de variabilite
+      max_tokens: 8192           # Tokens de sortie augmentes pour les mappings
+      stop_sequences: ""         # Pas de sequences d'arret
+      presence_penalty: 0.0      # Pas de penalite de presence
+      frequency_penalty: 0.0     # Pas de penalite de frequence
+      seed: 42                   # Graine fixe pour reproductibilite
+      max_steps: 1               # Une seule etape
+      # Configuration pour forcer le JSON strict
+      force_json_response: true  # Force la reponse en JSON pur
+      json_mode: true            # Active le mode JSON strict
+      response_format: "json_object"  # Format de reponse JSON
+      system_prompt_override: true    # Utilise un prompt systeme personnalise
+      # Limite de taille du prompt
+      max_prompt_length: 50000   # Taille maximale du prompt pour mapping
+      context:
+        window-size: 32768        # Fenetre de contexte plus petite pour mapping
+        max-tokens: 60048         # Tokens de sortie limites
+        array-sample-size: 1     # echantillonnage minimal pour coherence
+        max-file-size: 300000     # 30MB max pour mapping
+        chunk-size: 512          # Chunks plus petits
+        preserve-structure: true # Preserver la structure JSON
+        max-string-length: 50    # Strings plus courtes pour mapping
+        min-occurrences-for-reference: 3  # Plus strict
+        min-length-for-reference: 50     # Plus long
+  
+  # Configuration pour la generation de descriptions (plus creative)
+  description:
+    enabled: true
+    provider: deepinfra
+    deepinfra:
+      token: ${DEEPINFRA_TOKEN:}
+      url: https://api.deepinfra.com/v1/openai/chat/completions
+      model: Qwen/Qwen2.5-72B-Instruct
+      # Parametres CReATIFS pour la generation de descriptions
+      temperature: 0.3           # Temperature moderee pour creativite
+      top_p: 0.9                 # Top-p plus ouvert pour diversite
+      top_k: 50                  # Top-k standard
+      max_tokens: 1024           # Tokens de sortie pour descriptions
+      stop_sequences: ""         # Pas de sequences d'arret
+      presence_penalty: 0.0      # Pas de penalite de presence
+      frequency_penalty: 0.1     # Legere penalite de frequence
+      seed: 0                    # Graine aleatoire pour variete
+      max_steps: 1               # Une seule etape
+      context:
+        window-size: 4096        # Fenetre de contexte standard
+        max-tokens: 1024         # Tokens de sortie pour descriptions
+        array-sample-size: 2     # echantillonnage standard
+        max-file-size: 20000     # 20KB max pour descriptions
+        chunk-size: 1024         # Chunks standards
+        preserve-structure: true # Preserver la structure
+        max-string-length: 200   # Strings plus longues pour descriptions
+
+# Configuration for search ranking
+search:
+  auto-pick:
+    margin-ratio: 1.3              # Top result must be 30% better than second
+    min-score: 0.015               # Minimum score for auto-pick
+  reranking:
+    enabled: true
+    top-k: 20                      # Number of candidates to rerank
+    model: cross-encoder           # Reranking model type
+  query-understanding:
+    enabled: true
+    extract-hints: true            # Auto-extract provider/action/resource from query
+
+# Redis configuration for distributed caching
+spring.data.redis:
+  host: ${REDIS_HOST:localhost}
+  port: ${REDIS_PORT:6379}
+  timeout: 5000ms
+  lettuce:
+    pool:
+      max-active: 50
+      max-idle: 10
+      min-idle: 2
+
+# Cache TTL configuration (in minutes)
+cache:
+  ttl:
+    mcp-servers: 5        # MCP server discovery cache
+    tool-schemas: 60      # Tool schema cache (1 hour)
+    server-health: 5      # Server health status
+    rate-limit-window: 1  # Rate limiting sliding window

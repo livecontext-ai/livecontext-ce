@@ -1,0 +1,20 @@
+LiveContext Community Edition
+Copyright (c) 2026 LiveContext
+
+This product is licensed under the LiveContext Sustainable Use License 1.0
+(see LICENSE).
+
+This product includes open-source software developed by third parties.
+Each dependency is governed by its own license, declared in its package
+metadata (Maven POMs under backend/, package.json files under frontend/
+and mcp/). Notable runtime components:
+
+  - Spring Boot and the Spring ecosystem (Apache-2.0)
+  - Next.js and React (MIT)
+  - PostgreSQL JDBC driver (BSD-2-Clause)
+  - Flyway Community (Apache-2.0)
+  - MinIO client SDK (Apache-2.0)
+
+"LiveContext" and the LiveContext logo are trademarks of LiveContext.
+This NOTICE file is for attribution purposes and does not modify the
+LICENSE terms.

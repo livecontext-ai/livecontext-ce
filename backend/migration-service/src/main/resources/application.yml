@@ -1,0 +1,75 @@
+server:
+  port: 8084
+
+spring:
+  main:
+    web-application-type: none
+  application:
+    name: migration-service
+  datasource:
+    # `options=-c lc.migration.source_timezone=UTC` is required by V196 (the
+    # TIMESTAMP→TIMESTAMPTZ promotion migration). V196 fail-fasts if the GUC
+    # isn't set - it's the operator's contract that confirms "yes, the bare
+    # timestamps stored in this DB were written by a UTC host." Both app-host
+    # (JVM) and db-host (Postgres) have always run with TZ=UTC, so UTC is the
+    # correct value here; override via JDBC URL or PGOPTIONS env if restoring
+    # from a non-UTC backup. Without this option Flyway aborts at V196 and
+    # every subsequent migration (V197+) is blocked.
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:apimarketplace}?currentSchema=orchestrator&options=-c%20lc.migration.source_timezone%3DUTC
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 5
+      minimum-idle: 1
+      connection-timeout: 30000
+      # PR13 belt-and-braces (2026-05-12): set the GUC once per physical
+      # connection creation (Hikari's `connectionInitSql` semantic - NOT
+      # per logical acquire), in addition to the JDBC URL `options=...` (libpq-level, server-side
+      # at session start) and the Java ALTER DATABASE startup hook (DB-level,
+      # affects future sessions). Defense in depth - if either of the other two
+      # paths drops the GUC silently (env-var override drops options=, or hook
+      # runs after Hikari pre-warms minimum-idle connections), this SET catches
+      # it because Hikari runs connection-init-sql on EVERY pooled connection,
+      # including the pre-warmed ones. The bare `SET … = …` is safe at session
+      # level even in PgBouncer transaction-pool mode because migration-service
+      # bypasses PgBouncer entirely (deploy-direct.sh routes it to port 5432).
+      connection-init-sql: "SET lc.migration.source_timezone = 'UTC'"
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    # CRITICAL: baseline at 0, not the default 1. Otherwise Flyway treats V1 as
+    # already applied (because the OTHER schemas in `schemas:` may be non-empty
+    # on first run) and silently skips V1__create_orchestrator_schema.sql, which
+    # creates orchestrator.node_type_documentation. V11 then fails when it tries
+    # to seed that table.
+    baseline-version: 0
+    ignore-missing-migrations: true
+    # V74.1 is a historical backfill for pgvector schema placement. It must run
+    # on databases that already applied V75+ as well as on fresh installs.
+    out-of-order: true
+    # mixed=true allows a single migration to interleave transactional DDL/DML
+    # (ALTER, UPDATE) with non-transactional CONCURRENTLY operations under the
+    # per-migration `-- flyway:executeInTransaction=false` marker. Without this
+    # toggle Flyway aborts those files at parse time even though each statement
+    # is individually valid (V204 PR18: ADD COLUMN + UPDATE + CREATE INDEX
+    # CONCURRENTLY in one file). Migration-service is the only Flyway runner in
+    # the stack so the broader implication is contained.
+    mixed: true
+    # CREATE INDEX CONCURRENTLY waits for older transaction snapshots. Flyway's
+    # default PostgreSQL transactional advisory lock keeps an idle transaction
+    # open during the migration and can block its own concurrent indexes.
+    postgresql:
+      transactional-lock: false
+    locations: classpath:db/migration
+    schemas: orchestrator, storage, agent, "trigger", interface, publication, auth, datasource, catalog, conversation
+    default-schema: orchestrator
+    table: flyway_schema_history_orchestrator
+
+logging:
+  level:
+    org.flywaydb: INFO
+    com.apimarketplace.migration: INFO
+  file:
+    name: logs/migration-service.log
+

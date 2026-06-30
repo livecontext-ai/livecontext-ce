@@ -1,0 +1,12 @@
+-- ============================================================================
+-- V372: Per-agent inactivity watchdog window (seconds).
+--
+-- Mirrors execution_timeout (V5). The inactivity watchdog stops an agent that
+-- produces NO token/tool activity for this long with AgentStopReason.INACTIVITY_TIMEOUT,
+-- independently of execution_timeout (the total wall-clock cap).
+--
+-- NULL  => platform default (5 minutes).
+-- 0     => disabled for this agent.
+-- 10-7200 => custom window in seconds.
+-- ============================================================================
+ALTER TABLE agent.agents ADD COLUMN IF NOT EXISTS inactivity_timeout INTEGER;

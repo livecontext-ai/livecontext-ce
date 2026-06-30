@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Background rounded rect: AWS dark navy -->
+  <rect width="256" height="256" rx="40" ry="40" fill="#232F3E"/>
+
+  <!-- Database cylinder body (bottom ellipse fill) -->
+  <ellipse cx="128" cy="172" rx="52" ry="14" fill="#8A1A96"/>
+  <!-- Database cylinder side -->
+  <rect x="76" y="98" width="104" height="74" fill="#C925D1"/>
+  <!-- Database cylinder top ellipse -->
+  <ellipse cx="128" cy="98" rx="52" ry="14" fill="#E040FB"/>
+
+  <!-- Second (middle) cylinder ring -->
+  <ellipse cx="128" cy="128" rx="52" ry="14" fill="#8A1A96"/>
+  <ellipse cx="128" cy="128" rx="52" ry="14" fill="none" stroke="#E040FB" stroke-width="2"/>
+
+  <!-- Top ellipse highlight stroke -->
+  <ellipse cx="128" cy="98" rx="52" ry="14" fill="none" stroke="#F3A8FF" stroke-width="2"/>
+
+  <!-- SQL / query lightning bolt symbol centered -->
+  <!-- Bolt: top-right to center-left to bottom-right -->
+  <polygon
+    points="138,62  116,118  132,118  118,158  152,100  134,100"
+    fill="#FFFFFF"
+    opacity="0.95"
+  />
+</svg>

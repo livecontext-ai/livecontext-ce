@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="a19bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#C2A878"/>
+      <stop offset="100%" stop-color="#A68B5B"/>
+    </linearGradient>
+    <clipPath id="a19clip">
+      <circle cx="50" cy="50" r="50"/>
+    </clipPath>
+  </defs>
+  <circle cx="50" cy="50" r="50" fill="url(#a19bg)"/>
+  <!-- Strokes: thin calligraphic curves drifting diagonally -->
+  <g clip-path="url(#a19clip)">
+    <path d="M12,28 Q40,18 72,38" fill="none" stroke="white" stroke-width="0.9" stroke-linecap="round" opacity="0.15">
+      <animateTransform attributeName="transform" type="translate" values="0,0;4,-2;0,0;-3,2;0,0" dur="13s" repeatCount="indefinite"/>
+    </path>
+    <path d="M20,75 Q50,68 88,82" fill="none" stroke="white" stroke-width="0.8" stroke-linecap="round" opacity="0.15">
+      <animateTransform attributeName="transform" type="translate" values="0,0;-4,3;0,0;3,-2;0,0" dur="11s" repeatCount="indefinite"/>
+    </path>
+    <path d="M14,55 Q35,42 62,58 Q80,66 90,52" fill="none" stroke="white" stroke-width="0.7" stroke-linecap="round" opacity="0.15">
+      <animateTransform attributeName="transform" type="translate" values="0,0;3,2;0,0;-2,-3;0,0" dur="14s" repeatCount="indefinite"/>
+    </path>
+  </g>
+  <!-- Tiny dot eyes -->
+  <circle cx="42" cy="46" r="3" fill="white" opacity="0.8">
+    <animate attributeName="r" values="3;3;0.3;3;3" keyTimes="0;0.92;0.94;0.96;1" dur="8s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="58" cy="46" r="3" fill="white" opacity="0.8">
+    <animate attributeName="r" values="3;3;0.3;3;3" keyTimes="0;0.92;0.94;0.96;1" dur="8s" repeatCount="indefinite"/>
+  </circle>
+  <!-- Barely-there peaceful smile -->
+  <path d="M45,57 Q50,60 55,57" stroke="white" stroke-width="1.2" fill="none" stroke-linecap="round" opacity="0.5"/>
+</svg>

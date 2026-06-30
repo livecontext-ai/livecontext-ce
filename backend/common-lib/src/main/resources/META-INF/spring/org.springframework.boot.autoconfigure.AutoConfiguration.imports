@@ -1,0 +1,8 @@
+com.apimarketplace.common.web.GatewayWebAutoConfiguration
+com.apimarketplace.common.web.AppEditionAutoConfiguration
+com.apimarketplace.common.web.CommonAsyncConfig
+com.apimarketplace.common.event.RedisEventBusConfiguration
+com.apimarketplace.common.event.EventBusAutoConfiguration
+com.apimarketplace.common.scaling.redis.RedisScalingConfiguration
+com.apimarketplace.common.scaling.ScalingAutoConfiguration
+com.apimarketplace.common.analytics.PostHogAutoConfiguration

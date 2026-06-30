@@ -1,0 +1,10 @@
+<svg role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <title>Etherscan</title>
+  <!-- Ethereum diamond mark (official Ethereum logo, used by Etherscan) -->
+  <path fill="#343434" d="M11.944 0l-.254.826v15.962l.254.252 11.64-6.875z"/>
+  <path fill="#8C8C8C" d="M11.944 0L.302 10.165l11.642 6.875V0z"/>
+  <path fill="#3C3C3B" d="M11.944 17.97l-.143.176v6.65l.143.204 11.644-16.391z"/>
+  <path fill="#8C8C8C" d="M11.944 25V17.97L.3 10.673z"/>
+  <path fill="#141414" d="M11.944 16.04l11.638-6.875-11.638-5.295z"/>
+  <path fill="#393939" d="M.302 9.165l11.642 6.875V4.87z"/>
+</svg>

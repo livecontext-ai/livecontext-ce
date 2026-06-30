@@ -1,0 +1,91 @@
+server:
+  port: 8092
+
+spring:
+  application:
+    name: publication-service
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:apimarketplace}?currentSchema=publication
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 20000
+      idle-timeout: 300000
+      max-lifetime: 600000
+  jpa:
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        default_schema: publication
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: false
+  jackson:
+    time-zone: UTC
+    serialization:
+      write-dates-as-timestamps: false
+
+gateway:
+  filter:
+    secret-key: ${GATEWAY_SECRET_KEY:}
+    verification-enabled: ${GATEWAY_VERIFICATION_ENABLED:true}
+    public-paths:
+      - /health
+      - /actuator
+      - /api/internal/
+      - /api/public/
+
+# Cloud-only feature: admin-curated marketplace highlights. CE distributions
+# leave this unset (or false) -> the admin controller bean is not loaded
+# (404 on /api/publications/admin/highlights/**) and the public read endpoint
+# returns an empty array (the table stays empty since no admin can write).
+marketplace:
+  curation:
+    admin-enabled: ${MARKETPLACE_CURATION_ADMIN_ENABLED:false}
+  # Cloud-side CE marketplace endpoints (/api/ce-marketplace/**, CeDownloadController):
+  # free-snapshot download + acquire-with-auth paid purchase billed as
+  # MARKETPLACE_PURCHASE on the linked cloud account. Cloud is the implicit
+  # default profile -> ON by default here. CE monoliths run marketplace.mode=remote
+  # and CONSUME these endpoints from the cloud - they must not serve them
+  # (application-ce.yml pins this to false).
+  ce-download:
+    enabled: ${MARKETPLACE_CE_DOWNLOAD_ENABLED:true}
+
+# Plan-based resource limits (publication/shared-link quotas per plan). Kill-switch:
+# false = NO quota enforcement (CE sets it false in application-ce.yml). MUST stay
+# true in cloud prod; pinned in values-prod.yaml (services.publication.env). See the project docs.
+plan-limits:
+  enabled: ${PLAN_LIMITS_ENABLED:true}
+
+services:
+  orchestrator-url: ${ORCHESTRATOR_SERVICE_URL:http://localhost:8099}
+  agent-url: ${AGENT_SERVICE_URL:http://localhost:8090}
+  interface-url: ${INTERFACE_SERVICE_URL:http://localhost:8089}
+  datasource-url: ${DATASOURCE_SERVICE_URL:http://localhost:8088}
+  storage-url: ${STORAGE_SERVICE_URL:http://localhost:8082}
+  auth-service:
+    url: ${AUTH_SERVICE_URL:http://localhost:8083}
+
+# Marketplace showcase file proxy signing. Shared HMAC secret with storage-service.
+# Same env var on both services - drift would silently break every marketplace card.
+storage:
+  showcase:
+    hmac-secret: ${STORAGE_SHOWCASE_HMAC_SECRET:}
+
+logging:
+  file:
+    name: logs/publication-service.log
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: always

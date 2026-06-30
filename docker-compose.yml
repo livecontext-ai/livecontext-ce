@@ -1,0 +1,274 @@
+# LiveContext Community Edition: Docker Compose (prebuilt images)
+# Usage:
+#   git clone https://github.com/livecontext-ai/livecontext-ce
+#   cd livecontext-ce
+#   docker compose up -d
+#   Open http://localhost:3000
+#
+# This compose PULLS prebuilt images from GHCR (no local build). The image tag is
+# pinned to this release, so a clone always runs the matching version.
+#
+# Configuration (cloud connection, SMTP, ports): copy docker/.env.ce.example to
+# docker/.env.ce and pass it with `--env-file docker/.env.ce`. For agents to run, connect
+# to LiveContext Cloud (recommended) or add your own OpenAI/Anthropic/Google key in the app.
+#
+# Ports (override via env or --env-file):
+#   FRONTEND_PORT=3000   (the app; open http://localhost:3000)
+#   BACKEND_PORT=8080    (the API the browser talks to, e.g. WebSocket)
+# NOTE: the web UI bakes the API URL at build time as http://localhost:8080. If you change
+# BACKEND_PORT you must rebuild the frontend image (see docker/README-CE.md).
+#
+# No Keycloak required: CE uses embedded auth (email/password).
+
+name: livecontext-ce
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: livecontext-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: livecontext
+      POSTGRES_USER: ${DB_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+    volumes:
+      - livecontext_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  redis:
+    image: redis:7-alpine
+    container_name: livecontext-redis
+    restart: unless-stopped
+    volumes:
+      - livecontext_redis:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+
+  minio:
+    image: minio/minio:latest
+    container_name: livecontext-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - livecontext_minio:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: livecontext-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set myminio http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin};
+      mc mb myminio/workflow-files --ignore-existing;
+      echo 'Bucket workflow-files ready';
+      exit 0;
+      "
+    restart: "no"
+
+  bridge:
+    image: ghcr.io/livecontext-ai/livecontext-ce-bridge:v0.1.0
+    container_name: livecontext-bridge
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      PORT: 8093
+      REDIS_URL: redis://redis:6379
+      AGENT_CLI_URL: http://livecontext:8080
+      CONVERSATION_SERVICE_URL: http://livecontext:8080
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8093/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  livecontext:
+    image: ghcr.io/livecontext-ai/livecontext-ce:v0.1.0
+    container_name: livecontext-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      bridge:
+        condition: service_healthy
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    environment:
+      PORT: 8080
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: livecontext
+      DB_USERNAME: ${DB_USERNAME:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: ${JWT_SECRET:-}
+      # Encryption: auto-generated on first boot and persisted to the livecontext_keys
+      # volume if left empty. See docker/.env.ce.example.
+      CREDENTIAL_ENCRYPTION_PASSWORD: ${CREDENTIAL_ENCRYPTION_PASSWORD:-}
+      CREDENTIAL_ENCRYPTION_SALT: ${CREDENTIAL_ENCRYPTION_SALT:-}
+      # S3 / MinIO
+      STORAGE_S3_ENDPOINT: http://minio:9000
+      STORAGE_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      STORAGE_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      STORAGE_S3_BUCKET: workflow-files
+      STORAGE_SHOWCASE_HMAC_SECRET: ${STORAGE_SHOWCASE_HMAC_SECRET:-}
+      # Bridge (CLI adapters + MCP tools)
+      BRIDGE_ENABLED: "true"
+      BRIDGE_SERVICE_URL: "http://bridge:8093"
+      # Browser agent (agent_browse) - OFF by default. Opt in with the
+      # `browser-agent` profile + WEBSEARCH_ENABLED=true (both set by
+      # docker/.env.ce.browser-agent). When enabled, the orchestrator talks to
+      # the `websearch` container below; the model is whatever the agent node
+      # picks (default gemini 3.1 flash), with the install's Google/Gemini key
+      # injected per browse job.
+      WEBSEARCH_ENABLED: ${WEBSEARCH_ENABLED:-false}
+      WEBSEARCH_SERVICE_URL: "http://websearch:8085"
+      WEBSEARCH_CALLBACK_BASE_URL: "http://livecontext:8080"
+      # LLM API keys (at least one required for agent execution)
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      # OAuth2 redirect URLs (for end-user credential connections)
+      OAUTH2_FRONTEND_URL: "http://localhost:${FRONTEND_PORT:-3000}"
+      OAUTH2_CALLBACK_URL: "http://localhost:${BACKEND_PORT:-8080}/api/credentials/oauth2/callback"
+      # Catalog seed: import the bundled OpenAPI specs at first boot
+      CATALOG_SEED_ENABLED: "true"
+      CATALOG_SEED_PATH: /app/catalog-seeds
+      LOGGING_FILE_NAME: /app/logs/livecontext-ce.log
+      AUDIT_LOG_PATH: /app/logs/audit
+    volumes:
+      - livecontext_keys:/app/data/keys
+      - livecontext_logs:/app/logs
+      - ./catalog-seeds:/app/catalog-seeds:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
+
+  # ── Browser agent (agent_browse) - OPT-IN, heavy (Chromium + browser-use) ──
+  # NOT started by a default `up`. Unlike the other services (prebuilt images),
+  # this builds from the bundled websearch-service/ source on demand so opting in
+  # doesn't pull ~1 GB for users who never browse. Enable both this container AND
+  # the orchestrator module in one shot:
+  #   docker compose --env-file docker/.env.ce.browser-agent up -d
+  # which sets COMPOSE_PROFILES=browser-agent (starts this) + WEBSEARCH_ENABLED=true
+  # (loads BrowserAgentModule in the app). Needs a Google/Gemini key on the install
+  # for the default gemini 3.1 flash model. Shares the CE Redis + MinIO.
+  websearch:
+    profiles: ["browser-agent"]
+    build:
+      context: ./websearch-service
+    image: livecontext-ce-websearch:local
+    container_name: livecontext-websearch
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      WEBSEARCH_REDIS_URL: redis://redis:6379/0
+      WEBSEARCH_MINIO_ENDPOINT: minio:9000
+      WEBSEARCH_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      WEBSEARCH_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      WEBSEARCH_MINIO_BUCKET: workflow-files
+      WEBSEARCH_MINIO_SECURE: "false"
+      # Optional shared secrets with the app - empty is fine on a single-host CE
+      # network (the websearch gateway-secret check is open when unset). The CDP
+      # secret enables the live screencast; without it the panel still shows the
+      # captured last-page screenshot.
+      WEBSEARCH_GATEWAY_SECRET: ${WEBSEARCH_GATEWAY_SECRET:-}
+      WEBSEARCH_CDP_JWT_SECRET: ${WEBSEARCH_CDP_JWT_SECRET:-}
+      BROWSER_HEADLESS: "true"
+    # Chromium needs a large /dev/shm + relaxed seccomp for its sandbox.
+    security_opt:
+      - seccomp:unconfined
+    shm_size: "2gb"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8085/health').status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 2048M
+
+  frontend:
+    image: ghcr.io/livecontext-ai/livecontext-ce-frontend:v0.1.0
+    container_name: livecontext-frontend
+    restart: unless-stopped
+    depends_on:
+      livecontext:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+
+volumes:
+  livecontext_data:
+    driver: local
+  livecontext_redis:
+    driver: local
+  livecontext_minio:
+    driver: local
+  livecontext_keys:
+    driver: local
+  livecontext_logs:
+    driver: local

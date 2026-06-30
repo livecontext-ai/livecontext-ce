@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- White background -->
+  <rect width="256" height="256" fill="#ffffff"/>
+
+  <!-- Vault body: rounded rectangle -->
+  <rect x="32" y="48" width="192" height="160" rx="18" ry="18" fill="#0078D4"/>
+
+  <!-- Vault door panel (inset) -->
+  <rect x="52" y="68" width="152" height="120" rx="12" ry="12" fill="#005A9E"/>
+
+  <!-- Vault door inner ring -->
+  <circle cx="128" cy="128" r="46" fill="none" stroke="#ffffff" stroke-width="6"/>
+
+  <!-- Vault handle spokes (4 spokes at 45-degree angles) -->
+  <line x1="128" y1="82" x2="128" y2="174" stroke="#ffffff" stroke-width="6" stroke-linecap="round"/>
+  <line x1="82" y1="128" x2="174" y2="128" stroke="#ffffff" stroke-width="6" stroke-linecap="round"/>
+
+  <!-- Center hub circle -->
+  <circle cx="128" cy="128" r="14" fill="#0078D4" stroke="#ffffff" stroke-width="5"/>
+
+  <!-- Hinge bolts left side -->
+  <circle cx="54" cy="100" r="7" fill="#ffffff" opacity="0.85"/>
+  <circle cx="54" cy="156" r="7" fill="#ffffff" opacity="0.85"/>
+
+  <!-- Lock bolt right side -->
+  <rect x="185" y="118" width="20" height="20" rx="4" ry="4" fill="#ffffff" opacity="0.85"/>
+
+  <!-- Top handle bar -->
+  <rect x="96" y="36" width="64" height="20" rx="10" ry="10" fill="#0078D4" stroke="#005A9E" stroke-width="2"/>
+
+  <!-- Key symbol inside center -->
+  <circle cx="128" cy="125" r="6" fill="none" stroke="#ffffff" stroke-width="3"/>
+  <rect x="130" y="125" width="14" height="3.5" rx="1" fill="#ffffff"/>
+  <rect x="140" y="125" width="3.5" height="6" rx="1" fill="#ffffff"/>
+  <rect x="134" y="125" width="3.5" height="5" rx="1" fill="#ffffff"/>
+</svg>

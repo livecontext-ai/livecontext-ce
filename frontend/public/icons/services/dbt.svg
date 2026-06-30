@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <rect width="256" height="256" fill="#ffffff"/>
+  <!-- dbt logo: four-pointed diamond/cross shape in dbt orange #FF694A -->
+  <g transform="translate(128,128)">
+    <!-- Top petal -->
+    <ellipse cx="0" cy="-52" rx="22" ry="44" fill="#FF694A" transform="rotate(0)"/>
+    <!-- Right petal -->
+    <ellipse cx="52" cy="0" rx="22" ry="44" fill="#FF694A" transform="rotate(90)"/>
+    <!-- Bottom petal -->
+    <ellipse cx="0" cy="52" rx="22" ry="44" fill="#FF694A" transform="rotate(180)"/>
+    <!-- Left petal -->
+    <ellipse cx="-52" cy="0" rx="22" ry="44" fill="#FF694A" transform="rotate(270)"/>
+    <!-- Center circle -->
+    <circle cx="0" cy="0" r="22" fill="#FF694A"/>
+  </g>
+</svg>

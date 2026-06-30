@@ -1,0 +1,107 @@
+# Configuration de test pour Workflow V2 - H2 Database
+spring:
+  lifecycle:
+    timeout-per-shutdown-phase: 2s
+  application:
+    name: orchestrator-service-test
+  datasource:
+    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;MODE=PostgreSQL;INIT=CREATE SCHEMA IF NOT EXISTS orchestrator\;CREATE SCHEMA IF NOT EXISTS storage\;SET SCHEMA orchestrator
+    username: sa
+    password: 
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+        default_schema: orchestrator
+        format_sql: true
+        hbm2ddl:
+          auto: create-drop
+        jdbc:
+          lob:
+            non_contextual_creation: true
+        temp:
+          use_jdbc_metadata_defaults: false
+        # Configuration specifique pour H2 et les types JSON
+        connection:
+          provider_disables_autocommit: true
+    database-platform: org.hibernate.dialect.H2Dialect
+    open-in-view: false
+  h2:
+    console:
+      enabled: false
+  sql:
+    init:
+      mode: never
+  flyway:
+    enabled: false
+
+# Disable gateway authentication filter in tests (no real gateway running)
+gateway:
+  filter:
+    verification-enabled: false
+
+# Disable credit consumption in tests (no auth-service running)
+credit:
+  consumption:
+    enabled: false
+
+# Configuration orchestrator pour les tests
+orchestrator:
+  mock:
+    enabled: true
+  catalog:
+    enabled: false
+  scheduled:
+    signal-maintenance-pollers: false
+  v2:
+    enabled: true
+    task-queue: test-orchestrator-v2-task-queue
+    default-activity-timeout: PT1M
+    workflow-timeout: PT5M
+    default-max-attempts: 1
+  # Plan v4 optim flags - test profile overrides for safety. heartbeat-failover
+  # OFF in tests because the @ConditionalOnProperty bean's bootstrap UPSERT
+  # writes to orchestrator.instance_lease (V182) which the H2 test schema may
+  # not have. async-publish and cas-state-snapshot can stay ON in tests
+  # (their beans construct without DB-write side-effects).
+  optim:
+    async-publish: true
+    heartbeat-failover: false
+    cas-state-snapshot: true
+    step-data-bulk-insert: false  # H2 lacks PG-specific batchUpdate semantics
+    advisory-lock: false  # H2 lacks hashtextextended; DataAccessException would be caught but spams logs
+    pg-stat-watcher: false  # H2 lacks pg_stat_activity; @Scheduled would log errors every 30s
+
+# Configuration HTTP pour les tests
+http:
+  client:
+    timeout:
+      connect: 1000
+      read: 5000
+    retry:
+      max-attempts: 1
+      delay-ms: 100
+    logging:
+      enabled: false
+
+# Configuration Jackson pour les tests
+jackson:
+  serialization:
+    write-dates-as-timestamps: false
+  deserialization:
+    fail-on-unknown-properties: false
+  modules:
+    - com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
+  mapper:
+    require-handlers-for-java8-times: false
+workflow:
+  streaming:
+    emit-incoming-edges: true
+
+websearch:
+  redis:
+    auto-reconnect: false

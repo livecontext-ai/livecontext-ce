@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="a6bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#EAB308"/>
+      <stop offset="100%" stop-color="#A16207"/>
+    </linearGradient>
+    <clipPath id="a6clip">
+      <circle cx="50" cy="50" r="50"/>
+    </clipPath>
+  </defs>
+  <circle cx="50" cy="50" r="50" fill="url(#a6bg)"/>
+
+  <!-- === PRISM STREAKS === -->
+  <g clip-path="url(#a6clip)">
+    <!-- Streak 1: diagonal down-right, rotated 25deg -->
+    <g transform="rotate(25 50 50)">
+      <rect x="-40" y="30" width="60" height="1.2" fill="white" opacity="0">
+        <animate attributeName="x" values="-40;80" dur="5s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values="0;0.18;0.18;0" keyTimes="0;0.2;0.75;1" dur="5s" repeatCount="indefinite"/>
+      </rect>
+    </g>
+    <!-- Streak 2: diagonal, rotated -40deg -->
+    <g transform="rotate(-40 50 50)">
+      <rect x="-40" y="50" width="55" height="0.8" fill="white" opacity="0">
+        <animate attributeName="x" values="-40;85" dur="6s" begin="1.3s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values="0;0.14;0.14;0" keyTimes="0;0.2;0.75;1" dur="6s" begin="1.3s" repeatCount="indefinite"/>
+      </rect>
+    </g>
+    <!-- Streak 3: rotated 60deg -->
+    <g transform="rotate(60 50 50)">
+      <rect x="-40" y="42" width="65" height="1" fill="white" opacity="0">
+        <animate attributeName="x" values="-40;80" dur="4.5s" begin="2.6s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values="0;0.2;0.2;0" keyTimes="0;0.2;0.75;1" dur="4.5s" begin="2.6s" repeatCount="indefinite"/>
+      </rect>
+    </g>
+    <!-- Streak 4: rotated -15deg -->
+    <g transform="rotate(-15 50 50)">
+      <rect x="-40" y="60" width="58" height="0.9" fill="white" opacity="0">
+        <animate attributeName="x" values="-40;82" dur="5.5s" begin="3.9s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values="0;0.16;0.16;0" keyTimes="0;0.2;0.75;1" dur="5.5s" begin="3.9s" repeatCount="indefinite"/>
+      </rect>
+    </g>
+  </g>
+
+  <!-- Small bright eyes -->
+  <circle cx="41" cy="44" r="4" fill="white" opacity="0.9">
+    <animate attributeName="r" values="4;4;0.5;4;4" keyTimes="0;0.9;0.93;0.96;1" dur="6s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="59" cy="44" r="4" fill="white" opacity="0.9">
+    <animate attributeName="r" values="4;4;0.5;4;4" keyTimes="0;0.9;0.93;0.96;1" dur="6s" repeatCount="indefinite"/>
+  </circle>
+  <!-- Huge grin -->
+  <path d="M34,56 Q50,72 66,56" stroke="white" stroke-width="2.2" fill="none" stroke-linecap="round" opacity="0.85"/>
+</svg>

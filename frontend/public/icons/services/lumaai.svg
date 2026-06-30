@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+<path d="M42.667 127.979L264.363 0v512L42.667 384V127.979z" fill="#000"/>
+<path d="M264.363 512L42.667 384l221.696-128L486.08 384 264.363 512z" fill="url(#a)"/>
+<path d="M264.363 512L42.667 384l221.696-128L486.08 384 264.363 512z" fill="url(#b)"/>
+<path style="mix-blend-mode:screen" d="M42.667 127.979L264.363 0v512L42.667 384V127.979z" fill="url(#c)"/>
+<path style="mix-blend-mode:overlay" d="M264.363 512L42.667 384l221.696-128L486.08 384 264.363 512z" fill="url(#d)"/>
+<path style="mix-blend-mode:overlay" d="M42.667 127.979L264.363 0v512L42.667 384V127.979z" fill="url(#e)"/>
+<defs>
+<linearGradient id="a" x1="42.667" y1="384" x2="486.08" y2="384" gradientUnits="userSpaceOnUse"><stop stop-color="#00A"/><stop offset="1" stop-color="#A78DFF"/></linearGradient>
+<linearGradient id="b" x1="42.667" y1="384" x2="486.08" y2="384" gradientUnits="userSpaceOnUse"><stop stop-color="#00A"/><stop offset="1" stop-color="#A78DFF"/></linearGradient>
+<linearGradient id="c" x1="293.291" y1="483.029" x2="99.669" y2="79.893" gradientUnits="userSpaceOnUse"><stop stop-color="#004EFF"/><stop offset="1" stop-color="#0FF"/></linearGradient>
+<linearGradient id="d" x1="42.667" y1="384" x2="486.08" y2="384" gradientUnits="userSpaceOnUse"><stop stop-color="#00A"/><stop offset="1" stop-color="#A78DFF"/></linearGradient>
+<linearGradient id="e" x1="293.291" y1="483.029" x2="99.669" y2="79.893" gradientUnits="userSpaceOnUse"><stop stop-color="#004EFF"/><stop offset="1" stop-color="#0FF"/></linearGradient>
+</defs>
+</svg>

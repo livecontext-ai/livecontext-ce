@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <rect width="256" height="256" fill="#ffffff"/>
+  <!-- Fivetran logo: stylized "F" made of horizontal bars with a diagonal accent -->
+  <!-- Top bar -->
+  <rect x="48" y="52" width="112" height="28" rx="6" fill="#0073FF"/>
+  <!-- Middle bar (shorter) -->
+  <rect x="48" y="114" width="80" height="28" rx="6" fill="#0073FF"/>
+  <!-- Vertical spine -->
+  <rect x="48" y="52" width="28" height="152" rx="6" fill="#0073FF"/>
+  <!-- Diagonal accent / arrow pointing right-down -->
+  <polygon points="148,128 208,128 208,156 148,204 148,176 180,156 148,156" fill="#0073FF"/>
+</svg>

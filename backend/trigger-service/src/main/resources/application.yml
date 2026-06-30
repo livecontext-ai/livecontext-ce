@@ -1,0 +1,79 @@
+server:
+  port: 8091
+
+spring:
+  application:
+    name: trigger-service
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:apimarketplace}?currentSchema=trigger
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+    hikari:
+      maximum-pool-size: 30
+      minimum-idle: 5
+      connection-timeout: 20000
+      idle-timeout: 300000
+      max-lifetime: 600000
+  jpa:
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        default_schema: trigger
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: false
+  jackson:
+    time-zone: UTC
+    serialization:
+      write-dates-as-timestamps: false
+
+gateway:
+  filter:
+    secret-key: ${GATEWAY_SECRET_KEY:}
+    verification-enabled: ${GATEWAY_VERIFICATION_ENABLED:true}
+    public-paths:
+      - /health
+      - /actuator
+      - /api/internal/
+
+orchestrator:
+  webhook:
+    max-per-user: ${WEBHOOK_MAX_PER_USER:10}
+    base-url: ${WEBHOOK_BASE_URL:http://localhost:8080}
+  form-endpoint:
+    base-url: ${APP_PUBLIC_URL:${WEBHOOK_BASE_URL:http://localhost:8080}}
+  chat-endpoint:
+    base-url: ${APP_PUBLIC_URL:${WEBHOOK_BASE_URL:http://localhost:8080}}
+
+# Plan-based resource limits (webhook/schedule quotas per plan). Kill-switch:
+# false = NO quota enforcement (CE sets it false in application-ce.yml). MUST stay
+# true in cloud prod; pinned in values-prod.yaml (services.trigger.env). See the project docs.
+plan-limits:
+  enabled: ${PLAN_LIMITS_ENABLED:true}
+
+services:
+  publication-url: ${PUBLICATION_SERVICE_URL:http://localhost:8092}
+  orchestrator-url: ${ORCHESTRATOR_SERVICE_URL:http://localhost:8099}
+  auth-service:
+    url: ${AUTH_SERVICE_URL:http://localhost:8083}
+
+credential:
+  encryption:
+    password: ${CREDENTIAL_ENCRYPTION_PASSWORD:}
+    salt: ${CREDENTIAL_ENCRYPTION_SALT:}
+
+logging:
+  file:
+    name: logs/trigger-service.log
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: always

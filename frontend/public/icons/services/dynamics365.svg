@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- White background -->
+  <rect width="256" height="256" fill="#ffffff"/>
+
+  <!-- Left vertical stem of the "D" letterform -->
+  <rect x="42" y="46" width="30" height="164" rx="5" fill="#002050"/>
+
+  <!-- Filled D-curve: semicircle from top-right of stem to bottom-right, forming the "D" body -->
+  <!-- Outer D shape: rect left edge + right semicircle -->
+  <path d="M72 46 L72 210 Q180 210 180 128 Q180 46 72 46 Z" fill="#002050"/>
+
+  <!-- White inner cutout to create hollow D -->
+  <path d="M88 72 Q156 72 156 128 Q156 184 88 184 Z" fill="#ffffff"/>
+
+  <!-- Dynamics accent: bold curved arc sweeping top-right (signature Dynamics motif) -->
+  <path d="M128 26 A102 102 0 0 1 230 128"
+        stroke="#0078d4" stroke-width="12" fill="none"
+        stroke-linecap="round"/>
+
+  <!-- Small filled dot at the end of the arc (top-right) -->
+  <circle cx="216" cy="58" r="11" fill="#0078d4"/>
+
+  <!-- Thin inner accent arc for depth -->
+  <path d="M128 44 A84 84 0 0 1 212 128"
+        stroke="#0078d4" stroke-width="5" fill="none"
+        stroke-linecap="round" opacity="0.55"/>
+</svg>

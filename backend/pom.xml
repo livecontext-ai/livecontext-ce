@@ -1,0 +1,210 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.apimarketplace</groupId>
+    <artifactId>apimarketplace-parent</artifactId>
+    <version>0.1.0</version>
+    <packaging>pom</packaging>
+    <name>API Marketplace - Parent</name>
+
+    <licenses>
+        <license>
+            <name>LiveContext Sustainable Use License 1.0</name>
+            <url>https://github.com/livecontext-ai/livecontext-ce/blob/main/LICENSE</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <properties>
+        <java.version>21</java.version>
+        <spring-boot.version>3.5.14</spring-boot.version>
+        <spring-cloud.version>2025.0.0</spring-cloud.version>
+        <maven.compiler.release>${java.version}</maven.compiler.release>
+        <maven.compiler.source>${java.version}</maven.compiler.source>
+        <maven.compiler.target>${java.version}</maven.compiler.target>
+        <spring-boot.repackage.skip>false</spring-boot.repackage.skip>
+
+        <!-- 🔧 Aligne Flyway partout -->
+        <flyway.version>11.12.0</flyway.version>
+
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- Security pins - MUST stay BEFORE the spring-boot-dependencies import
+                 (Maven dependencyManagement is first-declaration-wins; property overrides
+                 like tomcat.version do NOT work with a BOM import, only with the starter
+                 parent). Boot 3.5.14 manages Tomcat 10.1.54 (CVE-2026-43512: Digest auth
+                 accepts password "null"; CVE-2026-43515) and Spring Security 6.5.9
+                 (CVE-2026-22753/-22754 servlet-path authorization bypass). Drop these
+                 pins when upgrading to a Boot version that manages these (or newer). -->
+            <dependency>
+                <groupId>org.springframework.security</groupId>
+                <artifactId>spring-security-bom</artifactId>
+                <version>6.5.10</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.tomcat.embed</groupId>
+                <artifactId>tomcat-embed-core</artifactId>
+                <version>10.1.55</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.tomcat.embed</groupId>
+                <artifactId>tomcat-embed-el</artifactId>
+                <version>10.1.55</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.tomcat.embed</groupId>
+                <artifactId>tomcat-embed-websocket</artifactId>
+                <version>10.1.55</version>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.cloud</groupId>
+                <artifactId>spring-cloud-dependencies</artifactId>
+                <version>${spring-cloud.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <modules>
+        <module>common-lib</module>
+        <module>agent-common</module>
+        <module>shared-agent-lib</module>
+        <module>shared-sse-lib</module>
+        <module>datasource-client</module>
+        <module>agent-client</module>
+        <module>interface-client</module>
+        <module>trigger-client</module>
+        <module>publication-client</module>
+        <module>auth-client</module>
+        <module>storage-client</module>
+        <module>credential-client</module>
+        <module>conversation-client</module>
+        <module>notification-client</module>
+        <module>common-security</module>
+        <module>trigger-service</module>
+        <module>catalog-service</module>
+        <module>conversation-service</module>
+        <module>auth-service</module>
+        <module>common-storage-service</module>
+        <module>storage-service</module>
+        <module>datasource-service</module>
+        <module>agent-service</module>
+        <module>interface-service</module>
+        <module>publication-service</module>
+        <module>migration-service</module>
+        <module>orchestrator-service</module>
+    </modules>
+
+    <build>
+        <finalName>app</finalName>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-maven-plugin</artifactId>
+                    <version>${spring-boot.version}</version>
+                    <configuration>
+                        <skip>${spring-boot.repackage.skip}</skip>
+                    </configuration>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <version>3.11.0</version>
+                    <configuration>
+                        <release>${java.version}</release>
+                        <parameters>true</parameters>
+                    </configuration>
+                </plugin>
+                <!--
+                    git-commit-id: stamps the runnable artifact with build version + commit sha
+                    + build time into classpath:git.properties, which Spring Boot exposes as a
+                    GitProperties bean (VersionController reads it for GET /api/version).
+
+                    Declared here (config + execution) but NOT activated globally: only the two
+                    runnable hosts that serve /api/version activate it (auth-service for cloud,
+                    monolith-service for CE) by declaring the bare plugin. Keeping it off the
+                    client/library JARs avoids a git.properties on every classpath entry; in the
+                    CE fat jar the monolith's own BOOT-INF/classes/git.properties wins anyway.
+
+                    git.commit.id.abbrev (the short sha) is the from-source build identity:
+                    VersionInfo.resolveVersion surfaces it as "dev-<sha>" when no release tag
+                    (APP_VERSION) is stamped, instead of the Maven SNAPSHOT version. So abbrev +
+                    build.time MUST stay in the includeOnlyProperties allow-list below.
+
+                    Defensive flags (failOn*=false, offline=true) so a build without a reachable
+                    .git (e.g. a Docker layer that did not COPY .git) degrades to "no git info"
+                    instead of failing - VersionController falls back to version "dev" / null sha.
+                    offline=true means no VCS remote is ever contacted, so a VCS-connection failure
+                    cannot occur (the plugin has no separate "skip connection failure" toggle; these
+                    three flags are the complete graceful-degradation set for v9.0.1).
+                -->
+                <plugin>
+                    <groupId>io.github.git-commit-id</groupId>
+                    <artifactId>git-commit-id-maven-plugin</artifactId>
+                    <version>9.0.1</version>
+                    <configuration>
+                        <generateGitPropertiesFile>true</generateGitPropertiesFile>
+                        <failOnNoGitDirectory>false</failOnNoGitDirectory>
+                        <failOnUnableToExtractRepoInfo>false</failOnUnableToExtractRepoInfo>
+                        <offline>true</offline>
+                        <dateFormat>yyyy-MM-dd'T'HH:mm:ss'Z'</dateFormat>
+                        <dateFormatTimeZone>UTC</dateFormatTimeZone>
+                        <includeOnlyProperties>
+                            <includeOnlyProperty>^git.build.version$</includeOnlyProperty>
+                            <includeOnlyProperty>^git.build.time$</includeOnlyProperty>
+                            <includeOnlyProperty>^git.commit.id.abbrev$</includeOnlyProperty>
+                            <includeOnlyProperty>^git.commit.time$</includeOnlyProperty>
+                            <includeOnlyProperty>^git.branch$</includeOnlyProperty>
+                        </includeOnlyProperties>
+                    </configuration>
+                    <executions>
+                        <execution>
+                            <id>get-the-git-infos</id>
+                            <phase>initialize</phase>
+                            <goals>
+                                <goal>revision</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+    </build>
+
+    <!-- CE Monolith profile: builds the single-JAR community edition -->
+    <profiles>
+        <profile>
+            <id>ce</id>
+            <modules>
+                <module>monolith-service</module>
+            </modules>
+            <properties>
+                <!--
+                    In CE profile, service modules produce regular JARs (not fat JARs)
+                    so they can be used as dependencies by monolith-service.
+                    The spring-boot-maven-plugin repackage is skipped globally via this property.
+                    Only monolith-service overrides this back to false in its own pom.
+                -->
+                <spring-boot.repackage.skip>true</spring-boot.repackage.skip>
+            </properties>
+        </profile>
+    </profiles>
+
+</project>

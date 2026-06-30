@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Background: AWS dark rounded square -->
+  <rect width="256" height="256" rx="32" ry="32" fill="#232F3E"/>
+
+  <!-- Lock body -->
+  <rect x="80" y="128" width="96" height="76" rx="10" ry="10" fill="#DD344C"/>
+
+  <!-- Lock shackle (arch) -->
+  <path d="M96 128 V100 A32 32 0 0 1 160 100 V128" fill="none" stroke="#DD344C" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Key handle circle -->
+  <circle cx="128" cy="96" r="26" fill="none" stroke="#DD344C" stroke-width="13"/>
+
+  <!-- Key shaft -->
+  <rect x="125" y="110" width="6" height="52" rx="3" fill="#DD344C"/>
+
+  <!-- Key teeth -->
+  <rect x="131" y="136" width="12" height="8" rx="2" fill="#DD344C"/>
+  <rect x="131" y="152" width="8" height="7" rx="2" fill="#DD344C"/>
+
+  <!-- Keyhole on lock body -->
+  <circle cx="128" cy="162" r="10" fill="#232F3E"/>
+  <rect x="124" y="168" width="8" height="16" rx="3" fill="#232F3E"/>
+</svg>

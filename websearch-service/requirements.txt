@@ -1,0 +1,63 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+httpx==0.28.1
+pydantic==2.13.3
+pydantic-settings==2.7.1
+redis>=5.0
+Pillow>=10.0.0
+nodriver>=0.38
+minio>=7.2.0
+prometheus-fastapi-instrumentator>=7.0.0
+# Used by routers/cdp.py for the live bidirectional CDP WebSocket proxy.
+# uvicorn[standard] also pulls a websockets impl, but the proxy needs the
+# `websockets` library client API explicitly.
+websockets>=13.0
+# browser_use is required by app/services/browser_agent/runner.py.
+# Pinned to 0.12.6 because newer versions hard-pin pydantic==2.12.5 +
+# starlette>=0.49 which conflict with fastapi 0.115.6. Installed with
+# --no-deps so pip never pulls `mcp==1.26.0` (which would force
+# starlette>=0.49 and break FastAPI 0.115.6).
+#
+# We then list the *non-conflicting* transitives manually so the runner's
+# `from browser_use import Agent` actually resolves at runtime - without
+# them, browser_use import paths blow up on modules such as `bubus` and
+# `psutil`. Pydantic bumps to 2.13.3 (pulled by bubus/browser-use-sdk)
+# which is FastAPI-safe.
+# Order matters in deploy: install everything BELOW first, then layer
+# `pip install --no-deps browser-use==0.12.6` on top.
+browser-use==0.12.6
+bubus==1.5.6
+browser-use-sdk==2.0.15
+inquirerpy==0.3.4
+ollama==0.6.1
+uuid7==0.1.0
+psutil==7.2.2
+# `from browser_use import Agent` eagerly imports a long chain (browser.session →
+# cdp_use, then agent.service → posthog, the LLM SDKs, doc/markdown helpers, …).
+# Since browser-use is installed --no-deps, ALL of its non-conflicting runtime deps
+# (from 0.12.6's requires_dist) must be listed here or the import fails one module
+# at a time. The ONLY dep we deliberately exclude is `mcp==1.26.0` (it forces
+# starlette>=0.49, which breaks FastAPI 0.115.6 - the whole reason for --no-deps);
+# the browser Agent does not need it. pydantic stays 2.13.3 (FastAPI-safe), not
+# browser-use's 2.12.5 pin. Versions match 0.12.6's requires_dist for API parity.
+cdp-use==1.4.5
+posthog==7.7.0
+openai==2.16.0
+anthropic==0.76.0
+groq==1.0.0
+google-genai==1.65.0
+google-api-core==2.29.0
+google-api-python-client==2.188.0
+google-auth==2.48.0
+google-auth-oauthlib==1.2.4
+markdownify==1.2.2
+pypdf==6.9.1
+python-docx==1.2.0
+python-dotenv==1.2.1
+reportlab==4.4.9
+requests==2.32.5
+rich==14.3.1
+screeninfo==0.8.1
+pyotp==2.9.0
+aiohttp==3.13.3
+cloudpickle==3.1.2

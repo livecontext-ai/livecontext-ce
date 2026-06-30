@@ -1,0 +1,43 @@
+{
+  "id": "fixture-08-single-node-sbs-rerun",
+  "triggers": [
+    {
+      "id": "t1",
+      "type": "manual",
+      "label": "Start",
+      "position": { "x": 100, "y": 200 }
+    }
+  ],
+  "mcps": [
+    {
+      "id": "mock/work",
+      "type": "mcp",
+      "label": "Work",
+      "position": { "x": 400, "y": 200 },
+      "params": {
+        "attempt": "{{trigger:start.output.attempt}}"
+      }
+    }
+  ],
+  "tables": [],
+  "agents": [],
+  "cores": [],
+  "edges": [
+    { "from": "trigger:start", "to": "mcp:work" }
+  ],
+  "notes": [
+    {
+      "id": "n1",
+      "type": "note",
+      "label": "STEP_BY_STEP rerun",
+      "text": "Initial fire executes mcp:work in STEP_BY_STEP mode. Harness then issues a single-node rerun via StepByStepExecutor. Validates that the rerun call site produces a canonicalized-equivalent trace under the new loop.",
+      "color": "#dbeafe",
+      "borderColor": "#3b82f6",
+      "textColor": "#1e3a8a",
+      "width": 320,
+      "height": 100,
+      "position": { "x": 50, "y": 50 }
+    }
+  ],
+  "interfaces": []
+}

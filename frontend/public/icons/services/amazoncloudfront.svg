@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <rect width="256" height="256" rx="32" fill="#232F3E"/>
+  <g transform="translate(40, 48)">
+    <!-- Globe/network circle -->
+    <circle cx="88" cy="80" r="56" fill="none" stroke="#8C4FFF" stroke-width="6"/>
+    <!-- Horizontal lines (latitude) -->
+    <line x1="32" y1="60" x2="144" y2="60" stroke="#8C4FFF" stroke-width="4" stroke-linecap="round"/>
+    <line x1="32" y1="100" x2="144" y2="100" stroke="#8C4FFF" stroke-width="4" stroke-linecap="round"/>
+    <!-- Vertical ellipse (longitude) -->
+    <ellipse cx="88" cy="80" rx="24" ry="56" fill="none" stroke="#8C4FFF" stroke-width="4"/>
+    <!-- CDN distribution arrows -->
+    <path d="M88 16L88 4" stroke="#8C4FFF" stroke-width="5" stroke-linecap="round"/>
+    <path d="M88 156L88 168" stroke="#8C4FFF" stroke-width="5" stroke-linecap="round"/>
+    <path d="M24 80L12 80" stroke="#8C4FFF" stroke-width="5" stroke-linecap="round"/>
+    <path d="M152 80L164 80" stroke="#8C4FFF" stroke-width="5" stroke-linecap="round"/>
+    <!-- Edge location dots -->
+    <circle cx="88" cy="4" r="6" fill="#8C4FFF"/>
+    <circle cx="88" cy="168" r="6" fill="#8C4FFF"/>
+    <circle cx="12" cy="80" r="6" fill="#8C4FFF"/>
+    <circle cx="164" cy="80" r="6" fill="#8C4FFF"/>
+    <!-- Diagonal edge nodes -->
+    <circle cx="40" cy="32" r="5" fill="#8C4FFF"/>
+    <circle cx="136" cy="32" r="5" fill="#8C4FFF"/>
+    <circle cx="40" cy="128" r="5" fill="#8C4FFF"/>
+    <circle cx="136" cy="128" r="5" fill="#8C4FFF"/>
+  </g>
+</svg>

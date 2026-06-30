@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="a8bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4F46E5"/>
+      <stop offset="100%" stop-color="#3730A3"/>
+    </linearGradient>
+  </defs>
+  <circle cx="50" cy="50" r="50" fill="url(#a8bg)"/>
+  <!-- Slow-rotating mesh: two rhombus outlines spinning in opposite directions -->
+  <g fill="none" stroke="white" stroke-width="0.6" opacity="0.12">
+    <polygon points="50,14 86,50 50,86 14,50">
+      <animateTransform attributeName="transform" type="rotate" from="0 50 50" to="360 50 50" dur="30s" repeatCount="indefinite"/>
+    </polygon>
+    <polygon points="50,14 86,50 50,86 14,50">
+      <animateTransform attributeName="transform" type="rotate" from="390 50 50" to="30 50 50" dur="40s" repeatCount="indefinite"/>
+    </polygon>
+  </g>
+  <!-- Rectangular bar eyes with blink -->
+  <rect x="33" y="41" width="12" height="5" rx="2.5" fill="white" opacity="0.9">
+    <animate attributeName="height" values="5;5;1;5;5" keyTimes="0;0.88;0.92;0.96;1" dur="5.5s" repeatCount="indefinite"/>
+    <animate attributeName="y" values="41;41;43;41;41" keyTimes="0;0.88;0.92;0.96;1" dur="5.5s" repeatCount="indefinite"/>
+  </rect>
+  <rect x="55" y="41" width="12" height="5" rx="2.5" fill="white" opacity="0.9">
+    <animate attributeName="height" values="5;5;1;5;5" keyTimes="0;0.88;0.92;0.96;1" dur="5.5s" repeatCount="indefinite"/>
+    <animate attributeName="y" values="41;41;43;41;41" keyTimes="0;0.88;0.92;0.96;1" dur="5.5s" repeatCount="indefinite"/>
+  </rect>
+  <!-- Minimal smile -->
+  <path d="M42,58 Q50,62 58,58" stroke="white" stroke-width="1.5" fill="none" stroke-linecap="round" opacity="0.7"/>
+</svg>

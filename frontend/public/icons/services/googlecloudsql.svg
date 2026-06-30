@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <rect width="256" height="256" fill="#ffffff"/>
+
+  <!-- Database cylinder body -->
+  <rect x="60" y="90" width="136" height="100" rx="4" fill="#4285F4"/>
+
+  <!-- Bottom ellipse cap -->
+  <ellipse cx="128" cy="190" rx="68" ry="20" fill="#2A65C0"/>
+
+  <!-- Top ellipse cap -->
+  <ellipse cx="128" cy="90" rx="68" ry="20" fill="#78AEFF"/>
+
+  <!-- Highlight line on body -->
+  <rect x="60" y="100" width="136" height="8" fill="#5A95F5" opacity="0.5"/>
+
+  <!-- Middle horizontal line detail -->
+  <rect x="60" y="135" width="136" height="4" rx="2" fill="#2A65C0" opacity="0.4"/>
+
+  <!-- Bottom horizontal line detail -->
+  <rect x="60" y="162" width="136" height="4" rx="2" fill="#2A65C0" opacity="0.4"/>
+
+  <!-- Shine highlight on top ellipse -->
+  <ellipse cx="110" cy="86" rx="24" ry="7" fill="#ffffff" opacity="0.25"/>
+</svg>

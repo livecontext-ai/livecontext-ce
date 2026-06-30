@@ -1,0 +1,49 @@
+{
+  "id": "fixture-07-parallel-epoch-reset",
+  "triggers": [
+    {
+      "id": "t1",
+      "type": "schedule",
+      "label": "Cron",
+      "position": { "x": 100, "y": 200 },
+      "params": {
+        "cron": "*/5 * * * *",
+        "timezone": "UTC",
+        "repeat": true,
+        "enabled": true
+      }
+    }
+  ],
+  "mcps": [
+    {
+      "id": "mock/work",
+      "type": "mcp",
+      "label": "Work",
+      "position": { "x": 400, "y": 200 },
+      "params": {
+        "fire": "{{trigger:cron.output.fireAt}}"
+      }
+    }
+  ],
+  "tables": [],
+  "agents": [],
+  "cores": [],
+  "edges": [
+    { "from": "trigger:cron", "to": "mcp:work" }
+  ],
+  "notes": [
+    {
+      "id": "n1",
+      "type": "note",
+      "label": "Parallel epoch reset",
+      "text": "Three rapid fires of the schedule trigger drive three epochs through ReusableTriggerService. Validates the 'Parallel Epoch Deferred Reset' fix (memory key finding 2026-03-02): only the LAST epoch's deferred reset creates a new ready epoch, no phantom epochs in activeEpochs. Validates resetForNextCycle guard `!anyActive` in resetDagWithRerunPattern.",
+      "color": "#dbeafe",
+      "borderColor": "#3b82f6",
+      "textColor": "#1e3a8a",
+      "width": 320,
+      "height": 120,
+      "position": { "x": 50, "y": 50 }
+    }
+  ],
+  "interfaces": []
+}

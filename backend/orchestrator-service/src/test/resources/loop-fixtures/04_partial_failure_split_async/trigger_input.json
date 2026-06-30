@@ -1,0 +1,45 @@
+{
+  "__harness_directives": {
+    "comment": "Async batch agent: harness sets agentQueueEnabled=true and configures MockAgentBackend to fail items at indices [3, 11, 17, 24] with HTTP 429. The other 26 items succeed and produce a valid selected_category_label. Tests that per-item barrier seals partial failures correctly.",
+    "async_agents": ["classify_email"],
+    "mock_agent_backend": {
+      "kind": "anthropic-batch",
+      "fail_item_indices": [3, 11, 17, 24],
+      "fail_with": { "status": 429, "error": "rate_limit_exceeded" }
+    },
+    "mock_fetch_emails_output": {
+      "items": [
+        { "id": "msg-0", "subject": "Q3 review", "body": "..." },
+        { "id": "msg-1", "subject": "lunch?", "body": "..." },
+        { "id": "msg-2", "subject": "PR ready", "body": "..." },
+        { "id": "msg-3", "subject": "summary", "body": "..." },
+        { "id": "msg-4", "subject": "billing", "body": "..." },
+        { "id": "msg-5", "subject": "weekend trip", "body": "..." },
+        { "id": "msg-6", "subject": "feature spec", "body": "..." },
+        { "id": "msg-7", "subject": "agenda", "body": "..." },
+        { "id": "msg-8", "subject": "final draft", "body": "..." },
+        { "id": "msg-9", "subject": "ack", "body": "..." },
+        { "id": "msg-10", "subject": "pricing", "body": "..." },
+        { "id": "msg-11", "subject": "alarm", "body": "..." },
+        { "id": "msg-12", "subject": "sprint plan", "body": "..." },
+        { "id": "msg-13", "subject": "happy bday", "body": "..." },
+        { "id": "msg-14", "subject": "release notes", "body": "..." },
+        { "id": "msg-15", "subject": "vacation", "body": "..." },
+        { "id": "msg-16", "subject": "code review", "body": "..." },
+        { "id": "msg-17", "subject": "promo 50%", "body": "..." },
+        { "id": "msg-18", "subject": "checkin", "body": "..." },
+        { "id": "msg-19", "subject": "blocker", "body": "..." },
+        { "id": "msg-20", "subject": "interview", "body": "..." },
+        { "id": "msg-21", "subject": "thanks", "body": "..." },
+        { "id": "msg-22", "subject": "rsvp", "body": "..." },
+        { "id": "msg-23", "subject": "kudos", "body": "..." },
+        { "id": "msg-24", "subject": "policy update", "body": "..." },
+        { "id": "msg-25", "subject": "demo prep", "body": "..." },
+        { "id": "msg-26", "subject": "follow-up", "body": "..." },
+        { "id": "msg-27", "subject": "weekly", "body": "..." },
+        { "id": "msg-28", "subject": "summary report", "body": "..." },
+        { "id": "msg-29", "subject": "newsletter", "body": "..." }
+      ]
+    }
+  }
+}

@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="a3bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10B981"/>
+      <stop offset="100%" stop-color="#047857"/>
+    </linearGradient>
+    <clipPath id="a3clip">
+      <circle cx="50" cy="50" r="50"/>
+    </clipPath>
+  </defs>
+  <circle cx="50" cy="50" r="50" fill="url(#a3bg)"/>
+
+  <!-- === ORBITAL DANCE === -->
+  <g clip-path="url(#a3clip)">
+    <!-- Orbit 1: inner, CW 14s, radius 18 -->
+    <circle cx="50" cy="50" r="18" fill="none" stroke="white" stroke-width="0.4" opacity="0.12"/>
+    <g>
+      <animateTransform attributeName="transform" type="rotate" from="0 50 50" to="360 50 50" dur="14s" repeatCount="indefinite"/>
+      <circle cx="68" cy="50" r="1.8" fill="white" opacity="0.22"/>
+    </g>
+    <!-- Orbit 2: middle, CCW 20s, radius 28 -->
+    <circle cx="50" cy="50" r="28" fill="none" stroke="white" stroke-width="0.4" opacity="0.1"/>
+    <g>
+      <animateTransform attributeName="transform" type="rotate" from="360 50 50" to="0 50 50" dur="20s" repeatCount="indefinite"/>
+      <circle cx="22" cy="50" r="2.2" fill="white" opacity="0.2"/>
+    </g>
+    <!-- Orbit 3: outer, CW 28s, radius 40 -->
+    <circle cx="50" cy="50" r="40" fill="none" stroke="white" stroke-width="0.4" opacity="0.08"/>
+    <g>
+      <animateTransform attributeName="transform" type="rotate" from="0 50 50" to="360 50 50" dur="28s" repeatCount="indefinite"/>
+      <circle cx="90" cy="50" r="2.6" fill="white" opacity="0.18"/>
+    </g>
+  </g>
+
+  <!-- Diamond-shaped eyes (rotated squares) with blink -->
+  <g>
+    <rect x="36" y="40" width="7" height="7" rx="1" fill="white" opacity="0.9" transform="rotate(45 39.5 43.5)"/>
+    <animate attributeName="opacity" values="1;1;0.1;1;1" keyTimes="0;0.87;0.91;0.95;1" dur="5.5s" repeatCount="indefinite"/>
+  </g>
+  <g>
+    <rect x="57" y="40" width="7" height="7" rx="1" fill="white" opacity="0.9" transform="rotate(45 60.5 43.5)"/>
+    <animate attributeName="opacity" values="1;1;0.1;1;1" keyTimes="0;0.87;0.91;0.95;1" dur="5.5s" repeatCount="indefinite"/>
+  </g>
+  <!-- Subtle arc smile -->
+  <path d="M41,58 Q50,63 59,58" stroke="white" stroke-width="1.8" fill="none" stroke-linecap="round" opacity="0.75"/>
+</svg>

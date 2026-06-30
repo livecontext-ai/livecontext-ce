@@ -1,0 +1,88 @@
+# Integration Test Configuration - Orchestrator Service
+# Uses H2 in-memory database with PostgreSQL compatibility mode
+spring:
+  lifecycle:
+    timeout-per-shutdown-phase: 2s
+  application:
+    name: orchestrator-service-integration-test
+  datasource:
+    url: jdbc:h2:mem:integrationdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;MODE=PostgreSQL;INIT=CREATE SCHEMA IF NOT EXISTS orchestrator\;CREATE SCHEMA IF NOT EXISTS storage\;SET SCHEMA orchestrator
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    defer-datasource-initialization: true
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+        default_schema: orchestrator
+        format_sql: false
+    database-platform: org.hibernate.dialect.H2Dialect
+    open-in-view: false
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema-e2e-extra.sql
+  flyway:
+    enabled: false
+
+# Orchestrator configuration for integration tests
+orchestrator:
+  mock:
+    enabled: true
+  catalog:
+    enabled: false
+  scheduled:
+    signal-maintenance-pollers: false
+  v2:
+    enabled: true
+    task-queue: integration-test-task-queue
+    default-activity-timeout: PT1M
+    workflow-timeout: PT5M
+    default-max-attempts: 1
+  execution:
+    parallel-ready:
+      enabled: false
+  optim:
+    pg-stat-watcher: false
+
+state-snapshot:
+  use-jsonb-patch: false
+
+# Disable credit consumption in tests (no auth-service running)
+credit:
+  consumption:
+    enabled: false
+
+# HTTP client configuration for integration tests
+http:
+  client:
+    timeout:
+      connect: 1000
+      read: 5000
+    retry:
+      max-attempts: 1
+      delay-ms: 100
+    logging:
+      enabled: false
+
+# Workflow streaming
+workflow:
+  streaming:
+    emit-incoming-edges: true
+
+websearch:
+  redis:
+    auto-reconnect: false
+
+# Disable gateway authentication for integration tests (no gateway headers needed)
+gateway:
+  filter:
+    verification-enabled: false
+
+logging:
+  level:
+    com.apimarketplace: DEBUG

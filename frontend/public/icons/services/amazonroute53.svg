@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <rect width="256" height="256" rx="24" fill="#232F3E"/>
+  <g transform="translate(128,128)" fill="none" stroke="#8C4FFF" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Outer compass circle -->
+    <circle cx="0" cy="0" r="60" fill="none"/>
+    <!-- Inner circle -->
+    <circle cx="0" cy="0" r="8" fill="#8C4FFF" stroke="none"/>
+    <!-- Compass needle north (purple filled) -->
+    <polygon points="0,-56 -10,-10 0,-18 10,-10" fill="#8C4FFF" stroke="none"/>
+    <!-- Compass needle south -->
+    <polygon points="0,56 -10,10 0,18 10,10" fill="none" stroke="#8C4FFF" stroke-width="3"/>
+    <!-- East/West ticks -->
+    <line x1="50" y1="0" x2="60" y2="0"/>
+    <line x1="-50" y1="0" x2="-60" y2="0"/>
+    <!-- Route lines -->
+    <path d="M14,14 L30,30 C40,35 45,25 38,18" stroke="#8C4FFF" stroke-width="5" fill="none"/>
+    <path d="M-14,-14 L-30,-30 C-40,-35 -45,-25 -38,-18" stroke="#8C4FFF" stroke-width="5" fill="none"/>
+  </g>
+</svg>

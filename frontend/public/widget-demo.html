@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Widget demo page</title>
+  <style>
+    body { font-family: -apple-system, Segoe UI, sans-serif; margin: 0; padding: 40px; background: #f3f4f6; }
+    h1 { color: #111827; }
+    .card { background: white; max-width: 720px; padding: 24px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+    code { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+    .status { padding: 8px 12px; border-radius: 6px; margin-top: 12px; font-size: 14px; }
+    .ok { background: #d1fae5; color: #065f46; }
+    .err { background: #fee2e2; color: #991b1b; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Widget demo page</h1>
+    <p>This is a fake customer website. The chat bubble in the corner is the embedded agent widget - same thing that third parties would paste on their site.</p>
+    <p>Token: <code id="tok"></code></p>
+    <p>Agent: <code>widget-demo</code> (zai / glm-5-turbo)</p>
+    <div id="status" class="status">Loading widget...</div>
+    <p style="margin-top: 24px; color: #6b7280; font-size: 14px;">
+      Click the bubble in the bottom-right, type a message, and the agent replies in a few seconds.
+    </p>
+  </div>
+
+  <script>
+    const WIDGET_TOKEN = 'wid_9623b67290f15a43f431226454a13125';
+    const GATEWAY = 'http://localhost:8080';
+    const API_BASE = GATEWAY + '/widget';
+    document.getElementById('tok').textContent = WIDGET_TOKEN;
+
+    let sessionId = null;
+
+    const styles = `
+      #w-bubble{position:fixed;right:20px;bottom:20px;width:60px;height:60px;border-radius:50%;
+        background:#6366f1;color:white;cursor:pointer;display:flex;align-items:center;justify-content:center;
+        box-shadow:0 4px 12px rgba(0,0,0,.15);z-index:9999;border:none;}
+      #w-bubble svg{width:28px;height:28px;fill:white;}
+      #w-panel{position:fixed;right:20px;bottom:90px;width:380px;height:520px;background:white;
+        border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.16);display:none;flex-direction:column;
+        overflow:hidden;z-index:9999;font-family:inherit;}
+      #w-panel.open{display:flex;}
+      #w-head{background:#6366f1;color:white;padding:16px;font-weight:600;}
+      #w-msgs{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px;}
+      .w-msg{max-width:80%;padding:8px 12px;border-radius:12px;font-size:14px;line-height:1.4;}
+      .w-msg.u{align-self:flex-end;background:#6366f1;color:white;}
+      .w-msg.a{align-self:flex-start;background:#f3f4f6;color:#111827;}
+      .w-msg.sys{align-self:center;font-size:12px;color:#6b7280;}
+      #w-form{border-top:1px solid #e5e7eb;padding:12px;display:flex;gap:8px;}
+      #w-input{flex:1;padding:8px 12px;border:1px solid #d1d5db;border-radius:20px;outline:none;font-size:14px;}
+      #w-send{padding:8px 16px;background:#6366f1;color:white;border:none;border-radius:20px;cursor:pointer;}
+      #w-send:disabled{opacity:.5;cursor:wait;}
+    `;
+    const styleEl = document.createElement('style');
+    styleEl.textContent = styles;
+    document.head.appendChild(styleEl);
+
+    const bubble = document.createElement('button');
+    bubble.id = 'w-bubble';
+    bubble.innerHTML = '<svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>';
+    document.body.appendChild(bubble);
+
+    const panel = document.createElement('div');
+    panel.id = 'w-panel';
+    panel.innerHTML = `
+      <div id="w-head">Demo widget</div>
+      <div id="w-msgs"></div>
+      <form id="w-form">
+        <input id="w-input" placeholder="Type a message..." autocomplete="off" />
+        <button id="w-send">Send</button>
+      </form>
+    `;
+    document.body.appendChild(panel);
+
+    const msgsEl = panel.querySelector('#w-msgs');
+    const form = panel.querySelector('#w-form');
+    const input = panel.querySelector('#w-input');
+    const sendBtn = panel.querySelector('#w-send');
+
+    function addMsg(role, text) {
+      const d = document.createElement('div');
+      d.className = 'w-msg ' + (role === 'user' ? 'u' : role === 'assistant' ? 'a' : 'sys');
+      d.textContent = text;
+      msgsEl.appendChild(d);
+      msgsEl.scrollTop = msgsEl.scrollHeight;
+    }
+
+    const STORAGE_KEY = 'lc_widget_session_' + WIDGET_TOKEN;
+
+    async function bootstrap() {
+      try {
+        const cfgRes = await fetch(`${API_BASE}/${WIDGET_TOKEN}/config`);
+        if (!cfgRes.ok) throw new Error('Config HTTP ' + cfgRes.status);
+        const cfg = await cfgRes.json();
+        if (cfg.status !== 'success') throw new Error('Config: ' + (cfg.message || 'failed'));
+        document.getElementById('w-head').textContent = cfg.data.agentName || 'Chat';
+
+        // Reuse session from localStorage if still valid (same conversation).
+        const stored = localStorage.getItem(STORAGE_KEY);
+        if (stored) {
+          const histRes = await fetch(`${API_BASE}/${WIDGET_TOKEN}/history`, { headers: { 'X-Widget-Session': stored } });
+          if (histRes.ok) {
+            const hist = await histRes.json();
+            if (hist.status === 'success') {
+              sessionId = stored;
+              const msgs = hist.data.messages || [];
+              if (msgs.length === 0) addMsg('assistant', cfg.data.welcomeMessage);
+              else msgs.forEach(m => addMsg(m.role, m.content));
+              document.getElementById('status').className = 'status ok';
+              document.getElementById('status').textContent = 'Resumed session: ' + sessionId.slice(0, 8) + '... (' + msgs.length + ' past messages)';
+              return;
+            }
+          }
+          // Stale session - purge and fall through to new session creation
+          localStorage.removeItem(STORAGE_KEY);
+        }
+
+        addMsg('assistant', cfg.data.welcomeMessage);
+        const sRes = await fetch(`${API_BASE}/${WIDGET_TOKEN}/session`, { method: 'POST' });
+        if (!sRes.ok) throw new Error('Session HTTP ' + sRes.status);
+        const s = await sRes.json();
+        if (s.status !== 'success') throw new Error('Session: ' + (s.message || 'failed'));
+        sessionId = s.data.sessionId;
+        localStorage.setItem(STORAGE_KEY, sessionId);
+
+        document.getElementById('status').className = 'status ok';
+        document.getElementById('status').textContent = 'New session: ' + sessionId.slice(0, 8) + '...';
+      } catch (e) {
+        document.getElementById('status').className = 'status err';
+        document.getElementById('status').textContent = 'Error: ' + e.message;
+      }
+    }
+
+    bubble.addEventListener('click', () => {
+      panel.classList.toggle('open');
+    });
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const text = input.value.trim();
+      if (!text || !sessionId) return;
+      addMsg('user', text);
+      input.value = '';
+      sendBtn.disabled = true;
+      addMsg('sys', 'thinking...');
+      const thinkingEl = msgsEl.lastChild;
+      try {
+        const r = await fetch(`${API_BASE}/${WIDGET_TOKEN}/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Widget-Session': sessionId },
+          body: JSON.stringify({ message: text }),
+        });
+        const body = await r.json();
+        thinkingEl.remove();
+        if (body.status === 'success') {
+          addMsg('assistant', body.data.content);
+        } else {
+          addMsg('sys', 'Error: ' + (body.message || 'failed'));
+        }
+      } catch (err) {
+        thinkingEl.remove();
+        addMsg('sys', 'Network error: ' + err.message);
+      } finally {
+        sendBtn.disabled = false;
+        input.focus();
+      }
+    });
+
+    bootstrap();
+  </script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+{
+  "attempt": 1,
+  "__harness_directives": {
+    "comment": "Run is created in STEP_BY_STEP execution mode. After the initial fire completes mcp:work for attempt=1, the harness invokes StepByStepExecutor to rerun mcp:work for attempt=2. Tests the SBS rerun call site (one of the six §1.2 sites being consolidated by the new loop).",
+    "execution_mode": "STEP_BY_STEP",
+    "rerun_requested": true,
+    "rerun_via": "StepByStepExecutor",
+    "rerun_node": "mcp:work",
+    "rerun_input": { "attempt": 2 }
+  }
+}

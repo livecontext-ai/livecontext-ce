@@ -1,0 +1,1736 @@
+@import "tailwindcss";
+@import "../styles/orbit.css";
+
+/* Configure dark mode to use class-based selector */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Map shadcn/ui theme color tokens to our custom CSS variables.
+   This makes classes like bg-background, text-foreground, ring-ring, etc. work.
+   Values chain to --bg-primary/--text-primary/etc. which change under .dark selector. */
+@theme {
+  /* shadcn/ui token mapping */
+  --color-background: var(--bg-primary);
+  --color-foreground: var(--text-primary);
+  --color-primary: var(--accent-primary);
+  --color-primary-foreground: var(--accent-foreground);
+  --color-muted-foreground: var(--text-muted);
+  --color-border: var(--border-color);
+  --color-ring: var(--accent-primary);
+
+  /* Semantic surface colors - selected/hover states for sidebar items, nav items, etc. */
+  --color-surface-hover: var(--bg-hover);
+
+}
+
+/* Ensure order classes are always available for flex ordering (tools before content) */
+.order-1 { order: 1 !important; }
+.order-2 { order: 2 !important; }
+
+/* Sidebar scroll - stable gutter reserves scrollbar space */
+.sidebar-scroll {
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 100, 100, 0.5) transparent;
+}
+
+.sidebar-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.sidebar-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-scroll::-webkit-scrollbar-thumb {
+  background: rgba(100, 100, 100, 0.5);
+  border-radius: 4px;
+}
+
+.sidebar-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 100, 100, 0.7);
+}
+
+/* Model selector dropdown scroll - thin scrollbar on the side */
+.model-selector-scroll {
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.model-selector-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.model-selector-scroll::-webkit-scrollbar-track {
+  background: transparent;
+  margin: 4px 0;
+}
+
+.model-selector-scroll::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+
+.model-selector-scroll::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Dark mode */
+.dark .model-selector-scroll::-webkit-scrollbar-thumb {
+  background: #3f3f3b;
+}
+
+.dark .model-selector-scroll::-webkit-scrollbar-thumb:hover {
+  background: #53534e;
+}
+
+/* Firefox */
+.model-selector-scroll {
+  scrollbar-color: #cbd5e1 transparent;
+}
+
+.dark .model-selector-scroll {
+  scrollbar-color: #3f3f3b transparent;
+}
+
+/* Hide scrollbars for horizontally-scrollable tab pills */
+.scrollbar-hide {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* Button contrast adjustments */
+.dark [data-variant="contrast"] {
+  background-color: #ededec;
+  color: #161615;
+  box-shadow: 0 12px 32px rgba(255, 255, 255, 0.08);
+}
+
+.dark [data-variant="contrast"]:hover {
+  background-color: #d5d4d0;
+  color: #161615;
+  box-shadow: 0 14px 36px rgba(255, 255, 255, 0.12);
+}
+
+/* Styles for Markdown rendering - see unified .prose pre below */
+
+.prose code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  font-size: 0.9em;
+}
+
+.prose code:not(pre code) {
+  font-family: inherit;
+  font-size: inherit;
+  background-color: var(--bg-secondary);
+  padding: 0.1em 0.4em;
+  border-radius: 0.25em;
+  color: inherit;
+}
+
+.dark .prose code:not(pre code) {
+  background-color: var(--bg-secondary);
+  color: inherit;
+}
+
+
+.prose pre {
+  background-color: var(--bg-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  padding: 0.75rem;
+  margin: 0.5rem 0;
+  border-radius: 0.75rem;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-x: auto;
+}
+
+.prose pre code,
+.prose pre code[class*="language-"],
+.prose code[class*="language-"],
+code[class*="language-"] {
+  background-color: transparent !important;
+  background: transparent !important;
+  color: inherit;
+  padding: 0;
+  margin: 0;
+  font-size: inherit;
+}
+
+/* Remove margins from divs inside pre and apply palette */
+.prose pre div {
+  margin: 0 !important;
+}
+
+.prose pre[class*="language-"] div {
+  margin: 0 !important;
+  background-color: var(--bg-secondary) !important;
+}
+
+/* Dark mode improvement for task lists and tables */
+.prose input[type="checkbox"] {
+  accent-color: var(--accent-primary) !important;
+  margin-right: 0.5rem !important;
+  width: 1.125rem !important;
+  height: 1.125rem !important;
+  cursor: pointer !important;
+  border: 2px solid var(--border-color) !important;
+  border-radius: 0.25rem !important;
+  background-color: var(--bg-primary) !important;
+  transition: all 0.2s ease !important;
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  -moz-appearance: none !important;
+}
+
+.prose input[type="checkbox"]:hover {
+  border-color: var(--accent-primary) !important;
+  background-color: var(--bg-secondary) !important;
+}
+
+.prose input[type="checkbox"]:checked {
+  background-color: var(--accent-primary) !important;
+  border-color: var(--accent-primary) !important;
+}
+
+/* Specific styles for disabled checkboxes */
+.prose input[type="checkbox"][disabled] {
+  accent-color: var(--accent-primary) !important;
+  background-color: var(--bg-primary) !important;
+  border-color: var(--border-color) !important;
+  opacity: 1 !important;
+}
+
+.prose input[type="checkbox"][disabled]:checked {
+  background-color: var(--accent-primary) !important;
+  border-color: var(--accent-primary) !important;
+}
+
+/* Styles for checkboxes in task lists */
+.prose .task-list-item input[type="checkbox"] {
+  accent-color: var(--accent-primary) !important;
+  margin-right: 0 !important;
+  margin-top: 0.125rem !important;
+  width: 1.125rem !important;
+  height: 1.125rem !important;
+  border: 2px solid var(--border-color) !important;
+  border-radius: 0.375rem !important;
+  background-color: var(--bg-primary) !important;
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  -moz-appearance: none !important;
+  flex-shrink: 0 !important;
+}
+
+.prose .task-list-item input[type="checkbox"]:checked {
+  background-color: var(--accent-primary) !important;
+  border-color: var(--accent-primary) !important;
+  position: relative !important;
+}
+
+/* Custom indicator for checked checkboxes */
+.prose .task-list-item input[type="checkbox"]:checked::after {
+  content: "✓" !important;
+  position: absolute !important;
+  top: 50% !important;
+  left: 50% !important;
+  transform: translate(-50%, -50%) !important;
+  color: white !important;
+  font-size: 0.75rem !important;
+  font-weight: bold !important;
+  line-height: 1 !important;
+}
+
+/* Specific styles for remark-gfm task lists */
+.prose .contains-task-list {
+  list-style: none;
+  padding-left: 0;
+  margin: 1rem 0;
+}
+
+.prose .task-list-item {
+  list-style: none;
+  margin-left: 0;
+  color: var(--text-primary) !important;
+  font-weight: 600;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  margin: 0.125rem 0;
+  border-radius: 0.5rem;
+  transition: background-color 0.2s ease;
+}
+
+.prose .task-list-item:hover {
+  background-color: var(--bg-secondary);
+}
+
+/* Task text alignment */
+.prose .task-list-item > *:not(input[type="checkbox"]) {
+  flex: 1;
+  line-height: 1.5;
+  margin: 0;
+  padding: 0;
+}
+
+.prose .task-list-item::marker {
+  display: none;
+}
+
+/* Styles for checked tasks */
+.prose .task-list-item:has(input[type="checkbox"]:checked) {
+  color: var(--text-muted);
+  text-decoration: line-through;
+  opacity: 0.8;
+}
+
+/* Styles for unchecked tasks */
+.prose .task-list-item:has(input[type="checkbox"]:not(:checked)) {
+  color: var(--text-primary);
+}
+
+/* Fallback for normal lists */
+.prose li:has(input[type="checkbox"]) {
+  list-style: none;
+  color: var(--text-primary);
+  font-weight: 500;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.25rem 0;
+}
+
+.prose li:has(input[type="checkbox"])::marker {
+  display: none;
+}
+
+/* Styles for tables - theme-aware */
+.prose table {
+  background-color: var(--bg-primary);
+  border-radius: 0.5rem;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+}
+
+.prose th {
+  background-color: var(--bg-secondary) !important;
+  color: var(--text-primary) !important;
+}
+
+.prose td {
+  background-color: var(--bg-primary);
+  color: var(--text-primary) !important;
+}
+
+/* Lists improvement in dark mode */
+.prose ul, .prose ol {
+  color: var(--text-primary) !important;
+}
+
+.prose li {
+  color: var(--text-primary) !important;
+}
+
+/* Styles for paragraphs and general text */
+.prose p {
+  color: var(--text-primary) !important;
+}
+
+/* Styles for table elements */
+.prose td {
+  color: var(--text-primary) !important;
+}
+
+/* Styles for links in Markdown */
+.prose a {
+  color: var(--accent-primary) !important;
+  text-decoration: none !important;
+  font-weight: 500 !important;
+  transition: color 0.2s ease !important;
+}
+
+.prose a:hover {
+  color: var(--accent-primary) !important;
+  opacity: 0.8 !important;
+  text-decoration: underline !important;
+}
+
+/* Styles for copy button in code blocks */
+.prose .group:hover .copy-button {
+  opacity: 1;
+}
+
+.copy-button {
+  transition: all 0.2s ease;
+}
+
+.copy-button:hover {
+  transform: scale(1.05);
+}
+
+@layer base {
+  :root {
+    /* Variables for light mode */
+    --bg-primary: #ffffff;
+    --bg-secondary: #f5f6f8;
+    --bg-tertiary: #eceff3;
+    --text-primary: #111827;
+    --text-secondary: #4b5563;
+    --text-muted: #6b7280;
+    --border-color: #d5dbe4;
+    --accent-primary: #0b0d16;
+    --accent-secondary: #1d2330;
+    --accent-hover: #151927;
+    --accent-foreground: #f6f7f9;
+    --shadow-color: rgba(11, 13, 22, 0.14);
+    --bg-hover: #e5e7eb;
+    --expression-bg: rgba(191, 219, 254, 0.5);
+    --expression-color: #1d4ed8;
+    --shimmer-color: rgba(255, 255, 255, 0.3);
+    --shimmer-color-strong: rgba(255, 255, 255, 0.3);
+  }
+
+  .dark {
+    /* Variables for dark mode - warm neutral */
+    --bg-primary: #171614;
+    --bg-secondary: #1f1e1b;
+    --bg-tertiary: #2a2925;
+    --text-primary: #edecea;
+    --text-secondary: #a39f97;
+    --text-muted: #736f67;
+    --border-color: #5e5a54;
+    --accent-primary: #edecea;
+    --accent-secondary: #c7c4bd;
+    --accent-hover: #d7d4ce;
+    --accent-foreground: #171614;
+    --shadow-color: rgba(0, 0, 0, 0.45);
+    --bg-hover: #57534e;
+    --expression-bg: rgba(56, 189, 248, 0.25);
+    --expression-color: #38bdf8;
+    --shimmer-color: rgba(23, 22, 20, 0.25);
+    --shimmer-color-strong: rgba(23, 22, 20, 0.4);
+
+    /* Override Tailwind grays with warm stone in dark mode only */
+    --color-gray-50: #fafaf9;
+    --color-gray-100: #f5f5f4;
+    --color-gray-200: #e7e5e4;
+    --color-gray-300: #d6d3d1;
+    --color-gray-400: #a8a29e;
+    --color-gray-500: #78716c;
+    --color-gray-600: #57534e;
+    --color-gray-700: #44403c;
+    --color-gray-800: #292524;
+    --color-gray-900: #1c1917;
+    --color-gray-950: #0c0a09;
+    --color-slate-50: #fafaf9;
+    --color-slate-100: #f5f5f4;
+    --color-slate-200: #e7e5e4;
+    --color-slate-300: #d6d3d1;
+    --color-slate-400: #a8a29e;
+    --color-slate-500: #78716c;
+    --color-slate-600: #57534e;
+    --color-slate-700: #44403c;
+    --color-slate-800: #292524;
+    --color-slate-900: #1c1917;
+    --color-slate-950: #0c0a09;
+  }
+
+  body {
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+}
+
+@layer components {
+  /* Expression variable highlighting in ExpressionEditor */
+  .token-expression {
+    background-color: var(--expression-bg);
+    color: var(--expression-color);
+    border-radius: 2px;
+    padding: 0 1px;
+  }
+
+  .bg-theme-primary {
+    background-color: var(--bg-primary);
+  }
+  
+  .bg-theme-secondary {
+    background-color: var(--bg-secondary);
+  }
+  
+  .bg-theme-tertiary {
+    background-color: var(--bg-tertiary);
+  }
+
+  .bg-theme-hover {
+    background-color: var(--bg-hover);
+  }
+  
+  .text-theme-primary {
+    color: var(--text-primary);
+  }
+  
+  .text-theme-secondary {
+    color: var(--text-secondary);
+  }
+  
+  .text-theme-muted {
+    color: var(--text-muted);
+  }
+  
+  .border-theme {
+    border-color: var(--border-color);
+  }
+  
+  .shadow-theme {
+    box-shadow: 0 4px 6px -1px var(--shadow-color);
+  }
+
+  /* Reusable hover classes for light/dark visibility */
+  .hover-row-datasource:hover {
+    background-color: #f3f4f6; /* gray-100 */
+  }
+  .dark .hover-row-datasource:hover {
+    background-color: #1f2937; /* gray-800 */
+  }
+
+  .hover-row-item:hover {
+    background-color: #fafafa; /* near gray-50 */
+  }
+  .dark .hover-row-item:hover {
+    background-color: #1f2937; /* gray-800 */
+  }
+
+  .focus-selected {
+    background-color: var(--bg-tertiary);
+  }
+  .focus-selected:hover {
+    background-color: var(--bg-tertiary);
+  }
+
+  /* Curseur de redimensionnement avec double fleche */
+  .cursor-resize-horizontal {
+    cursor: ew-resize;
+  }
+  
+  .cursor-resize-horizontal:hover {
+    cursor: ew-resize;
+  }
+
+  /* Enlever border-top pour les tr dans les tableaux avec divide-y */
+  tbody.divide-y > tr {
+    border-width: 0 !important;
+  }
+
+}
+
+/* Base styles for testing */
+body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-inter, 'Inter'), 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+}
+
+/* Custom animations */
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+/* Conversation Activity "go to message" jump: a brief accent ring ripple on the
+   target user bubble so the user sees which message was scrolled to. */
+@keyframes message-jump-flash {
+  0% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0); }
+  25% { box-shadow: 0 0 0 3px var(--accent-primary, #6366f1); }
+  100% { box-shadow: 0 0 0 8px rgba(99, 102, 241, 0); }
+}
+.message-jump-highlight {
+  animation: message-jump-flash 1.5s ease-out;
+  border-radius: 18px;
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-20px); }
+}
+
+@keyframes pulse-slow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes slide-in-left {
+  0% { transform: translateX(-100%); opacity: 0; }
+  100% { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes slide-in-right {
+  0% { transform: translateX(100%); opacity: 0; }
+  100% { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes fade-in-up {
+  0% { transform: translateY(30px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes float-grid {
+  0% { transform: translateY(0) translateX(0) scale(1); opacity: 0.5; }
+  50% { transform: translateY(-10px) translateX(10px) scale(1.05); opacity: 0.8; }
+  100% { transform: translateY(0) translateX(0) scale(1); opacity: 0.5; }
+}
+
+/* Animation classes */
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
+
+.animate-pulse-slow {
+  animation: pulse-slow 3s ease-in-out infinite;
+}
+
+.animate-slide-in-left {
+  animation: slide-in-left 0.8s ease-out;
+}
+
+.animate-slide-in-right {
+  animation: slide-in-right 0.8s ease-out;
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.8s ease-out;
+}
+
+.animate-float-grid {
+  animation: float-grid 8s infinite ease-in-out;
+}
+
+/* Animation delays */
+.animation-delay-1000 {
+  animation-delay: 1s;
+}
+
+.animation-delay-2000 {
+  animation-delay: 2s;
+}
+
+.animation-delay-3000 {
+  animation-delay: 3s;
+}
+
+/* Advanced hover effects */
+.hover-lift {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.hover-lift:hover {
+  transform: translateY(-8px) scale(1.02);
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+}
+
+/* Custom gradients */
+.gradient-text {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.gradient-border {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  padding: 2px;
+  border-radius: 1rem;
+}
+
+.gradient-border > * {
+  background: white;
+  border-radius: calc(1rem - 2px);
+}
+
+/* Glassmorphism effects */
+.glass {
+  background: rgba(255, 255, 255, 0.25);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+/* Buttons with 3D effects */
+.btn-3d {
+  position: relative;
+  transform-style: preserve-3d;
+  transition: all 0.2s ease;
+}
+
+.btn-3d:hover {
+  transform: translateY(-2px) rotateX(10deg);
+}
+
+.btn-3d:active {
+  transform: translateY(0) rotateX(0deg);
+}
+
+/* Particle effects */
+.particles {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.particle {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 50%;
+  animation: float 8s infinite linear;
+}
+
+/* Enhanced responsive design */
+@media (max-width: 640px) {
+  .hero-title {
+    font-size: 2.5rem;
+    line-height: 1.2;
+  }
+  
+  .hero-subtitle {
+    font-size: 1.125rem;
+    line-height: 1.6;
+  }
+}
+
+@media (min-width: 1024px) {
+  .hero-title {
+    font-size: 4.5rem;
+    line-height: 1.1;
+  }
+  
+  .hero-subtitle {
+    font-size: 1.5rem;
+    line-height: 1.5;
+  }
+}
+
+/* Scrollbar with default gray color */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Scrollbar for Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 #f1f5f9;
+}
+
+/* Scrollbar for IE/Edge */
+* {
+  -ms-overflow-style: auto;
+}
+
+/* Dark mode scrollbar */
+.dark ::-webkit-scrollbar-track {
+  background: #282826;
+  border-radius: 4px;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #3f3f3b;
+  border-radius: 4px;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #53534e;
+}
+
+/* Dark mode scrollbar for Firefox */
+.dark * {
+  scrollbar-color: #3f3f3b #282826;
+}
+
+/* Enhanced focus states */
+.focus-ring {
+  outline: none;
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.5);
+}
+
+/* Smooth transitions */
+.smooth-transition {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+
+
+/* Light parallax effects */
+.parallax-bg {
+  background-attachment: fixed;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+}
+
+/* Neon effects */
+.neon-glow {
+  box-shadow: 0 0 20px rgba(59, 130, 246, 0.5);
+}
+
+.neon-glow:hover {
+  box-shadow: 0 0 30px rgba(59, 130, 246, 0.8);
+}
+
+/* Entry animations for elements */
+.animate-on-scroll {
+  opacity: 0;
+  transform: translateY(30px);
+  transition: all 0.6s ease-out;
+}
+
+.animate-on-scroll.animate {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Morphing effects for shapes */
+.morph-shape {
+  transition: border-radius 0.3s ease;
+}
+
+.morph-shape:hover {
+  border-radius: 2rem;
+}
+
+/* Depth effects */
+.depth-shadow {
+  box-shadow: 
+    0 1px 3px rgba(0, 0, 0, 0.12),
+    0 1px 2px rgba(0, 0, 0, 0.24);
+  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+.depth-shadow:hover {
+  box-shadow: 
+    0 14px 28px rgba(0, 0, 0, 0.25),
+    0 10px 10px rgba(0, 0, 0, 0.22);
+}
+
+@keyframes float-slow {
+  0% { transform: translateY(0) translateX(0) rotate(0deg); }
+  50% { transform: translateY(-10px) translateX(10px) rotate(5deg); }
+  100% { transform: translateY(0) translateX(0) rotate(0deg); }
+}
+
+@keyframes float-medium {
+  0% { transform: translateY(0) translateX(0) rotate(0deg); }
+  50% { transform: translateY(-5px) translateX(5px) rotate(2deg); }
+  100% { transform: translateY(0) translateX(0) rotate(0deg); }
+}
+
+@keyframes float-fast {
+  0% { transform: translateY(0) translateX(0) rotate(0deg); }
+  50% { transform: translateY(-20px) translateX(20px) rotate(10deg); }
+  100% { transform: translateY(0) translateX(0) rotate(0deg); }
+}
+
+@keyframes float-particles {
+  0% { transform: translateY(0) translateX(0); opacity: 0.5; }
+  50% { transform: translateY(-10px) translateX(10px); opacity: 0.8; }
+  100% { transform: translateY(0) translateX(0); opacity: 0.5; }
+}
+
+@keyframes subtle-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+
+@keyframes slide-in-left {
+  0% { transform: translateX(-50px); opacity: 0; }
+  100% { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes slide-in-top {
+  0% { transform: translateY(-50px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes slide-in-right {
+  0% { transform: translateX(50px); opacity: 0; }
+  100% { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes slide-in-bottom {
+  0% { transform: translateY(50px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes fade-in {
+  0% { opacity: 0; transform: translateY(30px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+.animate-float-slow {
+  animation: float-slow 6s infinite ease-in-out;
+}
+
+.animate-float-medium {
+  animation: float-medium 4s infinite ease-in-out;
+}
+
+.animate-float-fast {
+  animation: float-fast 3s infinite ease-in-out;
+}
+
+.animate-float-particles {
+  animation: float-particles 8s infinite ease-in-out;
+}
+
+.animate-subtle-bounce {
+  animation: subtle-bounce 3s infinite ease-in-out;
+}
+
+.animate-slide-in-left {
+  animation: slide-in-left 1s ease-out;
+}
+
+.animate-slide-in-top {
+  animation: slide-in-top 1s ease-out;
+}
+
+.animate-slide-in-right {
+  animation: slide-in-right 1s ease-out;
+}
+
+.animate-slide-in-bottom {
+  animation: slide-in-bottom 1s ease-out;
+}
+
+.animate-fade-in {
+  animation: fade-in 1s ease-out;
+}
+
+/* Animations for workflow - Accelerated version */
+@keyframes step-1 {
+  0% { opacity: 0; transform: translateY(20px); }
+  3.33% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+
+
+@keyframes step-2 {
+  0% { opacity: 0; transform: translateY(20px); }
+  4.17% { opacity: 0; transform: translateY(20px); }
+  7.5% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes step-3 {
+  0% { opacity: 0; transform: translateY(20px); }
+  8.33% { opacity: 0; transform: translateY(20px); }
+  11.67% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes step-4 {
+  0% { opacity: 0; transform: translateY(20px); }
+  12.5% { opacity: 0; transform: translateY(20px); }
+  15.83% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes number-1 {
+  0% { opacity: 0; transform: scale(0); }
+  3.33% { opacity: 1; transform: scale(1); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes number-2 {
+  0% { opacity: 0; transform: scale(0); }
+  4.17% { opacity: 0; transform: scale(0); }
+  7.5% { opacity: 1; transform: scale(1); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes number-3 {
+  0% { opacity: 0; transform: scale(0); }
+  8.33% { opacity: 0; transform: scale(0); }
+  11.67% { opacity: 1; transform: scale(1); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes number-4 {
+  0% { opacity: 0; transform: scale(0); }
+  12.5% { opacity: 0; transform: scale(0); }
+  15.83% { opacity: 1; transform: scale(1); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes progress-line {
+  0% { width: 0%; }
+  3.33% { width: 25%; }
+  7.5% { width: 50%; }
+  11.67% { width: 75%; }
+  15.83% { width: 100%; }
+  100% { width: 100%; }
+}
+
+.animate-step-1 {
+  animation: step-1 30s ease-in-out infinite;
+}
+
+.animate-step-2 {
+  animation: step-2 30s ease-in-out infinite;
+}
+
+.animate-step-3 {
+  animation: step-3 30s ease-in-out infinite;
+}
+
+.animate-step-4 {
+  animation: step-4 30s ease-in-out infinite;
+}
+
+.animate-number-1 {
+  animation: number-1 30s ease-in-out infinite;
+}
+
+.animate-number-2 {
+  animation: number-2 30s ease-in-out infinite;
+}
+
+.animate-number-3 {
+  animation: number-3 30s ease-in-out infinite;
+}
+
+.animate-number-4 {
+  animation: number-4 30s ease-in-out infinite;
+}
+
+.animate-progress-line {
+  animation: progress-line 30s ease-in-out infinite;
+}
+
+/* Custom animations for pricing page */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slide-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.6s ease-out forwards;
+}
+
+.animate-slide-in-left {
+  animation: slide-in-left 0.6s ease-out forwards;
+}
+
+.animate-slide-in-right {
+  animation: slide-in-right 0.6s ease-out forwards;
+}
+
+.animate-scale-in {
+  animation: scale-in 0.6s ease-out forwards;
+}
+
+/* Staggered animation delays */
+.animate-delay-100 {
+  animation-delay: 100ms;
+}
+
+.animate-delay-200 {
+  animation-delay: 200ms;
+}
+
+.animate-delay-300 {
+  animation-delay: 300ms;
+}
+
+.animate-delay-400 {
+  animation-delay: 400ms;
+}
+
+.animate-delay-500 {
+  animation-delay: 500ms;
+}
+
+/* Enhanced hover effects */
+.hover-lift {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.hover-lift:hover {
+  transform: translateY(-8px);
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+}
+
+/* Smooth transitions for all interactive elements */
+* {
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, backdrop-filter;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 300ms;
+}
+
+/* Cursor pointer for all interactive elements */
+button,
+[role="button"],
+[role="tab"],
+[role="menuitem"],
+[role="option"],
+[tabindex]:not([tabindex="-1"]),
+a[href],
+input[type="button"],
+input[type="submit"],
+input[type="reset"],
+input[type="checkbox"],
+input[type="radio"],
+select,
+.cursor-pointer {
+  cursor: pointer;
+}
+
+button:disabled,
+[role="button"]:disabled,
+input:disabled {
+  cursor: not-allowed;
+}
+
+/* Custom select styling with better positioned chevron */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='m6 8 4 4 4-4'/%3e%3c/svg%3e");
+  background-position: right 8px center;
+  background-repeat: no-repeat;
+  background-size: 16px 16px;
+  padding-right: 32px !important;
+}
+
+/* Dark mode select chevron */
+.dark select {
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%9ca3af' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='m6 8 4 4 4-4'/%3e%3c/svg%3e");
+}
+
+/* Remove all focus outlines to avoid blue borders */
+*:focus {
+  outline: none !important;
+}
+
+button:focus,
+a:focus,
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none !important;
+}
+
+/* Enhanced focus states - Disabled to avoid blue border */
+button:focus,
+a:focus {
+  outline: none;
+}
+
+/* Ensure focus rings are not clipped by parent containers */
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+button:focus-visible,
+[role="button"]:focus-visible {
+  position: relative;
+  z-index: 1;
+}
+
+/* Allow focus rings to overflow Radix UI containers */
+[data-radix-dialog-content] {
+  overflow: visible !important;
+}
+
+/* But keep scroll on inner content containers */
+[data-radix-dialog-content] > div[class*="overflow"] {
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+
+/* Improved scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.1);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.5);
+}
+
+/* Dark mode scrollbar */
+.dark ::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* Specific font for LiveContext title */
+.livecontext-title {
+  font-family: 'Comfortaa', sans-serif;
+  font-weight: 200;
+}
+
+
+/* Disable animations on Radix UI Select content (keep transforms for positioning) */
+[data-radix-select-content],
+[data-radix-select-content] *,
+[data-radix-popper-content-wrapper],
+[data-radix-select-viewport] {
+  animation: none !important;
+  transition: none !important;
+}
+
+[data-radix-select-content][data-state],
+[data-radix-select-content][data-state="open"],
+[data-radix-select-content][data-state="closed"] {
+  animation: none !important;
+  transition: none !important;
+}
+
+/* Accordion animations */
+@keyframes accordion-down {
+  from {
+    height: 0;
+    opacity: 0;
+  }
+  to {
+    height: var(--radix-accordion-content-height);
+    opacity: 1;
+  }
+}
+
+@keyframes accordion-up {
+  from {
+    height: var(--radix-accordion-content-height);
+    opacity: 1;
+  }
+  to {
+    height: 0;
+    opacity: 0;
+  }
+}
+
+.animate-accordion-down {
+  animation: accordion-down 0.2s ease-out;
+}
+
+.animate-accordion-up {
+  animation: accordion-up 0.2s ease-out;
+}
+
+/* Streaming indicator - Red pulse animation */
+@keyframes streaming-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.streaming-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #dc2626; /* red-600 */
+  animation: streaming-pulse 1.5s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+/* Navigation loading bar animation */
+@keyframes loading-bar {
+  0% {
+    transform: translateX(-100%);
+  }
+  50% {
+    transform: translateX(200%);
+  }
+  100% {
+    transform: translateX(-100%);
+  }
+}
+
+/* Browser-style active tab - bottom corner curves */
+.browser-tab-active {
+  position: relative;
+  border: 1px solid var(--border-color);
+  border-bottom: none;
+}
+.browser-tab-active::before,
+.browser-tab-active::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  width: 8px;
+  height: 8px;
+  pointer-events: none;
+}
+.browser-tab-active::before {
+  left: -8px;
+  border-bottom-right-radius: 8px;
+  box-shadow: 2px 2px 0 0 var(--bg-primary);
+  border-right: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+}
+.browser-tab-active::after {
+  right: -8px;
+  border-bottom-left-radius: 8px;
+  box-shadow: -2px 2px 0 0 var(--bg-primary);
+  border-left: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+}
+
+/* Shimmer scan animation for workflow nodes - left to right like ChatGPT */
+@keyframes shimmer-scan {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@keyframes progress-indeterminate {
+  0% {
+    transform: translateX(-100%);
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(300%);
+    opacity: 0.4;
+  }
+}
+
+/* Shimmer text animation for chat tool activity - more visible contrast */
+.shimmer-text {
+  background: linear-gradient(
+    90deg,
+    #94a3b8 0%,
+    #94a3b8 35%,
+    #1e293b 50%,
+    #94a3b8 65%,
+    #94a3b8 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer-text 1.5s ease-in-out infinite;
+}
+
+/* Dark mode shimmer - more visible contrast */
+.dark .shimmer-text {
+  background: linear-gradient(
+    90deg,
+    #78716c 0%,
+    #78716c 35%,
+    #f5f5f4 50%,
+    #78716c 65%,
+    #78716c 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer-text 1.5s ease-in-out infinite;
+}
+
+@keyframes shimmer-text {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+/* Shimmer text animation - amber variant for awaiting approval */
+/* Narrower shimmer band (45%-55% instead of 35%-65%), slower animation (2.5s) */
+.shimmer-text-amber {
+  background: linear-gradient(
+    90deg,
+    #d97706 0%,
+    #d97706 45%,
+    #fbbf24 50%,
+    #d97706 55%,
+    #d97706 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer-text 2.5s ease-in-out infinite;
+}
+
+.dark .shimmer-text-amber {
+  background: linear-gradient(
+    90deg,
+    #fbbf24 0%,
+    #fbbf24 45%,
+    #fef3c7 50%,
+    #fbbf24 55%,
+    #fbbf24 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer-text 2.5s ease-in-out infinite;
+}
+
+/* Shimmer sweep animation for suggestion buttons */
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(200%);
+  }
+}
+
+/* Shimmer text for sidebar - subtle effect with dark base */
+.shimmer-text-visible {
+  background: linear-gradient(
+    90deg,
+    #1e293b 0%,
+    #1e293b 35%,
+    #94a3b8 50%,
+    #1e293b 65%,
+    #1e293b 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer-text 1.5s ease-in-out infinite;
+}
+
+.dark .shimmer-text-visible {
+  background: linear-gradient(
+    90deg,
+    #78716c 0%,
+    #78716c 35%,
+    #f5f5f4 50%,
+    #78716c 65%,
+    #78716c 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer-text 1.5s ease-in-out infinite;
+}
+
+/* Shimmer dot animation for pending tool calls */
+.shimmer-dot {
+  background: linear-gradient(
+    90deg,
+    #94a3b8 0%,
+    #94a3b8 30%,
+    #cbd5e1 50%,
+    #94a3b8 70%,
+    #94a3b8 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer-dot 1.5s ease-in-out infinite;
+}
+
+.dark .shimmer-dot {
+  background: linear-gradient(
+    90deg,
+    #64748b 0%,
+    #64748b 30%,
+    #94a3b8 50%,
+    #64748b 70%,
+    #64748b 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer-dot 1.5s ease-in-out infinite;
+}
+
+@keyframes shimmer-dot {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+/* Shimmer scan text - workflow style left-to-right scanning effect */
+.shimmer-scan-text {
+  position: relative;
+  color: #64748b;
+  overflow: hidden;
+}
+
+.shimmer-scan-text::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(100, 116, 139, 0.4) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: shimmer-scan 1.5s ease-in-out infinite;
+}
+
+.dark .shimmer-scan-text {
+  color: #94a3b8;
+}
+
+.dark .shimmer-scan-text::after {
+  background: linear-gradient(90deg, transparent 0%, rgba(148, 163, 184, 0.4) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: shimmer-scan 1.5s ease-in-out infinite;
+}
+
+/* Shimmer background for sidebar items - subtle scanning effect */
+.shimmer-bg {
+  position: relative;
+  overflow: hidden;
+  background-color: rgba(226, 232, 240, 0.5); /* slate-200 with opacity */
+}
+
+.shimmer-bg::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.6) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: shimmer-scan 1.5s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.dark .shimmer-bg {
+  background-color: rgba(71, 85, 105, 0.5); /* slate-600 with opacity */
+}
+
+.dark .shimmer-bg::after {
+  background: linear-gradient(90deg, transparent 0%, rgba(148, 163, 184, 0.3) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: shimmer-scan 1.5s ease-in-out infinite;
+}
+
+/* Shimmer effect overlay - adds shimmer WITHOUT changing background color */
+/* Use this when you want to keep the existing background and just add shimmer */
+.shimmer-effect {
+  position: relative;
+  overflow: hidden;
+}
+
+.shimmer-effect::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.4) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: shimmer-scan 1.5s ease-in-out infinite;
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+.dark .shimmer-effect::after {
+  background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.15) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: shimmer-scan 1.5s ease-in-out infinite;
+}
+
+/* Pulsing BLUE "running" border - overlays the application area while its
+   workflow run is executing, keeping the app itself visible (RunningBorder).
+   The whole ring fades in/out with a soft glow to signal "this app's current
+   epoch is running". `box-shadow` (inset ring + glow) so it adds no layout. */
+.app-running-border {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow:
+    inset 0 0 0 2px rgba(59, 130, 246, 0.90),  /* the ring */
+    inset 0 0 12px 0 rgba(59, 130, 246, 0.35), /* inner glow */
+    0 0 8px 0 rgba(59, 130, 246, 0.25);        /* soft outer glow */
+  animation: app-border-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes app-border-pulse {
+  0%, 100% { opacity: 0.4; }
+  50%      { opacity: 1; }
+}
+
+.dark .app-running-border {
+  box-shadow:
+    inset 0 0 0 2px rgba(96, 165, 250, 0.90),
+    inset 0 0 12px 0 rgba(96, 165, 250, 0.35),
+    0 0 8px 0 rgba(96, 165, 250, 0.25);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-running-border { animation: none; opacity: 0.85; }
+}
+
+/* Sound bar animation for speech recognition */
+@keyframes soundbar {
+  0%, 100% { height: 20%; }
+  50% { height: 100%; }
+}
+
+/* Side panel peek animation - slides in from right edge on mobile */
+@keyframes peekSlideIn {
+  0% { transform: translate(100%, -50%); opacity: 0; }
+  100% { transform: translate(0, -50%); opacity: 1; }
+}
+
+@keyframes peekPulse {
+  0%, 100% { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); }
+  50% { box-shadow: 0 4px 20px rgba(99, 102, 241, 0.3); }
+}
+
+@keyframes tool-call-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-tool-call-in {
+  animation: tool-call-in 0.25s ease-out;
+}
+
+/* ── Node Resizer handles & lines ── */
+/* Invisible by default, appear on node hover and selection */
+.node-resize-handle {
+  opacity: 0 !important;
+  width: 8px !important;
+  height: 8px !important;
+  border-radius: 2px !important;
+  background-color: #94a3b8 !important;
+  border: none !important;
+  transition: opacity 0.15s ease, background-color 0.15s ease !important;
+}
+
+.node-resize-line {
+  opacity: 0 !important;
+  border-color: #94a3b8 !important;
+  transition: opacity 0.15s ease !important;
+}
+
+/* Show on node hover */
+.react-flow__node:hover .node-resize-handle,
+.react-flow__node:hover .node-resize-line {
+  opacity: 0.5 !important;
+}
+
+/* Show on node selection */
+.react-flow__node.selected .node-resize-handle,
+.react-flow__node.selected .node-resize-line {
+  opacity: 0.6 !important;
+}
+
+/* Extra feedback when hovering directly on the handle */
+.node-resize-handle:hover {
+  opacity: 1 !important;
+  background-color: #64748b !important;
+}
+
+/* Dark mode adjustments */
+.dark .node-resize-handle {
+  background-color: #64748b !important;
+}
+
+.dark .node-resize-line {
+  border-color: #64748b !important;
+}
+
+.dark .node-resize-handle:hover {
+  background-color: #94a3b8 !important;
+}
+
+

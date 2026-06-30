@@ -1,0 +1,71 @@
+@layer utilities {
+  @keyframes orbit {
+    from {
+      transform: translate(-50%, -50%) rotate(calc(var(--angle, 0) * 1deg)) translateX(calc(var(--radius, 120) * 1px));
+    }
+    to {
+      transform: translate(-50%, -50%) rotate(calc(360deg + (var(--angle, 0) * 1deg))) translateX(calc(var(--radius, 120) * 1px));
+    }
+  }
+
+  .animate-orbit {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 60px;
+    height: 60px;
+    transform-origin: center;
+    transform: translate(-50%, -50%) rotate(calc(var(--angle, 0) * 1deg)) translateX(calc(var(--radius, 120) * 1px));
+    animation: orbit 8s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+    will-change: transform;
+  }
+
+  .animate-orbit.reverse {
+    animation-direction: reverse;
+    animation-timing-function: cubic-bezier(0.55, 0.06, 0.68, 0.19);
+  }
+
+  /* Classe pour les logos sans animation - positionnement correct */
+  .orbit-logo {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 60px;
+    height: 60px;
+    transform-origin: center;
+    transform: translate(-50%, -50%) rotate(calc(var(--angle, 0) * 1deg)) translateX(calc(var(--radius, 120) * 1px));
+    will-change: transform;
+  }
+
+
+  .orbit-item {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    transform: translate(calc(var(--radius, 120) * 1px), -50%) translateZ(0);
+    will-change: transform;
+  }
+
+  .ring {
+    @apply pointer-events-none absolute inset-0 rounded-full;
+    border: 1px solid rgb(0 0 0 / 0.07);
+  }
+
+  .ring-dark {
+    border-color: rgb(249 250 251 / 0.07);
+  }
+
+  .ring-grad {
+    background-image:
+      linear-gradient(to bottom, rgba(0,0,0,0.05) 0%, rgba(249,250,251,0) 55%);
+  }
+  .ring-grad-dark {
+    background-image:
+      linear-gradient(to bottom, rgba(249,250,251,0.03) 0%, rgba(249,250,251,0) 55%);
+  }
+
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-orbit { animation: none !important; }
+  }
+}

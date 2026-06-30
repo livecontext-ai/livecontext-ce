@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="a4bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F97316"/>
+      <stop offset="100%" stop-color="#C2410C"/>
+    </linearGradient>
+    <clipPath id="a4clip">
+      <circle cx="50" cy="50" r="50"/>
+    </clipPath>
+  </defs>
+  <circle cx="50" cy="50" r="50" fill="url(#a4bg)"/>
+
+  <!-- === FLOATING EMBERS === -->
+  <g clip-path="url(#a4clip)">
+    <!-- Ember 1 -->
+    <circle cx="18" cy="90" r="1.1" fill="white">
+      <animate attributeName="cy" values="90;10" dur="7s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.35;0" keyTimes="0;1" dur="7s" repeatCount="indefinite"/>
+    </circle>
+    <!-- Ember 2 -->
+    <circle cx="34" cy="90" r="0.9" fill="white">
+      <animate attributeName="cy" values="90;8" dur="9s" begin="1.2s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.3;0" keyTimes="0;1" dur="9s" begin="1.2s" repeatCount="indefinite"/>
+    </circle>
+    <!-- Ember 3 -->
+    <circle cx="48" cy="90" r="1.3" fill="white">
+      <animate attributeName="cy" values="90;12" dur="6s" begin="0.4s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.35;0" keyTimes="0;1" dur="6s" begin="0.4s" repeatCount="indefinite"/>
+    </circle>
+    <!-- Ember 4 -->
+    <circle cx="62" cy="90" r="0.8" fill="white">
+      <animate attributeName="cy" values="90;14" dur="10s" begin="2.5s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.3;0" keyTimes="0;1" dur="10s" begin="2.5s" repeatCount="indefinite"/>
+    </circle>
+    <!-- Ember 5 -->
+    <circle cx="74" cy="90" r="1.1" fill="white">
+      <animate attributeName="cy" values="90;10" dur="8s" begin="3.1s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.35;0" keyTimes="0;1" dur="8s" begin="3.1s" repeatCount="indefinite"/>
+    </circle>
+    <!-- Ember 6 -->
+    <circle cx="86" cy="90" r="0.9" fill="white">
+      <animate attributeName="cy" values="90;16" dur="7.5s" begin="1.8s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.3;0" keyTimes="0;1" dur="7.5s" begin="1.8s" repeatCount="indefinite"/>
+    </circle>
+    <!-- Ember 7 -->
+    <circle cx="26" cy="90" r="0.7" fill="white">
+      <animate attributeName="cy" values="90;18" dur="9.5s" begin="4.2s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.3;0" keyTimes="0;1" dur="9.5s" begin="4.2s" repeatCount="indefinite"/>
+    </circle>
+    <!-- Ember 8 -->
+    <circle cx="56" cy="90" r="1.0" fill="white">
+      <animate attributeName="cy" values="90;12" dur="6.8s" begin="2.2s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.35;0" keyTimes="0;1" dur="6.8s" begin="2.2s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <!-- Bouncing face group -->
+  <g>
+    <animateTransform attributeName="transform" type="translate" values="0,0;0,-3;0,0;0,-3;0,0" dur="1.8s" keyTimes="0;0.15;0.4;0.55;1" repeatCount="indefinite"/>
+    <!-- Wide excited eyes -->
+    <ellipse cx="38" cy="43" rx="6.5" ry="5.5" fill="white" opacity="0.9">
+      <animate attributeName="ry" values="5.5;5.5;0.5;5.5;5.5" keyTimes="0;0.85;0.89;0.93;1" dur="4s" repeatCount="indefinite"/>
+    </ellipse>
+    <ellipse cx="62" cy="43" rx="6.5" ry="5.5" fill="white" opacity="0.9">
+      <animate attributeName="ry" values="5.5;5.5;0.5;5.5;5.5" keyTimes="0;0.85;0.89;0.93;1" dur="4s" repeatCount="indefinite"/>
+    </ellipse>
+    <!-- Open mouth "D" shape -->
+    <path d="M42,57 Q50,67 58,57 Z" fill="white" fill-opacity="0.2" stroke="white" stroke-width="1.8" stroke-linecap="round" opacity="0.85"/>
+  </g>
+</svg>

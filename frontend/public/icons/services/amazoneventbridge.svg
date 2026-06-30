@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Background: rounded rect #232F3E -->
+  <rect width="256" height="256" rx="28" ry="28" fill="#232F3E"/>
+
+  <!-- Central horizontal event bus bar -->
+  <rect x="36" y="116" width="184" height="24" rx="12" ry="12" fill="#FF4F8B"/>
+
+  <!-- Left source node (circle) -->
+  <circle cx="56" cy="80" r="18" fill="none" stroke="#FF4F8B" stroke-width="5"/>
+  <circle cx="56" cy="80" r="7" fill="#FF4F8B"/>
+  <!-- Connector: left source node down to bus -->
+  <line x1="56" y1="98" x2="56" y2="116" stroke="#FF4F8B" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- Center-left source node (circle) -->
+  <circle cx="112" cy="64" r="18" fill="none" stroke="#FF4F8B" stroke-width="5"/>
+  <circle cx="112" cy="64" r="7" fill="#FF4F8B"/>
+  <!-- Connector: center-left source node down to bus -->
+  <line x1="112" y1="82" x2="112" y2="116" stroke="#FF4F8B" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- Right target node - Lambda-style hexagon -->
+  <polygon points="200,56 218,66 218,86 200,96 182,86 182,66" fill="none" stroke="#FF4F8B" stroke-width="5" stroke-linejoin="round"/>
+  <!-- Connector: right target node down to bus -->
+  <line x1="200" y1="96" x2="200" y2="116" stroke="#FF4F8B" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- Left target node - SQS queue shape (rounded rect) -->
+  <rect x="38" y="162" width="36" height="28" rx="6" ry="6" fill="none" stroke="#FF4F8B" stroke-width="5"/>
+  <!-- Connector: bus down to left target -->
+  <line x1="56" y1="140" x2="56" y2="162" stroke="#FF4F8B" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- Center target node - Lambda-style hexagon -->
+  <polygon points="128,164 143,173 143,190 128,199 113,190 113,173" fill="none" stroke="#FF4F8B" stroke-width="5" stroke-linejoin="round"/>
+  <!-- Connector: bus down to center target -->
+  <line x1="128" y1="140" x2="128" y2="164" stroke="#FF4F8B" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- Right target node - SNS topic (triangle) -->
+  <polygon points="200,162 220,196 180,196" fill="none" stroke="#FF4F8B" stroke-width="5" stroke-linejoin="round"/>
+  <!-- Connector: bus down to right target -->
+  <line x1="200" y1="140" x2="200" y2="162" stroke="#FF4F8B" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- Event flow arrows on the bus (right-pointing chevrons) -->
+  <polyline points="88,122 96,128 88,134" fill="none" stroke="#232F3E" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="152,122 160,128 152,134" fill="none" stroke="#232F3E" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

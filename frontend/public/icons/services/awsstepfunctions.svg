@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <rect width="256" height="256" rx="28" ry="28" fill="#232F3E"/>
+  <!-- Top node circle -->
+  <circle cx="128" cy="48" r="18" fill="none" stroke="#CD2264" stroke-width="6"/>
+  <!-- Left node circle -->
+  <circle cx="68" cy="140" r="18" fill="none" stroke="#CD2264" stroke-width="6"/>
+  <!-- Right node circle -->
+  <circle cx="188" cy="140" r="18" fill="none" stroke="#CD2264" stroke-width="6"/>
+  <!-- Bottom node circle -->
+  <circle cx="128" cy="210" r="18" fill="none" stroke="#CD2264" stroke-width="6"/>
+  <!-- Top to Left line -->
+  <line x1="114" y1="62" x2="82" y2="126" stroke="#CD2264" stroke-width="5" stroke-linecap="round"/>
+  <!-- Top to Right line -->
+  <line x1="142" y1="62" x2="174" y2="126" stroke="#CD2264" stroke-width="5" stroke-linecap="round"/>
+  <!-- Left to Bottom line -->
+  <line x1="82" y1="154" x2="114" y2="196" stroke="#CD2264" stroke-width="5" stroke-linecap="round"/>
+  <!-- Right to Bottom line -->
+  <line x1="174" y1="154" x2="142" y2="196" stroke="#CD2264" stroke-width="5" stroke-linecap="round"/>
+  <!-- Arrow heads on Left to Bottom -->
+  <polygon points="114,196 104,182 124,182" fill="#CD2264"/>
+  <!-- Arrow heads on Right to Bottom -->
+  <polygon points="142,196 132,182 152,182" fill="#CD2264"/>
+  <!-- Diamond/decision shape in center -->
+  <polygon points="128,90 148,115 128,140 108,115" fill="none" stroke="#CD2264" stroke-width="5" stroke-linejoin="round"/>
+</svg>
