@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { usePathname, useSearchParams } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 
 // Custom event name for sidebar navigation
 export const SIDEBAR_NAVIGATION_EVENT = 'sidebar-navigation-start';
@@ -13,12 +13,17 @@ export function triggerSidebarNavigation() {
   }
 }
 
+// If the pathname does not change within this window after a start, the click
+// did not actually navigate (same page, modal, blocked/guarded nav), so the bar
+// self-clears instead of crawling to 95% and getting stuck.
+const NAV_SAFETY_TIMEOUT_MS = 4000;
+
 export default function NavigationLoader() {
   const [isLoading, setIsLoading] = useState(false);
   const [progress, setProgress] = useState(0);
   const pathname = usePathname();
-  const searchParams = useSearchParams();
   const animationRef = useRef<number | null>(null);
+  const safetyTimerRef = useRef<number | null>(null);
   const startTimeRef = useRef<number>(0);
   const previousPathRef = useRef<string>('');
   const isInitializedRef = useRef<boolean>(false);
@@ -27,6 +32,27 @@ export default function NavigationLoader() {
   const easeOutCubic = (t: number): number => {
     return 1 - Math.pow(1 - t, 3);
   };
+
+  // Complete progress animation smoothly (defined before startProgress so the
+  // safety timer can reference it).
+  const completeProgress = useCallback(() => {
+    if (safetyTimerRef.current) {
+      clearTimeout(safetyTimerRef.current);
+      safetyTimerRef.current = null;
+    }
+    if (animationRef.current) {
+      cancelAnimationFrame(animationRef.current);
+    }
+
+    // Animate to 100% smoothly
+    setProgress(100);
+
+    // Hide after animation completes
+    setTimeout(() => {
+      setIsLoading(false);
+      setProgress(0);
+    }, 300);
+  }, []);
 
   // Start progress animation with smooth easing
   const startProgress = useCallback(() => {
@@ -38,6 +64,14 @@ export default function NavigationLoader() {
     if (animationRef.current) {
       cancelAnimationFrame(animationRef.current);
     }
+
+    // Arm the safety net: if no route change lands, auto-clear.
+    if (safetyTimerRef.current) {
+      clearTimeout(safetyTimerRef.current);
+    }
+    safetyTimerRef.current = window.setTimeout(() => {
+      completeProgress();
+    }, NAV_SAFETY_TIMEOUT_MS);
 
     const animate = (currentTime: number) => {
       const elapsed = currentTime - startTimeRef.current;
@@ -62,23 +96,7 @@ export default function NavigationLoader() {
     };
 
     animationRef.current = requestAnimationFrame(animate);
-  }, []);
-
-  // Complete progress animation smoothly
-  const completeProgress = useCallback(() => {
-    if (animationRef.current) {
-      cancelAnimationFrame(animationRef.current);
-    }
-
-    // Animate to 100% smoothly
-    setProgress(100);
-
-    // Hide after animation completes
-    setTimeout(() => {
-      setIsLoading(false);
-      setProgress(0);
-    }, 300);
-  }, []);
+  }, [completeProgress]);
 
   // Listen for sidebar navigation events
   useEffect(() => {
@@ -90,9 +108,11 @@ export default function NavigationLoader() {
     return () => window.removeEventListener(SIDEBAR_NAVIGATION_EVENT, handleSidebarNavigation);
   }, [startProgress]);
 
-  // Detect route changes to complete the progress
+  // Complete the bar only on a real PAGE change (pathname). A search-param-only
+  // change (opening a modal, filters, pagination) is not a page navigation and
+  // must not drive the bar.
   useEffect(() => {
-    const currentPath = pathname + (searchParams?.toString() ? `?${searchParams.toString()}` : '');
+    const currentPath = pathname || '';
 
     // Initialize previous path on first render
     if (!isInitializedRef.current) {
@@ -101,20 +121,22 @@ export default function NavigationLoader() {
       return;
     }
 
-    // If route has changed and we're loading, complete the progress
     if (previousPathRef.current !== currentPath) {
       if (isLoading) {
         completeProgress();
       }
       previousPathRef.current = currentPath;
     }
-  }, [pathname, searchParams, isLoading, completeProgress]);
+  }, [pathname, isLoading, completeProgress]);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
+      }
+      if (safetyTimerRef.current) {
+        clearTimeout(safetyTimerRef.current);
       }
     };
   }, []);

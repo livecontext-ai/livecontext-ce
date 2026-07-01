@@ -278,9 +278,9 @@ public class InternalAgentController {
 
         AgentEntity created = agentService.createAgent(
             tenantId,
-            extractor.getString(request, "name"),
-            extractor.getString(request, "description"),
-            extractor.getString(request, "systemPrompt"),
+            extractor.getText(request, "name"),
+            extractor.getText(request, "description"),
+            extractor.getText(request, "systemPrompt"),
             extractor.getString(request, "modelProvider"),
             extractor.getString(request, "modelName"),
             extractor.getBigDecimal(request, "temperature"),
@@ -341,9 +341,9 @@ public class InternalAgentController {
         AgentEntity updated = agentService.updateAgent(
             id,
             tenantId,
-            extractor.getString(request, "name"),
-            extractor.getString(request, "description"),
-            extractor.getString(request, "systemPrompt"),
+            extractor.getText(request, "name"),
+            extractor.getText(request, "description"),
+            extractor.getText(request, "systemPrompt"),
             extractor.getString(request, "modelProvider"),
             extractor.getString(request, "modelName"),
             extractor.getBigDecimal(request, "temperature"),

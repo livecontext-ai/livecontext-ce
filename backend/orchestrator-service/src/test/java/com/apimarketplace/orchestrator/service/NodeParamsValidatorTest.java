@@ -200,14 +200,17 @@ class NodeParamsValidatorTest {
         private void stubInterfaceSchema() {
             NodeTypeDocumentationEntity doc = new NodeTypeDocumentationEntity();
             doc.setType("interface");
-            // Mirrors the V228 + V229 + V230 DB doc state (canonical keys are camelCase).
+            // Mirrors the V228 + V229 + V230 + V376 DB doc state (canonical keys are camelCase).
             doc.setParameters(Map.of(
                 "interface_id", Map.of("type", "uuid", "required", true),
                 "variable_mapping", Map.of("type", "object", "required", false),
                 "action_mapping", Map.of("type", "object", "required", false),
                 "isEntryInterface", Map.of("type", "boolean", "required", false),
                 "generateScreenshot", Map.of("type", "boolean", "required", false),
-                "exposeRenderedSource", Map.of("type", "boolean", "required", false)
+                "exposeRenderedSource", Map.of("type", "boolean", "required", false),
+                "generatePdf", Map.of("type", "boolean", "required", false),
+                "pdfFormat", Map.of("type", "string", "required", false),
+                "pdfLandscape", Map.of("type", "boolean", "required", false)
             ));
             when(nodeLibraryService.findByType("interface")).thenReturn(Optional.of(doc));
         }
@@ -265,6 +268,34 @@ class NodeParamsValidatorTest {
                 "is_entry_interface", true
             ));
             assertThat(result.valid()).isTrue();
+        }
+
+        @Test
+        @DisplayName("camelCase generatePdf / pdfFormat / pdfLandscape accepted (canonical keys)")
+        void camelCasePdfParamsAccepted() {
+            stubInterfaceSchema();
+            ValidationResult result = validator.validate("interface", Map.of(
+                "interface_id", "11111111-2222-3333-4444-555555555555",
+                "generatePdf", true,
+                "pdfFormat", "A4",
+                "pdfLandscape", false
+            ));
+            assertThat(result.valid()).isTrue();
+        }
+
+        @Test
+        @DisplayName("snake_case generate_pdf / pdf_format / pdf_landscape accepted (alias) - regression: builder MCP rejected these")
+        void snakeCasePdfParamsAccepted() {
+            stubInterfaceSchema();
+            ValidationResult result = validator.validate("interface", Map.of(
+                "interface_id", "11111111-2222-3333-4444-555555555555",
+                "generate_pdf", true,
+                "pdf_format", "A4",
+                "pdf_landscape", true
+            ));
+            assertThat(result.valid())
+                .as("snake_case PDF params must validate via PARAM_ALIASES (caught live via the workflow MCP tool)")
+                .isTrue();
         }
 
         @Test

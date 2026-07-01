@@ -40,6 +40,9 @@ public class AuthPricingSyncClient {
     private final RestTemplate restTemplate;
     private final String authServiceUrl;
 
+    /** Ceiling of {@code auth.model_pricing.input_rate/output_rate} (NUMERIC(10,6)). */
+    private static final BigDecimal MAX_RATE = new BigDecimal("9999.999999");
+
     public AuthPricingSyncClient(RestTemplate restTemplate,
                                  @Value("${services.auth-service.url:http://localhost:8083}") String authServiceUrl) {
         this.restTemplate = restTemplate;
@@ -48,6 +51,15 @@ public class AuthPricingSyncClient {
 
     public void sync(String provider, String modelId, BigDecimal priceInput, BigDecimal priceOutput,
                      String providerKind) {
+        // Guard the billing mirror: a sentinel/garbage catalog price (e.g. the openrouter/auto
+        // router's "-1" list price, which x1e6 becomes -1000000) would 500 the sync with a Postgres
+        // numeric overflow (input_rate/output_rate are NUMERIC(10,6)) AND, if the column were ever
+        // widened, bill users a NEGATIVE provider cost. A non-billable rate must not reach the mirror.
+        if (outOfBillingRange(priceInput) || outOfBillingRange(priceOutput)) {
+            log.warn("Skipping pricing sync for {}/{}: non-billable rate input={} output={} (auth allows 0..{})",
+                    provider, modelId, priceInput, priceOutput, MAX_RATE);
+            return;
+        }
         try {
             Map<String, Object> body = new HashMap<>();
             body.put("provider", provider);
@@ -67,5 +79,11 @@ public class AuthPricingSyncClient {
             log.warn("Failed to sync pricing to auth-service for {}/{}: {}",
                     provider, modelId, e.getMessage());
         }
+    }
+
+    /** A rate the billing mirror cannot store: negative, or above the NUMERIC(10,6) ceiling.
+     *  {@code null} is in range (the sync coerces it to ZERO). */
+    private static boolean outOfBillingRange(BigDecimal rate) {
+        return rate != null && (rate.signum() < 0 || rate.compareTo(MAX_RATE) > 0);
     }
 }

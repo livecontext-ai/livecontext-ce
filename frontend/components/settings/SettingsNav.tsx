@@ -91,7 +91,11 @@ export function SettingsNav() {
                         <button
                             key={item.href}
                             onClick={() => {
-                                triggerSidebarNavigation();
+                                // Only show the navigation progress bar when actually
+                                // going to a different settings page (not the current one).
+                                if (!isActive) {
+                                    triggerSidebarNavigation();
+                                }
                                 safeNavigate(item.href);
                             }}
                             className={cn(

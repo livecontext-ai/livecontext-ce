@@ -17,6 +17,8 @@ import java.util.List;
  * - screenshot: object (FileRef) - PNG capture of the rendered interface (only present when
  *   generateScreenshot=true on the node AND the renderer sidecar successfully captured it).
  *   Conditional: no default, absent when not generated.
+ * - pdf: object (FileRef) - PDF rendering of the interface (only present when generatePdf=true on
+ *   the node AND the renderer sidecar successfully rendered it). Conditional: absent when not generated.
  * - rendered_html / rendered_css / rendered_js: string - the resolved interface templates
  *   (only present when exposeRenderedSource=true on the node AND the renderer returned a
  *   non-null value for that part). Conditional: no default, absent when not exposed.
@@ -58,6 +60,16 @@ public class InterfaceNodeSpec implements NodeSpec {
                         + "downstream consumers should null-guard or use a SpEL pipe default.")
                     .build(),
                 OutputFieldDef.builder()
+                    .key("pdf")
+                    .type("object")
+                    .description("FileRef to a PDF rendering of the interface. Only emitted when the "
+                        + "generatePdf parameter is true AND the renderer sidecar returns a successful "
+                        + "render. Page size follows pdfFormat (A4/Letter/Legal, default A4) and "
+                        + "pdfLandscape. Best-effort: a failed render leaves this field absent - map the "
+                        + "whole FileRef into a file-accepting param (email attachment, Telegram "
+                        + "send_document, agent file input) to use it.")
+                    .build(),
+                OutputFieldDef.builder()
                     .key("rendered_html")
                     .type("string")
                     .description("Resolved HTML template of the rendered interface. Only emitted when "
@@ -81,7 +93,7 @@ public class InterfaceNodeSpec implements NodeSpec {
                     .build()
             ))
             .keywords(List.of("interface", "ui", "page", "form", "display", "screenshot", "capture",
-                "html", "css", "javascript", "source", "template"))
+                "pdf", "document", "print", "html", "css", "javascript", "source", "template"))
             .build();
     }
 }

@@ -26,7 +26,6 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -51,7 +50,6 @@ class SkillServiceUserOverrideTest {
     @Mock private AuthClient authClient;
     @Mock private StorageBreakdownService breakdownService;
     @Mock private UserSkillOverrideRepository userSkillOverrideRepository;
-    @Mock private org.springframework.transaction.PlatformTransactionManager transactionManager;
 
     @InjectMocks private SkillService skillService;
 
@@ -227,113 +225,40 @@ class SkillServiceUserOverrideTest {
         assertThat(overrides).containsEntry(SKILL_ID, true).containsEntry(SKILL_ID_2, false).hasSize(2);
     }
 
-    // ===== seedDefaultSkills (V320 regression) =====
-
-    @Test
-    @DisplayName("seedDefaultSkills marks every seeded built-in skill is_default_active=true so a NEW tenant gets the out-of-the-box active defaults (pre-fix they seeded FALSE → unchecked)")
-    void seedDefaultSkillsMarksSeededRowsDefaultActive() {
-        // Nothing seeded yet for this tenant → every DefaultSkillsProvider entry is created.
-        when(skillRepository.findByTenantIdAndDefaultKey(any(), any())).thenReturn(Optional.empty());
-        when(skillRepository.save(any(SkillEntity.class))).thenAnswer(inv -> inv.getArgument(0));
-
-        int seeded = skillService.seedDefaultSkills("tenant_new");
-
-        assertThat(seeded).isGreaterThan(0);
-        ArgumentCaptor<SkillEntity> captor = ArgumentCaptor.forClass(SkillEntity.class);
-        verify(skillRepository, atLeastOnce()).save(captor.capture());
-        assertThat(captor.getAllValues())
-            .as("every seeded built-in skill must be default-active, a real default_key row, and active")
-            .allSatisfy(s -> {
-                assertThat(s.getIsDefaultActive()).isTrue();
-                assertThat(s.getDefaultKey()).isNotBlank();
-                assertThat(s.getIsActive()).isTrue();
-            });
-    }
-
-    // ===== listSkills auto-seed (Phase 6c regression, 2026-06-11) =====
+    // ===== seedDefaultSkills - dormant while no built-in defaults are registered =====
     //
-    // Post-V261 EVERY real request carries X-Organization-ID - the cloud
-    // gateway and the CE MonolithSecurityFilter both fall back to the caller's
-    // default/personal org when no active-org claim is usable. The Phase 6c
-    // org-aware listSkills (e1c10170f) only seeded on the organizationId==null
-    // branch, which real traffic can therefore never reach: every tenant
-    // created after its deploy got ZERO built-in skills (no Deep Research in
-    // the composer, nothing injected into general chat). Reproduced end-to-end
-    // on a fresh CE stack 2026-06-11.
+    // The "Deep Research" built-in was removed (DefaultSkillsProvider registers
+    // nothing now; global skills come from the cloud skill bundle), so the whole
+    // seeding path is a no-op until a built-in is re-added. These tests pin that
+    // dormant contract; the design guard in the first test fails loudly if a
+    // built-in reappears, so the richer per-row seed coverage gets restored then.
 
     @Test
-    @DisplayName("listSkills seeds the tenant's missing built-in defaults even when the request carries an organizationId (pre-fix the org branch skipped seeding and real traffic always has an org → new tenants got zero built-ins)")
-    void listSkillsSeedsDefaultsOnOrgBranch() {
-        when(skillRepository.countByTenantIdAndDefaultKeyIsNotNull(USER)).thenReturn(0L);
-        when(skillRepository.findByTenantIdAndDefaultKey(any(), any())).thenReturn(Optional.empty());
-        when(skillRepository.save(any(SkillEntity.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(skillRepository.findVisibleForOrganization(ORG)).thenReturn(List.of());
-
-        skillService.listSkills(USER, ORG);
-
-        verify(skillRepository, atLeastOnce()).save(any(SkillEntity.class));
-        verify(skillRepository).findVisibleForOrganization(ORG);
-    }
-
-    @Test
-    @DisplayName("listSkills does NOT re-seed when the tenant already has every built-in default (idempotence guard - the org-branch seed must not write on every list call)")
-    void listSkillsSkipsSeedWhenDefaultsPresent() {
-        when(skillRepository.countByTenantIdAndDefaultKeyIsNotNull(USER))
-                .thenReturn((long) com.apimarketplace.agent.skills.DefaultSkillsProvider.getAll().size());
-        when(skillRepository.findVisibleForOrganization(ORG)).thenReturn(List.of());
-
-        skillService.listSkills(USER, ORG);
-
-        verify(skillRepository, never()).save(any(SkillEntity.class));
-    }
-
-    @Test
-    @DisplayName("seedDefaultSkills stamps seeded rows with the tenant's PERSONAL org (resolved via AuthClient) so a first fetch from a TEAM workspace cannot leak the user's built-in defaults into the shared org scope")
-    void seedDefaultSkillsStampsPersonalOrg() {
-        when(authClient.getDefaultOrganizationIdForUser("tenant_new")).thenReturn("personal-org-1");
-        when(skillRepository.findByTenantIdAndDefaultKey(any(), any())).thenReturn(Optional.empty());
-        when(skillRepository.save(any(SkillEntity.class))).thenAnswer(inv -> inv.getArgument(0));
-
-        skillService.seedDefaultSkills("tenant_new");
-
-        ArgumentCaptor<SkillEntity> captor = ArgumentCaptor.forClass(SkillEntity.class);
-        verify(skillRepository, atLeastOnce()).save(captor.capture());
-        assertThat(captor.getAllValues())
-            .as("seeded rows must be stamped with the personal org, never the request's active org")
-            .allSatisfy(s -> assertThat(s.getOrganizationId()).isEqualTo("personal-org-1"));
-    }
-
-    @Test
-    @DisplayName("seedDefaultSkills SKIPS (returns 0, no throw) a row whose REQUIRES_NEW insert hits the V334 unique index - the concurrent-seeder loser must not poison the caller's listSkills transaction")
-    void seedDefaultSkillsSkipsConcurrentDuplicateInsert() {
-        // Wire a transaction manager so insertSeededSkill takes the
-        // REQUIRES_NEW + saveAndFlush path (null manager = degraded save path
-        // covered by the other seed tests).
-        ReflectionTestUtils.setField(skillService, "transactionManager", transactionManager);
-        when(skillRepository.findByTenantIdAndDefaultKey(any(), any())).thenReturn(Optional.empty());
-        when(skillRepository.saveAndFlush(any(SkillEntity.class)))
-                .thenThrow(new org.springframework.dao.DataIntegrityViolationException(
-                        "duplicate key value violates unique constraint \"uq_skills_tenant_default_key\""));
+    @DisplayName("seedDefaultSkills is a no-op (returns 0, writes nothing) while DefaultSkillsProvider registers no built-in defaults")
+    void seedDefaultSkillsIsNoOpWhileNoBuiltInsRegistered() {
+        // Design guard: no built-in default is registered. If one is re-added,
+        // this fails so the seed coverage (default-active, personal-org stamp,
+        // concurrent-insert skip) is revisited instead of silently dropped.
+        assertThat(com.apimarketplace.agent.skills.DefaultSkillsProvider.getAll()).isEmpty();
 
         int seeded = skillService.seedDefaultSkills("tenant_new");
 
         assertThat(seeded).isZero();
         verify(skillRepository, never()).save(any(SkillEntity.class));
+        verify(skillRepository, never()).saveAndFlush(any(SkillEntity.class));
     }
 
     @Test
-    @DisplayName("seedDefaultSkills leaves organizationId null when AuthClient cannot resolve the personal org - the OrgScopedEntityListener then stamps the request's org on request threads, or fails loud per the V263 contract on unbound threads (pre-existing semantics)")
-    void seedDefaultSkillsFallsBackWhenPersonalOrgUnresolvable() {
-        when(authClient.getDefaultOrganizationIdForUser("tenant_new")).thenReturn(null);
-        when(skillRepository.findByTenantIdAndDefaultKey(any(), any())).thenReturn(Optional.empty());
-        when(skillRepository.save(any(SkillEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+    @DisplayName("listSkills does NOT seed on the org branch while no built-in defaults are registered - it just lists the org's visible skills")
+    void listSkillsDoesNotSeedWhileNoBuiltInsRegistered() {
+        // expectedDefaults = DefaultSkillsProvider.getAll().size() = 0, so the
+        // seed branch (existingDefaults < expectedDefaults) can never fire.
+        when(skillRepository.countByTenantIdAndDefaultKeyIsNotNull(USER)).thenReturn(0L);
+        when(skillRepository.findVisibleForOrganization(ORG)).thenReturn(List.of());
 
-        int seeded = skillService.seedDefaultSkills("tenant_new");
+        skillService.listSkills(USER, ORG);
 
-        assertThat(seeded).isGreaterThan(0);
-        ArgumentCaptor<SkillEntity> captor = ArgumentCaptor.forClass(SkillEntity.class);
-        verify(skillRepository, atLeastOnce()).save(captor.capture());
-        assertThat(captor.getAllValues())
-            .allSatisfy(s -> assertThat(s.getOrganizationId()).isNull());
+        verify(skillRepository, never()).save(any(SkillEntity.class));
+        verify(skillRepository).findVisibleForOrganization(ORG);
     }
 }

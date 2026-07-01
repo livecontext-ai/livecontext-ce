@@ -2395,7 +2395,7 @@
       "skillUpdated": "Skill updated successfully",
       "createFailed": "Failed to create skill",
       "makeGlobalLabel": "Make available to everyone (global)",
-      "makeGlobalHelp": "Admin only. When enabled, this skill appears in every user's skill list like the built-in Deep Research skill. Only admins can edit or delete it.",
+      "makeGlobalHelp": "Admin only. When enabled, this skill appears in every user's skill list. Only admins can edit or delete it.",
       "globalReadOnly": "This is a global skill managed by administrators. You cannot edit it.",
       "success": "Success",
       "error": "Error"
@@ -5815,6 +5815,10 @@
         "entryInterfaceDescription": "Show this interface first when multiple interfaces are pending.",
         "generateScreenshot": "Generate screenshot",
         "generateScreenshotDescription": "When enabled, captures a PNG of the rendered interface and exposes it as the screenshot FileRef output for downstream nodes (email attachments, Telegram photo, agent image input). Best-effort: capture failures leave the output absent without failing the workflow.",
+        "generatePdf": "Generate PDF",
+        "generatePdfDescription": "When enabled, renders the interface to a PDF and exposes it as the pdf FileRef output for downstream nodes (email attachment, Telegram document, agent file input). Best-effort: render failures leave the output absent without failing the workflow.",
+        "pdfFormat": "PDF page size",
+        "pdfLandscape": "Landscape",
         "exposeRenderedSource": "Expose rendered source",
         "exposeRenderedSourceDescription": "When enabled, exposes the resolved interface templates as the rendered_html, rendered_css, rendered_js string outputs for downstream nodes (email body, agent text input, debugging). Best-effort: render failures leave the outputs absent without failing the workflow."
       },

@@ -100,8 +100,9 @@ public class TrustedKeyRegistry {
         return keys.keyIds();
     }
 
-    /** Underlying common-lib trust list, for {@link CatalogBundleVerifier} delegation. */
-    TrustedKeys trustedKeys() {
+    /** Underlying common-lib trust list, for {@link CatalogBundleVerifier} and
+     *  {@code SkillBundleVerifier} delegation (both share this one TOFU-pinned registry). */
+    public TrustedKeys trustedKeys() {
         return keys;
     }
 }

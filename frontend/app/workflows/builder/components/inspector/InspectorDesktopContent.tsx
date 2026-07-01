@@ -333,6 +333,9 @@ export function InspectorDesktopContent({
     if (interfaceData?.generateScreenshot === true) {
       nodeLevelOutputs.push({ name: 'screenshot', type: 'object' });
     }
+    if (interfaceData?.generatePdf === true) {
+      nodeLevelOutputs.push({ name: 'pdf', type: 'object' });
+    }
     if (interfaceData?.exposeRenderedSource === true) {
       nodeLevelOutputs.push({ name: 'rendered_html', type: 'text' });
       nodeLevelOutputs.push({ name: 'rendered_css', type: 'text' });
@@ -344,6 +347,7 @@ export function InspectorDesktopContent({
     (node?.data as any)?.interfaceData?.editorExpression,
     (node?.data as any)?.interfaceData?.actionMapping,
     (node?.data as any)?.interfaceData?.generateScreenshot,
+    (node?.data as any)?.interfaceData?.generatePdf,
     (node?.data as any)?.interfaceData?.exposeRenderedSource,
   ]);
 

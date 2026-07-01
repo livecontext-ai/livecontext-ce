@@ -187,9 +187,11 @@ public class WorkflowHelpProvider {
                 formatted.put("param_aliases",
                     "Boolean toggles accept BOTH camelCase (canonical) and snake_case (alias). " +
                     "Pairs: isEntryInterface / is_entry_interface, generateScreenshot / generate_screenshot, " +
-                    "exposeRenderedSource / expose_rendered_source. Pick one convention per call. " +
-                    "All 3 default to false - only set them when you want the feature on. " +
-                    "screenshot output → use generateScreenshot=true; rendered_html / rendered_css / rendered_js outputs → use exposeRenderedSource=true.");
+                    "exposeRenderedSource / expose_rendered_source, generatePdf / generate_pdf, " +
+                    "pdfLandscape / pdf_landscape (pdfFormat / pdf_format is a string). Pick one convention per call. " +
+                    "All toggles default to false - only set them when you want the feature on. " +
+                    "screenshot output → use generateScreenshot=true; pdf output → use generatePdf=true; " +
+                    "rendered_html / rendered_css / rendered_js outputs → use exposeRenderedSource=true.");
             }
             return formatted;
         }
@@ -298,12 +300,15 @@ public class WorkflowHelpProvider {
         result.put("1_concept", "Workflow=backend, interface=frontend. Workflow reaches interface → page shown → user interacts → triggers fire → workflow processes.");
 
         result.put("2_add_node", ordered(
-            "syntax", "workflow(action='add_node', type='interface', label='...', params={interface_id: '<uuid>', variable_mapping: {...}, action_mapping: {...}, isEntryInterface: true|false, generateScreenshot: true|false, exposeRenderedSource: true|false}, connect_after='...')",
+            "syntax", "workflow(action='add_node', type='interface', label='...', params={interface_id: '<uuid>', variable_mapping: {...}, action_mapping: {...}, isEntryInterface: true|false, generateScreenshot: true|false, generatePdf: true|false, pdfFormat: 'A4', pdfLandscape: true|false, exposeRenderedSource: true|false}, connect_after='...')",
             "interface_id", "REQUIRED. UUID returned by interface(action='create').",
             "isEntryInterface", "OPTIONAL boolean (default false). true = main page shown first in Application Mode. Only ONE interface per app should be marked entry.",
             "generateScreenshot", "OPTIONAL boolean (default false). true → adds a `screenshot` FileRef to output (PNG of the rendered page, 1280x800). To USE it, map the WHOLE FileRef into a file-accepting tool param to upload it: e.g. Telegram send_photo 'photo': '{{interface:<label>.output.screenshot}}', an email attachment, or an agent image input. Pass the object itself, NOT .path or .id. Best-effort: capture failure leaves the field absent, workflow continues.",
+            "generatePdf", "OPTIONAL boolean (default false). true → adds a `pdf` FileRef to output (a PDF rendering of the same interface). To USE it, map the WHOLE FileRef into a file-accepting tool param: e.g. an email attachment, Telegram send_document 'document': '{{interface:<label>.output.pdf}}', or an agent file input. Pass the object itself, NOT .path or .id. Best-effort: render failure leaves the field absent, workflow continues.",
+            "pdfFormat", "OPTIONAL string (default 'A4'). Page size for generatePdf: 'A4' | 'Letter' | 'Legal'. Unknown values fall back to A4. Ignored when generatePdf is false.",
+            "pdfLandscape", "OPTIONAL boolean (default false). true → the generatePdf output is rendered in landscape orientation. Ignored when generatePdf is false.",
             "exposeRenderedSource", "OPTIONAL boolean (default false). true → adds 3 string outputs `rendered_html`, `rendered_css`, `rendered_js` (the exact templates the iframe shows, HTML with {{var|default}} substituted via variable_mapping). Downstream consumers: email body, agent text input, debug logs. References: {{interface:<label>.output.rendered_html}}, .rendered_css, .rendered_js. Each capped at 256 KB. Best-effort: render failure leaves the fields absent, workflow continues.",
-            "param_naming", "All boolean params accept BOTH conventions: camelCase (canonical: isEntryInterface, generateScreenshot, exposeRenderedSource) and snake_case aliases (is_entry_interface, generate_screenshot, expose_rendered_source). Pick one and stick to it; the validator accepts either."
+            "param_naming", "All boolean params accept BOTH conventions: camelCase (canonical: isEntryInterface, generateScreenshot, generatePdf, pdfLandscape, exposeRenderedSource) and snake_case aliases (is_entry_interface, generate_screenshot, generate_pdf, pdf_landscape, expose_rendered_source). pdfFormat/pdf_format is a string. Pick one and stick to it; the validator accepts either."
         ));
 
         result.put("3_variable_mapping", ordered(

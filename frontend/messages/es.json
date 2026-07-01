@@ -2303,7 +2303,7 @@
       "skillUpdated": "Habilidad actualizada exitosamente",
       "createFailed": "Error al crear la habilidad",
       "makeGlobalLabel": "Hacer disponible para todos (global)",
-      "makeGlobalHelp": "Solo para administradores. Cuando se activa, esta habilidad aparece en la lista de habilidades de cada usuario, como la habilidad Deep Research integrada. Solo los administradores pueden editarla o eliminarla.",
+      "makeGlobalHelp": "Solo para administradores. Cuando se activa, esta habilidad aparece en la lista de habilidades de cada usuario. Solo los administradores pueden editarla o eliminarla.",
       "globalReadOnly": "Esta habilidad global la gestionan los administradores. No puedes editarla.",
       "success": "Éxito",
       "error": "Error"
@@ -5574,7 +5574,11 @@
         "exposeRenderedSource": "Exponer el código fuente renderizado",
         "exposeRenderedSourceDescription": "Cuando está habilitado, expone las plantillas de interfaz resueltas como las salidas de cadena rendered_html, rendered_css, rendered_js para los nodos posteriores (cuerpo de correo, entrada de texto del agente, depuración). Mejor esfuerzo: los fallos de renderizado dejan las salidas ausentes sin hacer fallar el flujo de trabajo.",
         "generateScreenshot": "Generar captura de pantalla",
-        "generateScreenshotDescription": "Cuando está habilitado, captura un PNG de la interfaz renderizada y lo expone como la salida screenshot FileRef para los nodos posteriores (adjuntos de correo, foto de Telegram, entrada de imagen del agente). Mejor esfuerzo: los fallos de captura dejan la salida ausente sin hacer fallar el flujo de trabajo."
+        "generateScreenshotDescription": "Cuando está habilitado, captura un PNG de la interfaz renderizada y lo expone como la salida screenshot FileRef para los nodos posteriores (adjuntos de correo, foto de Telegram, entrada de imagen del agente). Mejor esfuerzo: los fallos de captura dejan la salida ausente sin hacer fallar el flujo de trabajo.",
+        "generatePdf": "Generar PDF",
+        "generatePdfDescription": "Cuando está habilitado, renderiza la interfaz a un PDF y lo expone como la salida pdf FileRef para los nodos posteriores (adjunto de correo, documento de Telegram, entrada de archivo del agente). Mejor esfuerzo: los fallos de renderizado dejan la salida ausente sin hacer fallar el flujo de trabajo.",
+        "pdfFormat": "Tamaño de página PDF",
+        "pdfLandscape": "Horizontal"
       },
       "output": {
         "error": "Error de Ejecución",

@@ -493,6 +493,149 @@ class InterfaceNodeTest {
     }
 
     @Nested
+    @DisplayName("execute() - generatePdf toggle")
+    class PdfCaptureTests {
+
+        private static final String INTERFACE_UUID = "11111111-2222-3333-4444-555555555555";
+
+        /** 9-arg ctor: generateScreenshot=false, exposeRenderedSource=false, generatePdf as given. */
+        private InterfaceNode pdfNode(String interfaceId, boolean generatePdf, String format, boolean landscape) {
+            return new InterfaceNode("interface:form", interfaceId, Map.of(), false,
+                false, false, generatePdf, format, landscape);
+        }
+
+        @Test
+        @DisplayName("Toggle off → no pdf field emitted; capturePdf not invoked")
+        void toggleOffOmitsPdfField() {
+            InterfaceScreenshotService mockScreenshotService = mock(InterfaceScreenshotService.class);
+            InterfaceNode node = pdfNode(INTERFACE_UUID, false, "A4", false);
+            ServiceRegistry registry = mock(ServiceRegistry.class);
+            when(registry.getSignalService()).thenReturn(mockSignalService);
+            when(registry.getInterfaceScreenshotService()).thenReturn(mockScreenshotService);
+            node.acceptServices(registry);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertFalse(result.output().containsKey("pdf"), "pdf must be absent when toggle off");
+            verify(mockScreenshotService, never())
+                .capturePdf(any(), any(), anyInt(), anyInt(), any(), any(), any(), any(), anyBoolean());
+        }
+
+        @Test
+        @DisplayName("Toggle on + service returns FileRef → pdf field carries it AND format/landscape are forwarded")
+        void toggleOnWithSuccessfulRenderEmitsPdfFieldAndForwardsOptions() {
+            FileRef captured = FileRef.of("tenant-1/wf/run-1/interface:form/form_pdf_epoch_0_spawn_0.pdf",
+                "form_pdf_epoch_0_spawn_0.pdf", "application/pdf", 2048L);
+            InterfaceScreenshotService mockScreenshotService = mock(InterfaceScreenshotService.class);
+            when(mockScreenshotService.capturePdf(eq("tenant-1"), eq("run-1"), anyInt(), anyInt(), any(),
+                eq("interface:form"), eq(UUID.fromString(INTERFACE_UUID)), eq("Letter"), eq(true)))
+                .thenReturn(Optional.of(captured));
+            InterfaceNode node = pdfNode(INTERFACE_UUID, true, "Letter", true);
+            ServiceRegistry registry = mock(ServiceRegistry.class);
+            when(registry.getSignalService()).thenReturn(mockSignalService);
+            when(registry.getInterfaceScreenshotService()).thenReturn(mockScreenshotService);
+            node.acceptServices(registry);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertEquals(captured, result.output().get("pdf"));
+            // The node MUST forward the configured page options, not hard-code A4/portrait.
+            verify(mockScreenshotService).capturePdf(eq("tenant-1"), eq("run-1"), anyInt(), anyInt(), any(),
+                eq("interface:form"), eq(UUID.fromString(INTERFACE_UUID)), eq("Letter"), eq(true));
+        }
+
+        @Test
+        @DisplayName("Toggle on + render returns empty → pdf field absent, workflow continues (COMPLETED)")
+        void toggleOnWithRenderFailureContinuesWithoutPdf() {
+            InterfaceScreenshotService mockScreenshotService = mock(InterfaceScreenshotService.class);
+            when(mockScreenshotService.capturePdf(any(), any(), anyInt(), anyInt(), any(), any(), any(), any(), anyBoolean()))
+                .thenReturn(Optional.empty());
+            InterfaceNode node = pdfNode(INTERFACE_UUID, true, "A4", false);
+            ServiceRegistry registry = mock(ServiceRegistry.class);
+            when(registry.getSignalService()).thenReturn(mockSignalService);
+            when(registry.getInterfaceScreenshotService()).thenReturn(mockScreenshotService);
+            node.acceptServices(registry);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertFalse(result.output().containsKey("pdf"));
+            assertEquals(NodeStatus.COMPLETED, result.status(), "render failure must NOT fail the node");
+        }
+
+        @Test
+        @DisplayName("Toggle on + capturePdf throws → pdf absent, workflow continues (continue-on-failure guard)")
+        void toggleOnWithRenderExceptionContinuesWithoutPdf() {
+            InterfaceScreenshotService mockScreenshotService = mock(InterfaceScreenshotService.class);
+            when(mockScreenshotService.capturePdf(any(), any(), anyInt(), anyInt(), any(), any(), any(), any(), anyBoolean()))
+                .thenThrow(new RuntimeException("sidecar exploded"));
+            InterfaceNode node = pdfNode(INTERFACE_UUID, true, "A4", false);
+            ServiceRegistry registry = mock(ServiceRegistry.class);
+            when(registry.getSignalService()).thenReturn(mockSignalService);
+            when(registry.getInterfaceScreenshotService()).thenReturn(mockScreenshotService);
+            node.acceptServices(registry);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertFalse(result.output().containsKey("pdf"));
+            assertEquals(NodeStatus.COMPLETED, result.status());
+        }
+
+        @Test
+        @DisplayName("Toggle on + interfaceId is not a UUID → capturePdf is not called (defensive parse)")
+        void toggleOnWithInvalidInterfaceIdSkipsRender() {
+            InterfaceScreenshotService mockScreenshotService = mock(InterfaceScreenshotService.class);
+            InterfaceNode node = pdfNode("not-a-uuid", true, "A4", false);
+            ServiceRegistry registry = mock(ServiceRegistry.class);
+            when(registry.getSignalService()).thenReturn(mockSignalService);
+            when(registry.getInterfaceScreenshotService()).thenReturn(mockScreenshotService);
+            node.acceptServices(registry);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertFalse(result.output().containsKey("pdf"));
+            verify(mockScreenshotService, never())
+                .capturePdf(any(), any(), anyInt(), anyInt(), any(), any(), any(), any(), anyBoolean());
+        }
+
+        @Test
+        @DisplayName("Toggle on + screenshot service not wired (null) → no NPE, no pdf field")
+        void toggleOnWithNullServiceDoesNotThrow() {
+            InterfaceNode node = pdfNode(INTERFACE_UUID, true, "A4", false);
+            ServiceRegistry registry = mock(ServiceRegistry.class);
+            when(registry.getSignalService()).thenReturn(mockSignalService);
+            when(registry.getInterfaceScreenshotService()).thenReturn(null);
+            node.acceptServices(registry);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertFalse(result.output().containsKey("pdf"));
+            assertEquals(NodeStatus.COMPLETED, result.status());
+        }
+
+        @Test
+        @DisplayName("resolved_params surfaces generatePdf + pdfFormat + pdfLandscape (inspector visibility)")
+        @SuppressWarnings("unchecked")
+        void resolvedParamsSurfacesPdfConfig() {
+            InterfaceScreenshotService mockScreenshotService = mock(InterfaceScreenshotService.class);
+            when(mockScreenshotService.capturePdf(any(), any(), anyInt(), anyInt(), any(), any(), any(), any(), anyBoolean()))
+                .thenReturn(Optional.empty());
+            InterfaceNode node = pdfNode(INTERFACE_UUID, true, "Letter", true);
+            ServiceRegistry registry = mock(ServiceRegistry.class);
+            when(registry.getSignalService()).thenReturn(mockSignalService);
+            when(registry.getInterfaceScreenshotService()).thenReturn(mockScreenshotService);
+            node.acceptServices(registry);
+
+            NodeExecutionResult result = node.execute(context);
+
+            Map<String, Object> resolved = (Map<String, Object>) result.output().get("resolved_params");
+            assertNotNull(resolved, "resolved_params must be present for the inspector panel");
+            assertEquals(true, resolved.get("generatePdf"));
+            assertEquals("Letter", resolved.get("pdfFormat"));
+            assertEquals(true, resolved.get("pdfLandscape"));
+        }
+    }
+
+    @Nested
     @DisplayName("execute() - exposeRenderedSource toggle")
     class RenderedSourceExposureTests {
 

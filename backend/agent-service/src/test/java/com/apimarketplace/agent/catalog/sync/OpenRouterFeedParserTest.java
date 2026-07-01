@@ -83,6 +83,51 @@ class OpenRouterFeedParserTest {
     }
 
     @Test
+    @DisplayName("Rejects the openrouter/auto router's -1 sentinel price (x1e6 = -1000000 would overflow the NUMERIC(10,6) billing mirror)")
+    void rejectsNegativeSentinelPrice() {
+        String fixture = """
+            {"data": [{
+              "id": "openrouter/auto",
+              "name": "Auto Router",
+              "context_length": 200000,
+              "pricing": { "prompt": "-1", "completion": "-1" },
+              "supported_parameters": ["tools"]
+            }]}
+            """;
+
+        OpenRouterFeedParser.ParseResult result = parser.parse(
+                fixture.getBytes(StandardCharsets.UTF_8), "https://openrouter.ai/api/v1/models",
+                "2026-04-22T00:00:00Z");
+
+        assertThat(result.isSuccess()).isTrue();
+        // Pre-fix the signum()==0 gate let "-1" through -> accepted -> -1000000 synced to auth ->
+        // Postgres numeric overflow on the CE. Post-fix (signum()<=0) it is dropped.
+        assertThat(result.models()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Keeps a free-input / paid-output model (0 input, >0 output is still billable)")
+    void keepsZeroInputPaidOutput() {
+        String fixture = """
+            {"data": [{
+              "id": "vendor/free-in-paid-out",
+              "name": "Free In Paid Out",
+              "context_length": 100000,
+              "pricing": { "prompt": "0", "completion": "0.000002" },
+              "supported_parameters": ["tools"]
+            }]}
+            """;
+
+        OpenRouterFeedParser.ParseResult result = parser.parse(
+                fixture.getBytes(StandardCharsets.UTF_8), "https://openrouter.ai/api/v1/models",
+                "2026-04-22T00:00:00Z");
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.models()).hasSize(1);
+        assertThat(result.models().get(0).get("modelId")).isEqualTo("vendor/free-in-paid-out");
+    }
+
+    @Test
     @DisplayName("Drops duplicate-suffix ids (:free, :beta, :extended, :thinking, :nitro, :floor)")
     void dropsDuplicateSuffixes() {
         String fixture = """

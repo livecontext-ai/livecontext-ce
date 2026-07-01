@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import { ChevronDown, ChevronRight, Loader2, Check, AlertCircle } from 'lucide-react';
+import { ChevronDown, ChevronRight, Check, AlertCircle } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import type { Message } from '@/lib/api/conversation.types';
 import type { ToolActivity } from '@/contexts/StreamingContext';
@@ -273,7 +273,6 @@ function ActivityExecutionGroup({ group, expanded, onToggle, onJump, isLast }: A
           ) : (
             <span className="flex-1 truncate text-sm font-medium text-theme-secondary">{title}</span>
           )}
-          {isRunning && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-blue-500" />}
           <button
             type="button"
             onClick={onToggle}

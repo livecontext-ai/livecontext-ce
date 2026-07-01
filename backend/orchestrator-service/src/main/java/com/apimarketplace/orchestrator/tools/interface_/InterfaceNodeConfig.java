@@ -23,6 +23,9 @@ import java.util.stream.Collectors;
  * - is_entry_interface / isEntryInterface: boolean - show this interface first
  * - generate_screenshot / generateScreenshot: boolean - emit `screenshot` FileRef output
  * - expose_rendered_source / exposeRenderedSource: boolean - emit `rendered_html`/`rendered_css`/`rendered_js`
+ * - generate_pdf / generatePdf: boolean - emit `pdf` FileRef output (PDF of the rendered interface)
+ * - pdf_format / pdfFormat: string - page size for the PDF (A4, Letter, Legal); default A4
+ * - pdf_landscape / pdfLandscape: boolean - landscape orientation for the PDF; default false
  */
 public record InterfaceNodeConfig(
     String interfaceId,
@@ -30,7 +33,10 @@ public record InterfaceNodeConfig(
     Map<String, String> actionMapping,
     Boolean isEntryInterface,
     Boolean generateScreenshot,
-    Boolean exposeRenderedSource
+    Boolean exposeRenderedSource,
+    Boolean generatePdf,
+    String pdfFormat,
+    Boolean pdfLandscape
 ) {
 
     // ==================== Known Parameter Keys ====================
@@ -40,8 +46,27 @@ public record InterfaceNodeConfig(
         "interface_id", "id", "variable_mapping", "action_mapping",
         "is_entry_interface", "isEntryInterface",
         "generate_screenshot", "generateScreenshot",
-        "expose_rendered_source", "exposeRenderedSource"
+        "expose_rendered_source", "exposeRenderedSource",
+        "generate_pdf", "generatePdf",
+        "pdf_format", "pdfFormat",
+        "pdf_landscape", "pdfLandscape"
     );
+
+    /**
+     * Backward-compatible constructor without PDF options: {@code generatePdf} / {@code pdfFormat}
+     * / {@code pdfLandscape} default to null (= omitted from the plan, so no PDF output).
+     */
+    public InterfaceNodeConfig(
+        String interfaceId,
+        Map<String, String> variableMapping,
+        Map<String, String> actionMapping,
+        Boolean isEntryInterface,
+        Boolean generateScreenshot,
+        Boolean exposeRenderedSource
+    ) {
+        this(interfaceId, variableMapping, actionMapping, isEntryInterface,
+            generateScreenshot, exposeRenderedSource, null, null, null);
+    }
 
     // ==================== Factory ====================
 
@@ -72,8 +97,35 @@ public record InterfaceNodeConfig(
         // parser defaults to false. Setting true emits rendered_html/rendered_css/rendered_js.
         Boolean exposeRenderedSource = getFirstBoolean(params, "expose_rendered_source", "exposeRenderedSource");
 
+        // Extract generatePdf toggle (snake_case + camelCase). Default null → omitted, parser
+        // defaults to false. Setting true emits a `pdf` FileRef output (PDF of the interface).
+        Boolean generatePdf = getFirstBoolean(params, "generate_pdf", "generatePdf");
+
+        // Extract PDF page options. pdfFormat is normalised to a supported page size (A4 default);
+        // pdfLandscape defaults to false. Both are only meaningful when generatePdf=true.
+        String pdfFormat = normalizePdfFormat(getFirstString(params, "pdf_format", "pdfFormat"));
+        Boolean pdfLandscape = getFirstBoolean(params, "pdf_landscape", "pdfLandscape");
+
         return new InterfaceNodeConfig(interfaceId, variableMapping, actionMapping,
-            isEntryInterface, generateScreenshot, exposeRenderedSource);
+            isEntryInterface, generateScreenshot, exposeRenderedSource,
+            generatePdf, pdfFormat, pdfLandscape);
+    }
+
+    /** Supported PDF page sizes (matched case-insensitively). */
+    public static final java.util.Set<String> SUPPORTED_PDF_FORMATS =
+        java.util.Set.of("A4", "Letter", "Legal");
+
+    /**
+     * Normalise a caller-supplied PDF page size to one of {@link #SUPPORTED_PDF_FORMATS}.
+     * Blank / unknown values return null so the node falls back to its A4 default rather than
+     * forwarding an unsupported format the renderer would reject.
+     */
+    static String normalizePdfFormat(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        for (String supported : SUPPORTED_PDF_FORMATS) {
+            if (supported.equalsIgnoreCase(raw.trim())) return supported;
+        }
+        return null;
     }
 
     // ==================== Conversion ====================
@@ -95,6 +147,15 @@ public record InterfaceNodeConfig(
         }
         if (exposeRenderedSource != null) {
             node.put("exposeRenderedSource", exposeRenderedSource);
+        }
+        if (generatePdf != null) {
+            node.put("generatePdf", generatePdf);
+        }
+        if (pdfFormat != null) {
+            node.put("pdfFormat", pdfFormat);
+        }
+        if (pdfLandscape != null) {
+            node.put("pdfLandscape", pdfLandscape);
         }
         if (variableMapping != null && !variableMapping.isEmpty()) {
             node.put("variableMapping", variableMapping);
@@ -121,6 +182,15 @@ public record InterfaceNodeConfig(
         if (exposeRenderedSource != null) {
             params.put("expose_rendered_source", exposeRenderedSource);
         }
+        if (generatePdf != null) {
+            params.put("generate_pdf", generatePdf);
+        }
+        if (pdfFormat != null) {
+            params.put("pdf_format", pdfFormat);
+        }
+        if (pdfLandscape != null) {
+            params.put("pdf_landscape", pdfLandscape);
+        }
         if (variableMapping != null && !variableMapping.isEmpty()) {
             params.put("variable_mapping", variableMapping);
         }
@@ -144,6 +214,15 @@ public record InterfaceNodeConfig(
         }
         if (exposeRenderedSource != null) {
             extras.put("expose_rendered_source", exposeRenderedSource);
+        }
+        if (generatePdf != null) {
+            extras.put("generate_pdf", generatePdf);
+        }
+        if (pdfFormat != null) {
+            extras.put("pdf_format", pdfFormat);
+        }
+        if (pdfLandscape != null) {
+            extras.put("pdf_landscape", pdfLandscape);
         }
         if (variableMapping != null && !variableMapping.isEmpty()) {
             extras.put("variable_mapping", variableMapping);

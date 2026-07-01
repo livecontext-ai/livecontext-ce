@@ -64,6 +64,19 @@ export function collectInterfaces(ctx: PlanGeneratorContext): void {
       interfaceEntry.generateScreenshot = true;
     }
 
+    // Serialize generate-pdf toggle + page options (emits a `pdf` FileRef output).
+    // Without this the toggle silently drops on save/reload (the node runs, but the UI
+    // shows it off and any re-save strips it from the plan).
+    if (interfaceData.generatePdf === true) {
+      interfaceEntry.generatePdf = true;
+      if (interfaceData.pdfFormat) {
+        interfaceEntry.pdfFormat = interfaceData.pdfFormat;
+      }
+      if (interfaceData.pdfLandscape === true) {
+        interfaceEntry.pdfLandscape = true;
+      }
+    }
+
     // Serialize expose-rendered-source toggle (emits rendered_html / rendered_css / rendered_js)
     if (interfaceData.exposeRenderedSource === true) {
       interfaceEntry.exposeRenderedSource = true;

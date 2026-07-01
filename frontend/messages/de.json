@@ -2303,7 +2303,7 @@
       "skillUpdated": "Skill erfolgreich aktualisiert",
       "createFailed": "Skill konnte nicht erstellt werden",
       "makeGlobalLabel": "Für alle verfügbar machen (global)",
-      "makeGlobalHelp": "Nur für Admins. Wenn aktiviert, erscheint dieser Skill in der Skill-Liste jedes Benutzers, wie der integrierte Deep-Research-Skill. Nur Admins können ihn bearbeiten oder löschen.",
+      "makeGlobalHelp": "Nur für Admins. Wenn aktiviert, erscheint dieser Skill in der Skill-Liste jedes Benutzers. Nur Admins können ihn bearbeiten oder löschen.",
       "globalReadOnly": "Dieser globale Skill wird von Administratoren verwaltet. Sie können ihn nicht bearbeiten.",
       "success": "Erfolg",
       "error": "Fehler"
@@ -5574,7 +5574,11 @@
         "exposeRenderedSource": "Gerenderten Quellcode bereitstellen",
         "exposeRenderedSourceDescription": "Wenn aktiviert, werden die aufgelösten Interface-Templates als die String-Ausgaben rendered_html, rendered_css, rendered_js für nachgelagerte Knoten bereitgestellt (E-Mail-Text, Agenten-Texteingabe, Debugging). Best-Effort: Render-Fehler lassen die Ausgaben weg, ohne den Workflow zum Scheitern zu bringen.",
         "generateScreenshot": "Screenshot generieren",
-        "generateScreenshotDescription": "Wenn aktiviert, wird ein PNG des gerenderten Interfaces erfasst und als die screenshot-FileRef-Ausgabe für nachgelagerte Knoten bereitgestellt (E-Mail-Anhänge, Telegram-Foto, Agenten-Bildeingabe). Best-Effort: Erfassungsfehler lassen die Ausgabe weg, ohne den Workflow zum Scheitern zu bringen."
+        "generateScreenshotDescription": "Wenn aktiviert, wird ein PNG des gerenderten Interfaces erfasst und als die screenshot-FileRef-Ausgabe für nachgelagerte Knoten bereitgestellt (E-Mail-Anhänge, Telegram-Foto, Agenten-Bildeingabe). Best-Effort: Erfassungsfehler lassen die Ausgabe weg, ohne den Workflow zum Scheitern zu bringen.",
+        "generatePdf": "PDF generieren",
+        "generatePdfDescription": "Wenn aktiviert, wird das Interface als PDF gerendert und als die pdf-FileRef-Ausgabe für nachgelagerte Knoten bereitgestellt (E-Mail-Anhang, Telegram-Dokument, Agenten-Dateieingabe). Best-Effort: Render-Fehler lassen die Ausgabe weg, ohne den Workflow zum Scheitern zu bringen.",
+        "pdfFormat": "PDF-Seitengröße",
+        "pdfLandscape": "Querformat"
       },
       "output": {
         "error": "Ausführungsfehler",

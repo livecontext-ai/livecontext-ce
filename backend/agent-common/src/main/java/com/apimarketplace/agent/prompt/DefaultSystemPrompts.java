@@ -118,7 +118,7 @@ public final class DefaultSystemPrompts {
 
     public static final PromptModule INTERFACE = new PromptModule(
         "interface",
-        "\n        - interface - HTML pages (forms, dashboards, multi-page apps). variable_mapping/action_mapping go on the workflow node, not interface create.\n",
+        "\n        - interface - HTML pages (forms, dashboards, multi-page apps). variable_mapping/action_mapping go on the workflow node (not interface create); that node can also emit a screenshot (PNG) or pdf FileRef of the rendered page via generateScreenshot/generatePdf (no external tool needed).\n",
         Set.of("interface")
     );
 

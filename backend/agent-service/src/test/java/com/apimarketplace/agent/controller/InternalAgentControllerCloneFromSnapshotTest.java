@@ -31,8 +31,10 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -123,6 +125,49 @@ class InternalAgentControllerCloneFromSnapshotTest {
         ArgumentCaptor<SkillEntity> skillCaptor = ArgumentCaptor.forClass(SkillEntity.class);
         verify(skillRepository).save(skillCaptor.capture());
         assertThat(skillCaptor.getValue().getOrganizationId()).isEqualTo(ORG_ID);
+    }
+
+    @Test
+    @DisplayName("createAgentInternal rejects a numeric systemPrompt via getText (no silent .toString() corruption) - agentService is never invoked")
+    void createAgentInternalRejectsNumericSystemPrompt() {
+        Map<String, Object> body = new java.util.HashMap<>();
+        body.put("name", "Probe");
+        body.put("description", "Probe agent");
+        // Pre-fix getString().toString() stored "97559" into system_prompt; getText must reject it.
+        body.put("systemPrompt", 97559);
+
+        assertThatThrownBy(() -> controller.createAgentInternal(body, request))
+            .isInstanceOf(IllegalArgumentException.class);
+
+        verifyNoInteractions(agentService);
+    }
+
+    @Test
+    @DisplayName("updateAgentInternal rejects a numeric systemPrompt via getText (no silent .toString() corruption) - agentService is never invoked")
+    void updateAgentInternalRejectsNumericSystemPrompt() {
+        Map<String, Object> body = new java.util.HashMap<>();
+        body.put("name", "Probe");
+        body.put("description", "Probe agent");
+        body.put("systemPrompt", 97559);
+
+        assertThatThrownBy(() -> controller.updateAgentInternal(UUID.randomUUID(), body, request, ORG_ID))
+            .isInstanceOf(IllegalArgumentException.class);
+
+        verifyNoInteractions(agentService);
+    }
+
+    @Test
+    @DisplayName("createAgentInternal rejects a numeric name via getText (the content-field guard is not systemPrompt-only)")
+    void createAgentInternalRejectsNumericName() {
+        Map<String, Object> body = new java.util.HashMap<>();
+        body.put("name", 358361); // numeric content must be rejected, not stringified
+        body.put("description", "Probe agent");
+        body.put("systemPrompt", "You are helpful.");
+
+        assertThatThrownBy(() -> controller.createAgentInternal(body, request))
+            .isInstanceOf(IllegalArgumentException.class);
+
+        verifyNoInteractions(agentService);
     }
 
     @Test

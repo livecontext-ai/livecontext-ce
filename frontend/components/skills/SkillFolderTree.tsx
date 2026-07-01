@@ -379,13 +379,15 @@ export function SkillFolderTree({
             rejectionReason={rejectionReason}
           />
         </span>
-        <div className="flex-1" />
         {onToggleSkillActive && (
           // V276 toggle - per-user effective-active. Click stops propagation so
           // it doesn't open the edit modal. `scale-75` shrinks the shared Switch
           // (smallest size is h-6) to read as inline metadata on an h-8 row.
+          // Sits right after the name/globe (not floated to the far right) so it
+          // reads unambiguously as THIS skill's toggle; origin-left keeps the
+          // scaled switch hugging the metadata icons.
           <span
-            className="flex-shrink-0 ml-1 origin-right scale-75"
+            className="flex-shrink-0 ml-1.5 origin-left scale-75"
             onClick={(e) => e.stopPropagation()}
           >
             <Switch

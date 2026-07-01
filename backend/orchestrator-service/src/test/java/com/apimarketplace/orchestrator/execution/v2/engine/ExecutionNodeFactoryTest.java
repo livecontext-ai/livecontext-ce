@@ -70,6 +70,39 @@ class ExecutionNodeFactoryTest {
     }
 
     @Nested
+    @DisplayName("createInterfaceNodes() - PDF options threaded to the node")
+    class CreateInterfaceNodesTests {
+
+        @Test
+        @DisplayName("generatePdf + pdfFormat + pdfLandscape from the plan reach the InterfaceNode (no LLM in the loop)")
+        void interfaceDefPdfFieldsReachTheNode() {
+            // Full 12-arg InterfaceDef: generatePdf=true, format=Legal, landscape=true.
+            InterfaceDef def = new InterfaceDef(
+                "11111111-2222-3333-4444-555555555555", "My Form",
+                Map.of(), Map.of(), true, Map.of(),
+                /* isEntryInterface */ false, /* generateScreenshot */ false,
+                /* exposeRenderedSource */ false, /* generatePdf */ true,
+                /* pdfFormat */ "Legal", /* pdfLandscape */ true);
+
+            WorkflowPlan plan = org.mockito.Mockito.mock(WorkflowPlan.class);
+            when(plan.getInterfaces()).thenReturn(List.of(def));
+            Map<String, ExecutionNode> nodeMap = new HashMap<>();
+
+            factory.createInterfaceNodes(nodeMap, plan);
+
+            ExecutionNode node = nodeMap.get("interface:my_form");
+            assertNotNull(node, "interface node must be registered under its normalized key");
+            assertInstanceOf(InterfaceNode.class, node);
+            InterfaceNode iface = (InterfaceNode) node;
+            assertTrue(iface.isGeneratePdf(), "generatePdf must be threaded from InterfaceDef to the node");
+            assertEquals("Legal", iface.getPdfFormat());
+            assertTrue(iface.isPdfLandscape());
+            // sanity: unrelated screenshot toggle stays off
+            assertFalse(iface.isGenerateScreenshot());
+        }
+    }
+
+    @Nested
     @DisplayName("createTriggerNodes()")
     class CreateTriggerNodesTests {
 

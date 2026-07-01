@@ -2303,7 +2303,7 @@
       "skillUpdated": "Habilidade atualizada com sucesso",
       "createFailed": "Falha ao criar habilidade",
       "makeGlobalLabel": "Disponibilizar para todos (global)",
-      "makeGlobalHelp": "Apenas admin. Quando ativado, esta habilidade aparece na lista de habilidades de cada usuário, como a habilidade Deep Research integrada. Apenas admins podem editá-la ou excluí-la.",
+      "makeGlobalHelp": "Apenas admin. Quando ativado, esta habilidade aparece na lista de habilidades de cada usuário. Apenas admins podem editá-la ou excluí-la.",
       "globalReadOnly": "Esta habilidade global é gerenciada pelos administradores. Você não pode editá-la.",
       "success": "Sucesso",
       "error": "Erro"
@@ -5574,7 +5574,11 @@
         "exposeRenderedSource": "Expor o código-fonte renderizado",
         "exposeRenderedSourceDescription": "Quando habilitado, expõe os templates de interface resolvidos como as saídas de string rendered_html, rendered_css, rendered_js para os nós posteriores (corpo de e-mail, entrada de texto do agente, depuração). Melhor esforço: falhas de renderização deixam as saídas ausentes sem fazer o fluxo de trabalho falhar.",
         "generateScreenshot": "Gerar captura de tela",
-        "generateScreenshotDescription": "Quando habilitado, captura um PNG da interface renderizada e o expõe como a saída screenshot FileRef para os nós posteriores (anexos de e-mail, foto do Telegram, entrada de imagem do agente). Melhor esforço: falhas de captura deixam a saída ausente sem fazer o fluxo de trabalho falhar."
+        "generateScreenshotDescription": "Quando habilitado, captura um PNG da interface renderizada e o expõe como a saída screenshot FileRef para os nós posteriores (anexos de e-mail, foto do Telegram, entrada de imagem do agente). Melhor esforço: falhas de captura deixam a saída ausente sem fazer o fluxo de trabalho falhar.",
+        "generatePdf": "Gerar PDF",
+        "generatePdfDescription": "Quando habilitado, renderiza a interface para um PDF e o expõe como a saída pdf FileRef para os nós posteriores (anexo de e-mail, documento do Telegram, entrada de arquivo do agente). Melhor esforço: falhas de renderização deixam a saída ausente sem fazer o fluxo de trabalho falhar.",
+        "pdfFormat": "Tamanho da página PDF",
+        "pdfLandscape": "Paisagem"
       },
       "output": {
         "error": "Erro de Execução",

@@ -94,9 +94,13 @@ public class OpenRouterFeedParser {
             BigDecimal priceInput  = costPerTokenToPricePerMillion(pricing.get("prompt"));
             BigDecimal priceOutput = costPerTokenToPricePerMillion(pricing.get("completion"));
             if (priceInput == null || priceOutput == null) { rejectedNoPricing++; continue; }
-            // Reject fully zero-priced entries. OpenRouter lists these under
-            // "openrouter/openrouter/free" etc. - they'd slip the credit gate.
-            if (priceInput.signum() == 0 && priceOutput.signum() == 0) {
+            // Reject non-positive-priced entries. Zero-priced rows live under
+            // "openrouter/openrouter/free"; the "openrouter/auto" router returns a "-1"
+            // sentinel (variable pricing) which x1e6 becomes -1000000 and overflows the
+            // auth NUMERIC(10,6) billing mirror. Neither is billable. `<= 0` (not `== 0`)
+            // matches the Python parity gate (sync_openrouter.py) and keeps legit
+            // 0-input / >0-output rows.
+            if (priceInput.signum() <= 0 && priceOutput.signum() <= 0) {
                 rejectedNoPricing++; continue;
             }
 

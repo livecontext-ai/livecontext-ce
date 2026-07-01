@@ -60,6 +60,17 @@ class DefaultSystemPromptsModularTest {
         }
 
         @Test
+        @DisplayName("INTERFACE module hints the native screenshot/pdf output (discoverability)")
+        void interfaceModuleMentionsNativeScreenshotAndPdf() {
+            ModularPromptResult result = DefaultSystemPrompts.build(Set.of("interface"), false);
+
+            assertThat(result.systemPrompt())
+                .as("agents must be able to discover from the base prompt that an interface node can natively emit a screenshot/pdf")
+                .contains("generateScreenshot")
+                .contains("generatePdf");
+        }
+
+        @Test
         @DisplayName("AGENT module provides agent tool only")
         void agentModuleProvidesSingleTool() {
             ModularPromptResult result = DefaultSystemPrompts.build(Set.of("agent"), false);

@@ -335,7 +335,10 @@ public class ExecutionNodeFactory {
                 interfaceKey, iface.id(), iface.actionMapping(),
                 Boolean.TRUE.equals(iface.isEntryInterface()),
                 Boolean.TRUE.equals(iface.generateScreenshot()),
-                Boolean.TRUE.equals(iface.exposeRenderedSource()));
+                Boolean.TRUE.equals(iface.exposeRenderedSource()),
+                Boolean.TRUE.equals(iface.generatePdf()),
+                iface.pdfFormat(),
+                Boolean.TRUE.equals(iface.pdfLandscape()));
             nodeMap.put(interfaceKey, interfaceNode);
             logger.info("Added interface: key={}, id={}, label={}",
                 interfaceKey, iface.id(), iface.label());

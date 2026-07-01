@@ -22,7 +22,6 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -100,21 +99,20 @@ class SkillServiceOrgScopeTest {
     }
 
     @Test
-    @DisplayName("listSkills(personal) keeps the auto-seed default-skills behavior for personal workspace")
-    void listSkillsPersonalKeepsAutoSeed() {
-        // Personal-strict path runs the auto-seed branch first.
+    @DisplayName("listSkills(personal) does not seed while no built-in defaults are registered - it just lists the tenant's visible skills")
+    void listSkillsPersonalDoesNotSeedWhileNoBuiltIns() {
+        // Personal-strict path still runs the seed check first, but with no
+        // built-in defaults registered (Deep Research removed) expectedDefaults
+        // is 0, so the seed branch never fires and nothing is written.
         when(skillRepository.countByTenantIdAndDefaultKeyIsNotNull(OWNER_TENANT))
                 .thenReturn(0L);
-        when(skillRepository.findByTenantIdAndDefaultKey(any(), any()))
-                .thenReturn(Optional.empty());
-        when(skillRepository.save(any(SkillEntity.class))).thenAnswer(inv -> inv.getArgument(0));
         when(skillRepository.findVisibleForTenant(OWNER_TENANT))
                 .thenReturn(List.of());
 
         skillService.listSkills(OWNER_TENANT, null);
 
         verify(skillRepository).findVisibleForTenant(OWNER_TENANT);
-        verify(skillRepository, atLeastOnce()).save(any(SkillEntity.class));
+        verify(skillRepository, never()).save(any(SkillEntity.class));
         verify(skillRepository, never()).findVisibleForOrganization(any());
     }
 

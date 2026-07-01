@@ -122,10 +122,13 @@ public class NodeParamsValidator {
         )),
         // Interface aliases - agents may use snake_case (consistent with interface_id, variable_mapping)
         // OR camelCase (the canonical DB doc keys). Both must validate.
-        Map.entry("interface", Map.of(
-            "is_entry_interface", "isEntryInterface",
-            "generate_screenshot", "generateScreenshot",
-            "expose_rendered_source", "exposeRenderedSource"
+        Map.entry("interface", Map.ofEntries(
+            Map.entry("is_entry_interface", "isEntryInterface"),
+            Map.entry("generate_screenshot", "generateScreenshot"),
+            Map.entry("expose_rendered_source", "exposeRenderedSource"),
+            Map.entry("generate_pdf", "generatePdf"),
+            Map.entry("pdf_format", "pdfFormat"),
+            Map.entry("pdf_landscape", "pdfLandscape")
         ))
     );
 

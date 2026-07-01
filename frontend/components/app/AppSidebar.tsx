@@ -165,8 +165,14 @@ export const AppSidebar = memo(function AppSidebar({
   const hasActiveSubscription = subscriptionNotReady || !!(planCode && planCode !== 'FREE');
 
   const handleNavigate = useCallback((path: string) => {
-    // Trigger the navigation progress bar
-    triggerSidebarNavigation();
+    // Only show the navigation progress bar for a REAL page change. Resolve the
+    // /chat alias to /app/chat and compare to the current path (locale stripped)
+    // so clicking the page you are already on never starts the bar.
+    const target = (path === '/chat' || path.startsWith('/chat')) ? '/app/chat' : path;
+    const currentNoLocale = pathname?.replace(/^\/[a-z]{2}(?=\/|$)/, '') || '';
+    if (target !== currentNoLocale) {
+      triggerSidebarNavigation();
+    }
 
     if (path.startsWith('/app/')) {
       safeNavigate(path);
@@ -179,7 +185,7 @@ export const AppSidebar = memo(function AppSidebar({
     if (sidebarOpen) {
       setSidebarOpen(false);
     }
-  }, [safeNavigate, sidebarOpen, setSidebarOpen]);
+  }, [safeNavigate, sidebarOpen, setSidebarOpen, pathname]);
 
   const handleConversationSelect = useCallback((conversation: Conversation | null) => {
     if (conversation) {

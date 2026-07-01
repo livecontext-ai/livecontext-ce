@@ -983,8 +983,17 @@ public final class WorkflowPlanParser {
                     ? (Boolean) data.get("generateScreenshot") : false;
                 Boolean exposeRenderedSource = data.get("exposeRenderedSource") instanceof Boolean
                     ? (Boolean) data.get("exposeRenderedSource") : false;
+                Boolean generatePdf = data.get("generatePdf") instanceof Boolean
+                    ? (Boolean) data.get("generatePdf") : false;
+                // pdfFormat is a free-form string in the plan (kept raw here). The agent/build path
+                // already normalises it to A4/Letter/Legal via InterfaceNodeConfig; the raw value is
+                // forwarded to the renderer, which falls back to A4 when it is null/blank.
+                String pdfFormat = data.get("pdfFormat") instanceof String s && !s.isBlank() ? s : null;
+                Boolean pdfLandscape = data.get("pdfLandscape") instanceof Boolean
+                    ? (Boolean) data.get("pdfLandscape") : false;
 
-                return new InterfaceDef(id, label, actionMapping, variableMapping, showPreview, position, isEntryInterface, generateScreenshot, exposeRenderedSource);
+                return new InterfaceDef(id, label, actionMapping, variableMapping, showPreview, position,
+                    isEntryInterface, generateScreenshot, exposeRenderedSource, generatePdf, pdfFormat, pdfLandscape);
             })
             .filter(Objects::nonNull)
             .collect(Collectors.toList());

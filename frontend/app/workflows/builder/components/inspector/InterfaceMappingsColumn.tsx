@@ -942,6 +942,83 @@ export const InterfaceMappingsColumn = ({
             </div>
           )}
 
+          {/* Generate PDF toggle - exposes a `pdf` FileRef output for downstream nodes. */}
+          {!isRunMode && (
+            <div className="mt-2 px-1">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-1">
+                  <span className="text-sm text-slate-600 dark:text-slate-300">{t('generatePdf')}</span>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <button type="button" className="inline-flex items-center justify-center rounded-full hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5">
+                        <Info className="h-2.5 w-2.5 text-slate-400" />
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[260px] p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
+                      <p className="text-xs text-slate-600 dark:text-slate-300">{t('generatePdfDescription')}</p>
+                    </PopoverContent>
+                  </Popover>
+                </div>
+                <Switch
+                  checked={interfaceData.generatePdf === true}
+                  onCheckedChange={(checked) => {
+                    onUpdate({
+                      ...data,
+                      interfaceData: {
+                        ...interfaceData,
+                        generatePdf: checked,
+                      },
+                    });
+                  }}
+                />
+              </div>
+
+              {/* PDF page options - only shown when PDF generation is enabled. */}
+              {interfaceData.generatePdf === true && (
+                <div className="mt-2 flex items-center justify-between gap-3 pl-3">
+                  <label className="text-xs text-slate-500 dark:text-slate-400" htmlFor="pdf-format-select">
+                    {t('pdfFormat')}
+                  </label>
+                  <div className="flex items-center gap-3">
+                    <select
+                      id="pdf-format-select"
+                      className="text-xs rounded-md border border-gray-200/60 dark:border-gray-700/60 bg-[var(--bg-primary)] px-2 py-1 text-slate-600 dark:text-slate-300"
+                      value={interfaceData.pdfFormat || 'A4'}
+                      onChange={(e) => {
+                        onUpdate({
+                          ...data,
+                          interfaceData: {
+                            ...interfaceData,
+                            pdfFormat: e.target.value,
+                          },
+                        });
+                      }}
+                    >
+                      <option value="A4">A4</option>
+                      <option value="Letter">Letter</option>
+                      <option value="Legal">Legal</option>
+                    </select>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs text-slate-500 dark:text-slate-400">{t('pdfLandscape')}</span>
+                      <Switch
+                        checked={interfaceData.pdfLandscape === true}
+                        onCheckedChange={(checked) => {
+                          onUpdate({
+                            ...data,
+                            interfaceData: {
+                              ...interfaceData,
+                              pdfLandscape: checked,
+                            },
+                          });
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Expose rendered source toggle - exposes `rendered_html` / `rendered_css` / `rendered_js` string outputs. */}
           {!isRunMode && (
             <div className="flex items-center justify-between mt-2 px-1 gap-3">

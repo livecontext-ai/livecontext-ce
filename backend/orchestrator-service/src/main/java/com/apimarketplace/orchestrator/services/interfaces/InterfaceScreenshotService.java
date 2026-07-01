@@ -70,4 +70,27 @@ public interface InterfaceScreenshotService {
         String nodeId,
         UUID interfaceId
     );
+
+    /**
+     * Render the interface to a PDF and persist it, mirroring
+     * {@link #capture(String, String, int, int, Integer, String, UUID)} but producing a PDF (via
+     * the renderer's {@code /internal/render/pdf} endpoint) instead of a PNG. Same best-effort
+     * contract: any failure logs a warning and returns {@link Optional#empty()} so the workflow
+     * continues without a {@code pdf} output field.
+     *
+     * @param pdfFormat   page size ({@code A4} / {@code Letter} / {@code Legal}); null/blank → A4
+     * @param landscape   true to render in landscape orientation
+     * @return a {@link FileRef} for the captured PDF, or empty when the render/upload failed.
+     */
+    Optional<FileRef> capturePdf(
+        String tenantId,
+        String runId,
+        int epoch,
+        int spawn,
+        Integer itemIndex,
+        String nodeId,
+        UUID interfaceId,
+        String pdfFormat,
+        boolean landscape
+    );
 }

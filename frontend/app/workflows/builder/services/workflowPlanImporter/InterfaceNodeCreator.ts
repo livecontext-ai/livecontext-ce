@@ -19,6 +19,9 @@ interface InterfaceFromPlan {
   actionMapping?: Record<string, string>;
   isEntryInterface?: boolean;
   generateScreenshot?: boolean;
+  generatePdf?: boolean;
+  pdfFormat?: string;
+  pdfLandscape?: boolean;
   exposeRenderedSource?: boolean;
   // Enriched snapshot fields (from publication planSnapshot)
   _snapshot_htmlTemplate?: string;
@@ -95,6 +98,9 @@ export function createInterfaceNodes(
           actionMapping: iface.actionMapping,
           isEntryInterface: iface.isEntryInterface,
           generateScreenshot: iface.generateScreenshot,
+          generatePdf: iface.generatePdf,
+          pdfFormat: iface.pdfFormat,
+          pdfLandscape: iface.pdfLandscape,
           exposeRenderedSource: iface.exposeRenderedSource,
           // Use snapshot templates from enriched plan (publication preview)
           ...(iface._snapshot_htmlTemplate && { editorExpression: iface._snapshot_htmlTemplate }),

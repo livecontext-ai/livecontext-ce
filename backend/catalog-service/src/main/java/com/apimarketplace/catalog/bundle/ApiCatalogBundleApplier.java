@@ -7,6 +7,7 @@ import com.apimarketplace.catalog.repository.ApiCatalogBundleSyncStatusRepositor
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -159,30 +160,51 @@ public class ApiCatalogBundleApplier {
         // 3+4. Persist / flip the api_catalog_bundles row and the sync-status
         // row atomically. MUST run inside a transaction: deactivateAll() is a
         // JPA @Modifying bulk update (TransactionRequiredException otherwise).
-        recordTx.executeWithoutResult(txStatus -> {
-            ApiCatalogBundleEntity entity = existing.orElseGet(() -> {
-                ApiCatalogBundleEntity e = new ApiCatalogBundleEntity();
-                e.setVersion(bundle.version());
-                e.setSchemaVersion(bundle.schemaVersion());
-                e.setChecksum(bundle.checksum());
-                e.setSignature(bundle.signature());
-                e.setSigningKeyId(bundle.signingKeyId());
-                e.setIssuer(bundle.issuer());
-                e.setApiCount(bundle.apiCount());
-                e.setToolCount(bundle.toolCount());
-                e.setRawBytesSize((int) bundle.rawBytesSize());
-                e.setImportedAt(now);
-                // payload_gz intentionally left NULL on CE - the content now lives
-                // in catalog.* and a CE never serves bundles.
-                return e;
+        try {
+            recordTx.executeWithoutResult(txStatus -> {
+                // Re-read INSIDE the tx: the line-100 idempotency check is a TOCTOU
+                // window - a concurrent apply (a manual "Sync now" racing the 15-min
+                // scheduler) may have inserted this exact version in the meantime.
+                // Reuse that row (UPDATE) instead of inserting a duplicate that would
+                // blow the api_catalog_bundles_version_key unique constraint.
+                ApiCatalogBundleEntity entity = bundleRepo.findByVersion(bundle.version()).orElseGet(() -> {
+                    ApiCatalogBundleEntity e = new ApiCatalogBundleEntity();
+                    e.setVersion(bundle.version());
+                    e.setSchemaVersion(bundle.schemaVersion());
+                    e.setChecksum(bundle.checksum());
+                    e.setSignature(bundle.signature());
+                    e.setSigningKeyId(bundle.signingKeyId());
+                    e.setIssuer(bundle.issuer());
+                    e.setApiCount(bundle.apiCount());
+                    e.setToolCount(bundle.toolCount());
+                    e.setRawBytesSize((int) bundle.rawBytesSize());
+                    e.setImportedAt(now);
+                    // payload_gz intentionally left NULL on CE - the content now lives
+                    // in catalog.* and a CE never serves bundles.
+                    return e;
+                });
+                entity.setSourceUrl(sourceUrl);
+                bundleRepo.deactivateAll();
+                entity.setActive(true);
+                entity.setActivatedAt(now);
+                bundleRepo.save(entity);
+                writeSuccessStatus(bundle.version(), now);
             });
-            entity.setSourceUrl(sourceUrl);
-            bundleRepo.deactivateAll();
-            entity.setActive(true);
-            entity.setActivatedAt(now);
-            bundleRepo.save(entity);
+        } catch (DataIntegrityViolationException dup) {
+            // Expected ONLY for the unique-version race: two applies passed the in-tx re-read before
+            // either committed, both INSERTed, and this loser tripped api_catalog_bundles_version_key
+            // (its tx rolled back, so the winner's active row survives). Confirm that is what happened
+            // - the version is now present AND active - before declaring an idempotent no-op. Any
+            // OTHER integrity violation (a future NOT NULL / length / FK) must NOT be masked as a green
+            // success, so rethrow it and let the caller record a real failure.
+            if (bundleRepo.findByVersion(bundle.version()).filter(ApiCatalogBundleEntity::isActive).isEmpty()) {
+                throw dup;
+            }
+            log.info("API catalog bundle v{} applied concurrently (unique-version race); treating as already applied",
+                    bundle.version());
             writeSuccessStatus(bundle.version(), now);
-        });
+            return ApplyResult.alreadyApplied(bundle.version());
+        }
 
         log.info("Applied API catalog bundle v{} - apis={}, tools={}, deprecatedApis={}, " +
                         "deprecatedTools={}, skippedCustom={}, templates={}",

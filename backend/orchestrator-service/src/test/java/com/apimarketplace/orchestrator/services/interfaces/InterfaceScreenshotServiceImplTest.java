@@ -280,6 +280,101 @@ class InterfaceScreenshotServiceImplTest {
     }
 
     @Nested
+    @DisplayName("PDF render (capturePdf)")
+    class PdfRender {
+
+        @Test
+        @DisplayName("Successful render → uploads <label>_pdf_epoch_N_spawn_M.pdf with mime application/pdf and sourceType INTERFACE_PDF")
+        void successfulPdfUploadsWithPdfNameMimeAndSourceType() {
+            byte[] pdf = "%PDF-1.4 fake".getBytes();
+            FileRef uploaded = FileRef.of("k", "n.pdf", "application/pdf", pdf.length);
+
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+                .thenReturn(Optional.of(sampleSnapshot()));
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(), eq(byte[].class)))
+                .thenReturn(new ResponseEntity<>(pdf, HttpStatus.OK));
+            stubWorkflowLookup();
+
+            ArgumentCaptor<String> fileNameCaptor = ArgumentCaptor.forClass(String.class);
+            ArgumentCaptor<String> sourceTypeCaptor = ArgumentCaptor.forClass(String.class);
+            when(fileStorageService.upload(eq(TENANT), anyString(), eq(RUN_ID), eq(NODE_ID),
+                fileNameCaptor.capture(), eq("application/pdf"), any(InputStream.class), eq((long) pdf.length),
+                anyInt(), anyInt(), nullable(Integer.class), sourceTypeCaptor.capture()))
+                .thenReturn(uploaded);
+
+            Optional<FileRef> result = newService(RENDERER_URL)
+                .capturePdf(TENANT, RUN_ID, /* epoch */ 2, /* spawn */ 3, /* itemIndex */ 4, NODE_ID, INTERFACE_UUID, "A4", false);
+
+            assertTrue(result.isPresent());
+            assertEquals(uploaded, result.get());
+            assertEquals("my_form_pdf_epoch_2_spawn_3.pdf", fileNameCaptor.getValue(),
+                "PDF filename must carry the _pdf_ segment + epoch + spawn and a .pdf extension");
+            assertEquals(
+                com.apimarketplace.common.storage.service.StorageSourceTypes.INTERFACE_PDF,
+                sourceTypeCaptor.getValue(),
+                "interface PDFs are tagged sourceType=INTERFACE_PDF (not INTERFACE_SCREENSHOT)");
+        }
+
+        @Test
+        @DisplayName("Request targets /internal/render/pdf and forwards format + landscape in the body")
+        @SuppressWarnings("unchecked")
+        void requestTargetsPdfEndpointWithFormatAndLandscape() {
+            byte[] pdf = "%PDF".getBytes();
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+                .thenReturn(Optional.of(sampleSnapshot()));
+            ArgumentCaptor<String> urlCaptor = ArgumentCaptor.forClass(String.class);
+            ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor = ArgumentCaptor.forClass(HttpEntity.class);
+            when(restTemplate.exchange(urlCaptor.capture(), eq(HttpMethod.POST), bodyCaptor.capture(), eq(byte[].class)))
+                .thenReturn(new ResponseEntity<>(pdf, HttpStatus.OK));
+            stubWorkflowLookup();
+            when(fileStorageService.upload(any(), anyString(), any(), any(), anyString(), anyString(),
+                any(InputStream.class), anyLong(), anyInt(), anyInt(), nullable(Integer.class), anyString()))
+                .thenReturn(FileRef.of("p", "f.pdf", "application/pdf", pdf.length));
+
+            newService(RENDERER_URL)
+                .capturePdf(TENANT, RUN_ID, EPOCH, 0, null, NODE_ID, INTERFACE_UUID, "Letter", true);
+
+            assertTrue(urlCaptor.getValue().endsWith("/internal/render/pdf"),
+                "PDF render must hit the /internal/render/pdf endpoint, got: " + urlCaptor.getValue());
+            Map<String, Object> sent = bodyCaptor.getValue().getBody();
+            assertEquals("Letter", sent.get("format"));
+            assertEquals(Boolean.TRUE, sent.get("landscape"));
+            assertEquals(Boolean.TRUE, sent.get("printBackground"));
+        }
+
+        @Test
+        @DisplayName("Null/blank format defaults to A4 in the sidecar body")
+        @SuppressWarnings("unchecked")
+        void nullFormatDefaultsToA4() {
+            byte[] pdf = "%PDF".getBytes();
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+                .thenReturn(Optional.of(sampleSnapshot()));
+            ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor = ArgumentCaptor.forClass(HttpEntity.class);
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), bodyCaptor.capture(), eq(byte[].class)))
+                .thenReturn(new ResponseEntity<>(pdf, HttpStatus.OK));
+            stubWorkflowLookup();
+            when(fileStorageService.upload(any(), anyString(), any(), any(), anyString(), anyString(),
+                any(InputStream.class), anyLong(), anyInt(), anyInt(), nullable(Integer.class), anyString()))
+                .thenReturn(FileRef.of("p", "f.pdf", "application/pdf", pdf.length));
+
+            newService(RENDERER_URL)
+                .capturePdf(TENANT, RUN_ID, EPOCH, 0, null, NODE_ID, INTERFACE_UUID, null, false);
+
+            assertEquals("A4", bodyCaptor.getValue().getBody().get("format"),
+                "a null format must default to A4, never forward an empty/unsupported page size");
+        }
+
+        @Test
+        @DisplayName("Blank renderer URL → empty, no render/HTTP/upload (best-effort skip)")
+        void blankUrlSkipsPdf() {
+            Optional<FileRef> result = newService("")
+                .capturePdf(TENANT, RUN_ID, EPOCH, 0, null, NODE_ID, INTERFACE_UUID, "A4", false);
+            assertTrue(result.isEmpty());
+            verifyNoInteractions(renderService, restTemplate, fileStorageService, workflowRunRepository);
+        }
+    }
+
+    @Nested
     @DisplayName("isCompleteHtml helper")
     class IsCompleteHtml {
 

@@ -35,6 +35,9 @@ public class InterfaceNode extends BaseNode {
     private final boolean isEntryInterface;
     private final boolean generateScreenshot;
     private final boolean exposeRenderedSource;
+    private final boolean generatePdf;
+    private final String pdfFormat;
+    private final boolean pdfLandscape;
 
     /**
      * Per-field cap on the {@code rendered_html} / {@code rendered_css} / {@code rendered_js}
@@ -54,23 +57,35 @@ public class InterfaceNode extends BaseNode {
 
     public InterfaceNode(String nodeId, String interfaceId,
                          Map<String, String> actionMapping, boolean isEntryInterface,
-                         boolean generateScreenshot, boolean exposeRenderedSource) {
+                         boolean generateScreenshot, boolean exposeRenderedSource,
+                         boolean generatePdf, String pdfFormat, boolean pdfLandscape) {
         super(nodeId, NodeType.INTERFACE);
         this.interfaceId = interfaceId;
         this.actionMapping = actionMapping != null ? actionMapping : Map.of();
         this.isEntryInterface = isEntryInterface;
         this.generateScreenshot = generateScreenshot;
         this.exposeRenderedSource = exposeRenderedSource;
+        this.generatePdf = generatePdf;
+        this.pdfFormat = pdfFormat;
+        this.pdfLandscape = pdfLandscape;
     }
 
-    /** Backward-compatible 5-arg constructor: exposeRenderedSource defaults to false. */
+    /** Backward-compatible 6-arg constructor: PDF options default off (no PDF output). */
+    public InterfaceNode(String nodeId, String interfaceId,
+                         Map<String, String> actionMapping, boolean isEntryInterface,
+                         boolean generateScreenshot, boolean exposeRenderedSource) {
+        this(nodeId, interfaceId, actionMapping, isEntryInterface, generateScreenshot,
+            exposeRenderedSource, false, null, false);
+    }
+
+    /** Backward-compatible 5-arg constructor: exposeRenderedSource + PDF options default off. */
     public InterfaceNode(String nodeId, String interfaceId,
                          Map<String, String> actionMapping, boolean isEntryInterface,
                          boolean generateScreenshot) {
         this(nodeId, interfaceId, actionMapping, isEntryInterface, generateScreenshot, false);
     }
 
-    /** Backward-compatible 4-arg constructor: generateScreenshot + exposeRenderedSource default to false. */
+    /** Backward-compatible 4-arg constructor: generateScreenshot + exposeRenderedSource + PDF default off. */
     public InterfaceNode(String nodeId, String interfaceId,
                          Map<String, String> actionMapping, boolean isEntryInterface) {
         this(nodeId, interfaceId, actionMapping, isEntryInterface, false, false);
@@ -89,6 +104,11 @@ public class InterfaceNode extends BaseNode {
         resolvedParams.put("isEntryInterface", isEntryInterface);
         resolvedParams.put("generateScreenshot", generateScreenshot);
         resolvedParams.put("exposeRenderedSource", exposeRenderedSource);
+        resolvedParams.put("generatePdf", generatePdf);
+        if (generatePdf) {
+            resolvedParams.put("pdfFormat", pdfFormat != null ? pdfFormat : "A4");
+            resolvedParams.put("pdfLandscape", pdfLandscape);
+        }
 
         try {
             String runId = context.runId();
@@ -139,6 +159,13 @@ public class InterfaceNode extends BaseNode {
             if (generateScreenshot) {
                 Optional<FileRef> screenshot = captureScreenshot(context, effectiveEpoch);
                 screenshot.ifPresent(fileRef -> output.put("screenshot", fileRef));
+            }
+
+            // Best-effort PDF render of the interface, same continue-on-failure contract as the
+            // screenshot: sidecar error/absence → log + omit the `pdf` field, workflow continues.
+            if (generatePdf) {
+                Optional<FileRef> pdf = capturePdf(context, effectiveEpoch);
+                pdf.ifPresent(fileRef -> output.put("pdf", fileRef));
             }
 
             // Best-effort source exposure: emit the iframe-equivalent rendered HTML/CSS/JS as
@@ -267,6 +294,40 @@ public class InterfaceNode extends BaseNode {
         }
     }
 
+    private Optional<FileRef> capturePdf(ExecutionContext context, int effectiveEpoch) {
+        if (screenshotService == null) {
+            // Same high-confusion "toggle on, bean missing" case as the screenshot branch.
+            logger.warn("generatePdf toggle is ON but no InterfaceScreenshotService is wired - skipping PDF: nodeId={}", nodeId);
+            return Optional.empty();
+        }
+        try {
+            UUID parsedInterfaceId;
+            try {
+                parsedInterfaceId = UUID.fromString(interfaceId);
+            } catch (IllegalArgumentException invalid) {
+                logger.warn("Cannot render PDF: interfaceId is not a valid UUID - nodeId={}, interfaceId={}",
+                    nodeId, interfaceId);
+                return Optional.empty();
+            }
+            return screenshotService.capturePdf(
+                context.tenantId(),
+                context.runId(),
+                effectiveEpoch,
+                context.spawn(),
+                context.itemIndex(),
+                nodeId,
+                parsedInterfaceId,
+                pdfFormat,
+                pdfLandscape
+            );
+        } catch (Exception e) {
+            // Continue-on-failure: cosmetic feature must never break the workflow.
+            logger.warn("PDF render failed (continuing without pdf): nodeId={}, error={}",
+                nodeId, e.getMessage());
+            return Optional.empty();
+        }
+    }
+
     @Override
     public void acceptServices(ServiceRegistry registry) {
         super.acceptServices(registry);
@@ -294,6 +355,18 @@ public class InterfaceNode extends BaseNode {
 
     public boolean isExposeRenderedSource() {
         return exposeRenderedSource;
+    }
+
+    public boolean isGeneratePdf() {
+        return generatePdf;
+    }
+
+    public String getPdfFormat() {
+        return pdfFormat;
+    }
+
+    public boolean isPdfLandscape() {
+        return pdfLandscape;
     }
 
     public void setDagTriggerId(String dagTriggerId) {

@@ -17,6 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
 
@@ -45,6 +46,33 @@ class AuthPricingSyncClientTest {
     @BeforeEach
     void setUp() {
         client = new AuthPricingSyncClient(restTemplate, AUTH_URL);
+    }
+
+    @Test
+    @DisplayName("Skips the sync (no POST) for a negative sentinel rate (openrouter/auto's -1000000)")
+    void skipsNegativeRate() {
+        client.sync("openrouter", "openrouter/auto",
+                new BigDecimal("-1000000"), new BigDecimal("-1000000"), "byok");
+        // Pre-fix this POSTed -1000000 -> auth model_pricing NUMERIC(10,6) numeric overflow (500).
+        // Post-fix it is guarded out so the billing mirror never sees a non-billable rate.
+        verify(restTemplate, never()).postForEntity(any(String.class), any(), eq(Void.class));
+    }
+
+    @Test
+    @DisplayName("Skips the sync (no POST) for a rate above the NUMERIC(10,6) ceiling")
+    void skipsRateAboveCeiling() {
+        client.sync("vendor", "huge", new BigDecimal("10000.0"), new BigDecimal("1.0"), "byok");
+        verify(restTemplate, never()).postForEntity(any(String.class), any(), eq(Void.class));
+    }
+
+    @Test
+    @DisplayName("Still syncs an in-range rate and a zero rate (0 is billable/in range)")
+    void syncsInRangeRates() {
+        when(restTemplate.postForEntity(eq(SYNC_PATH), any(), eq(Void.class)))
+                .thenReturn(ResponseEntity.ok().build());
+        client.sync("openai", "gpt-5", new BigDecimal("1.25"), new BigDecimal("10.00"), "byok");
+        client.sync("vendor", "free-in", BigDecimal.ZERO, new BigDecimal("2.0"), "byok");
+        verify(restTemplate, org.mockito.Mockito.times(2)).postForEntity(eq(SYNC_PATH), any(), eq(Void.class));
     }
 
     @Test

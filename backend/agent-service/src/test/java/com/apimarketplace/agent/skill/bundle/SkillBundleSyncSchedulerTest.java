@@ -1,5 +1,7 @@
 package com.apimarketplace.agent.skill.bundle;
 
+import com.apimarketplace.agent.catalog.bundle.CatalogBundleTrustBootstrap;
+import com.apimarketplace.agent.catalog.bundle.TrustedKeyRegistry;
 import com.apimarketplace.agent.cloud.CloudLlmRuntimeAccess;
 import com.apimarketplace.agent.cloud.CloudLlmRuntimeCredentials;
 import com.apimarketplace.agent.domain.SkillBundleSyncStatusEntity;
@@ -35,6 +37,8 @@ class SkillBundleSyncSchedulerTest {
     @Mock private SkillBundleVerifier verifier;
     @Mock private SkillBundleApplier applier;
     @Mock private SkillBundleSyncStatusRepository syncStatusRepo;
+    @Mock private TrustedKeyRegistry trustedKeys;
+    @Mock private CatalogBundleTrustBootstrap trustBootstrap;
     @Mock private ObjectProvider<CloudLlmRuntimeAccess> runtimeAccessProvider;
     @Mock private CloudLlmRuntimeAccess runtimeAccess;
 
@@ -45,16 +49,21 @@ class SkillBundleSyncSchedulerTest {
 
     @BeforeEach
     void setUp() {
-        scheduler = new SkillBundleSyncScheduler(fetcher, verifier, applier, syncStatusRepo, runtimeAccessProvider);
+        scheduler = new SkillBundleSyncScheduler(fetcher, verifier, applier, syncStatusRepo,
+                trustedKeys, trustBootstrap, runtimeAccessProvider);
         lenient().when(syncStatusRepo.findById(SkillBundleSyncStatusEntity.SINGLETON_ID))
                 .thenReturn(Optional.empty());
         lenient().when(syncStatusRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
     }
 
     @Test
-    @DisplayName("no trusted keys -> records TRUST_UNCONFIGURED and never fetches")
-    void noTrustKeys() {
-        when(verifier.hasKeys()).thenReturn(false);
+    @DisplayName("cloud-linked but trust cannot be bootstrapped -> records TRUST_UNCONFIGURED and never fetches")
+    void trustUnconfiguredWhenBootstrapSkips() {
+        when(runtimeAccessProvider.getIfAvailable()).thenReturn(runtimeAccess);
+        when(runtimeAccess.resolveActiveCloudRuntime()).thenReturn(Optional.of(creds));
+        when(trustedKeys.hasKeys()).thenReturn(false);
+        when(trustBootstrap.bootstrapTrust())
+                .thenReturn(CatalogBundleTrustBootstrap.Result.skipped("cloud signing-key endpoint unreachable"));
 
         scheduler.tick();
 
@@ -63,9 +72,47 @@ class SkillBundleSyncSchedulerTest {
     }
 
     @Test
+    @DisplayName("empty registry on a linked CE -> TOFU-bootstraps trust (shared with model-catalog) then fetches")
+    void tofuBootstrapsTrustThenFetches() {
+        when(runtimeAccessProvider.getIfAvailable()).thenReturn(runtimeAccess);
+        when(runtimeAccess.resolveActiveCloudRuntime()).thenReturn(Optional.of(creds));
+        // Registry starts empty (as on a TOFU install with an empty catalog.bundle.trusted-keys),
+        // then the SHARED bootstrap pins the cloud key - the skill path must proceed, NOT get stuck.
+        when(trustedKeys.hasKeys()).thenReturn(false);
+        when(trustBootstrap.bootstrapTrust())
+                .thenReturn(CatalogBundleTrustBootstrap.Result.pinned("livecontext-prod-v1"));
+        when(fetcher.fetchLatest(creds)).thenReturn(SkillBundleFetcher.FetchResult.noActive());
+
+        scheduler.tick();
+
+        // Pre-fix (private empty snapshot) this returned at TRUST_UNCONFIGURED and never fetched.
+        verify(fetcher).fetchLatest(creds);
+        assertThat(captureStatus().getLastFetchStatus()).isEqualTo("NO_ACTIVE");
+    }
+
+    @Test
+    @DisplayName("sibling pins the shared key concurrently (bootstrap loses the race, 'already present') -> proceeds, no spurious TRUST_UNCONFIGURED")
+    void siblingPinnedConcurrentlyProceeds() {
+        when(runtimeAccessProvider.getIfAvailable()).thenReturn(runtimeAccess);
+        when(runtimeAccess.resolveActiveCloudRuntime()).thenReturn(Optional.of(creds));
+        // hasKeys(): false at the pre-check (we bootstrap), true at the re-check (the model-catalog
+        // sibling TOFU-pinned the same shared key concurrently at startup). Our bootstrap loses the
+        // race and returns not-pinned ("already present"), but trust IS configured - we must proceed,
+        // NOT record the transient boot-time failure the losing racer used to log.
+        when(trustedKeys.hasKeys()).thenReturn(false, true);
+        when(trustBootstrap.bootstrapTrust())
+                .thenReturn(CatalogBundleTrustBootstrap.Result.skipped("could not be pinned (already present)"));
+        when(fetcher.fetchLatest(creds)).thenReturn(SkillBundleFetcher.FetchResult.noActive());
+
+        scheduler.tick();
+
+        verify(fetcher).fetchLatest(creds);
+        assertThat(captureStatus().getLastFetchStatus()).isEqualTo("NO_ACTIVE");
+    }
+
+    @Test
     @DisplayName("not cloud-linked -> records NOT_LINKED (informational, not a consecutive failure) and never fetches")
     void notLinked() {
-        when(verifier.hasKeys()).thenReturn(true);
         when(runtimeAccessProvider.getIfAvailable()).thenReturn(runtimeAccess);
         when(runtimeAccess.resolveActiveCloudRuntime()).thenReturn(Optional.empty());
 
@@ -80,7 +127,7 @@ class SkillBundleSyncSchedulerTest {
     @Test
     @DisplayName("happy path: fetch -> verify ok -> apply; the applier owns the success status (no failure recorded)")
     void happyApply() {
-        when(verifier.hasKeys()).thenReturn(true);
+        when(trustedKeys.hasKeys()).thenReturn(true);
         when(runtimeAccessProvider.getIfAvailable()).thenReturn(runtimeAccess);
         when(runtimeAccess.resolveActiveCloudRuntime()).thenReturn(Optional.of(creds));
         SignedSkillBundle bundle = new SignedSkillBundle(1, 1, "c", "s", "k", "i", 1, 10, "p");
@@ -100,7 +147,7 @@ class SkillBundleSyncSchedulerTest {
     @Test
     @DisplayName("verification failure -> records the verifier's status and does NOT apply")
     void verifyFailure() {
-        when(verifier.hasKeys()).thenReturn(true);
+        when(trustedKeys.hasKeys()).thenReturn(true);
         when(runtimeAccessProvider.getIfAvailable()).thenReturn(runtimeAccess);
         when(runtimeAccess.resolveActiveCloudRuntime()).thenReturn(Optional.of(creds));
         SignedSkillBundle bundle = new SignedSkillBundle(1, 1, "c", "s", "k", "i", 1, 10, "p");
@@ -117,7 +164,7 @@ class SkillBundleSyncSchedulerTest {
     @Test
     @DisplayName("cloud has no active bundle (404) -> NO_ACTIVE fetch-only, no failure")
     void noActive() {
-        when(verifier.hasKeys()).thenReturn(true);
+        when(trustedKeys.hasKeys()).thenReturn(true);
         when(runtimeAccessProvider.getIfAvailable()).thenReturn(runtimeAccess);
         when(runtimeAccess.resolveActiveCloudRuntime()).thenReturn(Optional.of(creds));
         when(fetcher.fetchLatest(creds)).thenReturn(SkillBundleFetcher.FetchResult.noActive());
@@ -131,7 +178,7 @@ class SkillBundleSyncSchedulerTest {
     @Test
     @DisplayName("HTTP error from the cloud -> records the fetch status and bumps consecutive failures")
     void httpErrorRecordsFailure() {
-        when(verifier.hasKeys()).thenReturn(true);
+        when(trustedKeys.hasKeys()).thenReturn(true);
         when(runtimeAccessProvider.getIfAvailable()).thenReturn(runtimeAccess);
         when(runtimeAccess.resolveActiveCloudRuntime()).thenReturn(Optional.of(creds));
         when(fetcher.fetchLatest(creds)).thenReturn(SkillBundleFetcher.FetchResult.httpError("HTTP 500"));
@@ -146,7 +193,7 @@ class SkillBundleSyncSchedulerTest {
     @Test
     @DisplayName("an APPLY_FAILED result is persisted as a failure status")
     void applyFailedRecordsFailure() {
-        when(verifier.hasKeys()).thenReturn(true);
+        when(trustedKeys.hasKeys()).thenReturn(true);
         when(runtimeAccessProvider.getIfAvailable()).thenReturn(runtimeAccess);
         when(runtimeAccess.resolveActiveCloudRuntime()).thenReturn(Optional.of(creds));
         SignedSkillBundle bundle = new SignedSkillBundle(1, 1, "c", "s", "k", "i", 1, 10, "p");
@@ -163,7 +210,7 @@ class SkillBundleSyncSchedulerTest {
     @Test
     @DisplayName("an apply that THROWS is caught and persisted (the scheduler never crashes)")
     void applyThrowsIsCaught() {
-        when(verifier.hasKeys()).thenReturn(true);
+        when(trustedKeys.hasKeys()).thenReturn(true);
         when(runtimeAccessProvider.getIfAvailable()).thenReturn(runtimeAccess);
         when(runtimeAccess.resolveActiveCloudRuntime()).thenReturn(Optional.of(creds));
         SignedSkillBundle bundle = new SignedSkillBundle(1, 1, "c", "s", "k", "i", 1, 10, "p");

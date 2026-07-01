@@ -2395,7 +2395,7 @@
       "skillUpdated": "Skill mis a jour avec succes",
       "createFailed": "Impossible de creer le skill",
       "makeGlobalLabel": "Rendre disponible à tous (global)",
-      "makeGlobalHelp": "Admin uniquement. Quand activé, ce skill apparaît dans la liste de skills de chaque utilisateur, comme le skill Deep Research intégré. Seuls les admins peuvent l'éditer ou le supprimer.",
+      "makeGlobalHelp": "Admin uniquement. Quand activé, ce skill apparaît dans la liste de skills de chaque utilisateur. Seuls les admins peuvent l'éditer ou le supprimer.",
       "globalReadOnly": "Ce skill global est géré par les administrateurs. Vous ne pouvez pas l'éditer.",
       "success": "Succès",
       "error": "Erreur"
@@ -5815,6 +5815,10 @@
         "entryInterfaceDescription": "Afficher cette interface en priorite quand plusieurs sont en attente.",
         "generateScreenshot": "Générer une capture",
         "generateScreenshotDescription": "Active la capture PNG de l'interface rendue cote backend. La capture est exposee comme FileRef sur la sortie screenshot pour les nodes en aval (piece jointe email, Telegram photo, entree image agent). Best-effort : si la capture echoue, la sortie reste absente sans faire echouer le workflow.",
+        "generatePdf": "Générer un PDF",
+        "generatePdfDescription": "Une fois activé, rend l'interface en PDF et l'expose comme FileRef sur la sortie pdf pour les nodes en aval (pièce jointe email, Telegram document, entrée fichier agent). Best-effort : si le rendu échoue, la sortie reste absente sans faire échouer le workflow.",
+        "pdfFormat": "Taille de page PDF",
+        "pdfLandscape": "Paysage",
         "exposeRenderedSource": "Exposer la source rendue",
         "exposeRenderedSourceDescription": "Expose les templates resolus de l'interface comme sorties string rendered_html, rendered_css, rendered_js pour les nodes en aval (corps d'email, entree texte agent, debug). Best-effort : si le rendu echoue, les sorties restent absentes sans faire echouer le workflow."
       },

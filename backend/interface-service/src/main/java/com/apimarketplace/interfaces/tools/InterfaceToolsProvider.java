@@ -141,6 +141,7 @@ public class InterfaceToolsProvider implements ToolsProvider {
             .description("""
                 Create and manage HTML page templates. Works STANDALONE (static pages) or IN WORKFLOWS (dynamic data display + user interaction).
                 IMPORTANT: action_mapping and variable_mapping are NOT interface params - they go on the WORKFLOW node: workflow(action='add_node', type='interface', params={interface_id:'...', variable_mapping:{...}, action_mapping:{...}}).
+                Native output: the WORKFLOW node can render the page to a screenshot (PNG) or pdf FileRef output - set generateScreenshot / generatePdf on the node (no external tool/API needed).
                 MANDATORY: Call interface(action='help') before creating your first interface.
                 Editing: 'update' REPLACES a whole template; 'patch' does surgical search/replace edits (target + edits=[{old,new}]) - prefer patch to change a few lines without re-sending everything.
                 Marketplace: publish requires interface_id + title (the interface itself IS the landing page - no separate landing). unpublish marks the listing inactive - acquirers keep their copies.

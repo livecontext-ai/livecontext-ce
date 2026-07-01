@@ -1212,6 +1212,39 @@ class WorkflowPlanParserTest {
         }
 
         @Test
+        @DisplayName("Should parse generatePdf toggle + pdfFormat/pdfLandscape options")
+        void shouldParsePdfFieldsFromPlan() {
+            Map<String, Object> ifaceData = new HashMap<>();
+            ifaceData.put("id", "uuid-pdf");
+            ifaceData.put("label", "Form With Pdf");
+            ifaceData.put("generatePdf", true);
+            ifaceData.put("pdfFormat", "Letter");
+            ifaceData.put("pdfLandscape", true);
+
+            List<InterfaceDef> result = WorkflowPlanParser.parseInterfaces(List.of(ifaceData));
+
+            assertEquals(1, result.size());
+            assertTrue(result.get(0).generatePdf());
+            assertEquals("Letter", result.get(0).pdfFormat());
+            assertTrue(result.get(0).pdfLandscape());
+        }
+
+        @Test
+        @DisplayName("Should default PDF fields when missing (back-compat: generatePdf=false, format=null, landscape=false)")
+        void shouldDefaultPdfFieldsWhenMissing() {
+            Map<String, Object> ifaceData = new HashMap<>();
+            ifaceData.put("id", "uuid-nopdf");
+            ifaceData.put("label", "Pre-Pdf Form");
+
+            List<InterfaceDef> result = WorkflowPlanParser.parseInterfaces(List.of(ifaceData));
+
+            assertEquals(1, result.size());
+            assertFalse(result.get(0).generatePdf());
+            assertNull(result.get(0).pdfFormat());
+            assertFalse(result.get(0).pdfLandscape());
+        }
+
+        @Test
         @DisplayName("Should parse guardrail rules from Map format (builder tool)")
         void shouldParseGuardrailRulesFromMapFormat() {
             // Builder agent generates guardrailRules as Map<key, description>

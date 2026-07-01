@@ -43,12 +43,39 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
     private static final int VIEWPORT_WIDTH = 1280;
     private static final int VIEWPORT_HEIGHT = 800;
     private static final int PLAYWRIGHT_TIMEOUT_MS = 8000;
+    /** PDF renders (print layout + font settling) are slower than a screenshot - give them headroom. */
+    private static final int PDF_TIMEOUT_MS = 20000;
     private static final String MIME_PNG = "image/png";
+    private static final String MIME_PDF = "application/pdf";
+    private static final String DEFAULT_PDF_FORMAT = "A4";
     private static final String SCREENSHOT_ENDPOINT = "/internal/render/screenshot";
+    private static final String PDF_ENDPOINT = "/internal/render/pdf";
 
     /** Resource key for the backpressure permit. One global key per orchestrator deployment -
-     *  the Playwright sidecar is a shared singleton so the cap is process-global, not per-run. */
+     *  the Playwright sidecar is a shared singleton (screenshot + PDF share it) so the cap is
+     *  process-global, not per-run. */
     private static final String SEMAPHORE_KEY = "screenshot:sidecar";
+
+    /** Distinguishes the two render outputs, driving the sidecar endpoint, MIME, extension,
+     *  filename segment and storage source-type. Keeps the screenshot path byte-identical. */
+    private enum RenderKind {
+        SCREENSHOT("screenshot", MIME_PNG, "png",
+            com.apimarketplace.common.storage.service.StorageSourceTypes.INTERFACE_SCREENSHOT),
+        PDF("pdf", MIME_PDF, "pdf",
+            com.apimarketplace.common.storage.service.StorageSourceTypes.INTERFACE_PDF);
+
+        final String segment;
+        final String mime;
+        final String extension;
+        final String sourceType;
+
+        RenderKind(String segment, String mime, String extension, String sourceType) {
+            this.segment = segment;
+            this.mime = mime;
+            this.extension = extension;
+            this.sourceType = sourceType;
+        }
+    }
 
     private final InterfaceRenderService renderService;
     private final FileStorageService fileStorageService;
@@ -83,9 +110,30 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
     @Override
     public Optional<FileRef> capture(String tenantId, String runId, int epoch, int spawn,
                                      Integer itemIndex, String nodeId, UUID interfaceId) {
+        return render(RenderKind.SCREENSHOT, tenantId, runId, epoch, spawn, itemIndex, nodeId,
+            interfaceId, null, false);
+    }
+
+    @Override
+    public Optional<FileRef> capturePdf(String tenantId, String runId, int epoch, int spawn,
+                                        Integer itemIndex, String nodeId, UUID interfaceId,
+                                        String pdfFormat, boolean landscape) {
+        return render(RenderKind.PDF, tenantId, runId, epoch, spawn, itemIndex, nodeId,
+            interfaceId, pdfFormat, landscape);
+    }
+
+    /**
+     * Shared render pipeline for both {@link RenderKind}s: acquire the sidecar backpressure permit,
+     * resolve + assemble the interface HTML, POST to the kind's endpoint, then upload the returned
+     * bytes under the kind's MIME / extension / source-type. Best-effort throughout - any failure
+     * logs a warning and returns {@link Optional#empty()} so the workflow continues.
+     */
+    private Optional<FileRef> render(RenderKind kind, String tenantId, String runId, int epoch,
+                                     int spawn, Integer itemIndex, String nodeId, UUID interfaceId,
+                                     String pdfFormat, boolean landscape) {
         if (rendererBaseUrl == null || rendererBaseUrl.isBlank()) {
-            logger.debug("screenshot-renderer-url not configured - skipping screenshot for nodeId={} runId={}",
-                nodeId, runId);
+            logger.debug("screenshot-renderer-url not configured - skipping {} for nodeId={} runId={}",
+                kind.segment, nodeId, runId);
             return Optional.empty();
         }
 
@@ -94,24 +142,25 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
         // creates RestTemplate read-timeout cascades + RUNNABLE thread pile-up. Uses the same
         // DistributedSemaphore primitive as BrowserAgentModule + EpochConcurrencyLimiter -
         // cross-replica when Redis is wired, in-process otherwise. On capacity exhaustion we
-        // skip the capture (Optional.empty), honouring the existing best-effort contract: the
-        // workflow continues normally, just without a `screenshot` field this run.
+        // skip the render (Optional.empty), honouring the existing best-effort contract: the
+        // workflow continues normally, just without the field this run.
         String ownerId = nodeId + ":" + runId + ":" + epoch + ":" + spawn + ":" + Thread.currentThread().getId();
         if (!screenshotConcurrency.tryAcquire(SEMAPHORE_KEY, maxConcurrent, ownerId)) {
-            logger.info("Screenshot sidecar at capacity (max={}), skipping for nodeId={} runId={} epoch={} spawn={}",
-                maxConcurrent, nodeId, runId, epoch, spawn);
+            logger.info("Render sidecar at capacity (max={}), skipping {} for nodeId={} runId={} epoch={} spawn={}",
+                maxConcurrent, kind.segment, nodeId, runId, epoch, spawn);
             return Optional.empty();
         }
 
         try {
-            return doCapture(tenantId, runId, epoch, spawn, itemIndex, nodeId, interfaceId);
+            return doRender(kind, tenantId, runId, epoch, spawn, itemIndex, nodeId, interfaceId, pdfFormat, landscape);
         } finally {
             screenshotConcurrency.release(SEMAPHORE_KEY, ownerId);
         }
     }
 
-    private Optional<FileRef> doCapture(String tenantId, String runId, int epoch, int spawn,
-                                        Integer itemIndex, String nodeId, UUID interfaceId) {
+    private Optional<FileRef> doRender(RenderKind kind, String tenantId, String runId, int epoch,
+                                       int spawn, Integer itemIndex, String nodeId, UUID interfaceId,
+                                       String pdfFormat, boolean landscape) {
         ResolvedTemplateSnapshot snapshot;
         try {
             Optional<ResolvedTemplateSnapshot> opt = renderService.resolveTemplateSnapshot(interfaceId, runId, tenantId, epoch);
@@ -122,46 +171,44 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
             }
             snapshot = opt.get();
         } catch (Exception e) {
-            logger.warn("Interface render failed for screenshot capture: interfaceId={} runId={} epoch={}: {}",
-                interfaceId, runId, epoch, e.getMessage());
+            logger.warn("Interface render failed for {} capture: interfaceId={} runId={} epoch={}: {}",
+                kind.segment, interfaceId, runId, epoch, e.getMessage());
             return Optional.empty();
         }
 
         String assembled = assembleHtml(snapshot.html(), snapshot.css(), snapshot.js(), snapshot.vars());
 
-        byte[] pngBytes;
+        byte[] bytes;
         try {
-            pngBytes = postToSidecar(assembled);
+            bytes = postToSidecar(kind, assembled, pdfFormat, landscape);
         } catch (RestClientException e) {
-            logger.warn("Screenshot sidecar call failed for nodeId={} runId={} epoch={}: {}",
-                nodeId, runId, epoch, e.getMessage());
+            logger.warn("{} sidecar call failed for nodeId={} runId={} epoch={}: {}",
+                kind.segment, nodeId, runId, epoch, e.getMessage());
             return Optional.empty();
         } catch (Exception e) {
-            logger.warn("Unexpected error calling screenshot sidecar for nodeId={} runId={} epoch={}: {}",
-                nodeId, runId, epoch, e.getMessage());
+            logger.warn("Unexpected error calling {} sidecar for nodeId={} runId={} epoch={}: {}",
+                kind.segment, nodeId, runId, epoch, e.getMessage());
             return Optional.empty();
         }
 
-        if (pngBytes == null || pngBytes.length == 0) {
-            logger.warn("Screenshot sidecar returned empty body for nodeId={} runId={} epoch={}",
-                nodeId, runId, epoch);
+        if (bytes == null || bytes.length == 0) {
+            logger.warn("{} sidecar returned empty body for nodeId={} runId={} epoch={}",
+                kind.segment, nodeId, runId, epoch);
             return Optional.empty();
         }
 
         String workflowId = resolveWorkflowId(runId);
         if (workflowId == null) {
-            logger.warn("Workflow run not found, skipping screenshot upload for nodeId={} runId={}",
-                nodeId, runId);
+            logger.warn("Workflow run not found, skipping {} upload for nodeId={} runId={}",
+                kind.segment, nodeId, runId);
             return Optional.empty();
         }
 
-        // Name the screenshot after the producing node's label
-        // (e.g. "resultsui_screenshot_epoch_2_spawn_0.png") so it is traceable back to the
-        // exact interface node in the file explorer, instead of the opaque,
-        // collision-prone "interface_screenshot_epoch_N.png". nodeId looks like
-        // "interface:resultsui"; strip the "interface:" prefix for the label.
+        // Name the file after the producing node's label + render kind
+        // (e.g. "resultsui_screenshot_epoch_2_spawn_0.png" / "resultsui_pdf_epoch_2_spawn_0.pdf")
+        // so it is traceable back to the exact interface node in the file explorer.
         // The spawn segment is REQUIRED for uniqueness: re-spawning the same interface node
-        // within one epoch previously produced an identical "..._epoch_N.png" name.
+        // within one epoch previously produced an identical "..._epoch_N.<ext>" name.
         // Display-only label extraction goes through the sanctioned helper (never the
         // inline `indexOf(':') + 1` alias pattern that caused the split alias-drift bug
         // class - see StepOutputsWriterUsageTest). For "interface:resultsui" this yields
@@ -172,7 +219,7 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
         if (nodeLabel == null || nodeLabel.isBlank()) {
             nodeLabel = "interface";
         }
-        String fileName = nodeLabel + "_screenshot_epoch_" + epoch + "_spawn_" + spawn + ".png";
+        String fileName = nodeLabel + "_" + kind.segment + "_epoch_" + epoch + "_spawn_" + spawn + "." + kind.extension;
         FileRef fileRef;
         try {
             fileRef = fileStorageService.upload(
@@ -181,28 +228,28 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
                 runId,
                 nodeId,
                 fileName,
-                MIME_PNG,
-                new ByteArrayInputStream(pngBytes),
-                pngBytes.length,
+                kind.mime,
+                new ByteArrayInputStream(bytes),
+                bytes.length,
                 epoch,
                 spawn,
                 itemIndex,
-                com.apimarketplace.common.storage.service.StorageSourceTypes.INTERFACE_SCREENSHOT
+                kind.sourceType
             );
         } catch (Exception e) {
-            logger.warn("Screenshot upload failed for nodeId={} runId={} epoch={} spawn={}: {}",
-                nodeId, runId, epoch, spawn, e.getMessage());
+            logger.warn("{} upload failed for nodeId={} runId={} epoch={} spawn={}: {}",
+                kind.segment, nodeId, runId, epoch, spawn, e.getMessage());
             return Optional.empty();
         }
 
         if (fileRef == null) {
-            logger.warn("Screenshot upload returned null FileRef for nodeId={} runId={} epoch={}",
-                nodeId, runId, epoch);
+            logger.warn("{} upload returned null FileRef for nodeId={} runId={} epoch={}",
+                kind.segment, nodeId, runId, epoch);
             return Optional.empty();
         }
 
-        logger.info("Captured interface screenshot: nodeId={}, runId={}, epoch={}, spawn={}, bytes={}, path={}",
-            nodeId, runId, epoch, spawn, pngBytes.length, fileRef.path());
+        logger.info("Captured interface {}: nodeId={}, runId={}, epoch={}, spawn={}, bytes={}, path={}",
+            kind.segment, nodeId, runId, epoch, spawn, bytes.length, fileRef.path());
         return Optional.of(fileRef);
     }
 
@@ -294,11 +341,29 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
         return haystack.toLowerCase(Locale.ROOT).indexOf(needle.toLowerCase(Locale.ROOT));
     }
 
-    private byte[] postToSidecar(String html) {
+    private byte[] postToSidecar(RenderKind kind, String html, String pdfFormat, boolean landscape) {
+        String endpoint = kind == RenderKind.PDF ? PDF_ENDPOINT : SCREENSHOT_ENDPOINT;
         String url = rendererBaseUrl.endsWith("/")
-            ? rendererBaseUrl.substring(0, rendererBaseUrl.length() - 1) + SCREENSHOT_ENDPOINT
-            : rendererBaseUrl + SCREENSHOT_ENDPOINT;
+            ? rendererBaseUrl.substring(0, rendererBaseUrl.length() - 1) + endpoint
+            : rendererBaseUrl + endpoint;
 
+        Map<String, Object> body = kind == RenderKind.PDF
+            ? buildPdfBody(html, pdfFormat, landscape)
+            : buildScreenshotBody(html);
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setAccept(List.of(MediaType.APPLICATION_OCTET_STREAM));
+
+        HttpEntity<Map<String, Object>> entity = new HttpEntity<>(body, headers);
+        // RestTemplate's default error handler throws HttpStatusCodeException for non-2xx -
+        // it never returns a non-2xx ResponseEntity to this method, so the caller's catch
+        // around postToSidecar is the only failure-path we need.
+        ResponseEntity<byte[]> response = restTemplate.exchange(url, HttpMethod.POST, entity, byte[].class);
+        return response.getBody();
+    }
+
+    private Map<String, Object> buildScreenshotBody(String html) {
         Map<String, Object> viewport = new LinkedHashMap<>();
         viewport.put("width", VIEWPORT_WIDTH);
         viewport.put("height", VIEWPORT_HEIGHT);
@@ -312,17 +377,20 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
         body.put("fullPage", true);
         body.put("waitFor", "networkidle");
         body.put("timeoutMs", PLAYWRIGHT_TIMEOUT_MS);
+        return body;
+    }
 
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.setAccept(List.of(MediaType.APPLICATION_OCTET_STREAM));
-
-        HttpEntity<Map<String, Object>> entity = new HttpEntity<>(body, headers);
-        // RestTemplate's default error handler throws HttpStatusCodeException for non-2xx -
-        // it never returns a non-2xx ResponseEntity to this method, so the caller's catch
-        // around postToSidecar is the only failure-path we need.
-        ResponseEntity<byte[]> response = restTemplate.exchange(url, HttpMethod.POST, entity, byte[].class);
-        return response.getBody();
+    private Map<String, Object> buildPdfBody(String html, String pdfFormat, boolean landscape) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("html", html);
+        body.put("format", (pdfFormat != null && !pdfFormat.isBlank()) ? pdfFormat : DEFAULT_PDF_FORMAT);
+        body.put("landscape", landscape);
+        // Print backgrounds so styled interfaces (coloured cards, banners) render faithfully.
+        body.put("printBackground", true);
+        // Self-contained print HTML rarely needs networkidle; 'load' is faster + avoids hangs.
+        body.put("waitFor", "load");
+        body.put("timeoutMs", PDF_TIMEOUT_MS);
+        return body;
     }
 
     /**

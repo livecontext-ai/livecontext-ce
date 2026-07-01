@@ -197,7 +197,10 @@ class InterfaceNodeConfigTest {
                 "interface_id", "id", "variable_mapping", "action_mapping",
                 "is_entry_interface", "isEntryInterface",
                 "generate_screenshot", "generateScreenshot",
-                "expose_rendered_source", "exposeRenderedSource");
+                "expose_rendered_source", "exposeRenderedSource",
+                "generate_pdf", "generatePdf",
+                "pdf_format", "pdfFormat",
+                "pdf_landscape", "pdfLandscape");
         }
     }
 
@@ -303,6 +306,102 @@ class InterfaceNodeConfigTest {
             Map<String, Object> extras = config.toExtras();
             assertThat(extras).containsEntry("generate_screenshot", true);
             assertThat(extras).containsEntry("expose_rendered_source", true);
+        }
+    }
+
+    @Nested
+    @DisplayName("PDF plumbing (generatePdf / pdfFormat / pdfLandscape)")
+    class PdfPlumbing {
+
+        @Test
+        @DisplayName("Agent uses snake_case → PDF fields extracted, persisted in nodeMap as camelCase")
+        void agentSnakeCaseExtractsAndPersists() {
+            Map<String, Object> params = new HashMap<>();
+            params.put("interface_id", "uuid-1");
+            params.put("generate_pdf", true);
+            params.put("pdf_format", "Letter");
+            params.put("pdf_landscape", true);
+
+            InterfaceNodeConfig config = InterfaceNodeConfig.fromParams(params);
+
+            assertThat(config.generatePdf()).isTrue();
+            assertThat(config.pdfFormat()).isEqualTo("Letter");
+            assertThat(config.pdfLandscape()).isTrue();
+
+            Map<String, Object> nodeMap = config.toNodeMap("My Form", Map.of("x", 0, "y", 0));
+            assertThat(nodeMap).containsEntry("generatePdf", true);
+            assertThat(nodeMap).containsEntry("pdfFormat", "Letter");
+            assertThat(nodeMap).containsEntry("pdfLandscape", true);
+            assertThat(nodeMap).doesNotContainKey("generate_pdf");
+            assertThat(nodeMap).doesNotContainKey("pdf_format");
+        }
+
+        @Test
+        @DisplayName("Agent uses camelCase → PDF fields extracted")
+        void agentCamelCaseExtracts() {
+            Map<String, Object> params = new HashMap<>();
+            params.put("interface_id", "uuid-1");
+            params.put("generatePdf", true);
+            params.put("pdfFormat", "A4");
+            params.put("pdfLandscape", false);
+
+            InterfaceNodeConfig config = InterfaceNodeConfig.fromParams(params);
+
+            assertThat(config.generatePdf()).isTrue();
+            assertThat(config.pdfFormat()).isEqualTo("A4");
+            assertThat(config.pdfLandscape()).isFalse();
+        }
+
+        @Test
+        @DisplayName("pdfFormat is normalised to a supported page size (case-insensitive); unknown → null (falls back to A4 at render)")
+        void pdfFormatNormalised() {
+            assertThat(fromFormat("letter").pdfFormat()).isEqualTo("Letter");
+            assertThat(fromFormat("LEGAL").pdfFormat()).isEqualTo("Legal");
+            assertThat(fromFormat("a4").pdfFormat()).isEqualTo("A4");
+            assertThat(fromFormat("Tabloid").pdfFormat()).isNull();
+            assertThat(fromFormat("  ").pdfFormat()).isNull();
+        }
+
+        private InterfaceNodeConfig fromFormat(String format) {
+            Map<String, Object> params = new HashMap<>();
+            params.put("interface_id", "uuid-1");
+            params.put("pdf_format", format);
+            return InterfaceNodeConfig.fromParams(params);
+        }
+
+        @Test
+        @DisplayName("PDF fields default to null (= omitted) when not supplied - no nodeMap pollution")
+        void pdfFieldsDefaultNullWhenMissing() {
+            Map<String, Object> params = new HashMap<>();
+            params.put("interface_id", "uuid-1");
+
+            InterfaceNodeConfig config = InterfaceNodeConfig.fromParams(params);
+
+            assertThat(config.generatePdf()).isNull();
+            assertThat(config.pdfFormat()).isNull();
+            assertThat(config.pdfLandscape()).isNull();
+
+            Map<String, Object> nodeMap = config.toNodeMap("X", Map.of("x", 0, "y", 0));
+            assertThat(nodeMap).doesNotContainKey("generatePdf");
+            assertThat(nodeMap).doesNotContainKey("pdfFormat");
+            assertThat(nodeMap).doesNotContainKey("pdfLandscape");
+        }
+
+        @Test
+        @DisplayName("toSavedParams + toExtras emit PDF fields as snake_case (response visibility for the agent)")
+        void savedParamsAndExtrasEmitSnakeCase() {
+            InterfaceNodeConfig config = new InterfaceNodeConfig(
+                "uuid-1", null, null, false, false, false, true, "Legal", true);
+
+            Map<String, Object> saved = config.toSavedParams();
+            assertThat(saved).containsEntry("generate_pdf", true);
+            assertThat(saved).containsEntry("pdf_format", "Legal");
+            assertThat(saved).containsEntry("pdf_landscape", true);
+
+            Map<String, Object> extras = config.toExtras();
+            assertThat(extras).containsEntry("generate_pdf", true);
+            assertThat(extras).containsEntry("pdf_format", "Legal");
+            assertThat(extras).containsEntry("pdf_landscape", true);
         }
     }
 

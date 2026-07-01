@@ -63,7 +63,10 @@ function StatusBadge({
     );
   }
   const ok = status === "OK";
-  const informational = status === "NO_ACTIVE" || status === "NOT_LINKED";
+  // "Setup / not synced yet" states are informational (blue), NOT errors (red): a fresh or
+  // not-yet-bootstrapped CE legitimately sits here before its first sync - it must not look alarming.
+  const informational =
+    status === "NO_ACTIVE" || status === "NOT_LINKED" || status === "TRUST_UNCONFIGURED";
   const cls = ok
     ? "bg-green-500/15 text-green-700 dark:text-green-400"
     : informational

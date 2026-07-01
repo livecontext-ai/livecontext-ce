@@ -1,9 +1,9 @@
 package com.apimarketplace.agent.skill.bundle;
 
+import com.apimarketplace.agent.catalog.bundle.TrustedKeyRegistry;
 import com.apimarketplace.common.bundle.BundleVerification;
 import com.apimarketplace.common.bundle.TrustedKeys;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 /**
@@ -25,14 +25,17 @@ import org.springframework.stereotype.Component;
 @Component
 public class SkillBundleVerifier {
 
-    private final TrustedKeys trustedKeys;
+    private final TrustedKeyRegistry trustedKeys;
 
-    public SkillBundleVerifier(@Value("${catalog.bundle.trusted-keys:}") String rawTrustedKeys) {
-        this.trustedKeys = new TrustedKeys(rawTrustedKeys);
-        if (!trustedKeys.hasKeys()) {
-            log.info("No trusted skill-bundle keys configured (catalog.bundle.trusted-keys). " +
-                    "CE skill-bundle sync will reject all bundles until this is set.");
-        }
+    /**
+     * Verify against the SHARED {@link TrustedKeyRegistry} (not a private snapshot of the
+     * {@code catalog.bundle.trusted-keys} property): the model-catalog path TOFU-pins the cloud
+     * signing key into this same registry at runtime, so once either path bootstraps trust the
+     * skill path sees the pinned key too. Reading a frozen constructor-time snapshot instead left
+     * skill sync permanently "trust unconfigured" on installs that rely on TOFU (empty property).
+     */
+    public SkillBundleVerifier(TrustedKeyRegistry trustedKeys) {
+        this.trustedKeys = trustedKeys;
     }
 
     public record Result(boolean ok, Status status, String detail, byte[] payloadBytes) {
@@ -61,7 +64,7 @@ public class SkillBundleVerifier {
         if (bundle == null) return Result.fail(Status.PAYLOAD_MALFORMED, "null bundle");
 
         BundleVerification.Result r = BundleVerification.verify(
-                trustedKeys,
+                trustedKeys.trustedKeys(),
                 bundle.signingKeyId(),
                 bundle.checksum(),
                 bundle.signature(),

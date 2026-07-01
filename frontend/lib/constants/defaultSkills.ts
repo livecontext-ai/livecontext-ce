@@ -7,17 +7,12 @@ export interface DefaultSkill {
 }
 
 /**
- * Frontend reference for default skills.
- * These are seeded as real DB entities per tenant on first access.
- * This list is used as fallback display and for reset reference.
- * The actual skills come from the API (with real UUIDs and defaultKey set).
+ * Frontend reference for default skills, used only as a display fallback when
+ * the API has not (yet) returned the tenant's seeded defaults.
+ *
+ * Intentionally empty: the former "Deep Research" built-in was removed (global
+ * skills are now distributed from the cloud via the signed skill bundle), so
+ * the backend no longer seeds any hard-coded default. Keep the constant so the
+ * fallback merge in CreateAgentModal stays a no-op instead of crashing.
  */
-export const DEFAULT_SKILLS: DefaultSkill[] = [
-  {
-    id: 'default:deep_research',
-    name: 'Deep Research',
-    description: 'Autonomous deep web research with iterative queries and synthesis',
-    icon: 'search',
-    instructions: '# Deep Research Skill\n\nConduct thorough, autonomous web research using web_search tool.',
-  },
-];
+export const DEFAULT_SKILLS: DefaultSkill[] = [];

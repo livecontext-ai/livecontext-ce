@@ -2303,7 +2303,7 @@
       "skillUpdated": "技能更新成功",
       "createFailed": "创建技能失败",
       "makeGlobalLabel": "对所有人可用（全局）",
-      "makeGlobalHelp": "仅管理员。启用后，此技能将显示在每个用户的技能列表中，类似于内置的 Deep Research 技能。只有管理员可以编辑或删除它。",
+      "makeGlobalHelp": "仅管理员。启用后，此技能将显示在每个用户的技能列表中。只有管理员可以编辑或删除它。",
       "globalReadOnly": "此全局技能由管理员管理。您无法编辑它。",
       "success": "成功",
       "error": "错误"
@@ -5574,7 +5574,11 @@
         "exposeRenderedSource": "暴露渲染后的源",
         "exposeRenderedSourceDescription": "启用后，将已解析的界面模板暴露为 rendered_html、rendered_css、rendered_js 字符串输出，供下游节点使用（邮件正文、代理文本输入、调试）。尽力而为：渲染失败会使输出缺失，但不会使工作流失败。",
         "generateScreenshot": "生成截图",
-        "generateScreenshotDescription": "启用后，捕获渲染界面的 PNG 并将其暴露为 screenshot FileRef 输出，供下游节点使用（邮件附件、Telegram 照片、代理图像输入）。尽力而为：捕获失败会使输出缺失，但不会使工作流失败。"
+        "generateScreenshotDescription": "启用后，捕获渲染界面的 PNG 并将其暴露为 screenshot FileRef 输出，供下游节点使用（邮件附件、Telegram 照片、代理图像输入）。尽力而为：捕获失败会使输出缺失，但不会使工作流失败。",
+        "generatePdf": "生成 PDF",
+        "generatePdfDescription": "启用后，将界面渲染为 PDF 并将其暴露为 pdf FileRef 输出，供下游节点使用（邮件附件、Telegram 文档、代理文件输入）。尽力而为：渲染失败会使输出缺失，但不会使工作流失败。",
+        "pdfFormat": "PDF 页面大小",
+        "pdfLandscape": "横向"
       },
       "output": {
         "error": "执行错误",

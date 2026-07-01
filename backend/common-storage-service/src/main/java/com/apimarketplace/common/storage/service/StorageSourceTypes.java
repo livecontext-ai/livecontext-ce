@@ -32,4 +32,7 @@ public final class StorageSourceTypes {
 
     /** A PNG capture of a rendered interface, produced by an interface node. */
     public static final String INTERFACE_SCREENSHOT = "INTERFACE_SCREENSHOT";
+
+    /** A PDF rendering of an interface, produced by an interface node (generatePdf=true). */
+    public static final String INTERFACE_PDF = "INTERFACE_PDF";
 }

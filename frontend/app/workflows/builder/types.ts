@@ -399,6 +399,9 @@ export interface BuilderNodeData {
     dataSourceId?: string | number | null;
     isEntryInterface?: boolean; // Whether this is the entry interface (shown first)
     generateScreenshot?: boolean; // When true, capture a PNG of the rendered interface and expose it as the `screenshot` FileRef output
+    generatePdf?: boolean; // When true, render the interface to a PDF and expose it as the `pdf` FileRef output
+    pdfFormat?: string; // Page size for generatePdf: 'A4' | 'Letter' | 'Legal' (default A4)
+    pdfLandscape?: boolean; // When true, render the generatePdf output in landscape orientation
     exposeRenderedSource?: boolean; // When true, expose `rendered_html`, `rendered_css`, `rendered_js` string outputs (resolved interface templates)
     templateVariables?: string[]; // Template variables from the interface DB entity
   };
