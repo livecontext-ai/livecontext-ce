@@ -29,7 +29,7 @@ SELECT
     '[
       {"name": "host", "displayName": "IMAP Host", "type": "string", "required": true, "placeholder": "imap.gmail.com", "description": "IMAP server hostname"},
       {"name": "port", "displayName": "Port", "type": "string", "required": true, "default": "993", "placeholder": "993", "description": "IMAP port (993 for SSL, 143 for STARTTLS)"},
-      {"name": "username", "displayName": "Username", "type": "string", "required": true, "placeholder": "you@gmail.com", "description": "IMAP login / username"},
+      {"name": "username", "displayName": "Username", "type": "string", "required": true, "placeholder": "user@example.com", "description": "IMAP login / username"},
       {"name": "password", "displayName": "Password / App Password", "type": "string", "required": true, "placeholder": "Your IMAP password or app password", "typeOptions": {"password": true}, "description": "IMAP password or app-specific password (encrypted at rest)"},
       {"name": "use_ssl", "displayName": "Use SSL", "type": "options", "required": false, "default": "true", "options": [{"name": "Yes", "value": "true"}, {"name": "No", "value": "false"}], "description": "Connect over SSL (imaps, port 993). Disable to use STARTTLS (port 143)."}
     ]'::jsonb,

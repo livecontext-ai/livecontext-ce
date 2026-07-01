@@ -632,6 +632,182 @@ class OAuth2ServiceTest {
             }
         }
 
+        /**
+         * The lock is released with a Lua compare-and-delete that returns 0 when the lock TTL
+         * expired mid-refresh (or a second caller now owns it). The finally block must log a
+         * warning and leave the refresh result intact - it must NOT throw and must NOT retry the
+         * release (a blind delete could stomp a second holder's lock).
+         */
+        @Test
+        @DisplayName("lock release script returning 0 (TTL expired mid-refresh) is logged, refresh still returns")
+        void refreshToken_lockReleaseReturnsZero_stillCompletesSuccessfully() {
+            Credential cred = buildCredential(1L, USER_ID, Map.of(
+                    "refresh_token", "ENC:enc_refresh",
+                    "credential_template_id", "template-google",
+                    "client_id", "cid",
+                    "oauth_client_secret", "ENC:csec"
+            ));
+            when(credentialService.getCredential(1L)).thenReturn(Optional.of(cred));
+            when(encryptionService.decrypt("ENC:enc_refresh")).thenReturn("decrypted_refresh");
+            when(encryptionService.decrypt("ENC:csec")).thenReturn("decrypted_secret");
+            when(encryptionService.encrypt(anyString())).thenAnswer(inv -> "ENC:" + inv.getArgument(0));
+
+            com.fasterxml.jackson.databind.node.ObjectNode template = objectMapper.createObjectNode();
+            com.fasterxml.jackson.databind.node.ObjectNode metadata = template.putObject("metadata");
+            com.fasterxml.jackson.databind.node.ObjectNode oauth2 = metadata.putObject("oauth2Config");
+            oauth2.put("authorizationUrl", "https://accounts.google.com/o/oauth2/v2/auth");
+            oauth2.put("tokenUrl", "https://oauth2.googleapis.com/token");
+            oauth2.putArray("scopes");
+            stubCatalogTemplate(template);
+
+            com.fasterxml.jackson.databind.node.ObjectNode tokenBody = objectMapper.createObjectNode();
+            tokenBody.put("access_token", "new-at");
+            tokenBody.put("token_type", "Bearer");
+            tokenBody.put("expires_in", 3600);
+            org.springframework.web.client.RestTemplate mockRest =
+                    mock(org.springframework.web.client.RestTemplate.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(
+                    oAuth2Service, "restTemplate", mockRest);
+            when(mockRest.postForEntity(eq("https://oauth2.googleapis.com/token"),
+                    any(org.springframework.http.HttpEntity.class),
+                    eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                    .thenReturn(new org.springframework.http.ResponseEntity<>(
+                            (com.fasterxml.jackson.databind.JsonNode) tokenBody,
+                            org.springframework.http.HttpStatus.OK));
+            when(credentialService.updateCredentialData(eq(1L), eq(USER_ID), anyMap()))
+                    .thenReturn(cred);
+
+            // Compare-and-delete reports the lock was already gone.
+            when(redisTemplate.execute(
+                    any(org.springframework.data.redis.core.script.RedisScript.class),
+                    anyList(),
+                    any()))
+                    .thenReturn(0L);
+
+            Credential result = oAuth2Service.refreshToken(1L, USER_ID);
+
+            assertThat(result)
+                    .as("a lost lock release (script returns 0) must not fail the refresh - the new "
+                            + "tokens were already persisted before the finally block ran")
+                    .isSameAs(cred);
+            // Exactly one release attempt: the warning path does NOT retry the compare-and-delete.
+            verify(redisTemplate, times(1)).execute(
+                    any(org.springframework.data.redis.core.script.RedisScript.class),
+                    anyList(),
+                    any());
+        }
+
+        /**
+         * Transient failure (socket timeout) below the retry budget: {@code releaseTransient} must
+         * schedule a backoff cooldown and bump the attempt counter, WITHOUT scrubbing tokens or
+         * flipping the credential terminal. Strengthens the thin existing indirect check (which
+         * only asserted {@code containsKey}) by pinning the actual persisted values.
+         */
+        @Test
+        @DisplayName("transient refresh failure sets a cooldown and increments the attempt counter (no scrub)")
+        void refreshToken_transientFailureSetsCooldownAndIncrementsAttempts() {
+            Credential cred = buildCredential(1L, USER_ID, Map.of(
+                    "refresh_token", "ENC:enc_refresh",
+                    "credential_template_id", "template-google",
+                    "client_id", "cid",
+                    "oauth_client_secret", "ENC:csec"
+            ));
+            when(credentialService.getCredential(1L)).thenReturn(Optional.of(cred));
+            when(encryptionService.decrypt("ENC:enc_refresh")).thenReturn("decrypted_refresh");
+            when(encryptionService.decrypt("ENC:csec")).thenReturn("decrypted_secret");
+
+            com.fasterxml.jackson.databind.node.ObjectNode template = objectMapper.createObjectNode();
+            com.fasterxml.jackson.databind.node.ObjectNode metadata = template.putObject("metadata");
+            com.fasterxml.jackson.databind.node.ObjectNode oauth2 = metadata.putObject("oauth2Config");
+            oauth2.put("authorizationUrl", "https://accounts.google.com/o/oauth2/v2/auth");
+            oauth2.put("tokenUrl", "https://oauth2.googleapis.com/token");
+            oauth2.putArray("scopes");
+            stubCatalogTemplate(template);
+
+            org.springframework.web.client.RestTemplate mockRest =
+                    mock(org.springframework.web.client.RestTemplate.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(
+                    oAuth2Service, "restTemplate", mockRest);
+            // ResourceAccessException (socket I/O) -> classifier returns TRANSIENT.
+            when(mockRest.postForEntity(eq("https://oauth2.googleapis.com/token"),
+                    any(org.springframework.http.HttpEntity.class),
+                    eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                    .thenThrow(new org.springframework.web.client.ResourceAccessException("connect timeout"));
+
+            assertThatThrownBy(() -> oAuth2Service.refreshToken(1L, USER_ID))
+                    .isInstanceOf(com.apimarketplace.auth.credential.service.oauth2.refresh.RefreshTransientException.class);
+
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<Map<String, Object>> dataCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(credentialService).updateCredentialData(eq(1L), eq(USER_ID), dataCaptor.capture());
+            assertThat(dataCaptor.getValue())
+                    .as("a below-budget transient failure schedules a backoff cooldown and bumps the "
+                            + "attempt counter from 0 to 1")
+                    .containsKey("refresh_cooldown_until")
+                    .containsEntry("refresh_attempts_before_terminal", 1);
+            // Below budget = NOT terminal: tokens must survive, status must not flip.
+            verify(credentialService, never()).scrubSensitiveFields(
+                    anyLong(), anyString(), anySet(), any(), anyMap());
+        }
+
+        /**
+         * Transient failure that lands on the LAST attempt of the budget: {@code releaseTransient}
+         * promotes to TERMINAL_CONFIG via {@code releaseTerminal} - tokens scrubbed, status flipped
+         * to {@code error}, and NO cooldown write (a promoted credential must stop being swept).
+         * Budget is {@code RefreshBackoff.MAX_ATTEMPTS}=5, so a prior count of 4 -> next attempt 5
+         * is exhausted.
+         */
+        @Test
+        @DisplayName("transient failure on an exhausted attempt budget promotes to terminal (scrub + error status)")
+        void refreshToken_transientFailureExhaustedBudgetPromotesToTerminal() {
+            Map<String, Object> data = new java.util.HashMap<>();
+            data.put("refresh_token", "ENC:enc_refresh");
+            data.put("credential_template_id", "template-google");
+            data.put("client_id", "cid");
+            data.put("oauth_client_secret", "ENC:csec");
+            data.put("refresh_attempts_before_terminal", 4);
+            Credential cred = buildCredential(1L, USER_ID, data);
+            when(credentialService.getCredential(1L)).thenReturn(Optional.of(cred));
+            when(encryptionService.decrypt("ENC:enc_refresh")).thenReturn("decrypted_refresh");
+            when(encryptionService.decrypt("ENC:csec")).thenReturn("decrypted_secret");
+
+            com.fasterxml.jackson.databind.node.ObjectNode template = objectMapper.createObjectNode();
+            com.fasterxml.jackson.databind.node.ObjectNode metadata = template.putObject("metadata");
+            com.fasterxml.jackson.databind.node.ObjectNode oauth2 = metadata.putObject("oauth2Config");
+            oauth2.put("authorizationUrl", "https://accounts.google.com/o/oauth2/v2/auth");
+            oauth2.put("tokenUrl", "https://oauth2.googleapis.com/token");
+            oauth2.putArray("scopes");
+            stubCatalogTemplate(template);
+
+            org.springframework.web.client.RestTemplate mockRest =
+                    mock(org.springframework.web.client.RestTemplate.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(
+                    oAuth2Service, "restTemplate", mockRest);
+            when(mockRest.postForEntity(eq("https://oauth2.googleapis.com/token"),
+                    any(org.springframework.http.HttpEntity.class),
+                    eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                    .thenThrow(new org.springframework.web.client.ResourceAccessException("connect timeout"));
+
+            assertThatThrownBy(() -> oAuth2Service.refreshToken(1L, USER_ID))
+                    .isInstanceOf(com.apimarketplace.auth.credential.service.oauth2.refresh.RefreshTransientException.class);
+
+            // Promotion routes through releaseTerminal: scrub tokens + flip status to error.
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<java.util.Set<String>> fieldsCaptor = ArgumentCaptor.forClass(java.util.Set.class);
+            ArgumentCaptor<CredentialStatus> statusCaptor = ArgumentCaptor.forClass(CredentialStatus.class);
+            verify(credentialService).scrubSensitiveFields(
+                    eq(1L), eq(USER_ID), fieldsCaptor.capture(), statusCaptor.capture(), anyMap());
+            assertThat(statusCaptor.getValue())
+                    .as("budget-exhausted transient promotes to TERMINAL_CONFIG -> error status")
+                    .isEqualTo(CredentialStatus.error);
+            assertThat(fieldsCaptor.getValue())
+                    .as("the access/refresh tokens are scrubbed on promotion")
+                    .contains("access_token", "refresh_token");
+            // Promotion path returns before the cooldown write - a promoted credential must not be
+            // left with a refresh_cooldown_until that would keep the sweeper retrying it.
+            verify(credentialService, never()).updateCredentialData(anyLong(), anyString(), anyMap());
+        }
+
         /** Minimal WebClient chain mock returning the given JsonNode for any catalog lookup. */
         @SuppressWarnings({"unchecked", "rawtypes"})
         private void stubCatalogTemplate(com.fasterxml.jackson.databind.JsonNode template) {
@@ -1100,6 +1276,251 @@ class OAuth2ServiceTest {
                     .as("Personal-scope OAuth flow → organizationId must stay null, no false-positive "
                       + "tagging")
                     .isNull();
+        }
+    }
+
+    // ========== handleCallback - catalog-unreachable minimal config fallback ==========
+
+    /**
+     * When the catalog is unreachable at callback time, handleCallback rebuilds a MINIMAL
+     * OAuth2ProviderConfig from the Redis state. That fallback hardcodes {@code AuthMethod.POST}
+     * and drops {@code authorizeExtraParams}, so a provider that needs HTTP Basic auth
+     * (Twitter/X, Notion) silently loses its BASIC method. This locks that documented data-loss
+     * behavior so a future change to the fallback cannot flip it unnoticed.
+     */
+    @Nested
+    @DisplayName("handleCallback - catalog-unreachable minimal config fallback")
+    class HandleCallbackCatalogFallbackTests {
+
+        @Test
+        @DisplayName("catalog unreachable: BASIC-auth provider falls back to POST (secret in body, no Authorization header)")
+        void catalogUnreachableFallbackHardcodesPostLosingBasicAuth() throws Exception {
+            final String state = "state-twitter-basic";
+            final String code = "auth-code-twitter";
+
+            // State as persisted by a Twitter/X initiate. Twitter's token endpoint requires HTTP
+            // Basic auth, but the state blob carries no authMethod - so the fallback cannot know it.
+            var stateRecord = new com.apimarketplace.auth.credential.domain.OAuth2Models.OAuth2State(
+                    USER_ID, "template-twitter", "Twitter Credential",
+                    "twitter-client-id", "twitter-client-secret",
+                    "https://twitter.com/i/oauth2/authorize",
+                    "https://api.twitter.com/2/oauth2/token",
+                    "tweet.read users.read",
+                    "Production", "twitter", "/icons/services/twitter.svg",
+                    "/app/settings/credentials", Instant.parse("2026-05-01T10:00:00Z"),
+                    null // no PKCE
+            );
+            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            when(valueOperations.get("oauth2:state:" + state))
+                    .thenReturn(objectMapper.writeValueAsString(stateRecord));
+
+            // catalogClient is the real WebClient pointing at localhost:8081 (nothing listening in a
+            // unit test), so fetchCredentialTemplate returns null -> the minimal-config fallback fires.
+            org.springframework.web.client.RestTemplate mockRest =
+                    mock(org.springframework.web.client.RestTemplate.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(
+                    oAuth2Service, "restTemplate", mockRest);
+
+            com.fasterxml.jackson.databind.node.ObjectNode tokenBody = objectMapper.createObjectNode();
+            tokenBody.put("access_token", "fake-at");
+            tokenBody.put("token_type", "Bearer");
+            when(mockRest.postForEntity(anyString(),
+                    any(org.springframework.http.HttpEntity.class),
+                    eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                    .thenReturn(new org.springframework.http.ResponseEntity<>(
+                            (com.fasterxml.jackson.databind.JsonNode) tokenBody,
+                            org.springframework.http.HttpStatus.OK));
+            when(encryptionService.encrypt(anyString()))
+                    .thenAnswer(inv -> "ENC:" + inv.getArgument(0));
+            when(credentialService.createCredential(
+                    anyString(), org.mockito.ArgumentMatchers.<String>any(), anyString(), anyString(),
+                    any(CredentialType.class), any(CredentialEnvironment.class),
+                    anyString(), anyMap(), anyList(), anyList(),
+                    anyString(), anyString()))
+                    .thenReturn(buildCredential(1L, USER_ID, Map.of()));
+
+            String redirect = oAuth2Service.handleCallback(code, state);
+
+            assertThat(redirect)
+                    .as("the fallback still completes the exchange, just with the wrong auth method")
+                    .contains("success=true");
+
+            @SuppressWarnings("rawtypes")
+            org.mockito.ArgumentCaptor<org.springframework.http.HttpEntity> captor =
+                    org.mockito.ArgumentCaptor.forClass(org.springframework.http.HttpEntity.class);
+            verify(mockRest).postForEntity(
+                    eq("https://api.twitter.com/2/oauth2/token"),
+                    captor.capture(),
+                    eq(com.fasterxml.jackson.databind.JsonNode.class));
+
+            assertThat(captor.getValue().getHeaders()
+                            .getFirst(org.springframework.http.HttpHeaders.AUTHORIZATION))
+                    .as("minimal fallback config hardcodes POST -> no HTTP Basic Authorization header, "
+                            + "so a BASIC-only provider like Twitter/X loses its auth method")
+                    .isNull();
+
+            @SuppressWarnings("unchecked")
+            org.springframework.util.MultiValueMap<String, String> body =
+                    (org.springframework.util.MultiValueMap<String, String>) captor.getValue().getBody();
+            assertThat(body.getFirst("client_secret"))
+                    .as("POST fallback puts the client_secret in the body (BASIC would put it in the header)")
+                    .isEqualTo("twitter-client-secret");
+            assertThat(body.getFirst("client_id")).isEqualTo("twitter-client-id");
+        }
+    }
+
+    // ========== handleCallback - Redis state removal (replay prevention) ==========
+
+    /**
+     * handleCallback must delete the one-time OAuth2 state from Redis once the authorization
+     * code has been used - on BOTH the success and error paths - so the same code/state pair
+     * cannot be replayed. A delete failure is logged but swallowed (best-effort, not retried).
+     */
+    @Nested
+    @DisplayName("handleCallback - Redis state removal")
+    class HandleCallbackStateRemovalTests {
+
+        @Test
+        @DisplayName("success path removes the OAuth2 state from Redis (prevents code replay)")
+        void successPathRemovesStateFromRedis() throws Exception {
+            final String state = "state-remove-success";
+            var stateRecord = new com.apimarketplace.auth.credential.domain.OAuth2Models.OAuth2State(
+                    USER_ID, "template-github", "GitHub Credential",
+                    "cid", "csec",
+                    "https://github.com/login/oauth/authorize",
+                    "https://github.com/login/oauth/access_token",
+                    "repo",
+                    "Production", "github", "/icons/services/github.svg",
+                    null, Instant.parse("2026-05-01T10:00:00Z"),
+                    null);
+            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            when(valueOperations.get("oauth2:state:" + state))
+                    .thenReturn(objectMapper.writeValueAsString(stateRecord));
+
+            org.springframework.web.client.RestTemplate mockRest =
+                    mock(org.springframework.web.client.RestTemplate.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(
+                    oAuth2Service, "restTemplate", mockRest);
+            com.fasterxml.jackson.databind.node.ObjectNode tokenBody = objectMapper.createObjectNode();
+            tokenBody.put("access_token", "fake-at");
+            when(mockRest.postForEntity(anyString(),
+                    any(org.springframework.http.HttpEntity.class),
+                    eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                    .thenReturn(new org.springframework.http.ResponseEntity<>(
+                            (com.fasterxml.jackson.databind.JsonNode) tokenBody,
+                            org.springframework.http.HttpStatus.OK));
+            when(encryptionService.encrypt(anyString()))
+                    .thenAnswer(inv -> "ENC:" + inv.getArgument(0));
+            when(credentialService.createCredential(
+                    anyString(), org.mockito.ArgumentMatchers.<String>any(), anyString(), anyString(),
+                    any(CredentialType.class), any(CredentialEnvironment.class),
+                    anyString(), anyMap(), anyList(), anyList(),
+                    anyString(), anyString()))
+                    .thenReturn(buildCredential(1L, USER_ID, Map.of()));
+
+            String redirect = oAuth2Service.handleCallback("code", state);
+
+            assertThat(redirect).contains("success=true");
+            // A consumed state must be deleted so the auth code cannot be replayed.
+            verify(redisTemplate).delete("oauth2:state:" + state);
+        }
+
+        @Test
+        @DisplayName("token exchange HttpClientErrorException: opaque error redirect, no body leak, state removed")
+        void httpClientErrorRemovesStateAndReturnsScrubbedError() throws Exception {
+            final String state = "state-remove-error";
+            var stateRecord = new com.apimarketplace.auth.credential.domain.OAuth2Models.OAuth2State(
+                    USER_ID, "template-github", "GitHub Credential",
+                    "cid", "csec",
+                    "https://github.com/login/oauth/authorize",
+                    "https://github.com/login/oauth/access_token",
+                    "repo",
+                    "Production", "github", "/icons/services/github.svg",
+                    null, Instant.parse("2026-05-01T10:00:00Z"),
+                    null);
+            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            when(valueOperations.get("oauth2:state:" + state))
+                    .thenReturn(objectMapper.writeValueAsString(stateRecord));
+
+            org.springframework.web.client.RestTemplate mockRest =
+                    mock(org.springframework.web.client.RestTemplate.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(
+                    oAuth2Service, "restTemplate", mockRest);
+            // Provider rejects the code with a 400 whose body echoes a token-shaped secret.
+            String sensitiveBody =
+                    "{\"error\":\"invalid_grant\",\"error_description\":\"ya29.A0ARrdaMshould-be-scrubbed\"}";
+            org.springframework.web.client.HttpClientErrorException httpError =
+                    org.springframework.web.client.HttpClientErrorException.create(
+                            org.springframework.http.HttpStatus.BAD_REQUEST,
+                            "Bad Request",
+                            org.springframework.http.HttpHeaders.EMPTY,
+                            sensitiveBody.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                            java.nio.charset.StandardCharsets.UTF_8);
+            when(mockRest.postForEntity(anyString(),
+                    any(org.springframework.http.HttpEntity.class),
+                    eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                    .thenThrow(httpError);
+
+            String redirect = oAuth2Service.handleCallback("code", state);
+
+            assertThat(redirect)
+                    .as("HttpClientErrorException maps to a stable opaque error code, not the raw failure")
+                    .contains("error=token_exchange_failed")
+                    .doesNotContain("success=true");
+            assertThat(redirect)
+                    .as("the provider error body (with token-shaped substrings) must never reach the redirect")
+                    .doesNotContain("ya29");
+            // State must be removed on the error path too, to prevent replay of the code.
+            verify(redisTemplate).delete("oauth2:state:" + state);
+        }
+
+        @Test
+        @DisplayName("state removal failure is swallowed: the callback still returns its result")
+        void stateRemovalFailureDoesNotMaskResult() throws Exception {
+            final String state = "state-remove-fails";
+            var stateRecord = new com.apimarketplace.auth.credential.domain.OAuth2Models.OAuth2State(
+                    USER_ID, "template-github", "GitHub Credential",
+                    "cid", "csec",
+                    "https://github.com/login/oauth/authorize",
+                    "https://github.com/login/oauth/access_token",
+                    "repo",
+                    "Production", "github", "/icons/services/github.svg",
+                    null, Instant.parse("2026-05-01T10:00:00Z"),
+                    null);
+            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            when(valueOperations.get("oauth2:state:" + state))
+                    .thenReturn(objectMapper.writeValueAsString(stateRecord));
+            // Redis DELETE blows up - removeStateFromRedis must swallow it (logged, not retried).
+            doThrow(new org.springframework.data.redis.RedisConnectionFailureException("redis down"))
+                    .when(redisTemplate).delete("oauth2:state:" + state);
+
+            org.springframework.web.client.RestTemplate mockRest =
+                    mock(org.springframework.web.client.RestTemplate.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(
+                    oAuth2Service, "restTemplate", mockRest);
+            com.fasterxml.jackson.databind.node.ObjectNode tokenBody = objectMapper.createObjectNode();
+            tokenBody.put("access_token", "fake-at");
+            when(mockRest.postForEntity(anyString(),
+                    any(org.springframework.http.HttpEntity.class),
+                    eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                    .thenReturn(new org.springframework.http.ResponseEntity<>(
+                            (com.fasterxml.jackson.databind.JsonNode) tokenBody,
+                            org.springframework.http.HttpStatus.OK));
+            when(encryptionService.encrypt(anyString()))
+                    .thenAnswer(inv -> "ENC:" + inv.getArgument(0));
+            when(credentialService.createCredential(
+                    anyString(), org.mockito.ArgumentMatchers.<String>any(), anyString(), anyString(),
+                    any(CredentialType.class), any(CredentialEnvironment.class),
+                    anyString(), anyMap(), anyList(), anyList(),
+                    anyString(), anyString()))
+                    .thenReturn(buildCredential(1L, USER_ID, Map.of()));
+
+            String redirect = oAuth2Service.handleCallback("code", state);
+
+            assertThat(redirect)
+                    .as("a Redis DELETE failure during cleanup must not mask the successful callback result")
+                    .contains("success=true");
+            verify(redisTemplate).delete("oauth2:state:" + state);
         }
     }
 
@@ -1744,6 +2165,132 @@ class OAuth2ServiceTest {
                             + "default_scopes union was removed - they have no catalog to come from")
                     .contains("scope.read")
                     .contains("scope.write");
+        }
+
+        /**
+         * {@code saveStateToRedis} wraps any Redis write failure in a RuntimeException and
+         * propagates it - there is no retry or fallback, so the entire initiate flow fails. Without
+         * the persisted state the callback could not complete anyway, so failing loudly is correct.
+         */
+        @Test
+        @DisplayName("Redis write failure during initiate propagates as RuntimeException (no retry)")
+        void initiateRedisStateWriteFailurePropagates() throws Exception {
+            stubCatalogTemplateJson(GMAIL_TEMPLATE_JSON);
+            var platformRow = new com.apimarketplace.auth.credential.domain.PlatformCredentialModels.PlatformCredential(
+                    3L, "gmail", "Gmail",
+                    com.apimarketplace.auth.credential.domain.PlatformCredentialModels.AuthType.OAUTH2,
+                    "platform-cid", "platform-csec", null, null, null,
+                    "https://accounts.google.com/o/oauth2/v2/auth", "https://oauth2.googleapis.com/token", null,
+                    "gmail", "Communication", "desc",
+                    true, Map.of(), java.math.BigDecimal.ZERO, 0,
+                    Instant.now(), Instant.now(), null, null);
+            when(platformCredentialService.getRawOAuth2Credential("gmail", USER_ID, null))
+                    .thenReturn(Optional.of(platformRow));
+            // saveStateToRedis writes via opsForValue().set(...): simulate a Redis outage at write.
+            doThrow(new org.springframework.data.redis.RedisConnectionFailureException("redis down"))
+                    .when(valueOperations).set(anyString(), anyString(), any(java.time.Duration.class));
+
+            var request = new com.apimarketplace.auth.credential.domain.OAuth2Models.OAuth2InitiateRequest(
+                    "template-gmail", "My Gmail", null, null, "Production", null, "/app/settings/credentials");
+
+            assertThatThrownBy(() -> oAuth2Service.initiate(request, USER_ID))
+                    .as("a Redis write failure must fail the whole initiate flow - there is no retry")
+                    .isInstanceOf(RuntimeException.class)
+                    .hasMessageContaining("Failed to persist OAuth2 state");
+        }
+
+        /**
+         * Contract: a {@code pkce=true} template must produce an authorization URL carrying the
+         * generated PKCE challenge. This exercises the full service chain
+         * (shouldUsePkce -> pkceService.generate -> buildAuthorizationUrl), which the existing
+         * PKCE coverage (limited to handleCallback) never validated end-to-end on initiate.
+         */
+        @Test
+        @DisplayName("PKCE-enabled template: authorization URL carries code_challenge + code_challenge_method=S256")
+        void initiatePkceTemplateAddsChallengeToAuthorizationUrl() throws Exception {
+            String pkceTemplate = """
+                    {
+                      "id": "template-airtable",
+                      "credential_name": "airtable",
+                      "icon_slug": "airtable",
+                      "display_name": "Airtable",
+                      "auth_type": "oauth2",
+                      "metadata": {
+                        "oauth2Config": {
+                          "authorizationUrl": "https://airtable.com/oauth2/v1/authorize",
+                          "tokenUrl": "https://airtable.com/oauth2/v1/token",
+                          "scopes": ["data.records:read"],
+                          "pkce": true
+                        }
+                      }
+                    }
+                    """;
+            stubCatalogTemplateJson(pkceTemplate);
+            var row = new com.apimarketplace.auth.credential.domain.PlatformCredentialModels.PlatformCredential(
+                    5L, "airtable", "Airtable",
+                    com.apimarketplace.auth.credential.domain.PlatformCredentialModels.AuthType.OAUTH2,
+                    "airtable-cid", "airtable-csec", null, null, null,
+                    "https://airtable.com/oauth2/v1/authorize", "https://airtable.com/oauth2/v1/token", null,
+                    "airtable", "Productivity", "desc",
+                    true, Map.of(), java.math.BigDecimal.ZERO, 0,
+                    Instant.now(), Instant.now(), null, null);
+            when(platformCredentialService.getRawOAuth2Credential("airtable", USER_ID, null))
+                    .thenReturn(Optional.of(row));
+
+            var request = new com.apimarketplace.auth.credential.domain.OAuth2Models.OAuth2InitiateRequest(
+                    "template-airtable", "My Airtable", null, null, "Production", null, "/app/settings/credentials");
+
+            var response = oAuth2Service.initiate(request, USER_ID);
+
+            assertThat(response.authorizationUrl())
+                    .as("a pkce=true template must attach a PKCE challenge to the authorize URL")
+                    .contains("code_challenge=")
+                    .contains("code_challenge_method=S256");
+        }
+
+        /**
+         * Contract: initiate persists the OAuth2 state (including the captured organizationId) to
+         * Redis under the {@code oauth2:state:} prefix with a 10-minute TTL, so the state survives
+         * the third-party redirect and is retrievable at callback time. Pins both the TTL and the
+         * organizationId round-trip, which no test previously asserted on the initiate side.
+         */
+        @Test
+        @DisplayName("initiate persists state (with organizationId) to Redis under a 10-minute TTL")
+        void initiatePersistsStateWithOrganizationIdAndTenMinuteTtl() throws Exception {
+            stubCatalogTemplateJson(GMAIL_TEMPLATE_JSON);
+            var platformRow = new com.apimarketplace.auth.credential.domain.PlatformCredentialModels.PlatformCredential(
+                    3L, "gmail", "Gmail",
+                    com.apimarketplace.auth.credential.domain.PlatformCredentialModels.AuthType.OAUTH2,
+                    "platform-cid", "platform-csec", null, null, null,
+                    "https://accounts.google.com/o/oauth2/v2/auth", "https://oauth2.googleapis.com/token", null,
+                    "gmail", "Communication", "desc",
+                    true, Map.of(), java.math.BigDecimal.ZERO, 0,
+                    Instant.now(), Instant.now(), null, null);
+            when(platformCredentialService.getRawOAuth2Credential("gmail", USER_ID, "org-acme-99"))
+                    .thenReturn(Optional.of(platformRow));
+
+            var request = new com.apimarketplace.auth.credential.domain.OAuth2Models.OAuth2InitiateRequest(
+                    "template-gmail", "Team Gmail", null, null, "Production", null, "/app/settings/credentials");
+
+            oAuth2Service.initiate(request, USER_ID, "org-acme-99");
+
+            ArgumentCaptor<String> keyCaptor = ArgumentCaptor.forClass(String.class);
+            ArgumentCaptor<String> jsonCaptor = ArgumentCaptor.forClass(String.class);
+            ArgumentCaptor<java.time.Duration> ttlCaptor = ArgumentCaptor.forClass(java.time.Duration.class);
+            verify(valueOperations).set(keyCaptor.capture(), jsonCaptor.capture(), ttlCaptor.capture());
+
+            assertThat(keyCaptor.getValue())
+                    .as("state is stored under the oauth2:state: prefix so the callback can look it up")
+                    .startsWith("oauth2:state:");
+            assertThat(ttlCaptor.getValue())
+                    .as("state must expire after 10 minutes so an abandoned flow cannot be resumed later")
+                    .isEqualTo(java.time.Duration.ofMinutes(10));
+            var persisted = objectMapper.readValue(jsonCaptor.getValue(),
+                    com.apimarketplace.auth.credential.domain.OAuth2Models.OAuth2State.class);
+            assertThat(persisted.organizationId())
+                    .as("the workspace captured at initiate must survive the redirect via the Redis state")
+                    .isEqualTo("org-acme-99");
+            assertThat(persisted.userId()).isEqualTo(USER_ID);
         }
 
         /** Stub the catalog WebClient GET so fetchCredentialTemplate(id) returns the given JSON. */

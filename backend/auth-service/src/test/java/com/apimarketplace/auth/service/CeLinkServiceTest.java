@@ -129,7 +129,7 @@ class CeLinkServiceTest {
             existing.revoke(CeLink.RevokeReason.USER, CALLER_ID);
             when(repository.findById(INSTALL)).thenReturn(Optional.of(existing));
             User caller = new User();
-            caller.setEmail("ada.lovelace@gmail.com");
+            caller.setEmail("user@example.com");
             when(userRepository.findById(CALLER_ID)).thenReturn(Optional.of(caller));
 
             CeLinkRegisterResponse response = service.register(CALLER_ID, INSTALL, CE_VERSION, "Reset", AUDIT);
@@ -356,7 +356,7 @@ class CeLinkServiceTest {
         @Test
         @DisplayName("two-char local part is masked with 'xx***@domain' pattern")
         void typical_email() {
-            assertThat(CeLinkService.maskEmail("ada.lovelace@gmail.com")).isEqualTo("ad***@gmail.com");
+            assertThat(CeLinkService.maskEmail("user@example.com")).isEqualTo("ad***@gmail.com");
         }
 
         @Test

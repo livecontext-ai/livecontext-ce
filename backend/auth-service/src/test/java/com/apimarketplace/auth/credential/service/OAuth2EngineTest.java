@@ -210,6 +210,61 @@ class OAuth2EngineTest {
             assertThat(parseQuery(url)).doesNotContainKey("scope");
         }
 
+        @Test
+        @DisplayName("null authorizationUrl (client_credentials config) → NPE, never a malformed URL")
+        void nullAuthorizationUrlThrows() {
+            // client_credentials providers carry a null authorizationUrl (OAuth2ProviderConfig.fromJson
+            // only requires tokenUrl for that grant). buildAuthorizationUrl is authorization_code-only
+            // and must fail loudly rather than emit a "null?response_type=code..." redirect URL.
+            OAuth2ProviderConfig nullUrl = new OAuth2ProviderConfig(
+                    null,
+                    "https://example.com/token",
+                    null,
+                    List.of("read"),
+                    " ",
+                    AuthMethod.POST,
+                    false,
+                    Map.of(),
+                    OAuth2ProviderConfig.RefreshConfig.STANDARD
+            );
+
+            assertThatThrownBy(() -> engine.buildAuthorizationUrl(nullUrl, "c", "s", CALLBACK, null))
+                    .isInstanceOf(NullPointerException.class);
+
+            // Positive control: the SAME config but with a real authorizationUrl builds a valid redirect.
+            // This pins the failure to the null authorizationUrl specifically (the only field that differs),
+            // not to some other incidental null, and proves no "null?response_type=code..." URL is emitted.
+            OAuth2ProviderConfig withUrl = new OAuth2ProviderConfig(
+                    "https://example.com/authorize",
+                    "https://example.com/token",
+                    null,
+                    List.of("read"),
+                    " ",
+                    AuthMethod.POST,
+                    false,
+                    Map.of(),
+                    OAuth2ProviderConfig.RefreshConfig.STANDARD
+            );
+            String url = engine.buildAuthorizationUrl(withUrl, "c", "s", CALLBACK, null);
+            assertThat(url).startsWith("https://example.com/authorize");
+        }
+
+        @Test
+        @DisplayName("pkce gating: even with PKCE enabled in config, a null challenge argument omits code_challenge (engine gates on the argument, not config.pkceEnabled)")
+        void pkceGatingContract() {
+            OAuth2ProviderConfig pkceCfg = standardConfig(true);
+
+            // The supplied-challenge case is already pinned by pkceAddsChallenge. The behavior UNIQUE to
+            // this test: the engine gates the PKCE params on the challenge ARGUMENT, not on
+            // config.pkceEnabled(). With PKCE enabled in config but a null challenge supplied, the URL must
+            // NOT carry code_challenge - OAuth2Service, not the engine, owns the decision to generate one.
+            Map<String, String> withoutChallenge =
+                    parseQuery(engine.buildAuthorizationUrl(pkceCfg, "c", "s", CALLBACK, null));
+            assertThat(withoutChallenge)
+                    .doesNotContainKey("code_challenge")
+                    .doesNotContainKey("code_challenge_method");
+        }
+
         // ─── {ui_locale} placeholder: consent-screen language ───
 
         /** Google-style config that opts in to the dynamic UI-locale param under {@code hl}. */
@@ -598,6 +653,35 @@ class OAuth2EngineTest {
             assertThatThrownBy(() -> engine.parseTokenResponse(null))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("empty body");
+        }
+
+        @Test
+        @DisplayName("blank (whitespace-only) access_token → IllegalStateException, same as missing")
+        void blankAccessToken() throws Exception {
+            // present-but-blank is a distinct branch from absent: line 170 rejects isBlank() too,
+            // so a "   " token must be treated as missing, never returned as a usable access_token.
+            JsonNode body = json.readTree("""
+                    {"access_token":"   ","token_type":"Bearer","expires_in":3600}
+                    """);
+
+            assertThatThrownBy(() -> engine.parseTokenResponse(body))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("missing access_token");
+        }
+
+        @Test
+        @DisplayName("blank (whitespace-only) refresh_token → null, same as missing")
+        void blankRefreshToken() throws Exception {
+            // textOrNull collapses a present-but-blank refresh_token to null, so callers never
+            // persist a whitespace string as a real refresh token.
+            JsonNode body = json.readTree("""
+                    {"access_token":"AT","refresh_token":"   ","token_type":"Bearer","expires_in":3600}
+                    """);
+
+            OAuth2TokenResponse resp = engine.parseTokenResponse(body);
+
+            assertThat(resp.accessToken()).isEqualTo("AT");
+            assertThat(resp.refreshToken()).isNull();
         }
     }
 

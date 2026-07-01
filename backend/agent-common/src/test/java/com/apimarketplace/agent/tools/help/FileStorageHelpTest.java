@@ -26,9 +26,28 @@ class FileStorageHelpTest {
             .containsKeys(
                 "title", "concept",
                 "shapes", "auto_persist",
-                "display_in_interface", "auth",
+                "display_in_interface", "send_to_a_tool", "auth",
                 "wrong", "see_also"
             );
+    }
+
+    @Test
+    @DisplayName("send_to_a_tool teaches mapping a FileRef into a tool file param to upload it")
+    void teachesSendingFileToToolParam() {
+        String send = (String) FileStorageHelp.get().get("send_to_a_tool");
+        // The action the agent takes: map the FileRef object into the tool's file param.
+        assertThat(send).contains("send_photo");
+        assertThat(send).containsIgnoringCase("upload");
+        // Must steer to the OBJECT, not a drilled string (a drilled .path/.id would
+        // be treated as a remote URL / file id and skip the binary upload).
+        assertThat(send).contains("OBJECT");
+        assertThat(send).contains(".path");
+        assertThat(send).contains(".id");
+        // The wrong list must carry the symmetric anti-pattern for tool params.
+        @SuppressWarnings("unchecked")
+        List<String> wrong = (List<String>) FileStorageHelp.get().get("wrong");
+        assertThat(wrong).anyMatch(s ->
+            s.contains(".path") && s.contains(".id") && s.contains("send_photo"));
     }
 
     @Test

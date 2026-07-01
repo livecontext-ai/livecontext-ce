@@ -7,6 +7,8 @@ import com.apimarketplace.auth.credential.domain.OAuth2Models.PickerTokenRespons
 import com.apimarketplace.auth.credential.domain.PlatformCredentialModels.PlatformCredentialsAvailability;
 import com.apimarketplace.auth.credential.service.InternalCredentialService;
 import com.apimarketplace.auth.credential.service.OAuth2Service;
+import com.apimarketplace.auth.credential.service.oauth2.refresh.RefreshErrorBucket;
+import com.apimarketplace.auth.credential.service.oauth2.refresh.RefreshTerminalException;
 import com.apimarketplace.common.web.TenantResolver;
 import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.BeforeEach;
@@ -21,6 +23,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -134,6 +137,25 @@ class OAuth2ControllerTest {
 
         assertThat(response.getStatusCode().value()).isEqualTo(200);
         assertThat(((PickerTokenResponse) response.getBody()).accessToken()).isEqualTo("ya29.drive");
+    }
+
+    @Test
+    @DisplayName("refresh rejects an invalid/expired/revoked token by surfacing the terminal exception, never masking it as a 200 success")
+    void refreshToken_surfacesTerminalException_forInvalidOrExpiredToken() {
+        HttpServletRequest req = mock(HttpServletRequest.class);
+        when(tenantResolver.resolve(req)).thenReturn("u1");
+        // invalid_grant (RFC 6749) is the canonical signal for a revoked/expired refresh token.
+        RefreshTerminalException terminal = new RefreshTerminalException(
+                RefreshErrorBucket.TERMINAL_USER, "invalid_grant", 400,
+                "refresh token invalid, expired, or revoked");
+        when(oAuth2Service.refreshToken(7L, "u1")).thenThrow(terminal);
+
+        // The endpoint must reject the dead token by propagating the terminal failure to the HTTP
+        // layer (so re-OAuth is triggered), not swallow it into a successful credential response.
+        assertThatThrownBy(() -> controller.refreshToken(req, 7L))
+                .isSameAs(terminal);
+
+        verify(oAuth2Service).refreshToken(7L, "u1");
     }
 
     // ─────────────── initiate: ?locale= drives the consent-screen UI locale ───────────────

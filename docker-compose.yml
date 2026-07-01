@@ -97,7 +97,7 @@ services:
     restart: "no"
 
   bridge:
-    image: ghcr.io/livecontext-ai/livecontext-ce-bridge:v0.1.1
+    image: ghcr.io/livecontext-ai/livecontext-ce-bridge:v0.1.2
     container_name: livecontext-bridge
     restart: unless-stopped
     depends_on:
@@ -125,7 +125,7 @@ services:
           memory: 512M
 
   livecontext:
-    image: ghcr.io/livecontext-ai/livecontext-ce:v0.1.1
+    image: ghcr.io/livecontext-ai/livecontext-ce:v0.1.2
     container_name: livecontext-app
     restart: unless-stopped
     depends_on:
@@ -252,7 +252,7 @@ services:
           memory: 2048M
 
   frontend:
-    image: ghcr.io/livecontext-ai/livecontext-ce-frontend:v0.1.1
+    image: ghcr.io/livecontext-ai/livecontext-ce-frontend:v0.1.2
     container_name: livecontext-frontend
     restart: unless-stopped
     depends_on:

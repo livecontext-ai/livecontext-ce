@@ -121,6 +121,14 @@ public final class FileStorageHelp {
             "{'href':'{{mcp:gen.output.images[0]}}','filename':'{{mcp:gen.output.images[0].name}}'}.");
         map.put("display_in_interface", display);
 
+        map.put("send_to_a_tool",
+            "To SEND a file to an mcp: API tool that takes one (Telegram send_photo `photo` / " +
+            "send_document `document`, image/audio/video/file params on other APIs), map the canonical " +
+            "FileRef into that tool's file param: {'photo':'{{interface:card.output.screenshot}}'} or " +
+            "{'document':'{{core:dl.output.file}}'}. The platform uploads the bytes for you (multipart). " +
+            "A plain STRING in the same param is sent verbatim = a public URL or the provider's own file " +
+            "id. Same rule as <img>: pass the FileRef OBJECT, never .path or .id.");
+
         map.put("auth",
             "Token is a query param injected at iframe render time. The proxy is ORG-scoped: any member " +
             "of the file's workspace can view it (not just the uploader); only requests from a different " +
@@ -140,6 +148,9 @@ public final class FileStorageHelp {
                 "Use '{{core:<label>.output.file}}' for rendering, drill `.file.name` for filename.",
             "DON'T construct proxy URLs by hand. Pass the FileRef object; the rewriter handles " +
                 "auth + prefix.",
+            "DON'T drill `.path` or `.id` when sending a FileRef to a tool's file param (e.g. Telegram " +
+                "send_photo `photo`). Map the OBJECT so the platform can upload the bytes; a drilled " +
+                "string would be treated as a remote URL / file id and the upload would not happen.",
             "DON'T put '{{mcp:foo.output.…}}' directly in raw HTML. Always go through " +
                 "variable_mapping; raw HTML is for static markup."
         ));

@@ -1,6 +1,8 @@
 package com.apimarketplace.common.web;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
 import jakarta.servlet.ServletRequest;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -22,6 +24,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DisplayName("MonolithSecurityFilter")
 class MonolithSecurityFilterTest {
@@ -689,6 +692,511 @@ class MonolithSecurityFilterTest {
                 .isNull();
     }
 
+    @Test
+    @DisplayName("share token resolving to a null context is rejected with 401 invalid-share-token")
+    void shareTokenWithNullResolvedContextIsRejected() throws Exception {
+        // shareTokenResolver yields no context for a structurally valid share token.
+        MonolithSecurityFilter filter = new MonolithSecurityFilter(
+                () -> null,
+                List.of(),
+                token -> null);
+        MockHttpServletRequest request = externalRequest("/api/publications/00000000-0000-0000-0000-000000000123");
+        request.addHeader("Authorization", "ShareToken sl_unknown");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+        filter.doFilter(request, response, capturingChain(captured));
+
+        assertThat(response.getStatus()).isEqualTo(401);
+        assertThat(response.getContentAsString()).contains("Invalid or expired share token");
+        assertThat(captured.get()).as("an unresolvable share token must not reach the chain").isNull();
+    }
+
+    @Test
+    @DisplayName("share token whose resolved context has a null userId is rejected with 401")
+    void shareTokenWithNullUserIdIsRejected() throws Exception {
+        MonolithSecurityFilter filter = new MonolithSecurityFilter(
+                () -> null,
+                List.of(),
+                token -> new MonolithSecurityFilter.ShareTokenContext(
+                        null, "org-789", "APPLICATION", "pub-123", "workflow-456"));
+        MockHttpServletRequest request = externalRequest("/api/publications/00000000-0000-0000-0000-000000000123");
+        request.addHeader("Authorization", "ShareToken sl_scope");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+        filter.doFilter(request, response, capturingChain(captured));
+
+        assertThat(response.getStatus()).isEqualTo(401);
+        assertThat(response.getContentAsString()).contains("Invalid or expired share token");
+        assertThat(captured.get()).isNull();
+    }
+
+    @Test
+    @DisplayName("share token whose resolved context has a blank userId is rejected with 401")
+    void shareTokenWithBlankUserIdIsRejected() throws Exception {
+        MonolithSecurityFilter filter = new MonolithSecurityFilter(
+                () -> null,
+                List.of(),
+                token -> new MonolithSecurityFilter.ShareTokenContext(
+                        "   ", "org-789", "APPLICATION", "pub-123", "workflow-456"));
+        MockHttpServletRequest request = externalRequest("/api/publications/00000000-0000-0000-0000-000000000123");
+        request.addHeader("Authorization", "ShareToken sl_scope");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+        filter.doFilter(request, response, capturingChain(captured));
+
+        assertThat(response.getStatus()).isEqualTo(401);
+        assertThat(response.getContentAsString()).contains("Invalid or expired share token");
+        assertThat(captured.get()).isNull();
+    }
+
+    @Test
+    @DisplayName("share token with a null organizationId does not inject an X-Organization-ID header")
+    void shareTokenWithNullOrganizationIdSkipsOrganizationHeader() throws Exception {
+        MonolithSecurityFilter filter = new MonolithSecurityFilter(
+                () -> null,
+                List.of(),
+                token -> new MonolithSecurityFilter.ShareTokenContext(
+                        "42", null, "APPLICATION", "pub-123", "workflow-456"));
+        MockHttpServletRequest request = externalRequest("/api/publications/00000000-0000-0000-0000-000000000123");
+        request.addHeader("Authorization", "ShareToken sl_scope");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+        filter.doFilter(request, response, capturingChain(captured));
+
+        assertThat(response.getStatus()).isEqualTo(200);
+        assertThat(captured.get()).isNotNull();
+        var forwarded = (jakarta.servlet.http.HttpServletRequest) captured.get();
+        assertThat(forwarded.getHeader("X-User-ID")).isEqualTo("42");
+        assertThat(forwarded.getHeader("X-Authenticated")).isEqualTo("true");
+        assertThat(forwarded.getHeader("X-Organization-ID"))
+                .as("a null share organizationId must not be injected as a header")
+                .isNull();
+
+        // POSITIVE CONTROL: drive the SAME ShareAuthHeadersRequestWrapper path with a PRESENT,
+        // non-blank organizationId and assert X-Organization-ID IS then injected with that value.
+        // The null case above is a tautology on its own (Map.get of an absent key is null whether or
+        // not addIfPresent skips nulls); the present->injected vs null->absent contrast proves the
+        // wrapper injects the header CONDITIONALLY rather than never (or always) setting it.
+        MonolithSecurityFilter presentOrgFilter = new MonolithSecurityFilter(
+                () -> null,
+                List.of(),
+                token -> new MonolithSecurityFilter.ShareTokenContext(
+                        "42", "org-present", "APPLICATION", "pub-123", "workflow-456"));
+        MockHttpServletRequest presentOrgRequest =
+                externalRequest("/api/publications/00000000-0000-0000-0000-000000000123");
+        presentOrgRequest.addHeader("Authorization", "ShareToken sl_scope");
+        MockHttpServletResponse presentOrgResponse = new MockHttpServletResponse();
+        AtomicReference<ServletRequest> presentOrgCaptured = new AtomicReference<>();
+
+        presentOrgFilter.doFilter(presentOrgRequest, presentOrgResponse, capturingChain(presentOrgCaptured));
+
+        assertThat(presentOrgCaptured.get()).isNotNull();
+        var presentOrgForwarded = (jakarta.servlet.http.HttpServletRequest) presentOrgCaptured.get();
+        assertThat(presentOrgForwarded.getHeader("X-Organization-ID"))
+                .as("a present share organizationId must be injected as a header")
+                .isEqualTo("org-present");
+    }
+
+    @Test
+    @DisplayName("share token PUT request is rejected with the read-only 403 error")
+    void shareTokenPutIsRejectedWithReadOnlyError() throws Exception {
+        MonolithSecurityFilter filter = new MonolithSecurityFilter(
+                () -> null,
+                List.of(),
+                token -> new MonolithSecurityFilter.ShareTokenContext(
+                        "42", "org-789", "APPLICATION", "pub-123", "workflow-456"));
+        MockHttpServletRequest request = externalRequest("/api/v2/workflows/dag/00000000-0000-0000-0000-000000000456");
+        request.setMethod("PUT");
+        request.addHeader("Authorization", "Bearer ShareToken sl_scope");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+        filter.doFilter(request, response, capturingChain(captured));
+
+        assertThat(response.getStatus()).isEqualTo(403);
+        assertThat(response.getContentAsString()).contains("Write operations are not allowed in a shared context");
+        assertThat(captured.get()).isNull();
+    }
+
+    @Test
+    @DisplayName("share token PATCH request is rejected with the read-only 403 error")
+    void shareTokenPatchIsRejectedWithReadOnlyError() throws Exception {
+        MonolithSecurityFilter filter = new MonolithSecurityFilter(
+                () -> null,
+                List.of(),
+                token -> new MonolithSecurityFilter.ShareTokenContext(
+                        "42", "org-789", "APPLICATION", "pub-123", "workflow-456"));
+        MockHttpServletRequest request = externalRequest("/api/v2/workflows/dag/00000000-0000-0000-0000-000000000456");
+        request.setMethod("PATCH");
+        request.addHeader("Authorization", "Bearer ShareToken sl_scope");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+        filter.doFilter(request, response, capturingChain(captured));
+
+        assertThat(response.getStatus()).isEqualTo(403);
+        assertThat(response.getContentAsString()).contains("Write operations are not allowed in a shared context");
+        assertThat(captured.get()).isNull();
+    }
+
+    @Test
+    @DisplayName("share token HEAD and OPTIONS requests are forwarded as reads (not 403)")
+    void shareTokenHeadAndOptionsAreForwardedAsReads() throws Exception {
+        for (String method : List.of("HEAD", "OPTIONS")) {
+            MonolithSecurityFilter filter = new MonolithSecurityFilter(
+                    () -> null,
+                    List.of(),
+                    token -> new MonolithSecurityFilter.ShareTokenContext(
+                            "42", "org-789", "APPLICATION", "pub-123", "workflow-456"));
+            MockHttpServletRequest request =
+                    externalRequest("/api/publications/00000000-0000-0000-0000-000000000123");
+            request.setMethod(method);
+            request.addHeader("Authorization", "Bearer ShareToken sl_scope");
+            MockHttpServletResponse response = new MockHttpServletResponse();
+            AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+            filter.doFilter(request, response, capturingChain(captured));
+
+            assertThat(response.getStatus()).as(method + " share request must not be 403").isNotEqualTo(403);
+            assertThat(captured.get()).as(method + " share request must be forwarded as a read").isNotNull();
+            var forwarded = (jakarta.servlet.http.HttpServletRequest) captured.get();
+            assertThat(forwarded.getHeader("X-Share-Context")).isEqualTo("true");
+        }
+    }
+
+    @Test
+    @DisplayName("rejects an access token whose subject claim is missing")
+    void jwtWithMissingSubjectClaimIsRejected() throws Exception {
+        KeyPair keyPair = generateRsaKeyPair();
+        MonolithSecurityFilter filter = new MonolithSecurityFilter(() -> keyPair.getPublic(), List.of());
+        MockHttpServletRequest request = externalRequest("/api/storage/quota");
+        request.addHeader("Authorization", "Bearer " + signedJwt(keyPair, Map.of(
+                "userId", 42,
+                "roles", List.of("USER"),
+                "token_type", "access",
+                "exp", Instant.now().plusSeconds(300).getEpochSecond()
+        ))); // no "sub" claim
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+        filter.doFilter(request, response, capturingChain(captured));
+
+        assertThat(response.getStatus()).isEqualTo(401);
+        assertThat(captured.get()).as("a subjectless token must not reach the chain").isNull();
+    }
+
+    @Test
+    @DisplayName("accepts an access token whose exp equals the current second (strict greater-than boundary)")
+    void jwtExpiringAtCurrentSecondIsAccepted() throws Exception {
+        // The expiry guard is `now/1000 > exp`, so exp == now is still valid. This pins the strict >
+        // comparison (a >= guard would wrongly reject this token). A fixed clock is injected so the
+        // filter reads exactly the second the token is stamped with, hitting the equality case
+        // deterministically. (A real wall clock can roll a second between token-sign and filter-read,
+        // which would make exp one second in the past and turn this into a rare second-boundary flake;
+        // the injected LongSupplier seam removes that.)
+        KeyPair keyPair = generateRsaKeyPair();
+        long fixedMillis = 1_700_000_000_000L; // arbitrary fixed instant
+        long nowSeconds = fixedMillis / 1000;
+        MonolithSecurityFilter filter = new MonolithSecurityFilter(
+                () -> keyPair.getPublic(), List.of(), null, () -> fixedMillis);
+        MockHttpServletRequest request = externalRequest("/api/storage/quota");
+        request.addHeader("Authorization", "Bearer " + signedJwt(keyPair, Map.of(
+                "sub", "42",
+                "userId", 42,
+                "roles", List.of("USER"),
+                "token_type", "access",
+                "exp", nowSeconds
+        )));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+        filter.doFilter(request, response, capturingChain(captured));
+
+        assertThat(response.getStatus()).isEqualTo(200);
+        assertThat(captured.get()).isNotNull();
+        assertThat(((jakarta.servlet.http.HttpServletRequest) captured.get()).getHeader("X-User-ID"))
+                .isEqualTo("42");
+    }
+
+    @Test
+    @DisplayName("rejects an access token that expired one second ago (strict greater-than boundary)")
+    void jwtExpiredOneSecondAgoIsRejected() throws Exception {
+        KeyPair keyPair = generateRsaKeyPair();
+        MonolithSecurityFilter filter = new MonolithSecurityFilter(() -> keyPair.getPublic(), List.of());
+        MockHttpServletRequest request = externalRequest("/api/storage/quota");
+        long expiredSecond = System.currentTimeMillis() / 1000 - 1;
+        request.addHeader("Authorization", "Bearer " + signedJwt(keyPair, Map.of(
+                "sub", "42",
+                "userId", 42,
+                "roles", List.of("USER"),
+                "token_type", "access",
+                "exp", expiredSecond
+        )));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+        filter.doFilter(request, response, capturingChain(captured));
+
+        assertThat(response.getStatus()).isEqualTo(401);
+        assertThat(captured.get()).isNull();
+    }
+
+    @Test
+    @DisplayName("rejects a structurally valid RS256 JWT whose payload is malformed JSON")
+    void malformedJsonPayloadCausesTokenRejection() throws Exception {
+        // The 3-part structure, RS256 header and signature are all valid; only the payload JSON is
+        // garbage, so parseJson catches the parse exception, returns null, and validation rejects.
+        KeyPair keyPair = generateRsaKeyPair();
+        MonolithSecurityFilter filter = new MonolithSecurityFilter(() -> keyPair.getPublic(), List.of());
+        String headerSegment = base64Url(MAPPER.writeValueAsBytes(Map.of("alg", "RS256", "typ", "JWT")));
+        String payloadSegment = base64Url("{ not-valid-json ".getBytes(StandardCharsets.UTF_8));
+        String signingInput = headerSegment + "." + payloadSegment;
+        Signature signature = Signature.getInstance("SHA256withRSA");
+        signature.initSign(keyPair.getPrivate());
+        signature.update(signingInput.getBytes(StandardCharsets.US_ASCII));
+        String token = signingInput + "." + base64Url(signature.sign());
+
+        MockHttpServletRequest request = externalRequest("/api/storage/quota");
+        request.addHeader("Authorization", "Bearer " + token);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+        filter.doFilter(request, response, capturingChain(captured));
+
+        assertThat(response.getStatus()).isEqualTo(401);
+        assertThat(captured.get()).isNull();
+    }
+
+    @Test
+    @DisplayName("rejects a JWT when the verification key supplier returns a non-public key")
+    void nonPublicVerificationKeyRejectsJwt() throws Exception {
+        // The supplier returns the PRIVATE key, which is not a PublicKey instance, so verifySignature
+        // returns false and the token is rejected before any claim is trusted.
+        KeyPair keyPair = generateRsaKeyPair();
+        MonolithSecurityFilter filter = new MonolithSecurityFilter(() -> keyPair.getPrivate(), List.of());
+        MockHttpServletRequest request = externalRequest("/api/storage/quota");
+        request.addHeader("Authorization", "Bearer " + signedJwt(keyPair, Map.of(
+                "sub", "42",
+                "userId", 42,
+                "roles", List.of("USER"),
+                "token_type", "access",
+                "exp", Instant.now().plusSeconds(300).getEpochSecond()
+        )));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+        filter.doFilter(request, response, capturingChain(captured));
+
+        assertThat(response.getStatus()).isEqualTo(401);
+        assertThat(captured.get()).isNull();
+    }
+
+    @Test
+    @DisplayName("alg-confusion token (HS256 header, valid RSA signature) is rejected by the RS256-only header gate")
+    void nonRs256AlgorithmJwtIsRejected() throws Exception {
+        // alg-confusion token: the header advertises alg=HS256, but the signature is a VALID RSA
+        // signature over base64url(header)+"."+base64url(payload), produced with the same test
+        // private key whose public key the supplier returns, and every claim is valid (access token,
+        // unexpired exp, non-blank sub). The token is therefore rejected SOLELY by the RS256-only
+        // header gate that runs BEFORE verifySignature: if that gate were removed, the token would
+        // fall through to verifySignature, the RSA signature would genuinely verify, all claims would
+        // pass, and the request would be authenticated (200). So this test fails (200, not 401) if the
+        // gate is deleted, which makes it mutation-bearing. A fake/literal signature would NOT prove
+        // this: removing the gate would still 401 it at the signature check, so the test would pass
+        // either way and pin nothing.
+        KeyPair keyPair = generateRsaKeyPair();
+        MonolithSecurityFilter filter = new MonolithSecurityFilter(() -> keyPair.getPublic(), List.of());
+        String token = signedJwt(keyPair, "HS256", Map.of(
+                "sub", "42",
+                "userId", 42,
+                "roles", List.of("USER"),
+                "token_type", "access",
+                "exp", Instant.now().plusSeconds(300).getEpochSecond()));
+
+        MockHttpServletRequest request = externalRequest("/api/storage/quota");
+        request.addHeader("Authorization", "Bearer " + token);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+        filter.doFilter(request, response, capturingChain(captured));
+
+        assertThat(response.getStatus())
+                .as("a non-RS256 token must be rejected by the header gate before signature verification")
+                .isEqualTo(401);
+        assertThat(captured.get())
+                .as("the alg-confusion token (despite a valid RSA signature) must not reach the chain")
+                .isNull();
+    }
+
+    @Test
+    @DisplayName("a Bearer header with a whitespace-only token passes through unauthenticated and strips forged identity")
+    void bearerWithWhitespaceOnlyTokenPassesThroughUnauthenticated() throws Exception {
+        MonolithSecurityFilter filter = new MonolithSecurityFilter(() -> null, List.of());
+        MockHttpServletRequest request = externalRequest("/api/storage/quota");
+        request.addHeader("Authorization", "Bearer    ");
+        request.addHeader("X-User-ID", "999"); // forged identity must still be stripped
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+        filter.doFilter(request, response, capturingChain(captured));
+
+        assertThat(response.getStatus())
+                .as("an empty bearer token must be treated as no auth, not 401")
+                .isNotEqualTo(401);
+        assertThat(captured.get()).isNotNull();
+        var forwarded = (jakarta.servlet.http.HttpServletRequest) captured.get();
+        assertThat(forwarded.getHeader("X-User-ID")).isNull();
+    }
+
+    @Test
+    @DisplayName("skips malformed membership entries (non-map, missing/blank orgId) without failing JWT validation")
+    void malformedMembershipEntriesAreSkippedWithoutCrashing() throws Exception {
+        KeyPair keyPair = generateRsaKeyPair();
+        MonolithSecurityFilter filter = new MonolithSecurityFilter(() -> keyPair.getPublic(), List.of());
+        MockHttpServletRequest request = externalRequest("/api/schedules");
+        request.addHeader("X-Active-Organization-ID", "team-org-uuid");
+        request.addHeader("Authorization", "Bearer " + signedJwt(keyPair, Map.of(
+                "sub", "42",
+                "userId", 42,
+                "roles", List.of("USER"),
+                "token_type", "access",
+                "exp", Instant.now().plusSeconds(300).getEpochSecond(),
+                "memberships", List.<Object>of(
+                        "not-a-map-entry",
+                        Map.of("role", "ADMIN", "personal", false, "paused", false),
+                        Map.of("orgId", "", "role", "MEMBER", "personal", false, "paused", false),
+                        Map.of("orgId", "team-org-uuid", "role", "ADMIN", "personal", false, "paused", false))
+        )));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+        filter.doFilter(request, response, capturingChain(captured));
+
+        assertThat(response.getStatus()).isEqualTo(200);
+        assertThat(captured.get()).isNotNull();
+        var forwarded = (jakarta.servlet.http.HttpServletRequest) captured.get();
+        assertThat(forwarded.getHeader("X-Organization-ID"))
+                .as("the only well-formed membership must still resolve despite malformed siblings")
+                .isEqualTo("team-org-uuid");
+        assertThat(forwarded.getHeader("X-Organization-Role")).isEqualTo("ADMIN");
+    }
+
+    @Test
+    @DisplayName("paused default organization falls back to the personal OWNER organization")
+    void pausedDefaultOrganizationFallsBackToPersonalOwnerOrg() throws Exception {
+        KeyPair keyPair = generateRsaKeyPair();
+        MonolithSecurityFilter filter = new MonolithSecurityFilter(() -> keyPair.getPublic(), List.of());
+        MockHttpServletRequest request = externalRequest("/api/schedules");
+        // No X-Active-Organization-ID: resolution falls to the default org, which is paused.
+        request.addHeader("Authorization", "Bearer " + signedJwt(keyPair, Map.of(
+                "sub", "42",
+                "userId", 42,
+                "roles", List.of("USER"),
+                "token_type", "access",
+                "exp", Instant.now().plusSeconds(300).getEpochSecond(),
+                "defaultOrganizationId", "default-org-uuid",
+                "defaultOrganizationRole", "MEMBER",
+                "memberships", List.of(
+                        Map.of("orgId", "default-org-uuid", "role", "MEMBER", "personal", false, "paused", true),
+                        Map.of("orgId", "personal-org-uuid", "role", "OWNER", "personal", true, "paused", false))
+        )));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+        filter.doFilter(request, response, capturingChain(captured));
+
+        assertThat(response.getStatus()).isEqualTo(200);
+        assertThat(captured.get()).isNotNull();
+        var forwarded = (jakarta.servlet.http.HttpServletRequest) captured.get();
+        assertThat(forwarded.getHeader("X-Organization-ID"))
+                .as("a paused default org must fall back to the personal OWNER org")
+                .isEqualTo("personal-org-uuid");
+        assertThat(forwarded.getHeader("X-Organization-Role")).isEqualTo("OWNER");
+    }
+
+    @Test
+    @DisplayName("no default organization and no memberships injects no organization headers")
+    void noDefaultOrgAndNoMembershipInjectsNoOrganizationHeaders() throws Exception {
+        KeyPair keyPair = generateRsaKeyPair();
+        MonolithSecurityFilter filter = new MonolithSecurityFilter(() -> keyPair.getPublic(), List.of());
+        MockHttpServletRequest request = externalRequest("/api/storage/quota");
+        request.addHeader("Authorization", "Bearer " + signedJwt(keyPair, Map.of(
+                "sub", "42",
+                "userId", 42,
+                "roles", List.of("USER"),
+                "token_type", "access",
+                "exp", Instant.now().plusSeconds(300).getEpochSecond()
+        )));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+        filter.doFilter(request, response, capturingChain(captured));
+
+        assertThat(response.getStatus()).isEqualTo(200);
+        assertThat(captured.get()).isNotNull();
+        var forwarded = (jakarta.servlet.http.HttpServletRequest) captured.get();
+        assertThat(forwarded.getHeader("X-User-ID")).isEqualTo("42");
+        assertThat(forwarded.getHeader("X-Organization-ID"))
+                .as("OrgContext(null, null) must inject no org id header")
+                .isNull();
+        assertThat(forwarded.getHeader("X-Organization-Role"))
+                .as("OrgContext(null, null) must inject no org role header")
+                .isNull();
+
+        // POSITIVE CONTROL: drive the SAME AuthHeadersRequestWrapper path with a JWT carrying a
+        // (non-paused) default organization, so OrgContext resolves to a non-null org and
+        // X-Organization-ID / X-Organization-Role ARE injected. The absent case above is a tautology
+        // on its own; the present->injected vs absent->not contrast proves addIfPresent injects the
+        // org headers CONDITIONALLY rather than never setting them.
+        MockHttpServletRequest withOrgRequest = externalRequest("/api/storage/quota");
+        withOrgRequest.addHeader("Authorization", "Bearer " + signedJwt(keyPair, Map.of(
+                "sub", "42",
+                "userId", 42,
+                "roles", List.of("USER"),
+                "token_type", "access",
+                "exp", Instant.now().plusSeconds(300).getEpochSecond(),
+                "defaultOrganizationId", "default-org-uuid",
+                "defaultOrganizationRole", "MEMBER")));
+        MockHttpServletResponse withOrgResponse = new MockHttpServletResponse();
+        AtomicReference<ServletRequest> withOrgCaptured = new AtomicReference<>();
+
+        filter.doFilter(withOrgRequest, withOrgResponse, capturingChain(withOrgCaptured));
+
+        assertThat(withOrgCaptured.get()).isNotNull();
+        var withOrgForwarded = (jakarta.servlet.http.HttpServletRequest) withOrgCaptured.get();
+        assertThat(withOrgForwarded.getHeader("X-Organization-ID"))
+                .as("a present default organization must be injected as a header")
+                .isEqualTo("default-org-uuid");
+        assertThat(withOrgForwarded.getHeader("X-Organization-Role")).isEqualTo("MEMBER");
+    }
+
+    @Test
+    @DisplayName("downstream ServletException propagates after RequestContextHolder is restored")
+    void downstreamServletExceptionPropagatesAfterRequestContextCleanup() {
+        MonolithSecurityFilter filter = new MonolithSecurityFilter(() -> null, List.of());
+        MockHttpServletRequest request = externalRequest("/actuator/health");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        ServletRequestAttributes previous = new ServletRequestAttributes(new MockHttpServletRequest());
+        RequestContextHolder.setRequestAttributes(previous);
+        FilterChain throwingChain = (req, res) -> {
+            throw new ServletException("downstream boom");
+        };
+        try {
+            assertThatThrownBy(() -> filter.doFilter(request, response, throwingChain))
+                    .isInstanceOf(ServletException.class)
+                    .hasMessage("downstream boom");
+            assertThat(RequestContextHolder.getRequestAttributes())
+                    .as("the previous request binding must be restored in the finally block")
+                    .isSameAs(previous);
+        } finally {
+            RequestContextHolder.resetRequestAttributes();
+        }
+    }
+
     private static MockHttpServletRequest externalRequest(String path) {
         MockHttpServletRequest request = new MockHttpServletRequest("GET", path);
         request.setRemoteAddr("203.0.113.10");
@@ -711,7 +1219,18 @@ class MonolithSecurityFilterTest {
     }
 
     private static String signedJwt(KeyPair keyPair, Map<String, Object> claims) throws Exception {
-        String header = base64Url(MAPPER.writeValueAsBytes(Map.of("alg", "RS256", "typ", "JWT")));
+        return signedJwt(keyPair, "RS256", claims);
+    }
+
+    /**
+     * Builds a JWT whose header advertises {@code alg} but whose signature is ALWAYS a genuine RSA
+     * signature (SHA256withRSA) over base64url(header)+"."+base64url(payload), made with the test
+     * private key whose public key the supplier returns. Passing an alg other than "RS256" produces
+     * an alg-confusion token: a structurally real, RSA-verifiable token whose only defect is the
+     * header alg, so it exercises the RS256-only header gate rather than the signature check.
+     */
+    private static String signedJwt(KeyPair keyPair, String alg, Map<String, Object> claims) throws Exception {
+        String header = base64Url(MAPPER.writeValueAsBytes(Map.of("alg", alg, "typ", "JWT")));
         String payload = base64Url(MAPPER.writeValueAsBytes(claims));
         String signingInput = header + "." + payload;
         Signature signature = Signature.getInstance("SHA256withRSA");

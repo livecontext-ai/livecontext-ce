@@ -8,6 +8,7 @@ import com.apimarketplace.auth.repository.OrganizationMemberRepository;
 import com.apimarketplace.auth.service.PlanResolutionService;
 import com.apimarketplace.common.web.MonolithSecurityFilter;
 import com.apimarketplace.common.web.TenantResolver;
+import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletRequest;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -16,13 +17,19 @@ import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.web.context.request.RequestContextHolder;
 
+import java.io.IOException;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -226,6 +233,119 @@ class MonolithOrganizationContextFilterTest {
         var forwarded = (jakarta.servlet.http.HttpServletRequest) captured.get();
         assertThat(forwarded.getHeader("X-Organization-ID")).isEqualTo(personalOrgId.toString());
         assertThat(forwarded.getHeader("X-Organization-Role")).isEqualTo("OWNER");
+    }
+
+    @Test
+    @DisplayName("non-numeric X-User-ID is treated as anonymous and strips organization headers")
+    void nonNumericUserIdIsTreatedAsAnonymous() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/storage/quota");
+        request.addHeader("X-User-ID", "not-a-number");
+        request.addHeader("X-Active-Organization-ID", UUID.randomUUID().toString());
+        request.addHeader("X-Organization-ID", "forged-org");
+        request.addHeader("X-Organization-Role", "OWNER");
+        AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+        filter.doFilter(request, new MockHttpServletResponse(), capturingChain(captured));
+
+        var forwarded = (jakarta.servlet.http.HttpServletRequest) captured.get();
+        assertThat(forwarded.getHeader("X-Organization-ID")).isNull();
+        assertThat(forwarded.getHeader("X-Organization-Role")).isNull();
+        assertThat(forwarded.getHeader("X-Active-Organization-ID")).isNull();
+        // parseUserId swallowed the NumberFormatException -> anonymous, no membership lookup.
+        verifyNoInteractions(memberRepository);
+    }
+
+    @Test
+    @DisplayName("malformed active-organization UUID is rejected and falls back to the default membership")
+    void malformedActiveOrgClaimIsRejectedAndFallsBackToDefault() throws Exception {
+        UUID defaultOrgId = UUID.randomUUID();
+        when(memberRepository.findActiveDefaultByUserId(42L))
+                .thenReturn(Optional.of(membership(defaultOrgId, OrganizationRole.OWNER)));
+        MockHttpServletRequest request = authenticatedRequest();
+        request.addHeader("X-Active-Organization-ID", "not-a-valid-uuid");
+        AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+        filter.doFilter(request, new MockHttpServletResponse(), capturingChain(captured));
+
+        var forwarded = (jakarta.servlet.http.HttpServletRequest) captured.get();
+        assertThat(forwarded.getHeader("X-Organization-ID")).isEqualTo(defaultOrgId.toString());
+        assertThat(forwarded.getHeader("X-Organization-Role")).isEqualTo("OWNER");
+        assertThat(forwarded.getHeader("X-Active-Organization-ID")).isNull();
+        // UUID.fromString threw IllegalArgumentException before any lookup by the bad claim could run.
+        verify(memberRepository, never()).findActiveByOrganizationIdAndUserId(any(), any());
+    }
+
+    @Test
+    @DisplayName("authenticated user with no memberships forwards an empty org context with no injected headers")
+    void authenticatedUserWithoutMembershipForwardsEmptyOrgContext() throws Exception {
+        when(memberRepository.findActiveDefaultByUserId(42L)).thenReturn(Optional.empty());
+        MockHttpServletRequest request = authenticatedRequest();
+        request.addHeader("X-Organization-ID", "forged-org");
+        request.addHeader("X-Organization-Role", "OWNER");
+        AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+        filter.doFilter(request, new MockHttpServletResponse(), capturingChain(captured));
+
+        var forwarded = (jakarta.servlet.http.HttpServletRequest) captured.get();
+        assertThat(forwarded.getHeader("X-Organization-ID")).isNull();
+        assertThat(forwarded.getHeader("X-Organization-Role")).isNull();
+        verify(memberRepository).findActiveDefaultByUserId(42L);
+        // Default workspace absent -> else branch keeps the empty Optional, personal fallback never tried.
+        verify(memberRepository, never()).findPersonalByUserId(anyLong());
+    }
+
+    @Test
+    @DisplayName("IOException thrown by the downstream chain is propagated to the caller")
+    void downstreamIoExceptionIsPropagated() throws Exception {
+        UUID orgId = UUID.randomUUID();
+        when(memberRepository.findActiveByOrganizationIdAndUserId(orgId, 42L))
+                .thenReturn(Optional.of(membership(orgId, OrganizationRole.ADMIN)));
+        MockHttpServletRequest request = authenticatedRequest();
+        request.addHeader("X-Active-Organization-ID", orgId.toString());
+        IOException downstreamFailure = new IOException("downstream boom");
+        FilterChain throwingChain = (req, res) -> { throw downstreamFailure; };
+
+        assertThatThrownBy(() ->
+                filter.doFilter(request, new MockHttpServletResponse(), throwingChain))
+                .isSameAs(downstreamFailure);
+    }
+
+    @Test
+    @DisplayName("tenant scope and request-context are cleared after the downstream chain throws")
+    void tenantScopeAndRequestContextClearedWhenChainThrows() throws Exception {
+        RequestContextHolder.resetRequestAttributes();
+        UUID orgId = UUID.randomUUID();
+        when(memberRepository.findActiveByOrganizationIdAndUserId(orgId, 42L))
+                .thenReturn(Optional.of(membership(orgId, OrganizationRole.ADMIN)));
+        MockHttpServletRequest request = authenticatedRequest();
+        request.addHeader("X-Active-Organization-ID", orgId.toString());
+        IOException downstreamFailure = new IOException("downstream boom");
+        FilterChain throwingChain = (req, res) -> { throw downstreamFailure; };
+
+        assertThatThrownBy(() ->
+                filter.doFilter(request, new MockHttpServletResponse(), throwingChain))
+                .isSameAs(downstreamFailure);
+
+        // finally blocks restore both thread-locals even though the chain threw - no thread-pool leak.
+        assertThat(TenantResolver.currentRequestOrganizationId()).isNull();
+        assertThat(RequestContextHolder.getRequestAttributes()).isNull();
+    }
+
+    @Test
+    @DisplayName("tenant scope and request-context are cleared after a successful filter pass")
+    void tenantScopeAndRequestContextClearedAfterSuccessfulFilter() throws Exception {
+        RequestContextHolder.resetRequestAttributes();
+        UUID orgId = UUID.randomUUID();
+        when(memberRepository.findActiveByOrganizationIdAndUserId(orgId, 42L))
+                .thenReturn(Optional.of(membership(orgId, OrganizationRole.ADMIN)));
+        MockHttpServletRequest request = authenticatedRequest();
+        request.addHeader("X-Active-Organization-ID", orgId.toString());
+
+        filter.doFilter(request, new MockHttpServletResponse(), new MockFilterChain());
+
+        // Context bound during the chain (asserted elsewhere) must not leak past request exit.
+        assertThat(TenantResolver.currentRequestOrganizationId()).isNull();
+        assertThat(RequestContextHolder.getRequestAttributes()).isNull();
     }
 
     private static MockHttpServletRequest authenticatedRequest() {

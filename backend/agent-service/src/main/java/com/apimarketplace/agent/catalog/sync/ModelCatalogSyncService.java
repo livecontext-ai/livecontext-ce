@@ -180,7 +180,7 @@ public class ModelCatalogSyncService {
 
         // Safety: remove any row under an excluded provider (bridges + zai).
         // Parsers already filter, but this is belt-and-braces.
-        allFeedModels.removeIf(m -> EXCLUDED_PROVIDERS.contains(strOf(m.get("provider"))));
+        allFeedModels.removeIf(m -> isExcludedProvider(strOf(m.get("provider"))));
 
         // Derive bridge rows from LiteLLM cloud entries (AFTER the exclusion
         // filter, so the parsers stay purely cloud). The deriver honors
@@ -489,7 +489,7 @@ public class ModelCatalogSyncService {
     private Map<String, ModelConfigOverrideEntity> loadExistingNonBridge() {
         Map<String, ModelConfigOverrideEntity> out = new HashMap<>();
         for (ModelConfigOverrideEntity row : modelRepo.findAllByOrderByRankingAsc()) {
-            if (EXCLUDED_PROVIDERS.contains(row.getProvider())) continue;
+            if (isExcludedProvider(row.getProvider())) continue;
             if ("bridge".equals(row.getProviderKind())) continue;
             out.put(key(row.getProvider(), row.getModelId()), row);
         }
@@ -623,6 +623,17 @@ public class ModelCatalogSyncService {
 
     private static String key(String provider, String modelId) {
         return provider + '\0' + modelId;
+    }
+
+    /**
+     * Null-safe membership check against {@link #EXCLUDED_PROVIDERS}. That set
+     * is an immutable {@code Set.of(...)} which is null-hostile:
+     * {@code contains(null)} throws NPE ("Cannot invoke Object.hashCode()")
+     * rather than returning {@code false}. A feed row or DB row with a null
+     * provider is simply "not excluded", so treat it as such.
+     */
+    private static boolean isExcludedProvider(String provider) {
+        return provider != null && EXCLUDED_PROVIDERS.contains(provider);
     }
 
     private static String sha256(byte[] b) {

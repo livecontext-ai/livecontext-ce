@@ -290,6 +290,65 @@ class LiteLlmFeedParserTest {
     }
 
     @Test
+    @DisplayName("Meta blocks without litellm_provider are rejected, not crashed on (fallback_generalizations regression)")
+    void metaEntryWithoutProviderDoesNotCrash() {
+        // Regression: LiteLLM's live feed carries non-model meta blocks with no
+        // litellm_provider (e.g. "fallback_generalizations", a set of
+        // adaptive-thinking inference rules). PROVIDER_MAP is an immutable
+        // Map.ofEntries whose get(null) throws NPE, which previously aborted the
+        // ENTIRE sync ("sync failed: Cannot invoke Object.hashCode() ...") on the
+        // first refresh after that upstream entry appeared. The parser must route
+        // such entries through the reject path and still parse real models.
+        String fixture = """
+            {
+              "fallback_generalizations": {
+                "rules": [
+                  {"name": "anthropic-claude", "pattern": "^claude-.*$",
+                   "model_info": {"supports_adaptive_thinking": true}}
+                ]
+              },
+              "claude-opus-4-8": {
+                "litellm_provider": "anthropic", "mode": "chat",
+                "input_cost_per_token": 5e-06, "output_cost_per_token": 2.5e-05,
+                "supports_function_calling": true
+              }
+            }
+            """;
+
+        LiteLlmFeedParser.ParseResult result = parser.parse(
+                fixture.getBytes(StandardCharsets.UTF_8), "sha", "t");
+
+        assertThat(result.isSuccess()).isTrue();
+        // The meta block is counted as a rejected-provider entry, not a crash.
+        assertThat(result.rejectedProvider()).isEqualTo(1);
+        // The real model still parses.
+        assertThat(result.models()).hasSize(1);
+        assertThat(result.models().get(0).get("modelId")).isEqualTo("claude-opus-4-8");
+        assertThat(result.models().get(0).get("provider")).isEqualTo("anthropic");
+    }
+
+    @Test
+    @DisplayName("Explicit null litellm_provider is rejected, not crashed on")
+    void nullProviderValueDoesNotCrash() {
+        // Same class of bug via an explicit JSON null rather than a missing key.
+        String fixture = """
+            {
+              "some-weird-row": {
+                "litellm_provider": null, "mode": "chat",
+                "input_cost_per_token": 1e-06, "output_cost_per_token": 1e-05,
+                "supports_function_calling": true
+              }
+            }
+            """;
+        LiteLlmFeedParser.ParseResult result = parser.parse(
+                fixture.getBytes(StandardCharsets.UTF_8), "sha", "t");
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.models()).isEmpty();
+        assertThat(result.rejectedProvider()).isEqualTo(1);
+    }
+
+    @Test
     @DisplayName("Invalid JSON → isSuccess=false, empty models, error message populated")
     void malformedJson() {
         LiteLlmFeedParser.ParseResult result = parser.parse(

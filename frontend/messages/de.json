@@ -3201,7 +3201,7 @@
       "reconnectAriaLabel": "{name} erneut verbinden",
       "reconnectRequiredHint": "Die Autorisierung dieser Verbindung ist abgelaufen oder wurde widerrufen. Klicken Sie auf 'Erneut verbinden', um den OAuth-Ablauf erneut auszuführen.",
       "reconnectHintByokDeleted": "Sie haben die benutzerdefinierte OAuth-App gelöscht, die diese Verbindung verwendet hat. Die gewährten Scopes bleiben zur Information erhalten, aber die Tokens wurden widerrufen. Klicken Sie auf 'Erneut verbinden', um neu zu autorisieren, oder verwenden Sie wieder Ihre eigene OAuth-App.",
-      "reconnectHintTokenRevoked": "Der Anbieter hat das Refresh-Token dieser Verbindung widerrufen (Passwortänderung, App aus Ihrem Konto entfernt, Scope zurückgezogen usw.). Klicken Sie auf 'Erneut verbinden', um neu zu autorisieren.",
+      "reconnectHintTokenRevoked": "Der Anbieter hat das Refresh-Token dieser Verbindung widerrufen (Passwortänderung, App aus Ihrem Konto entfernt, Scope zurückgezogen usw.). Klicken Sie auf 'Erneut verbinden', um neu zu autorisieren. Wenn das erneute Verbinden nach einigen Stunden weiterhin fehlschlägt, ist die OAuth-App dieser Integration möglicherweise nicht für alle Berechtigungen freigegeben; wenden Sie sich an Ihren Workspace-Administrator oder den Support.",
       "reconnectHintConfigError": "Diese Verbindung schlug aufgrund eines Konfigurationsproblems fehl, das ein Administrator beheben muss (ungültiges Client-Geheimnis, fehlender Scope in der OAuth-App usw.). 'Erneut verbinden' allein löst das nicht.",
       "connectionError": "Verbindungsfehler",
       "connectionErrorHint": "Ein Administrator muss diese Anmeldedaten reparieren. Bitte kontaktieren Sie den Support.",

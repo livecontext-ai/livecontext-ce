@@ -12,6 +12,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.*;
 import org.springframework.web.client.RestTemplate;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -51,6 +52,15 @@ class CoreToolsCacheTest {
         ResponseEntity<Map> response = new ResponseEntity<>(wrapTools(toolMaps), HttpStatus.OK);
         when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(), eq(Map.class)))
             .thenReturn(response);
+    }
+
+    /** Build a 200 OK /api/agent-tools envelope advertising exactly the named tools. */
+    private ResponseEntity<Map> toolsFor(String... names) {
+        List<Map<String, Object>> toolMaps = new ArrayList<>();
+        for (String n : names) {
+            toolMaps.add(Map.of("name", n, "description", n + " tool", "id", n + "-1"));
+        }
+        return new ResponseEntity<>(wrapTools(toolMaps), HttpStatus.OK);
     }
 
     @Nested
@@ -277,6 +287,110 @@ class CoreToolsCacheTest {
 
             assertThat(cache.activeCoreToolNames()).doesNotContain("web_search");
             assertThat(cache.getCoreTools()).isEmpty();
+        }
+    }
+
+    @Nested
+    @DisplayName("scheduledRefreshIfIncomplete() periodic safety-net")
+    class PeriodicRefreshTests {
+
+        // The five per-service /api/agent-tools endpoints the cache fans out to,
+        // matching the URLs the default cache is constructed with in setUp().
+        private static final String ORCH = "http://localhost:8099/api/agent-tools";
+        private static final String AGENT = "http://localhost:8090/api/agent-tools";
+        private static final String DATASOURCE = "http://localhost:8088/api/agent-tools";
+        private static final String INTERFACE = "http://localhost:8089/api/agent-tools";
+        private static final String CATALOG = "http://localhost:8081/api/agent-tools";
+
+        @Test
+        @DisplayName("recovers tools the initial load missed WITHOUT clearing the already-cached ones, "
+            + "and re-queries ONLY the source that owns the missing tools")
+        void periodicRefreshRecoversMissingToolsWithoutClearingExistingCache() {
+            // Given: on the initial load orchestrator is down (returns an empty tool list)
+            // so its tools (workflow/application/web_search/image_generation/files) never
+            // land in the cache, while every other source loads fine. On the SECOND call
+            // orchestrator is back and advertises its tools.
+            when(restTemplate.exchange(eq(ORCH), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(toolsFor()) // initial: orchestrator unreachable -> no tools
+                .thenReturn(toolsFor("workflow", "application", "web_search", "image_generation", "files"));
+            when(restTemplate.exchange(eq(AGENT), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(toolsFor("agent", "skill"));
+            when(restTemplate.exchange(eq(DATASOURCE), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(toolsFor("table"));
+            when(restTemplate.exchange(eq(INTERFACE), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(toolsFor("interface"));
+            when(restTemplate.exchange(eq(CATALOG), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(toolsFor("catalog"));
+
+            cache.refreshCoreTools();
+
+            // Sanity: only orchestrator-owned tools are missing after the initial load.
+            assertThat(cache.getMissingTools())
+                .containsExactlyInAnyOrder("workflow", "application", "web_search", "image_generation", "files");
+            assertThat(cache.getCoreTools().stream().map(ToolDefinition::name))
+                .containsExactlyInAnyOrder("agent", "skill", "table", "interface", "catalog");
+
+            // When: the 5-minute safety net runs.
+            cache.scheduledRefreshIfIncomplete();
+
+            // Then: the missing orchestrator tools are recovered...
+            assertThat(cache.getMissingTools()).isEmpty();
+            assertThat(cache.getCoreTools().stream().map(ToolDefinition::name))
+                .containsExactlyInAnyOrder("catalog", "table", "interface", "agent", "skill",
+                    "workflow", "application", "web_search", "image_generation", "files");
+            // ...and the originally-loaded tools were preserved (the cache was NOT cleared,
+            // unlike refreshCoreTools()), so no consumer ever sees them disappear.
+            assertThat(cache.getCoreTools().stream().map(ToolDefinition::name))
+                .contains("agent", "skill", "table", "interface", "catalog");
+
+            // And: only orchestrator is re-queried on the periodic pass (2 calls total =
+            // initial + periodic); the sources whose tools already loaded are NOT re-hit
+            // (1 call each = initial only).
+            verify(restTemplate, times(2)).exchange(eq(ORCH), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class));
+            verify(restTemplate, times(1)).exchange(eq(AGENT), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class));
+            verify(restTemplate, times(1)).exchange(eq(DATASOURCE), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class));
+            verify(restTemplate, times(1)).exchange(eq(INTERFACE), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class));
+            verify(restTemplate, times(1)).exchange(eq(CATALOG), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class));
+        }
+
+        @Test
+        @DisplayName("is a no-op (fetches nothing) once the cache is already complete")
+        void periodicRefreshIsNoOpWhenCacheAlreadyComplete() {
+            // Given: every source loads its tools so the cache is complete.
+            when(restTemplate.exchange(eq(ORCH), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(toolsFor("workflow", "application", "web_search", "image_generation", "files"));
+            when(restTemplate.exchange(eq(AGENT), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(toolsFor("agent", "skill"));
+            when(restTemplate.exchange(eq(DATASOURCE), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(toolsFor("table"));
+            when(restTemplate.exchange(eq(INTERFACE), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(toolsFor("interface"));
+            when(restTemplate.exchange(eq(CATALOG), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(toolsFor("catalog"));
+
+            cache.refreshCoreTools();
+            assertThat(cache.getMissingTools()).isEmpty();
+
+            // When: the periodic tick runs with nothing missing.
+            clearInvocations(restTemplate);
+            cache.scheduledRefreshIfIncomplete();
+
+            // Then: no source is contacted and the cache is untouched.
+            verify(restTemplate, never()).exchange(anyString(), eq(HttpMethod.GET), any(), eq(Map.class));
+            assertThat(cache.getCoreTools()).hasSize(10);
+        }
+
+        @Test
+        @DisplayName("skips entirely while the initial load is still running (not yet initialized)")
+        void periodicRefreshSkipsWhenNotYetInitialized() {
+            // Given: a freshly-built cache whose initial load has not completed.
+            assertThat(cache.isInitialized()).isFalse();
+
+            // When: the periodic tick fires before initialization finished.
+            cache.scheduledRefreshIfIncomplete();
+
+            // Then: it short-circuits and never reaches any source.
+            verify(restTemplate, never()).exchange(anyString(), eq(HttpMethod.GET), any(), eq(Map.class));
         }
     }
 }

@@ -31,6 +31,13 @@ import java.util.Map;
  *   <li>{@code "fileRef"}  - the parameter must be a structured FileRef ({@code _type:"file", path:...}).
  *                            The bytes are downloaded from MinIO via {@link StorageClient#download(String, String)}
  *                            and added as a {@link ByteArrayResource}.</li>
+ *   <li>{@code "auto"}     - polymorphic part: inspect the runtime value and choose the encoding.
+ *                            A FileRef becomes a binary file part; a Map/Collection (e.g. Telegram
+ *                            {@code reply_markup} / {@code caption_entities}) becomes a JSON-serialized
+ *                            string (what such APIs require in {@code multipart/form-data}); any scalar
+ *                            (a Telegram {@code file_id}, an HTTP URL, a number, a boolean) becomes a
+ *                            plain text field. This is the source for a single field that accepts either
+ *                            an uploaded file OR a string reference under the same part name.</li>
  * </ul>
  */
 @Component
@@ -81,6 +88,9 @@ public class MultipartBodyEncoder {
                     break;
                 case "fileRef":
                     addFileRefPart(body, partName, paramValue, tenantId);
+                    break;
+                case "auto":
+                    addAutoPart(body, partName, paramValue, tenantId);
                     break;
                 default:
                     log.warn("MultipartBodyEncoder: unknown source '{}' for part '{}'", source, partName);
@@ -133,6 +143,44 @@ public class MultipartBodyEncoder {
                 return bytes.length;
             }
         });
+    }
+
+    /**
+     * Polymorphic part ({@code source:"auto"}). Picks the encoding from the runtime value type so a
+     * single field can carry either an uploaded file or a string reference under the same part name:
+     * <ul>
+     *   <li>a FileRef ({@code _type:"file"} / {@code path}+{@code name}) - downloaded and added as a
+     *       binary file part (reuses {@link #addFileRefPart});</li>
+     *   <li>a {@code Map} or {@code Collection} (e.g. Telegram {@code reply_markup},
+     *       {@code caption_entities}) - JSON-serialized to a string, because {@code multipart/form-data}
+     *       has no native object encoding and these APIs expect a JSON string in the field;</li>
+     *   <li>any scalar (file_id, HTTP URL, number, boolean) - added verbatim as a text field.</li>
+     * </ul>
+     */
+    private void addAutoPart(MultiValueMap<String, Object> body,
+                             String partName,
+                             Object paramValue,
+                             String tenantId) {
+        // FileRef detection runs first so a FileRef Map never falls into the Map->JSON branch.
+        // Note: coerceToFileRef also treats any Map carrying both `path` and `name` as a FileRef
+        // (not only `_type:"file"`). No Telegram object param collides with that shape; reusing
+        // `auto` on an API whose object param happens to carry path+name would upload it instead
+        // of JSON-encoding it. Declare such a field `source:"param"` rather than `auto`.
+        if (coerceToFileRef(paramValue) != null) {
+            addFileRefPart(body, partName, paramValue, tenantId);
+            return;
+        }
+        if (paramValue instanceof Map || paramValue instanceof java.util.Collection) {
+            try {
+                body.add(partName, objectMapper.writeValueAsString(paramValue));
+            } catch (Exception e) {
+                log.warn("MultipartBodyEncoder: failed to JSON-encode part '{}', falling back to toString: {}",
+                        partName, e.getMessage());
+                body.add(partName, String.valueOf(paramValue));
+            }
+            return;
+        }
+        body.add(partName, String.valueOf(paramValue));
     }
 
     /**

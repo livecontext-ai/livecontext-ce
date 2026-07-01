@@ -293,7 +293,7 @@ export default function AiProvidersPage() {
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -366,13 +366,13 @@ export default function AiProvidersPage() {
           */}
           {IS_CE && (
             <div className="flex flex-col items-center gap-2 text-center">
-              <div className="relative inline-flex items-center gap-1 rounded-full bg-theme-tertiary p-1 w-max">
+              <div className="relative inline-flex items-center gap-1 rounded-full bg-theme-tertiary p-1.5 w-max">
                 <button
                   type="button"
                   onClick={() => handleSetLlmSource("CLOUD")}
                   disabled={sourceLoading || sourceSaving !== null}
                   className={cn(
-                    "inline-flex items-center gap-2 rounded-full px-3 py-2 text-sm font-medium transition-colors",
+                    "inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-colors",
                     llmSource === "CLOUD"
                       ? "bg-[var(--bg-primary)] text-theme-primary shadow-sm"
                       : "text-theme-secondary hover:text-theme-primary"
@@ -386,7 +386,7 @@ export default function AiProvidersPage() {
                   onClick={() => handleSetLlmSource("BYOK")}
                   disabled={sourceLoading || sourceSaving !== null}
                   className={cn(
-                    "inline-flex items-center gap-2 rounded-full px-3 py-2 text-sm font-medium transition-colors",
+                    "inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-colors",
                     llmSource === "BYOK"
                       ? "bg-[var(--bg-primary)] text-theme-primary shadow-sm"
                       : "text-theme-secondary hover:text-theme-primary"

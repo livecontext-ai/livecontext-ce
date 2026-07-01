@@ -478,6 +478,96 @@ class ModelCatalogSyncServiceTest {
     }
 
     @Test
+    @DisplayName("A feed row with a null provider does not crash the excluded-provider filter (null-hostile Set.of guard)")
+    void nullProviderRowDoesNotCrashExcludedFilter() {
+        // EXCLUDED_PROVIDERS is an immutable Set.of(...) whose contains(null)
+        // throws NPE. Parsers never emit a null provider, but the service
+        // re-filters as belt-and-braces, so a null must be treated as
+        // "not excluded" rather than aborting the whole sync. A HashMap-backed
+        // row is required because Map.of rejects null values.
+        Map<String, Object> nullProviderRow = new java.util.HashMap<>();
+        nullProviderRow.put("provider", null);
+        nullProviderRow.put("modelId", "orphan");
+        nullProviderRow.put("priceInput", "1.0");
+        nullProviderRow.put("priceOutput", "2.0");
+
+        when(liteLlmParser.parse(any(), any(), any())).thenReturn(
+                LiteLlmFeedParser.ParseResult.success(List.of(
+                        feedRow("openai", "gpt-5.4", "2.5", "15.0"),
+                        nullProviderRow
+                ), 0, 0, 0, 0, 0));
+        when(openRouterParser.parse(any(), any(), any())).thenReturn(
+                OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
+
+        var result = syncService.sync(ModelCatalogSyncService.SyncRequest.dryRun("tester"));
+
+        // No crash; the valid row is classified, the null-provider row is
+        // skipped by the downstream (prov == null) guard.
+        assertThat(result.plan().added()).extracting(m -> m.get("modelId"))
+                .containsExactly("gpt-5.4");
+    }
+
+    @Test
+    @DisplayName("An existing DB row with a null provider does not crash loadExistingNonBridge (second null-hostile call site)")
+    void nullProviderExistingDbRowDoesNotCrashLoad() {
+        // Second EXCLUDED_PROVIDERS.contains(...) call site: loading existing
+        // rows for the diff. A DB row with a null provider must be treated as
+        // "not excluded" rather than aborting the sync. Pre-fix this threw the
+        // same Object.hashCode() NPE out of sync().
+        ModelConfigOverrideEntity nullProviderRow = new ModelConfigOverrideEntity();
+        nullProviderRow.setProvider(null);
+        nullProviderRow.setModelId("legacy-orphan");
+        ModelConfigOverrideEntity valid = entity("openai", "gpt-5.4",
+                new BigDecimal("2.500000"), new BigDecimal("15.000000"));
+        when(modelRepo.findAllByOrderByRankingAsc()).thenReturn(List.of(nullProviderRow, valid));
+
+        when(liteLlmParser.parse(any(), any(), any())).thenReturn(
+                LiteLlmFeedParser.ParseResult.success(List.of(
+                        feedRow("openai", "gpt-5.4", "2.500000", "15.000000")
+                ), 0, 0, 0, 0, 0));
+        when(openRouterParser.parse(any(), any(), any())).thenReturn(
+                OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
+
+        var result = syncService.sync(ModelCatalogSyncService.SyncRequest.dryRun("tester"));
+
+        // No crash; incoming gpt-5.4 matches the valid existing row (unchanged),
+        // and the null-provider existing row is inert in the diff.
+        assertThat(result.plan().unchanged()).isEqualTo(1);
+        assertThat(result.plan().added()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Null-provider feed row is harmless on the apply path: no crash, valid row still merged")
+    void nullProviderRowApplyPathDoesNotCrash() {
+        Map<String, Object> nullProviderRow = new java.util.HashMap<>();
+        nullProviderRow.put("provider", null);
+        nullProviderRow.put("modelId", "orphan");
+        nullProviderRow.put("priceInput", "1.0");
+        nullProviderRow.put("priceOutput", "2.0");
+
+        when(liteLlmParser.parse(any(), any(), any())).thenReturn(
+                LiteLlmFeedParser.ParseResult.success(List.of(
+                        feedRow("openai", "gpt-5.4", "2.5", "15.0"),
+                        nullProviderRow
+                ), 0, 0, 0, 0, 0));
+        when(openRouterParser.parse(any(), any(), any())).thenReturn(
+                OpenRouterFeedParser.ParseResult.success(List.of(), 0, 0, 0, 0));
+        when(mergeService.merge(any(), any()))
+                .thenReturn(new CatalogMergeService.MergeResult(1, 0, 0, 0, 0, 1));
+
+        var result = syncService.sync(ModelCatalogSyncService.SyncRequest.apply("ops", Set.of()));
+
+        assertThat(result.applied()).isTrue();
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Map<String, Object>>> payload = ArgumentCaptor.forClass(List.class);
+        verify(mergeService).merge(payload.capture(), any());
+        // The valid row still reaches merge; the null-provider row flows through
+        // as a no-op (CatalogMergeService skips null-provider rows) instead of
+        // crashing the excluded-provider filter upstream.
+        assertThat(payload.getValue()).extracting(m -> m.get("modelId")).contains("gpt-5.4");
+    }
+
+    @Test
     @DisplayName("Bridge rows are derived from LiteLLM cloud entries (AFTER excluded-provider filter) and merged into feed")
     void bridgeRowsAreDerivedAndAppended() {
         when(liteLlmParser.parse(any(), any(), any())).thenReturn(

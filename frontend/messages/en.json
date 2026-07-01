@@ -3433,7 +3433,7 @@
       "reconnectAriaLabel": "Reconnect {name}",
       "reconnectRequiredHint": "This connection's authorization expired or was revoked. Click Reconnect to re-run the OAuth flow.",
       "reconnectHintByokDeleted": "You deleted the custom OAuth app this connection used. The granted scopes are kept for reference, but the tokens were revoked. Click Reconnect to re-authorize, or use your own OAuth app again.",
-      "reconnectHintTokenRevoked": "The provider revoked this connection's refresh token (e.g. password change, app removed from your account, scope withdrawn). Click Reconnect to re-authorize.",
+      "reconnectHintTokenRevoked": "The provider revoked this connection's refresh token (e.g. password change, app removed from your account, scope withdrawn). Click Reconnect to re-authorize. If reconnecting keeps failing within a few hours, this integration's OAuth app may not be approved for all its permissions; contact your workspace admin or support.",
       "reconnectHintConfigError": "This connection failed because of a configuration issue an admin needs to fix (e.g. invalid client secret, missing scope on the OAuth app). Reconnect alone won't resolve it.",
       "connectionError": "Connection error",
       "connectionErrorHint": "An admin needs to repair this credential. Contact support.",

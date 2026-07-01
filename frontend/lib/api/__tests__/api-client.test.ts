@@ -877,4 +877,103 @@ describe('ApiClient', () => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
   });
+
+  // =========================================================================
+  // 401 -> silent token refresh -> single retry
+  //
+  // This is a SEPARATE mechanism from the generic retry loop (which explicitly
+  // does NOT retry 4xx). On a 401 the client re-invokes its tokenProvider (wired
+  // in smart-providers.tsx to the auth provider's signinSilent) and replays the
+  // request once with the fresh token; a dead session fires onAuthFailure once
+  // and rethrows, without looping.
+  // =========================================================================
+
+  describe('401 auto-refresh and single retry', () => {
+    it('refreshes the token and retries ONCE when the first attempt returns 401, then succeeds', async () => {
+      const tokenProvider = vi.fn()
+        .mockResolvedValueOnce('stale')  // initial getToken()
+        .mockResolvedValueOnce('fresh'); // forced refresh after the 401
+      client.setTokenProvider(tokenProvider);
+
+      fetchMock
+        .mockResolvedValueOnce(errorJsonResponse(401, { message: 'token expired' }))
+        .mockResolvedValueOnce(jsonResponse({ ok: true }));
+
+      const result = await client.get('/protected');
+
+      expect(result).toEqual({ ok: true });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      // First attempt carried the stale token; the retry carried the refreshed one.
+      expect(fetchMock.mock.calls[0][1].headers['Authorization']).toBe('Bearer stale');
+      expect(fetchMock.mock.calls[1][1].headers['Authorization']).toBe('Bearer fresh');
+      // Exactly one refresh (provider call #2), proving a single retry, not a loop.
+      expect(tokenProvider).toHaveBeenCalledTimes(2);
+    });
+
+    it('does NOT retry and fires onAuthFailure once when the refresh yields the SAME token (dead session, no loop)', async () => {
+      const tokenProvider = vi.fn().mockResolvedValue('same');
+      client.setTokenProvider(tokenProvider);
+      const onAuthFailure = vi.fn();
+      client.setOnAuthFailure(onAuthFailure);
+
+      fetchMock.mockResolvedValue(errorJsonResponse(401, { message: 'token expired' }));
+
+      await expect(client.get('/protected')).rejects.toMatchObject({ status: 401 });
+
+      // The refreshed token equals the one that 401'd, so NO replay fetch is sent.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      // One getToken() + one refresh attempt, then it stops (no infinite refresh loop).
+      expect(tokenProvider).toHaveBeenCalledTimes(2);
+      expect(onAuthFailure).toHaveBeenCalledTimes(1);
+    });
+
+    it('fires onAuthFailure once and rethrows the 401 when the refresh provider throws', async () => {
+      const tokenProvider = vi.fn()
+        .mockResolvedValueOnce('stale')
+        .mockRejectedValueOnce(new Error('refresh boom'));
+      client.setTokenProvider(tokenProvider);
+      const onAuthFailure = vi.fn();
+      client.setOnAuthFailure(onAuthFailure);
+
+      fetchMock.mockResolvedValueOnce(errorJsonResponse(401, { message: 'token expired' }));
+
+      await expect(client.get('/protected')).rejects.toMatchObject({ status: 401 });
+
+      // Refresh threw -> no replay fetch, and the session-dead callback fired exactly once.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      // One getToken() + one refresh attempt (which threw), then it stops.
+      expect(tokenProvider).toHaveBeenCalledTimes(2);
+      expect(onAuthFailure).toHaveBeenCalledTimes(1);
+    });
+
+    it('fires onAuthFailure only ONCE across two consecutive dead-session requests (cross-request one-shot guard)', async () => {
+      const tokenProvider = vi.fn().mockResolvedValue('same');
+      client.setTokenProvider(tokenProvider);
+      const onAuthFailure = vi.fn();
+      client.setOnAuthFailure(onAuthFailure);
+
+      // Every fetch is a dead-session 401, and the refresh always returns the same token.
+      fetchMock.mockResolvedValue(errorJsonResponse(401, { message: 'token expired' }));
+
+      await expect(client.get('/first')).rejects.toMatchObject({ status: 401 });
+      await expect(client.get('/second')).rejects.toMatchObject({ status: 401 });
+
+      // The authFailureFired latch must suppress the second callback: redirect-to-login
+      // fires once per client, not once per failed request.
+      expect(onAuthFailure).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not consult the provider or retry on a 401 when skipAuth is set', async () => {
+      const tokenProvider = vi.fn().mockResolvedValue('tok');
+      client.setTokenProvider(tokenProvider);
+
+      fetchMock.mockResolvedValueOnce(errorJsonResponse(401, { message: 'nope' }));
+
+      await expect(client.get('/public', { skipAuth: true })).rejects.toMatchObject({ status: 401 });
+
+      // skipAuth bypasses the 401-refresh branch entirely: one fetch, provider never called.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(tokenProvider).not.toHaveBeenCalled();
+    });
+  });
 });

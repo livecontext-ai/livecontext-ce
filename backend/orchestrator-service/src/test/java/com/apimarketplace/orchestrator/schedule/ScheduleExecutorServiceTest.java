@@ -23,8 +23,13 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
+import java.lang.management.ManagementFactory;
+import java.lang.management.MemoryMXBean;
+import java.lang.management.MemoryPoolMXBean;
+import java.lang.management.MemoryUsage;
 import java.lang.reflect.Method;
 import java.time.Instant;
+import java.util.OptionalLong;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -70,9 +75,10 @@ class ScheduleExecutorServiceTest {
         service.setSpreadDispatcherForTesting((task, delayMs) -> task.run());
         // Disable heap-pressure backpressure for the default test fixture by raising
         // the threshold above any achievable heap utilisation. Tests that exercise
-        // backpressure explicitly use a Mockito spy on isHeapUnderPressure(). Without
-        // this, the test JVM's natural heap utilisation (often >85% under mvn surefire
-        // defaults) would trigger the whole-tick skip and break unrelated tests.
+        // backpressure explicitly use a Mockito spy on isHeapUnderPressure() or inject
+        // a HeapUsageReader. The gate now measures the POST-GC live set (not the
+        // instantaneous G1 sawtooth peak), but keeping the fixture's gate hard-disabled
+        // stays robust across CI JVMs regardless of their heap sizing.
         java.lang.reflect.Field thresholdField = ScheduleExecutorService.class
             .getDeclaredField("heapPressureThreshold");
         thresholdField.setAccessible(true);
@@ -1545,6 +1551,254 @@ class ScheduleExecutorServiceTest {
             verify(triggerClient).recordScheduleExecution(SCHEDULE_ID);
             verify(conversationServiceClient, never()).findOrCreateAgentConversation(any(), any(), any(), any());
             verify(conversationServiceClient, never()).sendChatSync(any(), any(), any(), any(), any(), any(), any(), any(), any());
+        }
+    }
+
+    // ==================== Heap-pressure signal (post-GC live set) ====================
+    //
+    // Regression for the chronic false cron-tick skips + WorkflowScheduleTickSkippedUnderPressure
+    // alert spam. The gate used to read the INSTANTANEOUS heap (getHeapMemoryUsage().getUsed()),
+    // which is the top of the G1 allocation sawtooth (live set + uncollected Eden garbage) and
+    // routinely reads >85% on a healthy JVM. Prod telemetry 2026-07-01 (orchestrator, Xmx 1536m):
+    // instantaneous heap peaked at 99.6% of Xmx over 7 days while the POST-GC live set never
+    // exceeded 40.3% and GC overhead peaked at 0.75%, with zero OOMKills/restarts - yet ~62 cron
+    // ticks/day were skipped. The gate now measures the post-GC live set (sum of the heap pools'
+    // getCollectionUsage()), so it only backs off under genuine pressure.
+
+    @Nested
+    @DisplayName("Heap-pressure signal - post-GC live set, not the instantaneous G1 sawtooth peak")
+    class HeapPressureSignalTests {
+
+        private void setThreshold(double v) {
+            try {
+                java.lang.reflect.Field f = ScheduleExecutorService.class.getDeclaredField("heapPressureThreshold");
+                f.setAccessible(true);
+                f.setDouble(service, v);
+            } catch (ReflectiveOperationException e) {
+                throw new RuntimeException(e);
+            }
+        }
+
+        private ScheduleExecutorService.HeapUsageReader reader(long liveSetBytes, long maxBytes) {
+            return new ScheduleExecutorService.HeapUsageReader() {
+                @Override public long liveSetBytes() { return liveSetBytes; }
+                @Override public long maxBytes() { return maxBytes; }
+            };
+        }
+
+        @Test
+        @DisplayName("sumPostGcHeapUsed reads getCollectionUsage() (post-GC) and NEVER getUsage() (instantaneous)")
+        void sumsPostGcCollectionUsageAndIgnoresInstantaneous() {
+            // Eden emptied at its last young GC (post-GC used=0) though instantaneously
+            // near-full; Old Gen live=120M. The gate's numerator must be 120M (the live
+            // set), NOT the ~470M instantaneous sawtooth peak - so getUsage() is never read.
+            MemoryPoolMXBean eden = mock(MemoryPoolMXBean.class);
+            when(eden.getCollectionUsage()).thenReturn(new MemoryUsage(0, 0, 300_000_000L, 300_000_000L));
+            MemoryPoolMXBean oldGen = mock(MemoryPoolMXBean.class);
+            when(oldGen.getCollectionUsage()).thenReturn(new MemoryUsage(0, 120_000_000L, 200_000_000L, 1_200_000_000L));
+
+            OptionalLong postGc = ScheduleExecutorService.sumPostGcHeapUsed(List.of(eden, oldGen));
+
+            assertThat(postGc).as("live set = post-GC collection usage, not instantaneous")
+                .hasValue(120_000_000L);
+            verify(eden, never()).getUsage();
+            verify(oldGen, never()).getUsage();
+        }
+
+        @Test
+        @DisplayName("Some pools report collection usage → present sum; null pools contribute 0, no NPE")
+        void nullCollectionUsageContributesZeroButSumStillPresent() {
+            MemoryPoolMXBean noColl = mock(MemoryPoolMXBean.class);
+            when(noColl.getCollectionUsage()).thenReturn(null);
+            MemoryPoolMXBean withColl = mock(MemoryPoolMXBean.class);
+            when(withColl.getCollectionUsage()).thenReturn(new MemoryUsage(0, 50_000_000L, 100_000_000L, 100_000_000L));
+
+            assertThat(ScheduleExecutorService.sumPostGcHeapUsed(List.of(noColl, withColl)))
+                .hasValue(50_000_000L);
+        }
+
+        @Test
+        @DisplayName("NO pool reports collection usage (ZGC-like) → empty, so the caller falls back to instantaneous")
+        void allNullCollectionUsageIsEmpty() {
+            MemoryPoolMXBean a = mock(MemoryPoolMXBean.class);
+            when(a.getCollectionUsage()).thenReturn(null);
+            MemoryPoolMXBean b = mock(MemoryPoolMXBean.class);
+            when(b.getCollectionUsage()).thenReturn(null);
+
+            assertThat(ScheduleExecutorService.sumPostGcHeapUsed(List.of(a, b))).isEmpty();
+        }
+
+        @Test
+        @DisplayName("Empty pool list → empty (no data, not 0 live bytes)")
+        void emptyPoolListIsEmpty() {
+            assertThat(ScheduleExecutorService.sumPostGcHeapUsed(List.of())).isEmpty();
+        }
+
+        @Test
+        @DisplayName("Live set 40% of Xmx (the real prod peak, while instantaneous was 92%) is NOT under pressure at 85%")
+        void liveSet40PercentIsHealthy() {
+            setThreshold(0.85);
+            service.setHeapUsageReaderForTesting(reader(40, 100));
+            assertThat(service.isHeapUnderPressure()).isFalse();
+        }
+
+        @Test
+        @DisplayName("Live set above threshold IS under pressure (safety property preserved)")
+        void liveSetAboveThresholdIsUnderPressure() {
+            setThreshold(0.85);
+            service.setHeapUsageReaderForTesting(reader(90, 100));
+            assertThat(service.isHeapUnderPressure()).isTrue();
+        }
+
+        @Test
+        @DisplayName("Live set exactly at threshold is NOT under pressure (strictly-greater comparison)")
+        void liveSetAtThresholdBoundaryIsNotUnderPressure() {
+            setThreshold(0.85);
+            service.setHeapUsageReaderForTesting(reader(85, 100));
+            assertThat(service.isHeapUnderPressure()).isFalse();
+        }
+
+        @Test
+        @DisplayName("Undefined Xmx (max<=0) is treated as no pressure (never blocks the tick)")
+        void undefinedMaxIsNotUnderPressure() {
+            setThreshold(0.85);
+            service.setHeapUsageReaderForTesting(reader(999, -1));
+            assertThat(service.isHeapUnderPressure()).isFalse();
+        }
+
+        @Test
+        @DisplayName("Genuine live-set pressure skips the whole tick BEFORE claiming (end-to-end through the real gate)")
+        void genuinePressureSkipsTickThroughInjectedReader() {
+            setThreshold(0.85);
+            service.setHeapUsageReaderForTesting(reader(95, 100));
+
+            service.checkAndExecuteSchedules();
+
+            // Same invariant as the spy-based test, but exercised through the real
+            // isHeapUnderPressure() + injected reader (no method stub).
+            verify(triggerClient, never()).claimAndAdvanceDueSchedules(any(Instant.class));
+            assertThat(service.getTicksSkippedUnderPressure()).isEqualTo(1L);
+        }
+
+        @Test
+        @DisplayName("Healthy live set proceeds to claim schedules (no false skip)")
+        void healthyLiveSetProceedsToClaim() {
+            setThreshold(0.85);
+            service.setHeapUsageReaderForTesting(reader(40, 100));
+            when(triggerClient.claimAndAdvanceDueSchedules(any(Instant.class)))
+                .thenReturn(Collections.emptyList());
+
+            service.checkAndExecuteSchedules();
+
+            verify(triggerClient).claimAndAdvanceDueSchedules(any(Instant.class));
+            assertThat(service.getTicksSkippedUnderPressure()).isZero();
+        }
+
+        // --- Production reader (MxBeanHeapUsageReader): post-GC on G1, instantaneous fallback on ZGC ---
+
+        @Test
+        @DisplayName("Production reader on a G1-like JVM uses the post-GC live set (ignores instantaneous getUsed)")
+        void productionReaderUsesPostGcWhenCollectionUsagePresent() {
+            // Heap pools report collection usage (G1 behaviour): live set = post-GC sum,
+            // and the instantaneous getHeapMemoryUsage() is NOT consulted for the numerator.
+            MemoryPoolMXBean oldGen = mock(MemoryPoolMXBean.class);
+            when(oldGen.getCollectionUsage()).thenReturn(new MemoryUsage(0, 200_000_000L, 300_000_000L, 1_500_000_000L));
+            MemoryMXBean mx = mock(MemoryMXBean.class);
+            // Instantaneous heap is high (sawtooth peak) - must be ignored for the numerator.
+            when(mx.getHeapMemoryUsage()).thenReturn(new MemoryUsage(0, 1_400_000_000L, 1_500_000_000L, 1_500_000_000L));
+
+            ScheduleExecutorService.MxBeanHeapUsageReader reader =
+                new ScheduleExecutorService.MxBeanHeapUsageReader(List.of(oldGen), mx);
+
+            assertThat(reader.liveSetBytes()).as("post-GC live set, not the 1.4G instantaneous peak")
+                .isEqualTo(200_000_000L);
+            assertThat(reader.maxBytes()).isEqualTo(1_500_000_000L);
+        }
+
+        @Test
+        @DisplayName("Production reader on a ZGC-like JVM (no collection usage) FALLS BACK to instantaneous - gate stays armed")
+        void productionReaderFallsBackToInstantaneousWhenNoCollectionUsage() {
+            // ZGC generational (CE monolith) may not expose getCollectionUsage(). Without
+            // the fallback the numerator would be 0 and the OOM gate silently disabled;
+            // the reader must instead report the instantaneous heap so pressure is still seen.
+            MemoryPoolMXBean zPool = mock(MemoryPoolMXBean.class);
+            when(zPool.getCollectionUsage()).thenReturn(null);
+            MemoryMXBean mx = mock(MemoryMXBean.class);
+            when(mx.getHeapMemoryUsage()).thenReturn(new MemoryUsage(0, 900_000_000L, 1_000_000_000L, 1_000_000_000L));
+
+            ScheduleExecutorService.MxBeanHeapUsageReader reader =
+                new ScheduleExecutorService.MxBeanHeapUsageReader(List.of(zPool), mx);
+
+            assertThat(reader.liveSetBytes()).as("falls back to instantaneous getUsed()")
+                .isEqualTo(900_000_000L);
+        }
+
+        @Test
+        @DisplayName("LIVE JVM e2e: real production reader + real gate + real counter - skip at threshold~0, proceed at threshold>1")
+        void liveJvmGateEndToEndThroughRealReader() throws Exception {
+            // No injected reader and no mocked pools: this service uses the real
+            // MxBeanHeapUsageReader against THIS JVM's actual heap pools + MemoryMXBean,
+            // and the real Micrometer-backed counter. This is the live-orchestrator gate
+            // exercised end-to-end; each branch is forced deterministically via the
+            // configurable threshold rather than by inducing real memory pressure.
+            System.gc(); // best-effort: populate post-GC collection usage deterministically
+
+            io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+            ScheduleExecutorService live = new ScheduleExecutorService(
+                triggerClient, workflowRepository, runRepository, triggerService,
+                productionRunResolver, agentClient, conversationServiceClient, registry);
+            live.setSpreadDispatcherForTesting((task, delayMs) -> task.run());
+            when(triggerClient.claimAndAdvanceDueSchedules(any(Instant.class)))
+                .thenReturn(Collections.emptyList());
+
+            java.lang.reflect.Field thresholdField =
+                ScheduleExecutorService.class.getDeclaredField("heapPressureThreshold");
+            thresholdField.setAccessible(true);
+
+            // Show the live numbers this JVM's real reader produces (post-GC live set
+            // vs instantaneous) - the same relationship prod Prometheus showed (40% vs 99%).
+            long instantaneous = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed();
+            ScheduleExecutorService.MxBeanHeapUsageReader realReader =
+                new ScheduleExecutorService.MxBeanHeapUsageReader(
+                    ManagementFactory.getMemoryPoolMXBeans().stream()
+                        .filter(p -> p.getType() == java.lang.management.MemoryType.HEAP).toList(),
+                    ManagementFactory.getMemoryMXBean());
+            long liveSet = realReader.liveSetBytes();
+            long max = realReader.maxBytes();
+            System.out.printf("[live-jvm-e2e] post-GC live set=%d MB, instantaneous=%d MB, Xmx=%d MB%n",
+                liveSet / 1_048_576, instantaneous / 1_048_576, max / 1_048_576);
+            assertThat(liveSet).as("real live set is a positive value on a running JVM").isPositive();
+            assertThat(liveSet).as("live set cannot exceed Xmx").isLessThanOrEqualTo(max);
+
+            // Branch 1 - threshold ~0: any positive live set trips the gate -> whole tick skipped,
+            // claimAndAdvanceDueSchedules never reached.
+            thresholdField.setDouble(live, 0.0);
+            live.checkAndExecuteSchedules();
+            verify(triggerClient, times(0)).claimAndAdvanceDueSchedules(any(Instant.class));
+            assertThat(live.getTicksSkippedUnderPressure()).as("gate fired on the real JVM").isEqualTo(1L);
+
+            // Branch 2 - threshold > 1: live set / Xmx can never exceed 1 -> tick proceeds to claim.
+            thresholdField.setDouble(live, 2.0);
+            live.checkAndExecuteSchedules();
+            assertThat(live.getTicksSkippedUnderPressure()).as("no additional skip when threshold is unreachable").isEqualTo(1L);
+            verify(triggerClient, times(1)).claimAndAdvanceDueSchedules(any(Instant.class));
+        }
+
+        @Test
+        @DisplayName("Production reader: a present-but-ZERO post-GC reading also falls back to instantaneous")
+        void productionReaderFallsBackWhenPostGcReadsZero() {
+            // Defends against a collector that returns a non-null collection usage that is
+            // always 0 - treating that as "0% live" would silently disable the gate too.
+            MemoryPoolMXBean zeroPool = mock(MemoryPoolMXBean.class);
+            when(zeroPool.getCollectionUsage()).thenReturn(new MemoryUsage(0, 0, 1_000_000_000L, 1_000_000_000L));
+            MemoryMXBean mx = mock(MemoryMXBean.class);
+            when(mx.getHeapMemoryUsage()).thenReturn(new MemoryUsage(0, 950_000_000L, 1_000_000_000L, 1_000_000_000L));
+
+            ScheduleExecutorService.MxBeanHeapUsageReader reader =
+                new ScheduleExecutorService.MxBeanHeapUsageReader(List.of(zeroPool), mx);
+
+            assertThat(reader.liveSetBytes()).isEqualTo(950_000_000L);
         }
     }
 }

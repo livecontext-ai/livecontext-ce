@@ -184,6 +184,48 @@ class MonolithSecurityFilterInternalPathTest {
         assertThat(captured.get()).isNull();
     }
 
+    @Test
+    @DisplayName("loopback remoteAddr with an RFC 7239 Forwarded header is treated as proxied and BLOCKED (404)")
+    void loopbackWithRfc7239ForwardedHeaderIsBlocked() throws Exception {
+        // The RFC 7239 `Forwarded` header is the third proxy marker isLoopbackRequest inspects (after
+        // X-Forwarded-For and X-Real-IP). A genuine in-process call never sets it, so its presence on
+        // a 127.0.0.1 origin marks the request as relayed by a same-host reverse proxy and must drop
+        // loopback trust, leaving the internal surface 404-blocked.
+        MonolithSecurityFilter filter = new MonolithSecurityFilter(() -> null, List.of());
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/internal/credentials/access-token");
+        request.setRemoteAddr("127.0.0.1");
+        request.setQueryString("userId=victim&name=stripe");
+        request.addHeader("Forwarded", "for=203.0.113.10;proto=https");
+        request.addHeader("X-User-ID", "999"); // forged by the external client
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+        filter.doFilter(request, response, capturingChain(captured));
+
+        assertThat(response.getStatus()).as("Forwarded-header loopback must be 404-blocked").isEqualTo(404);
+        assertThat(response.getContentAsString()).isEqualTo(FILTER_404_BODY);
+        assertThat(captured.get()).as("proxied loopback must not reach the internal credential endpoint").isNull();
+    }
+
+    @Test
+    @DisplayName("null remoteAddr is treated as non-loopback (external) and BLOCKED on internal paths (404)")
+    void nullRemoteAddrIsTreatedAsExternalAndBlocked() throws Exception {
+        // isLoopbackRequest returns false when getRemoteAddr() is null/blank, so the request is held to
+        // the external rules and the internal credential surface is 404-blocked rather than trusted.
+        MonolithSecurityFilter filter = new MonolithSecurityFilter(() -> null, List.of());
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/internal/credentials/access-token");
+        request.setRemoteAddr(null);
+        request.setQueryString("userId=victim&name=stripe");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+        filter.doFilter(request, response, capturingChain(captured));
+
+        assertThat(response.getStatus()).as("null remoteAddr must not inherit loopback trust").isEqualTo(404);
+        assertThat(response.getContentAsString()).isEqualTo(FILTER_404_BODY);
+        assertThat(captured.get()).isNull();
+    }
+
     // ── Allowlist boundary: trailing-slash precision + header-strip defence on a wide prefix ──
 
     @Test

@@ -3201,7 +3201,7 @@
       "reconnectAriaLabel": "重新连接 {name}",
       "reconnectRequiredHint": "此连接的授权已过期或被撤销。点击重新连接以重新执行 OAuth 流程。",
       "reconnectHintByokDeleted": "您删除了此连接使用的自定义 OAuth 应用。已授予的权限范围保留作为参考，但令牌已被撤销。点击重新连接以重新授权，或再次使用您自己的 OAuth 应用。",
-      "reconnectHintTokenRevoked": "提供商已撤销此连接的刷新令牌（密码更改、应用从您的账户中移除、范围被收回等）。点击重新连接以重新授权。",
+      "reconnectHintTokenRevoked": "提供商已撤销此连接的刷新令牌（密码更改、应用从您的账户中移除、范围被收回等）。点击重新连接以重新授权。如果重新连接在几小时后仍然失败，此集成的 OAuth 应用可能未获批准使用其全部权限；请联系您的工作区管理员或支持人员。",
       "reconnectHintConfigError": "此连接因管理员需要修复的配置问题而失败（client secret 无效、OAuth 应用缺少范围等）。仅靠重新连接无法解决。",
       "connectionError": "连接错误",
       "connectionErrorHint": "管理员需要修复此凭据。请联系支持。",

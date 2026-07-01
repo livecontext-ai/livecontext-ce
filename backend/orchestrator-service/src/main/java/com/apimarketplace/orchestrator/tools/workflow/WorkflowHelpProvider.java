@@ -301,7 +301,7 @@ public class WorkflowHelpProvider {
             "syntax", "workflow(action='add_node', type='interface', label='...', params={interface_id: '<uuid>', variable_mapping: {...}, action_mapping: {...}, isEntryInterface: true|false, generateScreenshot: true|false, exposeRenderedSource: true|false}, connect_after='...')",
             "interface_id", "REQUIRED. UUID returned by interface(action='create').",
             "isEntryInterface", "OPTIONAL boolean (default false). true = main page shown first in Application Mode. Only ONE interface per app should be marked entry.",
-            "generateScreenshot", "OPTIONAL boolean (default false). true → adds a `screenshot` FileRef to output (PNG of the rendered page, 1280x800). Downstream consumers: email attachment, Telegram photo, agent image input. Reference: {{interface:<label>.output.screenshot}}. Best-effort: capture failure leaves the field absent, workflow continues.",
+            "generateScreenshot", "OPTIONAL boolean (default false). true → adds a `screenshot` FileRef to output (PNG of the rendered page, 1280x800). To USE it, map the WHOLE FileRef into a file-accepting tool param to upload it: e.g. Telegram send_photo 'photo': '{{interface:<label>.output.screenshot}}', an email attachment, or an agent image input. Pass the object itself, NOT .path or .id. Best-effort: capture failure leaves the field absent, workflow continues.",
             "exposeRenderedSource", "OPTIONAL boolean (default false). true → adds 3 string outputs `rendered_html`, `rendered_css`, `rendered_js` (the exact templates the iframe shows, HTML with {{var|default}} substituted via variable_mapping). Downstream consumers: email body, agent text input, debug logs. References: {{interface:<label>.output.rendered_html}}, .rendered_css, .rendered_js. Each capped at 256 KB. Best-effort: render failure leaves the fields absent, workflow continues.",
             "param_naming", "All boolean params accept BOTH conventions: camelCase (canonical: isEntryInterface, generateScreenshot, exposeRenderedSource) and snake_case aliases (is_entry_interface, generate_screenshot, expose_rendered_source). Pick one and stick to it; the validator accepts either."
         ));
@@ -313,6 +313,8 @@ public class WorkflowHelpProvider {
             "images", "Use download_file/sftp/convert_to_file/compression BEFORE interface. Map `output.file` (canonical FileRef) → <img src=\"{{photo}}\"/>. " +
                 "The FileRef object is auto-rewritten to a tokenised URL (auth'd app) or an HMAC-signed URL (marketplace + share preview for anonymous visitors). " +
                 "No legacy `file_url` - these nodes emit only `file` as the canonical FileRef.",
+            "file_params", "Sending a file to an mcp: API tool that takes one (Telegram send_photo `photo`/send_document `document`, etc.): map the WHOLE FileRef into that param, e.g. {'photo': '{{interface:card.output.screenshot}}'} or {'document': '{{core:dl.output.file}}'}. " +
+                "The platform uploads the bytes for you. A plain string in the same param is sent verbatim = a public URL or the provider's own file id. Map the object, never .path or .id.",
             "BEST_PRACTICE", "Prefer variable_mapping for scalars (visible in builder). js_template only for arrays/JSON parsing. " +
                 "Agent response is STRING - sub-field access won't work. Map whole response, parse in js_template."
         ));

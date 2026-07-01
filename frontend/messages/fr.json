@@ -3433,7 +3433,7 @@
       "reconnectAriaLabel": "Reconnecter {name}",
       "reconnectRequiredHint": "L'autorisation de cette connexion a expiré ou a été révoquée. Cliquez sur Reconnecter pour relancer le flux OAuth.",
       "reconnectHintByokDeleted": "Vous avez supprimé l'application OAuth personnalisée que cette connexion utilisait. Les scopes accordés sont conservés à titre indicatif, mais les jetons ont été révoqués. Cliquez sur Reconnecter pour réautoriser, ou réutilisez votre propre application OAuth.",
-      "reconnectHintTokenRevoked": "Le fournisseur a révoqué le refresh token de cette connexion (changement de mot de passe, application retirée de votre compte, scope retiré, etc.). Cliquez sur Reconnecter pour réautoriser.",
+      "reconnectHintTokenRevoked": "Le fournisseur a révoqué le refresh token de cette connexion (changement de mot de passe, application retirée de votre compte, scope retiré, etc.). Cliquez sur Reconnecter pour réautoriser. Si la reconnexion échoue à nouveau au bout de quelques heures, l'application OAuth de cette intégration n'est peut-être pas approuvée pour toutes ses permissions ; contactez l'administrateur de votre espace de travail ou le support.",
       "reconnectHintConfigError": "Cette connexion a échoué à cause d'un problème de configuration qu'un administrateur doit corriger (client secret invalide, scope manquant sur l'application OAuth, etc.). Reconnecter seul ne le résoudra pas.",
       "connectionError": "Erreur de connexion",
       "connectionErrorHint": "Un administrateur doit réparer cet identifiant. Contactez le support.",

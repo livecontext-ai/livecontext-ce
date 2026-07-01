@@ -1,5 +1,7 @@
 package com.apimarketplace.agent.service.execution;
 
+import com.apimarketplace.agent.bridge.BridgeAccessDecision;
+import com.apimarketplace.agent.bridge.BridgeAccessDeniedException;
 import com.apimarketplace.agent.bridge.BridgeAccessGuard;
 import com.apimarketplace.agent.client.dto.execution.AgentExecutionRequestDto;
 import com.apimarketplace.agent.client.dto.execution.AgentExecutionResponseDto;
@@ -19,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
@@ -394,6 +397,52 @@ class BridgeLoopDispatcherTest {
             dispatcher.dispatchRaw(request, "ADMIN,USER");
 
             verify(guard).enforce(eq("tenant-1"), eq("ADMIN,USER"), eq("claude-code"), anyBoolean());
+        }
+
+        @Test
+        @DisplayName("guard denies admin_only for a non-admin → propagates BridgeAccessDeniedException and never dispatches to the bridge")
+        void adminOnlyDenialPropagatesAndSkipsBridge() {
+            // The non-bridge path gates inside LLMProviderFactory; dispatchRaw bypasses
+            // the factory, so the guard MUST short-circuit here. When the admin_only
+            // policy denies a non-admin caller (reason admin_only_requires_admin_role),
+            // dispatchRaw has to surface the typed BridgeAccessDeniedException so
+            // GlobalExceptionHandler can map it to 403, and it must NOT forward the
+            // request to the bridge client (no subscription drain on a denied call).
+            BridgeAccessGuard guard = org.mockito.Mockito.mock(BridgeAccessGuard.class);
+            dispatcher.setBridgeAccessGuard(guard);
+
+            AgentExecutionRequestDto request = new AgentExecutionRequestDto(
+                "Hi", "system", "claude-code", "claude-sonnet-4-6",
+                0.7, 4096,
+                null, false, null, 10, 600,
+                null,
+                "tenant-1", null, null, null, null,
+                null,
+                null, null, null,
+                null, null,
+                null, null, null, null,
+                null, null,
+                "agent-1",
+                null, null, null,
+                null, null,
+                null,  // executionId
+                null,  // source
+                null,  // reasoningEffort
+                null   // enabledModules
+            );
+
+            // Non-admin "USER" hits the admin_only policy → typed denial.
+            org.mockito.Mockito.doThrow(
+                    new BridgeAccessDeniedException("claude-code", BridgeAccessDecision.REASON_NOT_ADMIN))
+                .when(guard).enforce(eq("tenant-1"), eq("USER"), eq("claude-code"), anyBoolean());
+
+            assertThatThrownBy(() -> dispatcher.dispatchRaw(request, "USER"))
+                .isInstanceOf(BridgeAccessDeniedException.class)
+                .satisfies(ex -> assertThat(((BridgeAccessDeniedException) ex).getReason())
+                    .isEqualTo(BridgeAccessDecision.REASON_NOT_ADMIN));
+
+            // The denial must abort before forwarding to the bridge.
+            verify(bridgeClient, org.mockito.Mockito.never()).execute(any());
         }
     }
 }

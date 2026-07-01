@@ -35,12 +35,15 @@ import org.springframework.beans.factory.annotation.Value;
 
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
+import java.lang.management.MemoryPoolMXBean;
+import java.lang.management.MemoryType;
 import java.lang.management.MemoryUsage;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -131,6 +134,18 @@ public class ScheduleExecutorService {
      * {@code advanceSchedule} → deferred schedules were silently lost for up to a
      * full cron interval (audit 2026-05-06 P0 #1).
      *
+     * <p><b>Measured against the POST-GC live set, not instantaneous heap.</b> The
+     * fraction compared here is the post-GC working set (see {@link #isHeapUnderPressure()}),
+     * because instantaneous {@code getHeapMemoryUsage().getUsed()} is the TOP of the G1
+     * allocation sawtooth (live set + Eden garbage not yet collected) and routinely
+     * sits above this threshold on a perfectly healthy JVM. Prod telemetry 2026-07-01
+     * (orchestrator, Xmx 1536m): instantaneous heap peaked at 99.6% of Xmx over 7 days
+     * while the post-GC live set never exceeded 40.3% and GC overhead peaked at 0.75%,
+     * with zero OOMKills or restarts - yet the old instantaneous gate skipped ~62 cron
+     * ticks/day for no real memory reason. The live set is what actually predicts Xmx
+     * exhaustion (the May 2026 OOMs genuinely drove it toward the ceiling), so it is the
+     * correct signal to back off on.
+     *
      * <p>Default 0.85 (85%). Configurable via
      * {@code schedule.heap-pressure-threshold}.
      */
@@ -138,6 +153,69 @@ public class ScheduleExecutorService {
     private double heapPressureThreshold;
 
     private final MemoryMXBean memoryMXBean = ManagementFactory.getMemoryMXBean();
+
+    /**
+     * Seam over the two JVM readings the heap-pressure gate needs: the POST-GC live
+     * heap set (numerator) and the heap max / Xmx (denominator). Production reads the
+     * MXBeans; tests inject deterministic values. {@code volatile} so a test override
+     * is safely published. See {@link #isHeapUnderPressure()} for why post-GC.
+     */
+    interface HeapUsageReader {
+        /** Best available estimate of the live working set (post-GC where the collector exposes it). */
+        long liveSetBytes();
+        /** Maximum heap size (Xmx). */
+        long maxBytes();
+    }
+
+    private volatile HeapUsageReader heapUsageReader = new MxBeanHeapUsageReader(
+            ManagementFactory.getMemoryPoolMXBeans().stream()
+                    .filter(p -> p.getType() == MemoryType.HEAP)
+                    .toList(),
+            memoryMXBean);
+
+    /**
+     * Production {@link HeapUsageReader}: live set = the POST-GC ("collection") usage
+     * summed across the heap pools, with an INSTANTANEOUS fallback when the running
+     * collector does not expose post-GC usage.
+     *
+     * <p><b>Why the fallback.</b> {@code getUsed()} is defined under every collector,
+     * but {@code getCollectionUsage()} is per-pool and may be absent (returns
+     * {@code null}) - notably the CE monolith ships generational ZGC
+     * ({@code -XX:+UseZGC -XX:+ZGenerational}, see monolith Dockerfile), whose pools do
+     * not reliably record discrete post-collection points. Without a fallback, an
+     * empty post-GC sum would read as 0 and the OOM backpressure gate - the whole point
+     * of this class - would be silently disabled on the most memory-constrained
+     * deployment. When no pool reports collection usage we degrade to the instantaneous
+     * heap (the pre-2026-07 behaviour): conservative (may over-skip), never unsafe.
+     * On G1 (prod orchestrator) collection usage is always present, so the fallback is
+     * never taken there.
+     */
+    static final class MxBeanHeapUsageReader implements HeapUsageReader {
+        private final List<MemoryPoolMXBean> heapPools;
+        private final MemoryMXBean memoryMXBean;
+
+        MxBeanHeapUsageReader(List<MemoryPoolMXBean> heapPools, MemoryMXBean memoryMXBean) {
+            this.heapPools = heapPools;
+            this.memoryMXBean = memoryMXBean;
+        }
+
+        @Override
+        public long liveSetBytes() {
+            long postGc = sumPostGcHeapUsed(heapPools).orElse(0L);
+            // A POSITIVE post-GC reading is the true live set - use it. A 0 / absent
+            // reading means the running collector does not expose usable post-collection
+            // usage (e.g. generational ZGC on the CE monolith); degrade to the
+            // instantaneous heap so the OOM gate stays armed rather than reading 0% and
+            // never firing. A running orchestrator's live set is always well above 0, so
+            // this only trips on genuinely-no-data, never on a healthy low live set.
+            return postGc > 0L ? postGc : memoryMXBean.getHeapMemoryUsage().getUsed();
+        }
+
+        @Override
+        public long maxBytes() {
+            return memoryMXBean.getHeapMemoryUsage().getMax();
+        }
+    }
 
     /** Cumulative count of cron ticks SKIPPED under heap pressure (entire tick). */
     private final AtomicLong ticksSkippedUnderPressure = new AtomicLong(0);
@@ -223,23 +301,75 @@ public class ScheduleExecutorService {
     }
 
     /**
-     * Reads JVM heap utilization (used / max). Returns true when above the
-     * configured backpressure threshold. Package-private to support deterministic
-     * test mocking via Mockito spy without stubbing the MemoryMXBean singleton.
+     * Reads JVM heap pressure as the POST-GC live working set over Xmx, returning
+     * true when it exceeds the configured backpressure threshold.
+     *
+     * <p>Deliberately NOT {@code getHeapMemoryUsage().getUsed() / getMax()}: that
+     * instantaneous ratio is the top of the G1 allocation sawtooth (live set + Eden
+     * garbage the collector has not reclaimed yet) and routinely reads >85% on a
+     * healthy JVM whose true working set is a fraction of that. Prod telemetry
+     * 2026-07-01 confirmed the divergence (instantaneous peak 99.6% vs post-GC live
+     * peak 40.3%, GC overhead peak 0.75%, zero OOMKills) - the old signal skipped
+     * ~62 cron ticks/day for no real memory reason. The post-GC live set (sum of the
+     * heap pools' {@code getCollectionUsage()}, closely related to Micrometer's
+     * {@code jvm_gc_live_data_size_bytes}) is what actually predicts Xmx exhaustion,
+     * so it is the correct thing to back off on. It trips slightly later than the old
+     * garbage-inclusive signal, but at Xmx 1536m the 15% headroom above the 85% live
+     * threshold spans several minutes of real fan-out (the May 2026 OOMs ramped over
+     * ~7 min), which the once-per-minute tick observes.
+     *
+     * <p>Package-private to support deterministic test mocking via Mockito spy
+     * without stubbing the MemoryMXBean singleton.
      */
     boolean isHeapUnderPressure() {
-        MemoryUsage heap = memoryMXBean.getHeapMemoryUsage();
-        long used = heap.getUsed();
-        long max = heap.getMax();
+        HeapUsageReader reader = this.heapUsageReader; // read the volatile once
+        long max = reader.maxBytes();
         if (max <= 0) return false;
-        return ((double) used / (double) max) > heapPressureThreshold;
+        return ((double) reader.liveSetBytes() / (double) max) > heapPressureThreshold;
     }
 
+    /**
+     * Sum of post-GC ("collection") usage across the given heap pools = the live
+     * working set after the JVM's most recent collection of each pool.
+     *
+     * <p>Returns {@link OptionalLong#empty()} when NO pool exposes a collection usage
+     * (every {@code getCollectionUsage()} is {@code null}) - i.e. the running collector
+     * does not record discrete post-collection points. Callers must then fall back to
+     * an instantaneous reading rather than treat "no data" as "0 bytes live", otherwise
+     * the backpressure gate silently disables itself (see {@link MxBeanHeapUsageReader}).
+     * Pools that individually return {@code null} contribute 0 to a sum that is still
+     * present as long as at least one pool reports. Standard collectors are all-or-nothing
+     * across heap pools (G1: all report; ZGC: none), so a partial report is a JVM anomaly;
+     * even then the dangerous sub-case (the pressure-bearing Old Gen not reporting) yields a
+     * sum near 0 and the reader's positive-only guard falls back to the instantaneous heap.
+     *
+     * <p>Static + package-private so a unit test can prove it reads
+     * {@code getCollectionUsage()} (post-GC) and never {@code getUsage()} (instantaneous).
+     */
+    static OptionalLong sumPostGcHeapUsed(List<MemoryPoolMXBean> pools) {
+        long used = 0L;
+        boolean anyReported = false;
+        for (MemoryPoolMXBean pool : pools) {
+            MemoryUsage collectionUsage = pool.getCollectionUsage();
+            if (collectionUsage != null) {
+                anyReported = true;
+                used += collectionUsage.getUsed();
+            }
+        }
+        return anyReported ? OptionalLong.of(used) : OptionalLong.empty();
+    }
+
+    /** Test seam - override the heap readings with deterministic values. */
+    void setHeapUsageReaderForTesting(HeapUsageReader reader) {
+        this.heapUsageReader = reader;
+    }
+
+    /** Post-GC live-set percentage of Xmx, rounded to 0.1%, for the skip log line. */
     private double currentHeapPercent() {
-        MemoryUsage heap = memoryMXBean.getHeapMemoryUsage();
-        long max = heap.getMax();
+        HeapUsageReader reader = this.heapUsageReader; // read the volatile once
+        long max = reader.maxBytes();
         if (max <= 0) return -1.0;
-        return Math.round((double) heap.getUsed() / max * 1000.0) / 10.0;
+        return Math.round((double) reader.liveSetBytes() / max * 1000.0) / 10.0;
     }
 
     /** Test/observability hook - total schedules deferred since boot. */
@@ -338,7 +468,7 @@ public class ScheduleExecutorService {
         // re-picks them.
         if (isHeapUnderPressure()) {
             ticksSkippedUnderPressure.incrementAndGet();
-            logger.warn("[Schedule] Skipping ENTIRE tick due to heap pressure ({}%) - no schedules claimed, will retry at next minute-tick",
+            logger.warn("[Schedule] Skipping ENTIRE tick due to heap pressure (post-GC live set {}% of Xmx) - no schedules claimed, will retry at next minute-tick",
                 currentHeapPercent());
             return;
         }

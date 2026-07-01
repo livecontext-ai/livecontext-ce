@@ -582,8 +582,8 @@ class SendEmailNodeTest {
         @DisplayName("Should create SendEmailNode using builder")
         void shouldCreateSendEmailNodeUsingBuilder() {
             Core.SendEmailConfig config = new Core.SendEmailConfig(
-                "smtp.gmail.com", 587, "user@gmail.com", "app-password", true,
-                "user@gmail.com", "Sender", "recipient@example.com",
+                "smtp.gmail.com", 587, "user@example.com", "app-password", true,
+                "user@example.com", "Sender", "recipient@example.com",
                 null, null, "Test Email", "Hello!", false, null
             , null, null);
 

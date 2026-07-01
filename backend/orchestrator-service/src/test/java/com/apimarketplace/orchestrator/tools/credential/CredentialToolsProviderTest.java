@@ -263,6 +263,43 @@ class CredentialToolsProviderTest {
         assertThat(connected.get(1)).containsEntry("status", "error");
     }
 
+    @Test
+    @DisplayName("a NEEDS_REAUTH credential (revoked OAuth token) is lowercased to the emitted 'needs_reauth' status the agent must handle")
+    void needsReauthStatusLowercased() {
+        // A revoked/expired OAuth credential (e.g. a Google Cloud integration whose
+        // refresh_token Google rejected with invalid_grant) surfaces as needs_reauth.
+        // The tool emits the raw lowercased status, so the agent must be able to see it.
+        when(credentialClient.getAllCredentials(TENANT)).thenReturn(List.of(
+                cred("Google BigQuery", "googlebigquery", "NEEDS_REAUTH", false, null)));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> connected = (List<Map<String, Object>>) data(call()).get("connected");
+        assertThat(connected.get(0)).containsEntry("status", "needs_reauth");
+    }
+
+    @Test
+    @DisplayName("doc/impl parity: description + helpText document ALL emittable statuses incl. needs_reauth, and convey that needs_reauth is user-only (agent cannot fix)")
+    void needsReauthStatusIsDocumented() {
+        // Regression for the doc drift: executeGetUserConnected emits needs_reauth (the
+        // raw lowercased status) but the tool metadata previously listed only
+        // active/expiring/error, so an agent branching on the documented set would
+        // silently mishandle a revoked credential. Assert not just token-presence but
+        // that the meaning is right (user re-authorizes; agent cannot use/fix it) and
+        // that adding needs_reauth did NOT drop any previously-documented status.
+        var tool = provider.getTools().get(0);
+        assertThat(tool.description())
+                .as("description must document every emittable status")
+                .contains("active").contains("expiring").contains("needs_reauth").contains("error");
+        assertThat(tool.helpText())
+                .as("helpText must document every emittable status")
+                .contains("active").contains("expiring").contains("needs_reauth").contains("error");
+        // Semantic guard: a bare contains(\"needs_reauth\") would still pass if the
+        // surrounding sentence were misleading. Pin the actionable meaning.
+        assertThat(tool.helpText())
+                .as("helpText must tell the agent needs_reauth is resolved by the USER, not the agent")
+                .containsPattern("(?s)needs_reauth.*(user|re-authorize|Reconnect)");
+    }
+
     /** Mutable, null-tolerant map builder (Map.of rejects nulls and is immutable). */
     private static Map<String, Object> mapOf(Object... kv) {
         Map<String, Object> m = new HashMap<>();

@@ -57,6 +57,21 @@ class LogSafeBodyTest {
                 .isEqualTo("<no-error-fields>");
     }
 
+    /**
+     * A present-but-non-textual error field (e.g. a numeric HTTP status code) is distinct from an
+     * absent one: stringField() only accepts textual nodes, so a numeric {@code error} value is
+     * treated as missing. With no error_description either, the result is the same
+     * {@code <no-error-fields>} marker, and the numeric value is never echoed into the log line.
+     */
+    @Test
+    @DisplayName("JSON with a numeric error field → <no-error-fields>, value never echoed")
+    void numericErrorFieldIsTreatedAsAbsent() {
+        String result = LogSafeBody.scrub("{\"error\":401}");
+
+        assertThat(result).isEqualTo("<no-error-fields>");
+        assertThat(result).doesNotContain("401");
+    }
+
     @Test
     @DisplayName("standard RFC body → error=code error_description=...")
     void standardRfcBody() {

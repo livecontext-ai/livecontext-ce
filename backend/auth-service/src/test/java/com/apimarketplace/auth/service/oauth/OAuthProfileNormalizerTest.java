@@ -29,7 +29,7 @@ class OAuthProfileNormalizerTest {
         void shouldNormalizeCompleteGoogleProfile() {
             Map<String, Object> attrs = createGoogleAttributes(
                     "123456789",
-                    "john.doe@gmail.com",
+                    "user@example.com",
                     true,
                     "John",
                     "Doe",
@@ -41,7 +41,7 @@ class OAuthProfileNormalizerTest {
 
             assertThat(result.provider()).isEqualTo("google");
             assertThat(result.providerId()).isEqualTo("123456789");
-            assertThat(result.email()).isEqualTo("john.doe@gmail.com");
+            assertThat(result.email()).isEqualTo("user@example.com");
             assertThat(result.emailVerified()).isTrue();
             assertThat(result.firstName()).isEqualTo("John");
             assertThat(result.lastName()).isEqualTo("Doe");

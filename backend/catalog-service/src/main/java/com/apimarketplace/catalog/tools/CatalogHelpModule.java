@@ -231,7 +231,7 @@ public class CatalogHelpModule implements ToolModule {
             Map.entry("body_types", Map.of(
                 "description", "Available request.bodyType values. Pick the one matching the upstream contract.",
                 "json", "Default. Params serialized as JSON.",
-                "multipart", "Multipart form data. Required for file uploads (source='fileRef').",
+                "multipart", "Multipart form data. Required for file uploads. Per-field multipartFields[].source: 'fileRef' (always upload a FileRef param), 'param' (always a text field), 'auto' (polymorphic: FileRef→file upload, object/array→JSON string, scalar→text). Use 'auto' for one field that accepts a file OR a string id/URL under the same name, e.g. Telegram send_photo 'photo'.",
                 "form_urlencoded", "application/x-www-form-urlencoded body.",
                 "raw_binary", "Raw bytes (or fileRef → bytes from MinIO) sent with the declared Content-Type.",
                 "graphql", Map.of(

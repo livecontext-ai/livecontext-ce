@@ -3201,7 +3201,7 @@
       "reconnectAriaLabel": "Reconectar {name}",
       "reconnectRequiredHint": "La autorizacion de esta conexion expiro o fue revocada. Haz clic en Reconectar para volver a ejecutar el flujo OAuth.",
       "reconnectHintByokDeleted": "Eliminaste la aplicacion OAuth personalizada que esta conexion usaba. Los scopes concedidos se conservan a titulo informativo, pero los tokens fueron revocados. Haz clic en Reconectar para reautorizar, o vuelve a usar tu propia aplicacion OAuth.",
-      "reconnectHintTokenRevoked": "El proveedor revoco el refresh token de esta conexion (cambio de contrasena, app retirada de tu cuenta, scope eliminado, etc.). Haz clic en Reconectar para reautorizar.",
+      "reconnectHintTokenRevoked": "El proveedor revoco el refresh token de esta conexion (cambio de contrasena, app retirada de tu cuenta, scope eliminado, etc.). Haz clic en Reconectar para reautorizar. Si la reconexion vuelve a fallar al cabo de unas horas, puede que la app OAuth de esta integracion no este aprobada para todos sus permisos; contacta al administrador de tu espacio de trabajo o al soporte.",
       "reconnectHintConfigError": "Esta conexion fallo por un problema de configuracion que debe corregir un administrador (client secret invalido, scope faltante en la aplicacion OAuth, etc.). Reconectar por si solo no lo resolvera.",
       "connectionError": "Error de conexion",
       "connectionErrorHint": "Un administrador debe reparar esta credencial. Contacta con soporte.",

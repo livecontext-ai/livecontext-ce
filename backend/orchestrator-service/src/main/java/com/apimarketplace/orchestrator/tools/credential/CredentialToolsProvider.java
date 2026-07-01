@@ -67,7 +67,7 @@ public class CredentialToolsProvider implements ToolsProvider {
                 Discover which external services the user has connected (Gmail, Slack, Calendar, etc.).
                 Takes NO parameters - just call get_connected_services().
                 Returns: {connected: [{name, integration, status, isDefault, account}], count, hint}.
-                Status: 'active' (ready), 'expiring' (works but token expiring), 'error' (needs reconnection).
+                Status: 'active' (ready), 'expiring' (still works, token expiring soon), 'needs_reauth' (token revoked or expired; only the user can Reconnect, you cannot use or fix it), 'error' (misconfigured; an admin must fix it, reconnecting alone will not help).
                 Only 'isDefault=true' credentials are used when executing tools.
 
                 WHEN TO USE: When uncertain which service the user has (e.g. "check my emails" without specifying Gmail/Outlook).
@@ -92,7 +92,8 @@ public class CredentialToolsProvider implements ToolsProvider {
                 Status values:
                 - active: Ready to use
                 - expiring: Token expiring soon, still works
-                - error: Connection issue, may need reconnection
+                - needs_reauth: Token was revoked or expired. Only the user can re-authorize (Reconnect); you cannot use this credential or fix it yourself.
+                - error: Configuration problem (bad client secret, missing scope). An admin must fix it; reconnecting alone will not resolve it.
                 """)
             .requiresAuth(true)
             .tags(List.of("credential", "discovery", "integration", "oauth"))

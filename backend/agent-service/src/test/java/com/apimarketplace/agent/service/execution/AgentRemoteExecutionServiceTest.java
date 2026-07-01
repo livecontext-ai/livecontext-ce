@@ -443,6 +443,52 @@ class AgentRemoteExecutionServiceTest {
     }
 
     @Test
+    @DisplayName("Streaming routing: conversation format with a non-null streamChannelId opens the CONVERSATION callback factory, never the workflow one")
+    void conversationFormatWithStreamChannelOpensConversationCallbackFactory() {
+        // The base request(...) helper leaves streamChannelId null (only the negative branch
+        // is exercised by conversationFormatWithoutStreamChannelDoesNotOpenConversationStream).
+        // Here streamChannelId is set, so the positive (format == conversation && channel != null)
+        // branch fires and must instantiate the CONVERSATION callback factory.
+        when(agentLoopService.execute(any(AgentLoopContext.class), any(StreamingCallback.class)))
+            .thenReturn(successfulLoopResult());
+
+        service.executeAgent(streamingRequest("conversation", "stream-channel-1"));
+
+        // The WHY: the conversation format must produce flat events on stream:events + ws:conversation,
+        // which is wired by the conversation callback factory called with the run's stream + conversation
+        // identity and model - never the workflow envelope factory.
+        verify(conversationRedisStreamingCallback).forExecution(
+            org.mockito.ArgumentMatchers.eq("stream-channel-1"),
+            org.mockito.ArgumentMatchers.eq("conversation-1"),
+            org.mockito.ArgumentMatchers.eq("deepseek-chat"),
+            org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.isNull(),
+            org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.isNull(),
+            org.mockito.ArgumentMatchers.isNull());
+        verify(redisStreamingCallback, never()).forExecution(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("Streaming routing: workflow format with a non-null streamChannelId opens the WORKFLOW envelope callback factory, never the conversation one")
+    void workflowFormatWithStreamChannelOpensWorkflowCallbackFactory() {
+        // streamingFormat != "conversation" with a non-null streamChannelId takes the second
+        // branch, which must instantiate the WORKFLOW envelope callback factory.
+        when(agentLoopService.execute(any(AgentLoopContext.class), any(StreamingCallback.class)))
+            .thenReturn(successfulLoopResult());
+
+        service.executeAgent(streamingRequest("workflow", "stream-channel-1"));
+
+        // The WHY: the workflow format must produce envelope events on ws:workflow:run, which is
+        // wired by the workflow callback factory called with the run's channel + node/item/iteration
+        // context - never the conversation flat-event factory.
+        verify(redisStreamingCallback).forExecution(
+            org.mockito.ArgumentMatchers.eq("stream-channel-1"),
+            org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.isNull(),
+            org.mockito.ArgumentMatchers.isNull());
+        verify(conversationRedisStreamingCallback, never())
+            .forExecution(any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
     @DisplayName("Bridge returning a null response yields a FAILED 'no response from bridge server' result and publishes FAILED activity")
     void bridgeNullResponseYieldsFailureAndPublishesFailedActivity() {
         String executionId = UUID.randomUUID().toString();
@@ -514,6 +560,56 @@ class AgentRemoteExecutionServiceTest {
 
     private AgentExecutionRequestDto request(Map<String, Object> credentials, String executionId) {
         return request(credentials, executionId, null);
+    }
+
+    /**
+     * A streaming request with an explicit {@code streamingFormat} and a non-null
+     * {@code streamChannelId}, so the POSITIVE callback-routing branch fires. The base
+     * {@link #request} helper leaves streamChannelId null, which only exercises the
+     * negative (no-stream) path - this helper drives the format-to-factory routing.
+     */
+    private AgentExecutionRequestDto streamingRequest(String streamingFormat, String streamChannelId) {
+        return new AgentExecutionRequestDto(
+            "Stream the answer.",
+            "You are a streaming agent.",
+            "deepseek",
+            "deepseek-chat",
+            0.0,
+            320,
+            List.of(),
+            false,
+            10,
+            4,
+            150,
+            null,
+            "tenant-1",
+            null,             // runId
+            null,             // nodeId
+            null,             // variables
+            Map.of(),         // credentials
+            null,             // maxCreditBudget
+            streamChannelId,  // streamChannelId - the field under test
+            null,             // itemIndex
+            null,             // loopIteration
+            "conversation-1", // conversationId
+            streamingFormat,  // streamingFormat - the field under test
+            null,             // parentConversationId
+            null,             // subAgentName
+            null,             // subAgentAvatarUrl
+            null,             // subAgentId
+            null,             // workflowRunId
+            null,             // attachments
+            "agent-1",        // agentEntityId
+            100.0,            // tenantBalance
+            null,             // pricingRates
+            0.0,              // creditsConsumedSoFar
+            null,             // loopIdenticalStop
+            null,             // loopConsecutiveStop
+            UUID.randomUUID().toString(), // executionId
+            null,             // source
+            null,             // reasoningEffort
+            null              // enabledModules
+        );
     }
 
     private AgentExecutionRequestDto request(Map<String, Object> credentials, String executionId, String source) {

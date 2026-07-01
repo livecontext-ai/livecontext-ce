@@ -23,6 +23,7 @@ import java.security.PublicKey;
 import java.security.Signature;
 import java.util.*;
 import java.util.function.Function;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 /**
@@ -76,6 +77,7 @@ public class MonolithSecurityFilter implements Filter {
     private final Supplier<Key> verificationKeySupplier;
     private final List<String> publicPaths;
     private final Function<String, ShareTokenContext> shareTokenResolver;
+    private final LongSupplier nowMillis;
 
     /**
      * @param verificationKeySupplier provides the RSA public key for JWT verification
@@ -88,9 +90,23 @@ public class MonolithSecurityFilter implements Filter {
     public MonolithSecurityFilter(Supplier<Key> verificationKeySupplier,
                                   List<String> publicPaths,
                                   Function<String, ShareTokenContext> shareTokenResolver) {
+        this(verificationKeySupplier, publicPaths, shareTokenResolver, System::currentTimeMillis);
+    }
+
+    /**
+     * Test seam: injects the wall-clock source so the {@code exp == now} expiry boundary can be
+     * exercised deterministically (a real clock rolling a second between token-sign and filter-read
+     * makes that case a rare flake). Production always uses {@link System#currentTimeMillis()} via
+     * the public constructors above.
+     */
+    MonolithSecurityFilter(Supplier<Key> verificationKeySupplier,
+                           List<String> publicPaths,
+                           Function<String, ShareTokenContext> shareTokenResolver,
+                           LongSupplier nowMillis) {
         this.verificationKeySupplier = verificationKeySupplier;
         this.publicPaths = publicPaths != null ? publicPaths : List.of();
         this.shareTokenResolver = shareTokenResolver;
+        this.nowMillis = nowMillis;
     }
 
     @Override
@@ -331,7 +347,7 @@ public class MonolithSecurityFilter implements Filter {
             } else {
                 expSeconds = Long.parseLong(expObj.toString());
             }
-            if (System.currentTimeMillis() / 1000 > expSeconds) {
+            if (nowMillis.getAsLong() / 1000 > expSeconds) {
                 log.debug("JWT expired");
                 return null;
             }

@@ -130,7 +130,12 @@ public class LiteLlmFeedParser {
             if (modelId.startsWith("ft:")) { rejectedFineTuneTemplate++; continue; }
 
             String litellmProvider = strOf(fields.get("litellm_provider"));
-            String ourProvider = PROVIDER_MAP.get(litellmProvider);
+            // Non-model meta blocks in the feed carry no litellm_provider (e.g.
+            // "fallback_generalizations", "sample_spec"). PROVIDER_MAP is an
+            // immutable Map.ofEntries whose get(null) throws NPE, so guard the
+            // null before the lookup and route it through the reject path
+            // instead of crashing the whole sync on one meta entry.
+            String ourProvider = litellmProvider == null ? null : PROVIDER_MAP.get(litellmProvider);
             if (ourProvider == null) { rejectedProvider++; continue; }
 
             // LiteLLM sometimes prefixes ids with the provider namespace

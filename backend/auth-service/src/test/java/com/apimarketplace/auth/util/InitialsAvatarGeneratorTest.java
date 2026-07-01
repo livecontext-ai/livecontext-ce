@@ -78,8 +78,8 @@ class InitialsAvatarGeneratorTest {
     @Test
     @DisplayName("Color: same email always picks the same palette color")
     void colorStableAcrossInvocations() {
-        String a = InitialsAvatarGenerator.pickColor("sarah.lambert.ai@gmail.com");
-        String b = InitialsAvatarGenerator.pickColor("sarah.lambert.ai@gmail.com");
+        String a = InitialsAvatarGenerator.pickColor("user@example.com");
+        String b = InitialsAvatarGenerator.pickColor("user@example.com");
         assertThat(a).isEqualTo(b);
     }
 
@@ -121,8 +121,8 @@ class InitialsAvatarGeneratorTest {
     @DisplayName("SVG: contains picked color in the linearGradient stop")
     void svgEmbedsColor() {
         byte[] svg = InitialsAvatarGenerator.generateSvg(
-                "Sarah", "Lambert", null, "sarah.lambert.ai@gmail.com");
-        String expectedColor = InitialsAvatarGenerator.pickColor("sarah.lambert.ai@gmail.com");
+                "Sarah", "Lambert", null, "user@example.com");
+        String expectedColor = InitialsAvatarGenerator.pickColor("user@example.com");
         assertThat(svgText(svg)).contains("stop-color=\"" + expectedColor + "\"");
     }
 
