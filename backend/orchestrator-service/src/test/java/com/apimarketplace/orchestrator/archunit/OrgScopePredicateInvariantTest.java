@@ -84,6 +84,12 @@ class OrgScopePredicateInvariantTest {
             // comparison, so the documented false-positive remedy is an allow-list entry.
             "PinAwareTriggerSyncService#ensureFormEndpointForWorkflow",
             "PinAwareTriggerSyncService#ensureChatEndpointForWorkflow",
+            // Datasource-subscription sync: reads the workflow's tenant + org only to
+            // copy them into the DatasourceSubscriptionRequest sent to trigger-service
+            // (subscription rows carry owner scope for later event dispatch). Pure
+            // copy, no owner-vs-org comparison - same category as the endpoint
+            // auto-create entries above.
+            "DatasourceSubscriptionSyncService#syncFromPlan",
             // V291 Redis execution queue: factory snapshots the run's tenant + org + role
             // into the queued message for later rehydration. Pure copy, no comparison.
             "QueuedExecutionMessage#fromRun",

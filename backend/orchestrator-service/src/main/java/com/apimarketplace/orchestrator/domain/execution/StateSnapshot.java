@@ -32,6 +32,17 @@ import java.util.Set;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public final class StateSnapshot {
 
+    /**
+     * V2-to-V3 migration sentinel DAG key. Runs migrated from the flat V2 format
+     * (and flat writes that land before any real DAG exists) key their single DAG
+     * under this id. It never receives trigger fires, so nothing can ever close an
+     * epoch that becomes active on it - sentinel-aware call sites below must never
+     * count or reactivate its epochs when real trigger DAGs exist. NOTE: a real
+     * trigger labeled "Default" normalizes to the same key (pre-existing collision,
+     * shared with getDefaultTriggerId and the V164 trigger_id column default).
+     */
+    public static final String DEFAULT_TRIGGER_SENTINEL = "trigger:default";
+
     // Version for backwards compatibility (v3 = multi-DAG)
     private final int version;
 
@@ -813,10 +824,28 @@ public final class StateSnapshot {
 
     /**
      * Check if any DAG has any active epochs.
+     *
+     * <p>Sentinel-aware: when at least one REAL trigger DAG exists, active epochs on
+     * the {@code "trigger:default"} migration sentinel are ignored. The sentinel never
+     * receives trigger fires, so an epoch that leaks onto it (e.g. via a flat-fallback
+     * write during a rerun) can never be closed by any cycle - counting it would pin
+     * this method to {@code true} forever and the run could never re-arm to
+     * WAITING_TRIGGER (the zombie scanner then fails the armed run). A legacy
+     * V2-migrated run whose ONLY DAG is the sentinel keeps its active epochs counted.
      */
     public boolean hasAnyActiveEpoch() {
-        for (DagState ds : dags.values()) {
-            if (ds.hasActiveEpochs()) {
+        boolean hasRealDag = false;
+        for (String key : dags.keySet()) {
+            if (!DEFAULT_TRIGGER_SENTINEL.equals(key)) {
+                hasRealDag = true;
+                break;
+            }
+        }
+        for (var entry : dags.entrySet()) {
+            if (hasRealDag && DEFAULT_TRIGGER_SENTINEL.equals(entry.getKey())) {
+                continue;
+            }
+            if (entry.getValue().hasActiveEpochs()) {
                 return true;
             }
         }
@@ -925,9 +954,63 @@ public final class StateSnapshot {
      * @param nodeIdsToReset the set of node IDs to remove from all tracking sets
      */
     public StateSnapshot resetDag(Set<String> nodeIdsToReset) {
+        return resetDag(nodeIdsToReset, null);
+    }
+
+    /**
+     * Owner-scoped variant of {@link #resetDag(Set)} for step rerun.
+     *
+     * <p>When {@code ownerTriggerId} is known, ONLY the owner DAG goes through the
+     * reset-and-reactivate branches; every other DAG is never reactivated, only stale
+     * copies of the reset nodes are stripped from its current epoch. A rerun executes
+     * outside a trigger fire, so a non-owner epoch reactivated here would never be
+     * closed by any cycle and the run could never re-arm to WAITING_TRIGGER
+     * (multi-trigger workflows). On a legacy sentinel-only run the sentinel itself is
+     * that non-owner DAG: its reset nodes are stripped without reactivation (flat
+     * views still read its dormant current epoch via the no-active-epochs fallback)
+     * and the subsequent ready-marking creates the real owner DAG. {@code null}
+     * keeps the legacy all-DAGs reactivation for callers that do not know the owner
+     * (SBS paths, whose epochs are closed by the SBS cycle management).
+     *
+     * @param nodeIdsToReset the set of node IDs to remove from all tracking sets
+     * @param ownerTriggerId the DAG owning the rerun target; {@code null} = all DAGs
+     */
+    public StateSnapshot resetDag(Set<String> nodeIdsToReset, String ownerTriggerId) {
         Map<String, DagState> newDags = new HashMap<>();
+        boolean hasRealDag = false;
+        for (String key : dags.keySet()) {
+            if (!DEFAULT_TRIGGER_SENTINEL.equals(key)) {
+                hasRealDag = true;
+                break;
+            }
+        }
         for (var entry : dags.entrySet()) {
             DagState ds = entry.getValue();
+            // Never REACTIVATE the "trigger:default" migration sentinel when real
+            // trigger DAGs exist: no trigger fire can ever close a sentinel epoch, so
+            // reactivating it here (the rerun path) would pin hasAnyActiveEpoch() to
+            // true forever and the run could never re-arm to WAITING_TRIGGER. Active
+            // sentinel epochs already leaked by earlier reruns are healed (closed and
+            // pruned - they carry no recoverable work);
+            // real DAGs carry the state the rerun's flat view needs.
+            if (hasRealDag && DEFAULT_TRIGGER_SENTINEL.equals(entry.getKey())) {
+                newDags.put(entry.getKey(), ds.hasActiveEpochs() ? ds.closeAllActiveEpochs() : ds);
+                continue;
+            }
+            // Sibling DAG of an owner-scoped rerun: never reactivate it (a rerun
+            // executes outside a trigger fire, so nothing would ever close a sibling
+            // epoch reactivated here - multi-trigger runs could never re-arm). Only
+            // strip stale copies of the reset nodes, without reactivation.
+            if (ownerTriggerId != null && !ownerTriggerId.equals(entry.getKey())) {
+                EpochState siblingEpoch = ds.currentEpochState();
+                boolean hasStaleNodes = nodeIdsToReset.stream().anyMatch(id ->
+                        siblingEpoch.getCompletedNodeIds().contains(id) || siblingEpoch.getFailedNodeIds().contains(id) ||
+                        siblingEpoch.getSkippedNodeIds().contains(id) ||
+                        siblingEpoch.getReadyNodeIds().contains(id) || siblingEpoch.getAwaitingSignalNodeIds().contains(id));
+                newDags.put(entry.getKey(),
+                        hasStaleNodes ? ds.withCurrentEpochState(siblingEpoch.removeNodes(nodeIdsToReset)) : ds);
+                continue;
+            }
             EpochState es = ds.currentEpochState();
             // Check if any of the nodeIdsToReset are in this epoch's state.
             // P2.3 site 9 - `runningNodeIds` NOT consulted (lives in Redis only post-elide).
@@ -1325,11 +1408,11 @@ public final class StateSnapshot {
             return dags.keySet().iterator().next();
         }
         if (dags.isEmpty()) {
-            return "trigger:default";
+            return DEFAULT_TRIGGER_SENTINEL;
         }
         // Prefer a real trigger over "trigger:default"
         for (String key : dags.keySet()) {
-            if (!"trigger:default".equals(key)) {
+            if (!DEFAULT_TRIGGER_SENTINEL.equals(key)) {
                 return key;
             }
         }
@@ -1420,7 +1503,7 @@ public final class StateSnapshot {
         EpochState epoch = new EpochState(completed, failed, skipped, running, ready, awaiting,
                 branches, loops, splits, Instant.now());
         DagState dagState = new DagState(0, 0, 0, Map.of(0, epoch));
-        return Map.of("trigger:default", dagState);
+        return Map.of(DEFAULT_TRIGGER_SENTINEL, dagState);
     }
 
     private static Map<String, Set<String>> deepCopySetMap(Map<String, Set<String>> original) {

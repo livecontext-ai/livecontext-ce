@@ -77,4 +77,57 @@ class AgentExecutionControllerJsonCompletionTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("empty content");
     }
+
+    // ── Model execution links (third link consumer - compaction summariser gap) ──
+
+    @Test
+    @DisplayName("Honors an API-target execution link: the invoker runs the linked pair, not the requested one")
+    void apiTargetLinkSwapsExecutionPair() {
+        com.apimarketplace.agent.service.ModelExecutionLinkService linkService =
+                org.mockito.Mockito.mock(com.apimarketplace.agent.service.ModelExecutionLinkService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(controller, "executionLinkService", linkService);
+        when(linkService.resolveSingleCompletionTarget("anthropic", "claude-haiku-4-5"))
+                .thenReturn(new com.apimarketplace.agent.service.ModelExecutionLinkService.SingleCompletionTarget(
+                        "openrouter", "anthropic/claude-haiku"));
+        when(invoker.invoke(eq("openrouter"), eq("anthropic/claude-haiku"), eq("s"), eq("u"), eq("t-39")))
+                .thenReturn("{\"summary\":\"ok\"}");
+
+        JsonCompletionRequestDto req = new JsonCompletionRequestDto(
+                "anthropic", "claude-haiku-4-5", "s", "u", "t-39");
+
+        ResponseEntity<JsonCompletionResponseDto> response = controller.executeJsonCompletion(null, req);
+
+        assertThat(response.getBody().content()).isEqualTo("{\"summary\":\"ok\"}");
+    }
+
+    @Test
+    @DisplayName("Bridge-target link rejection propagates as IllegalArgumentException (GlobalExceptionHandler maps to 400)")
+    void bridgeTargetLinkRejectionPropagates() {
+        com.apimarketplace.agent.service.ModelExecutionLinkService linkService =
+                org.mockito.Mockito.mock(com.apimarketplace.agent.service.ModelExecutionLinkService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(controller, "executionLinkService", linkService);
+        when(linkService.resolveSingleCompletionTarget("anthropic", "claude-opus-4-8"))
+                .thenThrow(new IllegalArgumentException("BRIDGE_EXECUTION_NOT_RELAYABLE: ..."));
+
+        JsonCompletionRequestDto req = new JsonCompletionRequestDto(
+                "anthropic", "claude-opus-4-8", "s", "u", null);
+
+        assertThatThrownBy(() -> controller.executeJsonCompletion(null, req))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("BRIDGE_EXECUTION_NOT_RELAYABLE");
+        org.mockito.Mockito.verifyNoInteractions(invoker);
+    }
+
+    @Test
+    @DisplayName("Absent link service (CE / feature off) keeps the requested pair verbatim")
+    void absentLinkServiceKeepsRequestedPair() {
+        // setUp leaves executionLinkService null - the CE wiring.
+        when(invoker.invoke(eq("deepseek"), eq("deepseek-chat"), eq("s"), eq("u"), eq(null)))
+                .thenReturn("{}");
+
+        JsonCompletionRequestDto req = new JsonCompletionRequestDto(
+                "deepseek", "deepseek-chat", "s", "u", null);
+
+        assertThat(controller.executeJsonCompletion(null, req).getBody().content()).isEqualTo("{}");
+    }
 }

@@ -7,7 +7,7 @@ import { Handle, NodeProps, Position } from 'reactflow';
 import { getNodeVisual } from '../../data/nodeVisuals';
 import type { BuilderNodeData, DerivedNodeStatus, NodeStatus } from '../../types';
 import { useValidation } from '../../contexts/ValidationContext';
-import { NodeHeader, useHoverVisibility, getIconSlug, getStatusBorderColor } from './shared';
+import { NodeHeader, useHoverVisibility, getIconSlug, getStatusBorderColor, ReadyShimmerOverlay } from './shared';
 import { findNodeClassById } from '../../nodes/nodeClasses';
 import { NodeStatusBadge } from '../NodeStatusBadge';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
@@ -103,6 +103,9 @@ export function WorkflowNode({ data, selected, id }: NodeProps<BuilderNodeData>)
             animation: 'shimmer-scan 2.5s ease-in-out infinite',
           }}
         />
+      )}
+      {stepByStepStatus.isStepByStepMode && effectiveStatus === 'ready' && (
+        <ReadyShimmerOverlay className="absolute inset-0 pointer-events-none rounded-2xl z-[5]" />
       )}
 
       {/* Node content */}

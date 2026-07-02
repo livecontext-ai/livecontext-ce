@@ -232,7 +232,7 @@ public class AgentLoopExecutor {
         // against Anthropic's API validation).
         state.getMessages().add(Message.assistantWithToolCalls(
             response.content() != null ? response.content() : "", pendingToolCalls));
-        addToolResultMessages(state, toolResults);
+        addToolResultMessages(state, toolResults, provider.supportsImageAttachments());
 
         // F1.2 - STOP during tool execution: persist results we got, bail out.
         // Sequential loop already breaks early; parallel branch lets in-flight
@@ -769,7 +769,8 @@ public class AgentLoopExecutor {
         return enriched;
     }
 
-    private void addToolResultMessages(LoopExecutionState state, List<ToolResult> toolResults) {
+    private void addToolResultMessages(LoopExecutionState state, List<ToolResult> toolResults,
+                                       boolean providerSupportsImages) {
         int total = toolResults.size();
         int index = 0;
 
@@ -797,14 +798,25 @@ public class AgentLoopExecutor {
 
         // Direct-API vision: the tool_result text role cannot carry image bytes on most
         // providers (OpenAI/Gemini reject images in the tool role), so surface the images
-        // on a synthetic USER message that each provider already serialises to a native
-        // image block - the API-mode equivalent of the bridge's __media__ → image block.
+        // on a synthetic USER message that the provider serialises to a native image
+        // block - the API-mode equivalent of the bridge's __media__ → image block.
+        //
+        // Gated on the provider's attachment capability: a provider whose serialiser
+        // DROPS attachments (DeepSeek, Mistral, OpenAI-compatible, cloud relay) must not
+        // have the model told "shown below for you to see" about pixels it will never
+        // receive - that misleading label makes the model hallucinate about an image it
+        // cannot inspect. For those providers the images are skipped and logged.
         if (!visionImages.isEmpty()) {
-            String label = visionImages.size() == 1
-                ? "[Image returned by the preceding tool call - shown below for you to see.]"
-                : "[" + visionImages.size() + " images returned by the preceding tool calls - shown below for you to see.]";
-            state.getMessages().add(Message.userWithAttachments(label, visionImages));
-            log.debug("[VISION] Attached {} tool-result image(s) as a synthetic user message", visionImages.size());
+            if (providerSupportsImages) {
+                String label = visionImages.size() == 1
+                    ? "[Image returned by the preceding tool call - shown below for you to see.]"
+                    : "[" + visionImages.size() + " images returned by the preceding tool calls - shown below for you to see.]";
+                state.getMessages().add(Message.userWithAttachments(label, visionImages));
+                log.debug("[VISION] Attached {} tool-result image(s) as a synthetic user message", visionImages.size());
+            } else {
+                log.info("[VISION] Dropping {} tool-result image(s): the active provider does not serialise "
+                    + "user-message image attachments (no native vision block wired)", visionImages.size());
+            }
         }
     }
 

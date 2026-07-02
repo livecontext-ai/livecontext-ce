@@ -8,7 +8,7 @@ import { getNodeVisual } from '../../data/nodeVisuals';
 import { deriveStatusFromCounts } from '../../utils/statusCounts';
 import type { BuilderNodeData, DerivedNodeStatus, NodeStatus } from '../../types';
 import { useValidation } from '../../contexts/ValidationContext';
-import { NodeHeader, useHoverVisibility, getIconSlug, getIconUrl, getStatusBorderColor } from './shared';
+import { NodeHeader, useHoverVisibility, getIconSlug, getIconUrl, getStatusBorderColor, ReadyShimmerOverlay } from './shared';
 import { findNodeClassById } from '../../nodes/nodeClasses';
 import { NodeStatusBadge } from '../NodeStatusBadge';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
@@ -382,6 +382,9 @@ export function FlowNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
             animation: 'shimmer-scan 2.5s ease-in-out infinite',
           }}
         />
+      )}
+      {stepByStepStatus.isStepByStepMode && effectiveStatus === 'ready' && !isShowingHtml && (
+        <ReadyShimmerOverlay className="absolute inset-0 pointer-events-none rounded-[26px]" />
       )}
       {/* Fleet trigger buttons (webhook / schedule) are rendered to the LEFT of the
           agent node (see the FleetTriggerButtons block further down), so the old

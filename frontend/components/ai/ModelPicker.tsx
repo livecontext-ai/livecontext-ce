@@ -31,6 +31,7 @@ import {
   toSelectedModel,
   ModelCapability,
   modelHasCapability,
+  isBridgeModel,
 } from '@/hooks/useModels';
 import { getProviderIconSlug, getProviderDisplayName } from '@/lib/ai-providers/providerIcons';
 import { ModelOptionDisplay, ModelInfoPopover } from '@/components/ai/ModelInfo';
@@ -57,6 +58,15 @@ export interface ModelPickerProps {
    * until the backend surfaces them on {@code /v3/chat/models}.
    */
   filterCapability?: ModelCapability;
+  /**
+   * Hide CLI-bridge providers (claude-code / codex / gemini-cli /
+   * mistral-vibe) even for admins. Set it on surfaces that dispatch a bare
+   * single completion (e.g. the compaction summariser): a CLI bridge can
+   * never serve those - the backend rejects a bridge-linked pair with 400
+   * BRIDGE_EXECUTION_NOT_RELAYABLE and a direct bridge pick fails at run
+   * time. Default false (primary-model pickers keep the full catalog).
+   */
+  excludeBridgeProviders?: boolean;
 }
 
 /**
@@ -73,17 +83,27 @@ export function ModelPicker({
   modelLabel = 'Model',
   className,
   filterCapability = 'chat',
+  excludeBridgeProviders = false,
 }: ModelPickerProps) {
   const { providers, defaultModel, defaultProvider, isLoading } = useVisibleModels();
 
-  // Apply the capability filter ONCE at the top: providers without any
-  // matching model are dropped entirely (so the provider dropdown never
-  // shows an entry that resolves to an empty model dropdown).
+  // Apply the capability (and optional bridge-exclusion) filter ONCE at the
+  // top: providers without any matching model are dropped entirely (so the
+  // provider dropdown never shows an entry that resolves to an empty model
+  // dropdown).
   const filteredProviders = React.useMemo(() => {
     return providers
-      .map(p => ({ ...p, models: p.models.filter(m => modelHasCapability(m, filterCapability)) }))
+      .map(p => ({
+        ...p,
+        models: p.models.filter(
+          m =>
+            modelHasCapability(m, filterCapability) &&
+            (!excludeBridgeProviders ||
+              !isBridgeModel({ providerKind: m.providerKind, provider: m.provider ?? p.name })),
+        ),
+      }))
       .filter(p => p.models.length > 0);
-  }, [providers, filterCapability]);
+  }, [providers, filterCapability, excludeBridgeProviders]);
 
   // Resolve the current provider record with a cascading fallback:
   // 1) the caller-provided provider, if it exists in the FILTERED catalog
@@ -110,8 +130,15 @@ export function ModelPicker({
     if (value.id && availableModels.some(m => m.id === value.id)) {
       return value.id;
     }
-    return currentProviderData?.defaultModel
-      ?? availableModels[0]?.id
+    // The provider-declared default may have been dropped by the capability /
+    // bridge filters above - only honor it when it survived, otherwise fall
+    // back to the first filtered model so the trigger never displays an
+    // option the dropdown does not offer.
+    const providerDefault = currentProviderData?.defaultModel;
+    if (providerDefault && availableModels.some(m => m.id === providerDefault)) {
+      return providerDefault;
+    }
+    return availableModels[0]?.id
       ?? defaultModel
       ?? '';
   }, [value.id, availableModels, currentProviderData, defaultModel]);

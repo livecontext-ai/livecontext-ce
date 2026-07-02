@@ -3205,6 +3205,101 @@ class AgentServiceTest {
         }
     }
 
+    @Nested
+    @DisplayName("setCompactionModel - per-agent compaction summariser model override")
+    class SetCompactionModelTests {
+
+        @Test
+        @DisplayName("persists a trimmed provider/name pair on a personal agent")
+        void persistsTrimmedPair() {
+            AgentEntity entity = agentWith(AGENT_ID, TENANT_ID, "Worker");
+            when(agentRepository.findById(AGENT_ID)).thenReturn(Optional.of(entity));
+            when(agentRepository.save(any(AgentEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            AgentEntity result = agentService.setCompactionModel(
+                    AGENT_ID, TENANT_ID, null, " openai ", " gpt-5-mini ");
+
+            assertThat(result.getCompactionModelProvider()).isEqualTo("openai");
+            assertThat(result.getCompactionModelName()).isEqualTo("gpt-5-mini");
+            verify(agentRepository).save(entity);
+        }
+
+        @Test
+        @DisplayName("both null clears the override back to inherit")
+        void bothNullClears() {
+            AgentEntity entity = agentWith(AGENT_ID, TENANT_ID, "Worker");
+            entity.setCompactionModelProvider("google");
+            entity.setCompactionModelName("gemini-3-flash");
+            when(agentRepository.findById(AGENT_ID)).thenReturn(Optional.of(entity));
+            when(agentRepository.save(any(AgentEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            AgentEntity result = agentService.setCompactionModel(AGENT_ID, TENANT_ID, null, null, null);
+
+            assertThat(result.getCompactionModelProvider()).isNull();
+            assertThat(result.getCompactionModelName()).isNull();
+        }
+
+        @Test
+        @DisplayName("both blank also clears - blank normalizes to null before the pair check")
+        void bothBlankClears() {
+            AgentEntity entity = agentWith(AGENT_ID, TENANT_ID, "Worker");
+            entity.setCompactionModelProvider("google");
+            entity.setCompactionModelName("gemini-3-flash");
+            when(agentRepository.findById(AGENT_ID)).thenReturn(Optional.of(entity));
+            when(agentRepository.save(any(AgentEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            AgentEntity result = agentService.setCompactionModel(AGENT_ID, TENANT_ID, null, "", "   ");
+
+            assertThat(result.getCompactionModelProvider()).isNull();
+            assertThat(result.getCompactionModelName()).isNull();
+        }
+
+        @Test
+        @DisplayName("a partial pair (either direction, incl. a blank member) throws BEFORE any DB access")
+        void partialPairThrowsBeforeRepo() {
+            assertThatThrownBy(() -> agentService.setCompactionModel(
+                    AGENT_ID, TENANT_ID, null, "openai", null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("set together");
+            assertThatThrownBy(() -> agentService.setCompactionModel(
+                    AGENT_ID, TENANT_ID, null, null, "gpt-5-mini"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("set together");
+            // A blank member counts as missing, so blank + set is partial too.
+            assertThatThrownBy(() -> agentService.setCompactionModel(
+                    AGENT_ID, TENANT_ID, null, "   ", "gpt-5-mini"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("set together");
+            verify(agentRepository, never()).findById(any());
+            verify(agentRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("unknown agent throws, no save")
+        void unknownAgentThrows() {
+            when(agentRepository.findById(AGENT_ID)).thenReturn(Optional.empty());
+            assertThatThrownBy(() -> agentService.setCompactionModel(
+                    AGENT_ID, TENANT_ID, null, "openai", "gpt-5-mini"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Agent not found");
+            verify(agentRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("a VIEWER on an org agent is denied by the write gate - no save")
+        void viewerOnOrgAgentDenied() {
+            AgentEntity entity = agentWith(AGENT_ID, TENANT_ID, "Worker");
+            entity.setOrganizationId("org-42");
+            when(agentRepository.findById(AGENT_ID)).thenReturn(Optional.of(entity));
+            com.apimarketplace.common.web.TenantResolver.runWithOrgScope("org-42", "VIEWER", () ->
+                assertThatThrownBy(() -> agentService.setCompactionModel(
+                        AGENT_ID, TENANT_ID, "org-42", "openai", "gpt-5-mini"))
+                    .isInstanceOf(com.apimarketplace.auth.client.access.OrgAccessDeniedException.class)
+                    .hasMessageContaining("agent"));
+            verify(agentRepository, never()).save(any());
+        }
+    }
+
     @org.junit.jupiter.api.Nested
     @DisplayName("setInactivityTimeout - per-agent inactivity watchdog window")
     class SetInactivityTimeoutTests {

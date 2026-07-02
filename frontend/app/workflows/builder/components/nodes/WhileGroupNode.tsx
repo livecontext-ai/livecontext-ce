@@ -7,7 +7,7 @@ import { useTranslations } from 'next-intl';
 
 import { getNodeVisual } from '../../data/nodeVisuals';
 import type { BuilderNodeData, DerivedNodeStatus, NodeStatus } from '../../types';
-import { NodeActionButtons, NodeHeader, useHoverVisibility, getIconSlug, getStatusBorderColor } from './shared';
+import { NodeActionButtons, NodeHeader, useHoverVisibility, getIconSlug, getStatusBorderColor, ReadyShimmerOverlay } from './shared';
 import { NodeStatusBadge } from '../NodeStatusBadge';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
 import { useNodeExecutionStatus } from '../../contexts/StepByStepContext';
@@ -91,6 +91,9 @@ export function WhileGroupNode({ data, selected, id }: NodeProps<BuilderNodeData
             animation: 'shimmer-scan 2.5s ease-in-out infinite',
           }}
         />
+      )}
+      {stepByStepStatus.isStepByStepMode && effectiveStatus === 'ready' && (
+        <ReadyShimmerOverlay className="absolute inset-0 pointer-events-none rounded-[26px]" />
       )}
 
       <NodeHeader

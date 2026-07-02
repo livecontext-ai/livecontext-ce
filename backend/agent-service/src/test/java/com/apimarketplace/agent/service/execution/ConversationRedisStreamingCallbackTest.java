@@ -696,6 +696,37 @@ class ConversationRedisStreamingCallbackTest {
             assertThat(json).contains("\"iconSlug\":\"chart\"");
             assertThat(json).contains("\"label\":\"Sales Chart\"");
         }
+
+        @Test
+        @DisplayName("never forwards heavy __media__ vision bytes to the chat stream (metadata sink strip contract)")
+        void neverForwardsHeavyMediaBytes() {
+            when(redisTemplate.convertAndSend(anyString(), anyString())).thenReturn(1L);
+
+            var callback = callbackFactory.forExecution(STREAM_ID, CONVERSATION_ID);
+            java.util.Map<String, Object> metadata = new java.util.HashMap<>();
+            metadata.put("iconSlug", "image");
+            metadata.put(com.apimarketplace.agent.tools.common.ToolMediaMetadata.MEDIA_KEY,
+                java.util.List.of(com.apimarketplace.agent.tools.common.ToolMediaMetadata
+                    .imageDescriptor("image/png", "HEAVYVISIONBASE64PAYLOAD")));
+            ToolResult result = ToolResult.builder()
+                .toolCall(ToolCall.builder().id("call_1").toolName("files").build())
+                .success(true)
+                .content("{\"vision\":\"inlined\"}")
+                .metadata(metadata)
+                .build();
+
+            callback.onToolResult(result);
+
+            ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
+            verify(redisTemplate, atLeast(1)).convertAndSend(anyString(), messageCaptor.capture());
+            String published = String.join("\n", messageCaptor.getAllValues());
+            // The base64 must never reach the chat stream (this sink uses an explicit
+            // field allowlist; the strip contract is what matters, not the mechanism).
+            assertThat(published).doesNotContain("HEAVYVISIONBASE64PAYLOAD");
+            assertThat(published).doesNotContain(com.apimarketplace.agent.tools.common.ToolMediaMetadata.MEDIA_KEY);
+            // Light metadata still flows.
+            assertThat(published).contains("\"iconSlug\":\"image\"");
+        }
     }
 
     @Nested

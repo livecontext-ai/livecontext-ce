@@ -967,8 +967,10 @@ public class StateSnapshotService
                                     String ownerTriggerId) {
         loadFreshForUpdate(runId).ifPresent(run -> {
             StateSnapshot current = parseSnapshot(run);
-            // Chain operations: reset DAG execution state (counts always accumulate) then add ready node
-            StateSnapshot reset = current.resetDag(dagNodeIds);
+            // Chain operations: reset DAG execution state (counts always accumulate) then add
+            // ready node. Owner-scoped: sibling DAGs must NOT be reactivated by a rerun
+            // (nothing outside a trigger fire ever closes them - multi-trigger wedge).
+            StateSnapshot reset = current.resetDag(dagNodeIds, ownerTriggerId);
             StateSnapshot updated = ownerTriggerId != null
                 ? reset.addReadyNode(ownerTriggerId, readyNodeId)
                 : reset.addReadyNode(readyNodeId);

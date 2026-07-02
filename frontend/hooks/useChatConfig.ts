@@ -74,6 +74,20 @@ export interface ChatConfig {
    */
   compactionEnabled?: boolean;
   compactionAfterTurns?: number;
+  /**
+   * Compaction SUMMARISER model override - both-or-neither with
+   * {@link compactionModelName}. Agent scope: flat AgentEntity columns
+   * (compactionModelProvider / compactionModelName). Conversation scope:
+   * conversation.chatConfig.compaction.{modelProvider,modelName}.
+   * User-default scope: flat keys on /v3/chat/defaults.
+   * undefined or '' on either field ⇒ inherit. Backend resolution ladder:
+   * conversation setting > agent compaction setting > platform default (a
+   * cost-efficient platform model); the primary chat model is NEVER a tier.
+   * So an agent conversation inherits the agent's compaction model if set,
+   * otherwise the platform default.
+   */
+  compactionModelProvider?: string;
+  compactionModelName?: string;
 }
 
 export interface UseChatConfigOptions {
@@ -179,7 +193,12 @@ export function buildDraftChatConfigBody(
     }
   }
   if (Object.keys(turnLimits).length > 0) body.turnLimits = turnLimits;
-  const compaction = buildCompactionBlock(draft.compactionEnabled, draft.compactionAfterTurns);
+  const compaction = buildCompactionBlock(
+    draft.compactionEnabled,
+    draft.compactionAfterTurns,
+    draft.compactionModelProvider,
+    draft.compactionModelName,
+  );
   if (compaction) body.compaction = compaction;
   return Object.keys(body).length > 0 ? body : undefined;
 }
@@ -227,11 +246,28 @@ function extractTurnLimits(source: Record<string, unknown> | null | undefined): 
   return out;
 }
 
-type CompactionConfig = Pick<ChatConfig, 'compactionEnabled' | 'compactionAfterTurns'>;
+type CompactionConfig = Pick<
+  ChatConfig,
+  'compactionEnabled' | 'compactionAfterTurns' | 'compactionModelProvider' | 'compactionModelName'
+>;
+
+/**
+ * True iff BOTH halves of the summariser-model pair are usable (non-blank
+ * strings). The pair is both-or-neither everywhere: a partial pair is treated
+ * as unset (read side) and never emitted (write side), matching the backend
+ * validation (400 invalid_compaction_model on a partial pair).
+ */
+function isModelPairSet(provider: unknown, name: unknown): provider is string {
+  return (
+    typeof provider === 'string' && provider.trim() !== '' &&
+    typeof name === 'string' && name.trim() !== ''
+  );
+}
 
 /**
  * Read the compaction override from a {@code chatConfig.compaction} sub-object
- * ({enabled, afterTurns}). Missing/invalid fields are omitted so the UI inherits.
+ * ({enabled, afterTurns, modelProvider, modelName}). Missing/invalid fields are
+ * omitted so the UI inherits; a partial model pair is treated as unset.
  */
 function extractCompaction(source: Record<string, unknown> | null | undefined): CompactionConfig {
   const comp = (source?.compaction ?? {}) as Record<string, unknown>;
@@ -240,22 +276,49 @@ function extractCompaction(source: Record<string, unknown> | null | undefined): 
   if (typeof comp.afterTurns === 'number' && Number.isFinite(comp.afterTurns)) {
     out.compactionAfterTurns = comp.afterTurns;
   }
+  if (isModelPairSet(comp.modelProvider, comp.modelName)) {
+    out.compactionModelProvider = comp.modelProvider as string;
+    out.compactionModelName = comp.modelName as string;
+  }
   return out;
 }
 
 /**
- * Build the {@code compaction} sub-object ({enabled?, afterTurns?}) for a
- * conversation chatConfig / new-conversation seed. Returns {@code undefined}
- * when neither field is set so callers can skip the key entirely.
+ * Build the {@code compaction} sub-object ({enabled?, afterTurns?,
+ * modelProvider?, modelName?}) for a conversation chatConfig /
+ * new-conversation seed. The summariser-model pair is included only when both
+ * halves are non-blank (both-or-neither; blank = cleared, so a rewritten
+ * chatConfig simply omits it). Returns {@code undefined} when no field is set
+ * so callers can skip the key entirely.
  */
 function buildCompactionBlock(
   enabled: boolean | undefined,
   afterTurns: number | undefined,
-): { enabled?: boolean; afterTurns?: number } | undefined {
-  const block: { enabled?: boolean; afterTurns?: number } = {};
+  modelProvider?: string,
+  modelName?: string,
+): { enabled?: boolean; afterTurns?: number; modelProvider?: string; modelName?: string } | undefined {
+  const block: { enabled?: boolean; afterTurns?: number; modelProvider?: string; modelName?: string } = {};
   if (typeof enabled === 'boolean') block.enabled = enabled;
   if (typeof afterTurns === 'number' && Number.isFinite(afterTurns)) block.afterTurns = afterTurns;
+  if (isModelPairSet(modelProvider, modelName)) {
+    block.modelProvider = modelProvider;
+    block.modelName = modelName as string;
+  }
   return Object.keys(block).length > 0 ? block : undefined;
+}
+
+/**
+ * Drop the summariser-model pair from a flat config unless BOTH halves are
+ * non-blank. Used by the user-default save path: PUT /v3/chat/defaults
+ * replaces the stored config, so omitting the keys both prevents a partial
+ * pair from persisting and clears a previously-saved override.
+ */
+export function stripUnsetCompactionModelPair(config: ChatConfig): ChatConfig {
+  if (isModelPairSet(config.compactionModelProvider, config.compactionModelName)) {
+    return config;
+  }
+  const { compactionModelProvider: _p, compactionModelName: _n, ...rest } = config;
+  return rest;
 }
 
 /**
@@ -283,7 +346,16 @@ function extractImageGeneration(source: Record<string, unknown> | null | undefin
 
 export function configFromAgent(agent: Agent): ChatConfig {
   const toolsCfg = (agent.toolsConfig ?? {}) as Record<string, unknown>;
+  // Summariser-model pair (flat AgentEntity columns) - both-or-neither: a
+  // partial/blank pair reads as unset so the UI shows "inherit".
+  const compactionModel = isModelPairSet(agent.compactionModelProvider, agent.compactionModelName)
+    ? {
+        compactionModelProvider: agent.compactionModelProvider as string,
+        compactionModelName: agent.compactionModelName as string,
+      }
+    : {};
   return {
+    ...compactionModel,
     temperature: typeof agent.temperature === 'number' ? agent.temperature : undefined,
     systemPrompt: agent.systemPrompt,
     maxTokens: typeof agent.maxTokens === 'number' ? agent.maxTokens : undefined,
@@ -368,6 +440,19 @@ export function buildAgentPatch(
   if (partial.compactionEnabled !== undefined) patch.compactionEnabled = partial.compactionEnabled;
   if (partial.compactionAfterTurns !== undefined) patch.compactionAfterTurns = partial.compactionAfterTurns;
 
+  // Summariser-model pair - FLAT keys on the agent body, always written
+  // together (both non-blank = override, both '' = clear back to inherit).
+  // A partial pair is never sent: the backend rejects it with 400
+  // invalid_compaction_model, and the UI only ever writes both halves at once.
+  if (partial.compactionModelProvider !== undefined && partial.compactionModelName !== undefined) {
+    const provider = partial.compactionModelProvider;
+    const name = partial.compactionModelName;
+    if ((provider.trim() !== '') === (name.trim() !== '')) {
+      patch.compactionModelProvider = provider;
+      patch.compactionModelName = name;
+    }
+  }
+
   return patch;
 }
 
@@ -413,11 +498,15 @@ export function buildConversationPatch(
     mergedFlat.turnLimits = mergedTurnLimits;
   }
 
-  // Compaction override lives under chatConfig.compaction.{enabled,afterTurns}.
-  // Merge current + partial so a single-field edit keeps the other untouched.
+  // Compaction override lives under chatConfig.compaction.{enabled,afterTurns,
+  // modelProvider,modelName}. Merge current + partial so a single-field edit
+  // keeps the others untouched. A blank ('') model pair in the partial clears
+  // the override: the rewritten block simply omits it.
   const compaction = buildCompactionBlock(
     partial.compactionEnabled !== undefined ? partial.compactionEnabled : currentConfig.compactionEnabled,
     partial.compactionAfterTurns !== undefined ? partial.compactionAfterTurns : currentConfig.compactionAfterTurns,
+    partial.compactionModelProvider !== undefined ? partial.compactionModelProvider : currentConfig.compactionModelProvider,
+    partial.compactionModelName !== undefined ? partial.compactionModelName : currentConfig.compactionModelName,
   );
   if (compaction) mergedFlat.compaction = compaction;
 
@@ -569,7 +658,9 @@ export function useChatConfig(options: UseChatConfigOptions): UseChatConfigResul
         await queryClient.invalidateQueries({ queryKey: ['conversation-config', conversationId] });
       } else if (target === 'user-default') {
         // Persist the full merged config to /v3/chat/defaults (sanitized server-side).
-        const merged = { ...localConfig, ...patch };
+        // The summariser-model pair goes as FLAT keys, both-or-neither: PUT replaces
+        // the stored config, so stripping an unset/blank pair also clears it.
+        const merged = stripUnsetCompactionModelPair({ ...localConfig, ...patch });
         const saved = await conversationApi.updateUserChatDefaults(merged as Record<string, unknown>);
         setUserDefaultChatConfigCache(saved as ChatConfig);
         queryClient.setQueryData(['user-chat-defaults'], saved);

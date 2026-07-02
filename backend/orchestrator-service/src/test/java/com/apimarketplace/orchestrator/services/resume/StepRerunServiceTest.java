@@ -231,6 +231,104 @@ class StepRerunServiceTest {
     // =========================================================================
 
     @Nested
+    @DisplayName("closeCycleAfterAutoExecution")
+    class CloseCycleAfterAutoExecutionTests {
+
+        private com.apimarketplace.orchestrator.execution.v2.services.SignalResumeService mockSignalResume;
+
+        @BeforeEach
+        void injectFunnel() throws Exception {
+            mockSignalResume = mock(com.apimarketplace.orchestrator.execution.v2.services.SignalResumeService.class);
+            setField("signalResumeService", mockSignalResume);
+        }
+
+        private WorkflowRunEntity runWithTriggers(List<Map<String, Object>> triggers) {
+            Map<String, Object> planMap = new HashMap<>();
+            planMap.put("id", "test-plan");
+            planMap.put("tenant_id", "test-tenant");
+            planMap.put("triggers", triggers);
+            planMap.put("mcps", List.of(Map.of("id", "s1", "label", "step_a", "type", "mcp")));
+            planMap.put("edges", List.of());
+            WorkflowRunEntity run = mock(WorkflowRunEntity.class);
+            lenient().when(run.getPlan()).thenReturn(planMap);
+            lenient().when(run.getTenantId()).thenReturn("test-tenant");
+            lenient().when(run.getWorkflow()).thenReturn(null);
+            return run;
+        }
+
+        @Test
+        @DisplayName("Funnels a reusable owner trigger into performDeferredReset with the rerun epoch")
+        void reusableOwnerFunnelsIntoDeferredReset() {
+            WorkflowRunEntity run = runWithTriggers(List.of(
+                Map.of("id", "t1", "label", "start", "type", "manual")));
+            when(mockRunRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
+
+            service.closeCycleAfterAutoExecution("run-1", "trigger:start", 4);
+
+            verify(mockSignalResume).performDeferredReset("run-1", "trigger:start", 4);
+        }
+
+        @Test
+        @DisplayName("A label-less trigger resolves through the id fallback of the canonical parser")
+        void labelLessTriggerResolvesThroughIdFallback() {
+            // Regression: a hand-rolled label-only match would silently skip the close
+            // for plans whose trigger has no label (normalized key falls back to the id).
+            Map<String, Object> labelLess = new HashMap<>();
+            labelLess.put("id", "hook1");
+            labelLess.put("type", "webhook");
+            WorkflowRunEntity run = runWithTriggers(List.of(labelLess));
+            when(mockRunRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
+
+            service.closeCycleAfterAutoExecution("run-1", "trigger:hook1", 2);
+
+            verify(mockSignalResume).performDeferredReset("run-1", "trigger:hook1", 2);
+        }
+
+        @Test
+        @DisplayName("A non-reusable owner type skips the close (one-shot runs are never re-armed)")
+        void nonReusableOwnerTypeSkipsTheClose() {
+            WorkflowRunEntity run = runWithTriggers(List.of(
+                Map.of("id", "t1", "label", "start", "type", "not_a_reusable_type")));
+            when(mockRunRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
+
+            service.closeCycleAfterAutoExecution("run-1", "trigger:start", 4);
+
+            verifyNoInteractions(mockSignalResume);
+        }
+
+        @Test
+        @DisplayName("A null owner trigger id is a no-op")
+        void nullOwnerTriggerIdIsNoOp() {
+            service.closeCycleAfterAutoExecution("run-1", null, 4);
+
+            verifyNoInteractions(mockSignalResume);
+            verifyNoInteractions(mockRunRepository);
+        }
+
+        @Test
+        @DisplayName("A missing run is a no-op")
+        void missingRunIsNoOp() {
+            when(mockRunRepository.findByRunIdPublic("run-1")).thenReturn(Optional.empty());
+
+            service.closeCycleAfterAutoExecution("run-1", "trigger:start", 4);
+
+            verifyNoInteractions(mockSignalResume);
+        }
+
+        @Test
+        @DisplayName("A deferred-reset failure is contained (the rerun already succeeded)")
+        void deferredResetFailureIsContained() {
+            WorkflowRunEntity run = runWithTriggers(List.of(
+                Map.of("id", "t1", "label", "start", "type", "manual")));
+            when(mockRunRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
+            doThrow(new RuntimeException("redis down"))
+                .when(mockSignalResume).performDeferredReset(anyString(), anyString(), anyInt());
+
+            assertDoesNotThrow(() -> service.closeCycleAfterAutoExecution("run-1", "trigger:start", 4));
+        }
+    }
+
+    @Nested
     @DisplayName("RerunResult record")
     class RerunResultTests {
 
@@ -245,7 +343,8 @@ class StepRerunServiceTest {
                 Set.of("mcp:api_call", "mcp:process"),
                 Set.of("mcp:api_call"),
                 "RUNNING",
-                0L
+                0L,
+                "trigger:start"
             );
 
             assertEquals("run-1", result.runId());
@@ -257,13 +356,14 @@ class StepRerunServiceTest {
             assertTrue(result.resetSteps().contains("mcp:process"));
             assertEquals(Set.of("mcp:api_call"), result.readySteps());
             assertEquals("RUNNING", result.status());
+            assertEquals("trigger:start", result.ownerTriggerId());
         }
 
         @Test
         @DisplayName("Should support empty sets")
         void shouldSupportEmptySets() {
             StepRerunService.RerunResult result = new StepRerunService.RerunResult(
-                "run-1", "mcp:step", 1, 0, Set.of(), Set.of(), "PAUSED", 0L
+                "run-1", "mcp:step", 1, 0, Set.of(), Set.of(), "PAUSED", 0L, "trigger:start"
             );
 
             assertTrue(result.resetSteps().isEmpty());
@@ -274,10 +374,10 @@ class StepRerunServiceTest {
         @DisplayName("Should be equal for same values")
         void shouldBeEqualForSameValues() {
             StepRerunService.RerunResult a = new StepRerunService.RerunResult(
-                "run-1", "mcp:step", 1, 0, Set.of("mcp:step"), Set.of("mcp:step"), "RUNNING", 0L
+                "run-1", "mcp:step", 1, 0, Set.of("mcp:step"), Set.of("mcp:step"), "RUNNING", 0L, "trigger:start"
             );
             StepRerunService.RerunResult b = new StepRerunService.RerunResult(
-                "run-1", "mcp:step", 1, 0, Set.of("mcp:step"), Set.of("mcp:step"), "RUNNING", 0L
+                "run-1", "mcp:step", 1, 0, Set.of("mcp:step"), Set.of("mcp:step"), "RUNNING", 0L, "trigger:start"
             );
 
             assertEquals(a, b);

@@ -475,6 +475,99 @@ class AgentConfigProviderTest {
     }
 
     @Nested
+    @DisplayName("getCompactionOverride - per-agent compaction override (enable + cadence + summariser model)")
+    class GetCompactionOverride {
+
+        @Test
+        @DisplayName("parses compactionModelProvider/compactionModelName (trimmed) alongside enable + cadence")
+        void parsesFullOverrideIncludingModelPair() {
+            String jsonResponse = """
+                {
+                    "name": "Agent",
+                    "compactionEnabled": true,
+                    "compactionAfterTurns": 6,
+                    "compactionModelProvider": " openai ",
+                    "compactionModelName": "gpt-5-mini"
+                }
+                """;
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(String.class)))
+                    .thenReturn(new ResponseEntity<>(jsonResponse, HttpStatus.OK));
+
+            var override = agentConfigProvider.getCompactionOverride("agent-1", "tenant-1");
+
+            assertThat(override.enabled()).isTrue();
+            assertThat(override.afterTurns()).isEqualTo(6);
+            assertThat(override.modelProvider()).isEqualTo("openai");
+            assertThat(override.modelName()).isEqualTo("gpt-5-mini");
+        }
+
+        @Test
+        @DisplayName("partial model pair (provider without name) nulls BOTH - the tier refuses to guess")
+        void partialModelPairNullsBoth() {
+            // Persisting/serving only one half of the pair is a broken state; the
+            // parser must collapse it to fully-unset so the resolver falls through
+            // to the next tier instead of merging halves from different tiers.
+            String jsonResponse = """
+                {
+                    "name": "Agent",
+                    "compactionEnabled": false,
+                    "compactionModelProvider": "openai"
+                }
+                """;
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(String.class)))
+                    .thenReturn(new ResponseEntity<>(jsonResponse, HttpStatus.OK));
+
+            var override = agentConfigProvider.getCompactionOverride("agent-1", "tenant-1");
+
+            assertThat(override.modelProvider()).isNull();
+            assertThat(override.modelName()).isNull();
+            // The enable flag on the same payload still parses - only the pair collapses.
+            assertThat(override.enabled()).isFalse();
+        }
+
+        @Test
+        @DisplayName("numeric model fields are rejected as non-text (no toString coercion) - both null")
+        void numericModelFieldsAreNull() {
+            // Regression guard for the getString-style toString() coercion bug class
+            // (a numeric JSON value once became the literal string "106735" in a
+            // content field). A number must NEVER coerce into a model provider/name.
+            String jsonResponse = """
+                {
+                    "name": "Agent",
+                    "compactionModelProvider": 106735,
+                    "compactionModelName": 42
+                }
+                """;
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(String.class)))
+                    .thenReturn(new ResponseEntity<>(jsonResponse, HttpStatus.OK));
+
+            var override = agentConfigProvider.getCompactionOverride("agent-1", "tenant-1");
+
+            assertThat(override.modelProvider()).isNull();
+            assertThat(override.modelName()).isNull();
+        }
+
+        @Test
+        @DisplayName("blank model provider collapses the pair to unset - both null despite a real name")
+        void blankModelProviderNullsBoth() {
+            String jsonResponse = """
+                {
+                    "name": "Agent",
+                    "compactionModelProvider": "   ",
+                    "compactionModelName": "claude-haiku-4-5"
+                }
+                """;
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(String.class)))
+                    .thenReturn(new ResponseEntity<>(jsonResponse, HttpStatus.OK));
+
+            var override = agentConfigProvider.getCompactionOverride("agent-1", "tenant-1");
+
+            assertThat(override.modelProvider()).isNull();
+            assertThat(override.modelName()).isNull();
+        }
+    }
+
+    @Nested
     @DisplayName("ToolsConfig")
     class ToolsConfigTests {
 

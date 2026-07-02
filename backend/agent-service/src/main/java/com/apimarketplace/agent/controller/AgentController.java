@@ -103,6 +103,11 @@ public class AgentController {
             return inactivityError;
         }
 
+        ResponseEntity<Object> compactionModelError = validateCompactionModel(request);
+        if (compactionModelError != null) {
+            return compactionModelError;
+        }
+
         AgentEntity created = agentService.createAgent(
             tenantId,
             extractor.getText(request, "name"),
@@ -156,6 +161,18 @@ public class AgentController {
                 extractor.getInteger(request, "inactivityTimeout"));
         }
 
+        // V106 columns, user-facing write path - per-agent compaction SUMMARISER model.
+        // Dedicated setter (own scope gate) like the compaction enable/cadence above.
+        // Pre-validated (both-or-neither), so the post-create setter never throws.
+        // getText (strict, throws on non-text) - a numeric JSON value must never be
+        // toString-coerced into a model id (the "106735" content-corruption class).
+        if (request.containsKey("compactionModelProvider") || request.containsKey("compactionModelName")) {
+            created = agentService.setCompactionModel(
+                created.getId(), tenantId, organizationId,
+                extractor.getText(request, "compactionModelProvider"),
+                extractor.getText(request, "compactionModelName"));
+        }
+
         return ResponseEntity.ok(created);
     }
 
@@ -197,6 +214,39 @@ public class AgentController {
                 return ResponseEntity.badRequest().<Object>body(Map.of(
                     "error", "invalid_inactivity_timeout",
                     "message", "inactivityTimeout must be 0 (disabled) or between 10 and 7200 (seconds)"));
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Validate the optional compaction summariser model pair on a create/update body
+     * BEFORE persistence: {@code compactionModelProvider} and {@code compactionModelName}
+     * must be set together (both non-blank) or cleared together (both null/blank) - the
+     * resolver treats a partial pair as unset, so persisting one would silently do
+     * nothing. Returns 400 on a partial pair; {@code null} when valid/absent. Mirrors
+     * {@link #validateInactivityTimeout} so the post-create setter never throws.
+     */
+    private ResponseEntity<Object> validateCompactionModel(Map<String, Object> request) {
+        if (request.containsKey("compactionModelProvider") || request.containsKey("compactionModelName")) {
+            String provider;
+            String name;
+            try {
+                // getText (strict): a numeric JSON value is a client bug, not a model id -
+                // reject it here instead of toString-coercing ("106735" corruption class).
+                provider = extractor.getText(request, "compactionModelProvider");
+                name = extractor.getText(request, "compactionModelName");
+            } catch (IllegalArgumentException e) {
+                return ResponseEntity.badRequest().<Object>body(Map.of(
+                    "error", "invalid_compaction_model",
+                    "message", e.getMessage()));
+            }
+            boolean hasProvider = provider != null && !provider.isBlank();
+            boolean hasName = name != null && !name.isBlank();
+            if (hasProvider != hasName) {
+                return ResponseEntity.badRequest().<Object>body(Map.of(
+                    "error", "invalid_compaction_model",
+                    "message", "compactionModelProvider and compactionModelName must be set together (or both cleared)"));
             }
         }
         return null;
@@ -378,6 +428,11 @@ public class AgentController {
             return inactivityError;
         }
 
+        ResponseEntity<Object> compactionModelError = validateCompactionModel(request);
+        if (compactionModelError != null) {
+            return compactionModelError;
+        }
+
         AgentEntity updated = agentService.updateAgent(
             id,
             tenantId,
@@ -426,6 +481,16 @@ public class AgentController {
             updated = agentService.setInactivityTimeout(
                 id, tenantId, callerOrgId,
                 extractor.getInteger(request, "inactivityTimeout"));
+        }
+
+        // Per-agent compaction SUMMARISER model (patch semantics: absent => unchanged;
+        // both blank/null => clear back to inherit). Pre-validated both-or-neither.
+        // getText (strict) - see the create-path note on the "106735" coercion class.
+        if (request.containsKey("compactionModelProvider") || request.containsKey("compactionModelName")) {
+            updated = agentService.setCompactionModel(
+                id, tenantId, callerOrgId,
+                extractor.getText(request, "compactionModelProvider"),
+                extractor.getText(request, "compactionModelName"));
         }
 
         return ResponseEntity.ok(updated);

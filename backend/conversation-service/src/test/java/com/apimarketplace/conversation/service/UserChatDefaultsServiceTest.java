@@ -120,6 +120,26 @@ class UserChatDefaultsServiceTest {
     }
 
     @Test
+    @DisplayName("save keeps compactionModelProvider/compactionModelName (whitelisted) and still drops unknown keys")
+    void saveKeepsCompactionModelKeys() {
+        when(repository.findByUserIdAndOrganizationId("u1", "orgA")).thenReturn(Optional.empty());
+        when(repository.save(any(UserChatDefaults.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Map<String, Object> incoming = new LinkedHashMap<>();
+        incoming.put("compactionModelProvider", "openai");       // whitelisted (summariser model)
+        incoming.put("compactionModelName", "gpt-5-mini");       // whitelisted (summariser model)
+        incoming.put("compactionSummariserVendor", "drop-me");   // unknown → dropped
+
+        Map<String, Object> saved = service.save("u1", "orgA", incoming);
+
+        // Pre-change sanitize() dropped both model keys, so a per-(user, workspace)
+        // default summariser model could never seed a new conversation's chatConfig.
+        assertThat(saved).containsEntry("compactionModelProvider", "openai");
+        assertThat(saved).containsEntry("compactionModelName", "gpt-5-mini");
+        assertThat(saved).doesNotContainKey("compactionSummariserVendor");
+    }
+
+    @Test
     @DisplayName("get never writes")
     void getIsReadOnly() {
         when(repository.findByUserIdAndOrganizationId("u1", "orgA")).thenReturn(Optional.empty());

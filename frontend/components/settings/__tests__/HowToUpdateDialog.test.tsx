@@ -11,8 +11,8 @@ import HowToUpdateDialog from '../HowToUpdateDialog';
 
 const labels: Record<string, string> = {
   howToUpdate: 'How to update',
-  updateIntro: 'Pull the latest image and restart your stack.',
-  updateRunFrom: 'Run these from the folder with your Docker Compose file:',
+  updateIntro: 'Get the latest release and restart your stack.',
+  updateRunFrom: 'Run these from your cloned LiveContext folder:',
   copy: 'Copy',
   copied: 'Copied',
   releaseNotes: 'Release notes',
@@ -22,12 +22,15 @@ vi.mock('next-intl', () => ({
 }));
 
 describe('HowToUpdateDialog', () => {
-  it('renders the docker compose update commands when open', () => {
+  it('renders the update commands with git pull first when open', () => {
     render(<HowToUpdateDialog open onOpenChange={() => {}} releaseUrl={null} />);
 
     expect(screen.getByText('How to update')).toBeTruthy();
-    expect(screen.getByText(/docker compose pull/)).toBeTruthy();
-    expect(screen.getByText(/docker compose up -d/)).toBeTruthy();
+    // The public compose pins the release image tag, so following the dialog
+    // without git pull first would silently re-pull the OLD version.
+    expect(
+      screen.getByText(/git pull[\s\S]*docker compose pull[\s\S]*docker compose up -d/),
+    ).toBeTruthy();
   });
 
   it('shows the release-notes link only when a URL is provided', () => {
@@ -52,8 +55,10 @@ describe('HowToUpdateDialog', () => {
     fireEvent.click(screen.getByTitle('Copy'));
 
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
-    expect(writeText.mock.calls[0][0]).toContain('docker compose pull');
-    expect(writeText.mock.calls[0][0]).toContain('docker compose up -d');
+    // Order matters: git pull must precede docker compose pull (pinned image tag).
+    expect(writeText.mock.calls[0][0]).toMatch(
+      /^git pull\ndocker compose pull\ndocker compose up -d$/,
+    );
   });
 
   it('does not render content when closed', () => {

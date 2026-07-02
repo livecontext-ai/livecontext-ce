@@ -117,9 +117,18 @@ vi.mock('@/lib/api/orchestrator/schedule-settings.service', () => ({
 }));
 
 vi.mock('@/lib/providers/smart-providers', () => ({ useAuth: () => ({ hasRole: () => false }) }));
-vi.mock('@/hooks/useModels', () => ({
-  useVisibleModels: () => ({ providers: [], defaultModel: null, defaultProvider: null, isLoading: false }),
-}));
+const modelsCacheMock = vi.hoisted(() => ({ value: null as unknown }));
+// Partial mock: the hook + catalog cache are test-controlled while the compaction
+// seed guard (toNonBridgeSelectedModel / isEmptySelectedModel) stays REAL so the
+// "never seed a bridge pair" behaviour is exercised, not stubbed.
+vi.mock('@/hooks/useModels', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/hooks/useModels')>();
+  return {
+    ...actual,
+    useVisibleModels: () => ({ providers: [], defaultModel: null, defaultProvider: null, isLoading: false }),
+    getModelsCache: () => modelsCacheMock.value,
+  };
+});
 vi.mock('@/app/workflows/builder/hooks/useMcpData', () => ({
   useMcpApis: () => ({ data: { pages: [] }, isLoading: false, isFetching: false, fetchNextPage: vi.fn(), hasNextPage: false }),
   fetchApiTools: vi.fn().mockResolvedValue([]),
@@ -127,7 +136,27 @@ vi.mock('@/app/workflows/builder/hooks/useMcpData', () => ({
 vi.mock('@/app/workflows/builder/components/palette/useLazyLoadObserver', () => ({
   useLazyLoadObserver: () => {},
 }));
-vi.mock('@/components/ai/ModelPicker', () => ({ ModelPicker: () => null }));
+// Renders once for the primary model and once for the compaction summariser
+// override (when toggled on). Clicking it emits a fixed pick so payload tests
+// can drive onChange; existing tests query buttons by NAME so the extra
+// nameless buttons are inert for them. data-exclude-bridge surfaces the
+// bridge-exclusion flag (must be set on the compaction picker ONLY).
+vi.mock('@/components/ai/ModelPicker', () => ({
+  ModelPicker: (props: {
+    value: { provider: string; id: string };
+    onChange: (next: { provider: string; id: string }) => void;
+    excludeBridgeProviders?: boolean;
+  }) => (
+    <button
+      type="button"
+      data-testid="model-picker"
+      data-provider={props.value.provider}
+      data-model={props.value.id}
+      data-exclude-bridge={props.excludeBridgeProviders ? 'true' : 'false'}
+      onClick={() => props.onChange({ provider: 'anthropic', id: 'claude-haiku-4-5' })}
+    />
+  ),
+}));
 vi.mock('@/components/skills/SkillFolderTree', () => ({ SkillFolderTree: () => null }));
 vi.mock('@/components/agents', () => ({
   AvatarDisplay: () => null,
@@ -150,6 +179,12 @@ interface TestAgent {
   backlogEnabled?: boolean;
   inactivityTimeout?: number;
   toolsConfig?: Record<string, unknown> | null;
+  modelProvider?: string;
+  modelName?: string;
+  compactionEnabled?: boolean | null;
+  compactionAfterTurns?: number | null;
+  compactionModelProvider?: string | null;
+  compactionModelName?: string | null;
 }
 
 function renderModal(agent?: TestAgent, initialStep = 1) {
@@ -166,6 +201,7 @@ const save = () => fireEvent.click(screen.getByRole('button', { name: /Update Ag
 
 beforeEach(() => {
   vi.clearAllMocks();
+  modelsCacheMock.value = null;
   getScheduleMock.mockResolvedValue(null);
   updateAgentMock.mockResolvedValue({ id: 'agent-1' });
   createAgentMock.mockResolvedValue({ id: 'created-agent-1' });
@@ -291,6 +327,168 @@ describe('CreateAgentModal - Task 2: backlog lives under Schedule → Advanced O
     await waitFor(() => expect(updateAgentMock).toHaveBeenCalledTimes(1));
     const payload = updateAgentMock.mock.calls[0][1] as Record<string, unknown>;
     expect(payload.backlogEnabled).toBe(true);
+  });
+});
+
+describe('CreateAgentModal - compaction summariser-model payload (flat keys, both-or-neither)', () => {
+  const openAdvanced = async () => {
+    fireEvent.click(await screen.findByText('modals.createAgent.advancedModeLabel'));
+  };
+
+  it('untouched hydrated pair → both keys ABSENT from the payload (columns stay as-is)', async () => {
+    renderModal(
+      {
+        id: 'agent-1', name: 'A', compactionEnabled: true,
+        compactionModelProvider: 'openai', compactionModelName: 'gpt-5-mini',
+      },
+      2,
+    );
+    await openAdvanced();
+    // Hydrated override → the model toggle is ON without any interaction.
+    expect(screen.getByRole('switch', { name: 'chatConfig.compactionModelLabel' }))
+      .toHaveAttribute('aria-checked', 'true');
+    next();
+    save();
+
+    await waitFor(() => expect(updateAgentMock).toHaveBeenCalledTimes(1));
+    const payload = updateAgentMock.mock.calls[0][1] as Record<string, unknown>;
+    expect('compactionModelProvider' in payload).toBe(false);
+    expect('compactionModelName' in payload).toBe(false);
+  });
+
+  it('toggling the override OFF sends both halves as "" (explicit clear)', async () => {
+    renderModal(
+      {
+        id: 'agent-1', name: 'A', compactionEnabled: true,
+        compactionModelProvider: 'openai', compactionModelName: 'gpt-5-mini',
+      },
+      2,
+    );
+    await openAdvanced();
+    fireEvent.click(screen.getByRole('switch', { name: 'chatConfig.compactionModelLabel' }));
+    next();
+    save();
+
+    await waitFor(() => expect(updateAgentMock).toHaveBeenCalledTimes(1));
+    const payload = updateAgentMock.mock.calls[0][1] as Record<string, unknown>;
+    expect(payload).toHaveProperty('compactionModelProvider', '');
+    expect(payload).toHaveProperty('compactionModelName', '');
+  });
+
+  it('picking a summariser model sends the WHOLE pair as flat keys', async () => {
+    renderModal({ id: 'agent-1', name: 'A', compactionEnabled: true }, 2);
+    await openAdvanced();
+    fireEvent.click(screen.getByRole('switch', { name: 'chatConfig.compactionModelLabel' }));
+    // Two pickers render on step 2: [0] = primary model, [1] = compaction override.
+    const pickers = screen.getAllByTestId('model-picker');
+    expect(pickers).toHaveLength(2);
+    fireEvent.click(pickers[1]);
+    next();
+    save();
+
+    await waitFor(() => expect(updateAgentMock).toHaveBeenCalledTimes(1));
+    const payload = updateAgentMock.mock.calls[0][1] as Record<string, unknown>;
+    expect(payload).toHaveProperty('compactionModelProvider', 'anthropic');
+    expect(payload).toHaveProperty('compactionModelName', 'claude-haiku-4-5');
+    // The primary model selection is untouched by the override pick.
+    expect(payload.modelProvider).toBeUndefined();
+  });
+
+  it('excludes bridge providers on the compaction picker ONLY (primary keeps the full catalog)', async () => {
+    renderModal(
+      {
+        id: 'agent-1', name: 'A', compactionEnabled: true,
+        compactionModelProvider: 'openai', compactionModelName: 'gpt-5-mini',
+      },
+      2,
+    );
+    await openAdvanced();
+    // [0] = primary model picker, [1] = compaction summariser picker.
+    const pickers = screen.getAllByTestId('model-picker');
+    expect(pickers).toHaveLength(2);
+    expect(pickers[0]).toHaveAttribute('data-exclude-bridge', 'false');
+    expect(pickers[1]).toHaveAttribute('data-exclude-bridge', 'true');
+  });
+
+  it('toggle-on seeds the NON-bridge primary pair as before', async () => {
+    renderModal(
+      { id: 'agent-1', name: 'A', modelProvider: 'openai', modelName: 'gpt-5-mini', compactionEnabled: true },
+      2,
+    );
+    await openAdvanced();
+    fireEvent.click(screen.getByRole('switch', { name: 'chatConfig.compactionModelLabel' }));
+    const pickers = screen.getAllByTestId('model-picker');
+    expect(pickers[1]).toHaveAttribute('data-provider', 'openai');
+    expect(pickers[1]).toHaveAttribute('data-model', 'gpt-5-mini');
+  });
+
+  it('toggle-on with a BRIDGE primary model seeds a non-bridge pair instead (never a bridge summariser)', async () => {
+    // The summariser is a bare single completion which a CLI bridge can never
+    // serve (the backend rejects a bridge-linked pair with 400), so the seed
+    // must fall back to the first non-bridge provider's default model.
+    modelsCacheMock.value = {
+      providers: [
+        {
+          name: 'claude-code', defaultModel: 'claude-opus-4-6', displayOrder: 1,
+          supportsStreaming: true, supportsToolCalling: true,
+          models: [{ id: 'claude-opus-4-6', name: 'claude-opus-4-6', provider: 'claude-code', providerKind: 'bridge' }],
+        },
+        {
+          name: 'deepseek', defaultModel: 'deepseek-chat', displayOrder: 2,
+          supportsStreaming: true, supportsToolCalling: true,
+          models: [{ id: 'deepseek-chat', name: 'deepseek-chat', provider: 'deepseek', providerKind: 'cloud' }],
+        },
+      ],
+      defaultProvider: 'claude-code',
+      defaultModel: 'claude-opus-4-6',
+    };
+    renderModal(
+      { id: 'agent-1', name: 'A', modelProvider: 'claude-code', modelName: 'claude-opus-4-6', compactionEnabled: true },
+      2,
+    );
+    await openAdvanced();
+    fireEvent.click(screen.getByRole('switch', { name: 'chatConfig.compactionModelLabel' }));
+    const pickers = screen.getAllByTestId('model-picker');
+    expect(pickers[1]).toHaveAttribute('data-provider', 'deepseek');
+    expect(pickers[1]).toHaveAttribute('data-model', 'deepseek-chat');
+    next();
+    save();
+
+    await waitFor(() => expect(updateAgentMock).toHaveBeenCalledTimes(1));
+    const payload = updateAgentMock.mock.calls[0][1] as Record<string, unknown>;
+    expect(payload).toHaveProperty('compactionModelProvider', 'deepseek');
+    expect(payload).toHaveProperty('compactionModelName', 'deepseek-chat');
+  });
+
+  it('toggle-on with a bridge primary and a bridge-only catalog seeds NOTHING (no bridge pair, ever)', async () => {
+    modelsCacheMock.value = {
+      providers: [
+        {
+          name: 'codex', defaultModel: 'gpt-5.4', displayOrder: 1,
+          supportsStreaming: true, supportsToolCalling: true,
+          models: [{ id: 'gpt-5.4', name: 'gpt-5.4', provider: 'codex', providerKind: 'bridge' }],
+        },
+      ],
+      defaultProvider: 'codex',
+      defaultModel: 'gpt-5.4',
+    };
+    renderModal(
+      { id: 'agent-1', name: 'A', modelProvider: 'codex', modelName: 'gpt-5.4', compactionEnabled: true },
+      2,
+    );
+    await openAdvanced();
+    fireEvent.click(screen.getByRole('switch', { name: 'chatConfig.compactionModelLabel' }));
+    const pickers = screen.getAllByTestId('model-picker');
+    expect(pickers[1]).toHaveAttribute('data-provider', '');
+    expect(pickers[1]).toHaveAttribute('data-model', '');
+    next();
+    save();
+
+    await waitFor(() => expect(updateAgentMock).toHaveBeenCalledTimes(1));
+    const payload = updateAgentMock.mock.calls[0][1] as Record<string, unknown>;
+    // Unchanged from the '' initials → keys absent, never a bridge pair.
+    expect('compactionModelProvider' in payload).toBe(false);
+    expect('compactionModelName' in payload).toBe(false);
   });
 });
 

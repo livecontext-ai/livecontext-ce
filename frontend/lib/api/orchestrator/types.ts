@@ -331,8 +331,10 @@ export interface Agent {
   loopIdenticalStop?: number | null;
   loopConsecutiveStop?: number | null;
   // Stage 5.2b - per-agent override for the COLD summariser model.
-  // Null on both ⇒ resolver falls back to the agent's primary model and then
-  // to the platform default (ai.agent.defaults.compaction-model.*).
+  // Null on both ⇒ resolver falls back to the platform default
+  // (ai.agent.defaults.compaction-model.*, a cost-efficient platform model).
+  // A conversation-level override, when set, outranks this pair either way;
+  // the primary chat model is never a fallback tier.
   compactionModelProvider?: string | null;
   compactionModelName?: string | null;
   // V350 - per-agent compaction enable + cadence override. Null ⇒ inherit

@@ -554,6 +554,37 @@ export function getEffectiveDefaultSelectedModel(): SelectedModel {
   return { provider: provider ?? getProviderFromModel(id), id };
 }
 
+/**
+ * Coerce a seed selection into one that can serve a bare single completion
+ * (e.g. the compaction summariser): CLI-bridge providers can never serve
+ * those, so a bridge seed is replaced by the first non-bridge provider's
+ * default model (by displayOrder) from {@code data}. A non-bridge seed is
+ * returned unchanged; {@link EMPTY_SELECTED_MODEL} when no non-bridge
+ * provider exists (callers skip seeding). Pure so it can be unit-tested;
+ * pass {@link getModelsCache} for {@code data} at the call-site.
+ */
+export function toNonBridgeSelectedModel(
+  seed: SelectedModel,
+  data: ModelsData | null,
+): SelectedModel {
+  if (!isEmptySelectedModel(seed) && !isBridgeModel({ provider: seed.provider })) {
+    return seed;
+  }
+  const sorted = (data?.providers ?? [])
+    .slice()
+    .sort((a, b) => (a.displayOrder ?? 999) - (b.displayOrder ?? 999));
+  for (const p of sorted) {
+    if (isBridgeModel({ provider: p.name })) continue;
+    const models = p.models.filter(
+      m => !isBridgeModel({ providerKind: m.providerKind, provider: m.provider ?? p.name }),
+    );
+    if (models.length === 0) continue;
+    const id = models.some(m => m.id === p.defaultModel) ? p.defaultModel : models[0].id;
+    return { provider: p.name, id };
+  }
+  return EMPTY_SELECTED_MODEL;
+}
+
 // Helper function to get provider icon name
 export function getProviderIcon(provider: string): string {
   const icons: Record<string, string> = {

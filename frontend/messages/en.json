@@ -8645,7 +8645,12 @@
     "compactionEnabledLabel": "Context compaction",
     "compactionEnabledInfo": "Summarise older turns once the conversation grows long, to stay within the model's context window. Off by default; inherits the platform setting when left untouched.",
     "compactionAfterTurnsLabel": "Compact after N turns",
-    "compactionAfterTurnsInfo": "Minimum number of new turns before the conversation is re-summarised. Lower means compaction runs more often."
+    "compactionAfterTurnsInfo": "Minimum number of new turns before the conversation is re-summarised. Lower means compaction runs more often.",
+    "compactionModelLabel": "Summariser model",
+    "compactionModelInfo": "Which model writes the conversation summaries when compaction runs. Leave off to inherit: agent conversations use the agent's compaction model if set, otherwise the platform default (a cost-efficient model).",
+    "compactionModelProviderLabel": "Provider",
+    "compactionModelNameLabel": "Model",
+    "compactionModelPlatformDefault": "Summaries use the default model."
   },
   "customApis": {
     "title": "Custom APIs",
@@ -9149,8 +9154,8 @@
     "howToUpdate": "How to update",
     "releaseNotes": "Release notes",
     "lastChecked": "Checked {date}",
-    "updateIntro": "Pull the latest image and restart your stack. Database migrations run automatically on startup.",
-    "updateRunFrom": "Run these from the folder with your Docker Compose file:",
+    "updateIntro": "Get the latest release and restart your stack. The Compose file pins the release image tag, so run git pull first. Your data is kept, and database migrations run automatically on startup.",
+    "updateRunFrom": "Run these from your cloned LiveContext folder:",
     "copy": "Copy",
     "copied": "Copied"
   },

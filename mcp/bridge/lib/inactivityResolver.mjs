@@ -10,9 +10,18 @@ export const DEFAULT_INACTIVITY_MS = 5 * 60 * 1000;
 
 export function resolveInactivityMs(inactivityTimeout, credentials) {
   const credSecs = credentials && credentials.__inactivityTimeoutSeconds__;
-  const secs = (credSecs != null && credSecs !== '')
-    ? Number(credSecs)
-    : (typeof inactivityTimeout === 'number' ? inactivityTimeout : null);
-  if (secs == null || Number.isNaN(secs)) return DEFAULT_INACTIVITY_MS;
-  return secs > 0 ? secs * 1000 : 0;
+  if (credSecs != null && credSecs !== '') {
+    const secs = Number(credSecs);
+    if (!Number.isNaN(secs)) {
+      // Credential-channel contract (parity with AgentLoopService.resolveInactivityWindowMs):
+      // 0 = disabled, 10-7200 = custom window. Out-of-contract values (negative, 1-9, > 7200)
+      // are ignored so a stray small value cannot arm a seconds-scale watchdog.
+      if (secs === 0) return 0;
+      if (secs >= 10 && secs <= 7200) return secs * 1000;
+    }
+    // malformed or out-of-contract credential -> fall through to the DTO field / default
+  }
+  const fieldSecs = typeof inactivityTimeout === 'number' ? inactivityTimeout : null;
+  if (fieldSecs == null || Number.isNaN(fieldSecs)) return DEFAULT_INACTIVITY_MS;
+  return fieldSecs > 0 ? fieldSecs * 1000 : 0;
 }

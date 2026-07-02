@@ -698,8 +698,10 @@ public class SnapshotService implements RunScopedCache {
         // Pre-compute: are there any active epochs? If so, nodes NOT in flat views
         // should show "pending" (not yet executed in current epoch), not historical status.
         // When no epochs are active (WAITING_TRIGGER, COMPLETED), historical counts are fine.
-        boolean hasAnyActiveEpoch = dbSnapshot.getDags().values().stream()
-                .anyMatch(DagState::hasActiveEpochs);
+        // Sentinel-aware (StateSnapshot.hasAnyActiveEpoch): an epoch stranded on the
+        // trigger:default migration sentinel must not make historical nodes render as
+        // "pending" - keep this in lockstep with the run-status accounting.
+        boolean hasAnyActiveEpoch = dbSnapshot.hasAnyActiveEpoch();
 
         for (Map.Entry<String, StateSnapshot.NodeCounts> entry : dbSnapshot.getNodes().entrySet()) {
             String nodeId = entry.getKey();

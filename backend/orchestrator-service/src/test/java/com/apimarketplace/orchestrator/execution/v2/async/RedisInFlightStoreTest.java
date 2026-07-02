@@ -149,4 +149,60 @@ class RedisInFlightStoreTest {
 
         assertThat(store.hasOtherInFlightForEpoch("run-1", "trigger:ask", 1, "cid-self")).isFalse();
     }
+
+    @Test
+    @DisplayName("hasOtherInFlightForEpochWithNullExcludeMatchesAnyEntryInScope: recovery-style callers without a self entry")
+    void hasOtherNullExcludeMatchesAll() {
+        RedisInFlightStore store = storeReturning(List.of(
+            entry("cid-a", "run-1", "trigger:ask", 1)));
+
+        assertThat(store.hasOtherInFlightForEpoch("run-1", "trigger:ask", 1, null)).isTrue();
+    }
+
+    // ── tryClaimReplay / releaseReplayClaim (cross-pod replay claim barrier) ─────
+
+    @Test
+    @DisplayName("firstReplicaWinsTheReplayClaimSecondReplicaIsRefused")
+    void replayClaimSingleWinner() {
+        StringRedisTemplate template = mock(StringRedisTemplate.class);
+        @SuppressWarnings("unchecked")
+        org.springframework.data.redis.core.ValueOperations<String, String> ops =
+            mock(org.springframework.data.redis.core.ValueOperations.class);
+        org.mockito.Mockito.when(template.opsForValue()).thenReturn(ops);
+        org.mockito.Mockito.when(ops.setIfAbsent(
+                org.mockito.ArgumentMatchers.eq(RedisInFlightStore.REPLAY_CLAIM_PREFIX + "cid-1"),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.any(java.util.concurrent.TimeUnit.class)))
+            .thenReturn(Boolean.TRUE, Boolean.FALSE);
+        RedisInFlightStore store = new RedisInFlightStore(template, new ObjectMapper());
+
+        assertThat(store.tryClaimReplay("cid-1")).isTrue();
+        assertThat(store.tryClaimReplay("cid-1")).isFalse();
+    }
+
+    @Test
+    @DisplayName("replayClaimFailsOpenOnRedisErrorSoAtLeastOnceDeliveryIsPreserved")
+    void replayClaimFailsOpen() {
+        StringRedisTemplate template = mock(StringRedisTemplate.class);
+        org.mockito.Mockito.when(template.opsForValue())
+            .thenThrow(new org.springframework.data.redis.RedisConnectionFailureException("down"));
+        RedisInFlightStore store = new RedisInFlightStore(template, new ObjectMapper());
+
+        assertThat(store.tryClaimReplay("cid-1")).isTrue();
+    }
+
+    @Test
+    @DisplayName("releaseReplayClaimDeletesTheMarkerAndSwallowsRedisErrors")
+    void releaseReplayClaimDeletesMarker() {
+        StringRedisTemplate template = mock(StringRedisTemplate.class);
+        RedisInFlightStore store = new RedisInFlightStore(template, new ObjectMapper());
+
+        store.releaseReplayClaim("cid-1");
+        org.mockito.Mockito.verify(template).delete(RedisInFlightStore.REPLAY_CLAIM_PREFIX + "cid-1");
+
+        org.mockito.Mockito.when(template.delete(org.mockito.ArgumentMatchers.anyString()))
+            .thenThrow(new org.springframework.data.redis.RedisConnectionFailureException("down"));
+        store.releaseReplayClaim("cid-1"); // must not throw
+    }
 }

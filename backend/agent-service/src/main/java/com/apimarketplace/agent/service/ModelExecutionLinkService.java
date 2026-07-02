@@ -97,6 +97,49 @@ public class ModelExecutionLinkService {
         return Optional.ofNullable(snap.get(key(billedProvider, billedModel, ModelExecutionLinkScope.ALL)));
     }
 
+    /**
+     * The effective execution pair for a SINGLE-COMPLETION caller. Unlike the full
+     * agent path there is no billed-identity re-stamp to carry: single completions
+     * are not billed per-model, so the caller just executes on this pair.
+     */
+    public record SingleCompletionTarget(String provider, String model) {}
+
+    /**
+     * Resolve the execution target for a bare single completion (the
+     * {@code json-completion} path: COLD-summary generation, single-turn JSON
+     * extraction). This is the third consumer of the link system, alongside the
+     * full agent execution ({@code AgentRemoteExecutionService}) and the CE relay
+     * ({@code CloudLlmRelayController}).
+     *
+     * <p>Only {@link ModelExecutionLinkScope#ALL} links apply: a single completion
+     * carries no activity source, so no surface-scoped row can match.
+     *
+     * <p>A link that targets a CLI bridge is NOT executable here - a bridge owns its
+     * own agent loop and cannot serve a bare completion (same constraint as the CE
+     * relay's {@code BRIDGE_EXECUTION_NOT_RELAYABLE}). Falling through to the billed
+     * provider would silently execute on the key the admin linked AWAY from (the
+     * misleading "credit balance too low" failure shape), so it throws instead.
+     *
+     * @throws IllegalArgumentException when the resolved link targets a CLI bridge
+     *         (maps to 400 INVALID_ARGUMENT at the controller layer)
+     */
+    public SingleCompletionTarget resolveSingleCompletionTarget(String billedProvider, String billedModel) {
+        ExecutionRoute route = resolve(billedProvider, billedModel, null).orElse(null);
+        if (route == null) {
+            return new SingleCompletionTarget(billedProvider, billedModel);
+        }
+        if (com.apimarketplace.agent.service.execution.SubAgentBridgeClient.isBridgeProvider(route.executionProvider())) {
+            throw new IllegalArgumentException(
+                "BRIDGE_EXECUTION_NOT_RELAYABLE: model execution link routes " + billedProvider + "/" + billedModel
+                    + " to CLI bridge " + route.executionProvider()
+                    + ", which cannot serve a single JSON completion. Point the link's execution target at an"
+                    + " API provider, or use a non-linked model for this call.");
+        }
+        log.debug("Single-completion link route: billed={}/{} -> exec={}/{}",
+            billedProvider, billedModel, route.executionProvider(), route.executionModel());
+        return new SingleCompletionTarget(route.executionProvider(), route.executionModel());
+    }
+
     private Map<String, ExecutionRoute> snapshot() {
         long now = System.currentTimeMillis();
         if (now < cacheExpiresAt) {

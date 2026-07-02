@@ -9,6 +9,13 @@ import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { ModelPicker } from '@/components/ai/ModelPicker';
+import {
+  getEffectiveDefaultSelectedModel,
+  getModelsCache,
+  isEmptySelectedModel,
+  toNonBridgeSelectedModel,
+} from '@/hooks/useModels';
 import { useChatConfig, type ChatConfig } from '@/hooks/useChatConfig';
 
 interface ChatConfigPanelProps {
@@ -75,6 +82,9 @@ export function ChatConfigPanel({
     onPendingSave: onPendingConfigurationSave,
   });
   const [advancedOpen, setAdvancedOpen] = useState(advancedOpenByDefault);
+  // Summariser-model override visibility: null = follow the persisted pair
+  // (hydrates async), true/false = the user touched the toggle this session.
+  const [compactionModelOpen, setCompactionModelOpen] = useState<boolean | null>(null);
 
   const handleNumberChange = useCallback(
     (key: keyof ChatConfig, raw: string, fallback: number) => {
@@ -89,6 +99,27 @@ export function ChatConfigPanel({
   // binary toggle (the per-scope override) plus a cadence field shown only when on.
   const renderCompaction = () => {
     const enabled = config.compactionEnabled === true;
+    // Both-or-neither summariser-model pair; a stored partial pair reads as unset.
+    const hasModelOverride = Boolean(config.compactionModelProvider && config.compactionModelName);
+    const modelOverrideOpen = compactionModelOpen ?? hasModelOverride;
+    const handleModelOverrideToggle = (checked: boolean) => {
+      setCompactionModelOpen(checked);
+      if (checked) {
+        // Persist the resolved default pair immediately so the toggle never
+        // shows a picker whose displayed selection isn't actually saved.
+        // Never seed a bridge pair: the summariser runs a bare single
+        // completion which a CLI bridge cannot serve, so a bridge default
+        // falls back to the first non-bridge provider's default model.
+        const def = toNonBridgeSelectedModel(getEffectiveDefaultSelectedModel(), getModelsCache());
+        if (!isEmptySelectedModel(def) && !hasModelOverride) {
+          updateConfig({ compactionModelProvider: def.provider, compactionModelName: def.id });
+        }
+      } else {
+        // Blank pair = clear back to inherit (agent columns cleared /
+        // conversation + user-default keys omitted on rewrite).
+        updateConfig({ compactionModelProvider: '', compactionModelName: '' });
+      }
+    };
     return (
       <div className="space-y-3">
         <div className="flex items-center justify-between gap-3">
@@ -103,15 +134,50 @@ export function ChatConfigPanel({
           />
         </div>
         {enabled && (
-          <NumericInput
-            inline
-            label={t('compactionAfterTurnsLabel')}
-            info={t('compactionAfterTurnsInfo')}
-            value={config.compactionAfterTurns ?? 5}
-            onChange={(v) => handleNumberChange('compactionAfterTurns', String(v), 5)}
-            min={1}
-            max={100}
-          />
+          <>
+            <NumericInput
+              inline
+              label={t('compactionAfterTurnsLabel')}
+              info={t('compactionAfterTurnsInfo')}
+              value={config.compactionAfterTurns ?? 5}
+              onChange={(v) => handleNumberChange('compactionAfterTurns', String(v), 5)}
+              min={1}
+              max={100}
+            />
+            {/* Summariser-model override - off = inherit (agent conversations use the
+                agent's compaction model if set, otherwise the platform default; the
+                primary chat model is never a tier). Bridge providers are excluded:
+                the summariser is a bare single completion no CLI bridge can serve. */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary min-w-0">
+                  <span className="min-w-0">{t('compactionModelLabel')}</span>
+                  <InfoTooltip text={t('compactionModelInfo')} />
+                </label>
+                <Switch
+                  checked={modelOverrideOpen}
+                  onCheckedChange={handleModelOverrideToggle}
+                  aria-label={t('compactionModelLabel')}
+                />
+              </div>
+              {modelOverrideOpen ? (
+                <ModelPicker
+                  value={{
+                    provider: config.compactionModelProvider ?? '',
+                    id: config.compactionModelName ?? '',
+                  }}
+                  onChange={(next) =>
+                    updateConfig({ compactionModelProvider: next.provider, compactionModelName: next.id })
+                  }
+                  providerLabel={t('compactionModelProviderLabel')}
+                  modelLabel={t('compactionModelNameLabel')}
+                  excludeBridgeProviders
+                />
+              ) : (
+                <p className="text-xs text-theme-secondary">{t('compactionModelPlatformDefault')}</p>
+              )}
+            </div>
+          </>
         )}
       </div>
     );

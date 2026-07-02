@@ -38,8 +38,12 @@ test('agent-cli-server intercepts repo calls locally (no backend proxy)', () => 
   assert.match(block, /handleRepoTool\(/);
 });
 
-test('bridge passes AGENT_REPO_PATH into the MCP subprocess env', () => {
-  assert.match(server, /AGENT_REPO_PATH:\s*process\.env\.AGENT_REPO_PATH\s*\|\|\s*''/);
+test('bridge passes AGENT_REPO_PATH into the MCP subprocess env (blanked for restricted toolsets)', () => {
+  // Current wiring: a restricted toolset must NOT expose the host repo to the
+  // subprocess, so the env value is gated on restrictedToolset before falling
+  // back to process.env.AGENT_REPO_PATH.
+  assert.match(server,
+    /AGENT_REPO_PATH:\s*restrictedToolset\s*\?\s*''\s*:\s*\(process\.env\.AGENT_REPO_PATH\s*\|\|\s*''\)/);
 });
 
 test('main() connects the MCP transport BEFORE warming the session (prevents "0 MCP connected")', () => {

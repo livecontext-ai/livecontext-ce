@@ -38,6 +38,15 @@ public class AgentExecutionController {
     private final ProviderLlmJsonInvoker jsonInvoker;
 
     /**
+     * Model execution links (CLOUD only): a billed {@code (provider, model)} pair may
+     * EXECUTE on a different API target. Field-injected and optional - null in CE /
+     * when the feature flag is off, in which case json-completion runs the requested
+     * pair verbatim (pre-link behavior).
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.agent.service.ModelExecutionLinkService executionLinkService;
+
+    /**
      * Execute a full agent with tool calls and streaming.
      * Tool calls are delegated back to orchestrator via HTTP.
      * Streaming events are published to Redis for gateway SSE pickup.
@@ -109,9 +118,35 @@ public class AgentExecutionController {
         log.debug("Received json-completion request: provider={}, model={}, tenantId={}",
             request.provider(), request.model(), request.tenantId());
 
+        // Model execution link (CLOUD only, third consumer after agent execution + CE
+        // relay): the requested pair may be linked to an API execution target - honor
+        // it, so an admin routing a billed model away from its direct platform key also
+        // covers single completions (COLD-summary compaction was the reported gap). A
+        // bridge-target link throws IllegalArgumentException -> 400 (a CLI bridge
+        // cannot serve a bare completion). Bean absent in CE -> requested pair verbatim.
+        final String execProvider;
+        final String execModel;
+        boolean resolvable = request.provider() != null && !request.provider().isBlank()
+            && request.model() != null && !request.model().isBlank();
+        if (executionLinkService != null && resolvable) {
+            var target = executionLinkService.resolveSingleCompletionTarget(request.provider(), request.model());
+            execProvider = target.provider();
+            execModel = target.model();
+            if (!java.util.Objects.equals(execProvider, request.provider())
+                    || !java.util.Objects.equals(execModel, request.model())) {
+                log.info("json-completion link route: billed={}/{} -> exec={}/{}",
+                    request.provider(), request.model(), execProvider, execModel);
+            }
+        } else {
+            // No link service (CE / feature off) or a blank pair: run the requested pair
+            // verbatim - the invoker rejects blanks with its own explicit error.
+            execProvider = request.provider();
+            execModel = request.model();
+        }
+
         String content = executeWithOrgScope(headerOrgId(httpRequest), () -> jsonInvoker.invoke(
-                request.provider(),
-                request.model(),
+                execProvider,
+                execModel,
                 request.system(),
                 request.user(),
                 request.tenantId()

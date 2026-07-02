@@ -180,7 +180,7 @@ class ChatCompactionOrchestratorTest {
         when(conversationRepo.findById(CONV))
                 .thenReturn(Optional.of(conversationWithCompaction(null, null, "agent-7")));
         when(agentConfigProvider.getCompactionOverride(eq("agent-7"), any()))
-                .thenReturn(new AgentConfigProvider.CompactionOverride(true, 9));
+                .thenReturn(new AgentConfigProvider.CompactionOverride(true, 9, null, null));
 
         orchestrator.afterTurn(CONV, "anthropic", "claude", TENANT, null);
 
@@ -190,19 +190,118 @@ class ChatCompactionOrchestratorTest {
     }
 
     @Test
-    @DisplayName("Agent RPC is skipped when the conversation already pins BOTH enable + cadence")
-    void agentFetchSkippedWhenConversationPinsBothFields() {
+    @DisplayName("Agent RPC IS invoked when the conversation pins enable + cadence but NOT the summariser model")
+    void agentFetchStillPaidWhenConversationDoesNotPinModel() {
+        // Contract change with the configurable summariser model: enable + cadence
+        // alone no longer skip the per-agent fetch, because the agent may still carry
+        // a compaction MODEL override the conversation left unresolved.
         when(messageRepo.findByConversationIdOrderByCreatedAtAsc(CONV)).thenReturn(messages(8));
         when(conversationRepo.findById(CONV))
                 .thenReturn(Optional.of(conversationWithCompaction(true, 4, "agent-7")));
 
         orchestrator.afterTurn(CONV, "anthropic", "claude", TENANT, null);
 
-        // Both fields resolved at the conversation tier → no per-agent fetch.
+        verify(agentConfigProvider).getCompactionOverride(eq("agent-7"), any());
+        ArgumentCaptor<SummarizeRequest> captor = ArgumentCaptor.forClass(SummarizeRequest.class);
+        verify(summarizer).summarize(captor.capture(), any(LlmJsonInvoker.class));
+        assertThat(captor.getValue().cadenceTurns()).isEqualTo(4);
+        // Neither the conversation nor the agent pins a model → YAML default used.
+        assertThat(captor.getValue().providerName()).isEqualTo("anthropic");
+        assertThat(captor.getValue().modelName()).isEqualTo("claude-haiku-4-5");
+    }
+
+    @Test
+    @DisplayName("Agent RPC is skipped when the conversation pins enable + cadence + the full model pair")
+    void agentFetchSkippedWhenConversationPinsAllFields() {
+        when(messageRepo.findByConversationIdOrderByCreatedAtAsc(CONV)).thenReturn(messages(8));
+        when(conversationRepo.findById(CONV))
+                .thenReturn(Optional.of(conversationWithCompaction(true, 4, "agent-7", "openai", "gpt-5-mini")));
+
+        orchestrator.afterTurn(CONV, "anthropic", "claude", TENANT, null);
+
+        // Everything the resolver needs is pinned at the conversation tier → no per-agent fetch.
         verify(agentConfigProvider, never()).getCompactionOverride(anyString(), any());
         ArgumentCaptor<SummarizeRequest> captor = ArgumentCaptor.forClass(SummarizeRequest.class);
         verify(summarizer).summarize(captor.capture(), any(LlmJsonInvoker.class));
         assertThat(captor.getValue().cadenceTurns()).isEqualTo(4);
+        assertThat(captor.getValue().providerName()).isEqualTo("openai");
+        assertThat(captor.getValue().modelName()).isEqualTo("gpt-5-mini");
+    }
+
+    // -------------------------------------------------------------------------
+    // Summariser model ladder: conversation > agent > YAML
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("Conversation model pair wins over BOTH the agent override and the YAML default")
+    void conversationModelPairWinsOverAgentAndYaml() {
+        when(messageRepo.findByConversationIdOrderByCreatedAtAsc(CONV)).thenReturn(messages(8));
+        // Model pinned at the conversation, enable/cadence unset → the per-agent RPC
+        // is still paid (enable/cadence unresolved) and returns a COMPETING model
+        // pair that must LOSE to the conversation's.
+        when(conversationRepo.findById(CONV))
+                .thenReturn(Optional.of(conversationWithCompaction(null, null, "agent-7", "openai", "gpt-5-mini")));
+        when(agentConfigProvider.getCompactionOverride(eq("agent-7"), any()))
+                .thenReturn(new AgentConfigProvider.CompactionOverride(null, null, "google", "gemini-3-flash"));
+
+        orchestrator.afterTurn(CONV, "anthropic", "claude", TENANT, null);
+
+        ArgumentCaptor<SummarizeRequest> captor = ArgumentCaptor.forClass(SummarizeRequest.class);
+        verify(summarizer).summarize(captor.capture(), any(LlmJsonInvoker.class));
+        assertThat(captor.getValue().providerName()).isEqualTo("openai");
+        assertThat(captor.getValue().modelName()).isEqualTo("gpt-5-mini");
+    }
+
+    @Test
+    @DisplayName("Agent compaction-model override wins over the YAML default when the conversation does not pin one")
+    void agentModelOverrideWinsOverYaml() {
+        when(messageRepo.findByConversationIdOrderByCreatedAtAsc(CONV)).thenReturn(messages(8));
+        when(conversationRepo.findById(CONV))
+                .thenReturn(Optional.of(conversationWithCompaction(null, null, "agent-7")));
+        when(agentConfigProvider.getCompactionOverride(eq("agent-7"), any()))
+                .thenReturn(new AgentConfigProvider.CompactionOverride(null, null, "google", "gemini-3-flash"));
+
+        orchestrator.afterTurn(CONV, "anthropic", "claude", TENANT, null);
+
+        ArgumentCaptor<SummarizeRequest> captor = ArgumentCaptor.forClass(SummarizeRequest.class);
+        verify(summarizer).summarize(captor.capture(), any(LlmJsonInvoker.class));
+        assertThat(captor.getValue().providerName()).isEqualTo("google");
+        assertThat(captor.getValue().modelName()).isEqualTo("gemini-3-flash");
+    }
+
+    @Test
+    @DisplayName("Partial conversation pair (provider only) is ignored - the agent tier resolves the model instead")
+    void partialConversationModelPairIsIgnored() {
+        // A lone modelProvider on the conversation is a broken picker state; the
+        // tier must be treated as fully UNSET (never merged with another tier's name).
+        when(messageRepo.findByConversationIdOrderByCreatedAtAsc(CONV)).thenReturn(messages(8));
+        when(conversationRepo.findById(CONV))
+                .thenReturn(Optional.of(conversationWithCompaction(null, null, "agent-7", "openai", null)));
+        when(agentConfigProvider.getCompactionOverride(eq("agent-7"), any()))
+                .thenReturn(new AgentConfigProvider.CompactionOverride(null, null, "google", "gemini-3-flash"));
+
+        orchestrator.afterTurn(CONV, "anthropic", "claude", TENANT, null);
+
+        ArgumentCaptor<SummarizeRequest> captor = ArgumentCaptor.forClass(SummarizeRequest.class);
+        verify(summarizer).summarize(captor.capture(), any(LlmJsonInvoker.class));
+        assertThat(captor.getValue().providerName()).isEqualTo("google");
+        assertThat(captor.getValue().modelName()).isEqualTo("gemini-3-flash");
+    }
+
+    @Test
+    @DisplayName("No conversation or agent model override - the YAML default anthropic/claude-haiku-4-5 is used")
+    void noModelOverridesFallToYamlDefault() {
+        when(messageRepo.findByConversationIdOrderByCreatedAtAsc(CONV)).thenReturn(messages(8));
+        when(conversationRepo.findById(CONV))
+                .thenReturn(Optional.of(conversationWithCompaction(null, null, "agent-7")));
+        // setUp default: the agent RPC returns CompactionOverride.NONE (no model pair).
+
+        orchestrator.afterTurn(CONV, "anthropic", "claude", TENANT, null);
+
+        ArgumentCaptor<SummarizeRequest> captor = ArgumentCaptor.forClass(SummarizeRequest.class);
+        verify(summarizer).summarize(captor.capture(), any(LlmJsonInvoker.class));
+        assertThat(captor.getValue().providerName()).isEqualTo("anthropic");
+        assertThat(captor.getValue().modelName()).isEqualTo("claude-haiku-4-5");
     }
 
     // -------------------------------------------------------------------------
@@ -933,15 +1032,27 @@ class ChatCompactionOrchestratorTest {
      * {@code agentId}. Null override fields are omitted so the resolver inherits.
      */
     private static Conversation conversationWithCompaction(Boolean enabled, Integer afterTurns, String agentId) {
+        return conversationWithCompaction(enabled, afterTurns, agentId, null, null);
+    }
+
+    /**
+     * Full-shape variant additionally carrying the per-conversation summariser
+     * model pair under {@code chat_config.compaction.{modelProvider,modelName}}.
+     * Null fields are omitted, which lets tests express a PARTIAL pair too.
+     */
+    private static Conversation conversationWithCompaction(Boolean enabled, Integer afterTurns, String agentId,
+                                                           String modelProvider, String modelName) {
         Conversation c = new Conversation();
         c.setSummaryCold(null);
         if (agentId != null) {
             c.setAgentId(agentId);
         }
-        if (enabled != null || afterTurns != null) {
+        if (enabled != null || afterTurns != null || modelProvider != null || modelName != null) {
             Map<String, Object> comp = new HashMap<>();
             if (enabled != null) comp.put("enabled", enabled);
             if (afterTurns != null) comp.put("afterTurns", afterTurns);
+            if (modelProvider != null) comp.put("modelProvider", modelProvider);
+            if (modelName != null) comp.put("modelName", modelName);
             Map<String, Object> cfg = new HashMap<>();
             cfg.put("compaction", comp);
             c.setChatConfig(cfg);

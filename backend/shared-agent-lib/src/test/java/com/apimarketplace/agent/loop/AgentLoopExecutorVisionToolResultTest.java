@@ -65,12 +65,16 @@ class AgentLoopExecutorVisionToolResultTest {
                 .toolCall(tc).success(true).content("{\"vision\":\"inlined\"}").metadata(metadata).build();
     }
 
-    @SuppressWarnings("unchecked")
     private void invokeAddToolResultMessages(List<ToolResult> results) throws Exception {
+        invokeAddToolResultMessages(results, true);
+    }
+
+    @SuppressWarnings("unchecked")
+    private void invokeAddToolResultMessages(List<ToolResult> results, boolean providerSupportsImages) throws Exception {
         Method m = AgentLoopExecutor.class.getDeclaredMethod(
-                "addToolResultMessages", LoopExecutionState.class, List.class);
+                "addToolResultMessages", LoopExecutionState.class, List.class, boolean.class);
         m.setAccessible(true);
-        m.invoke(executor, state, results);
+        m.invoke(executor, state, results, providerSupportsImages);
     }
 
     @Test
@@ -163,5 +167,38 @@ class AgentLoopExecutorVisionToolResultTest {
         assertThat(msgs).hasSize(1);
         assertThat(msgs.get(0).role()).isEqualTo(Message.Role.TOOL);
         assertThat(msgs.get(0).content()).startsWith("Error:");
+    }
+
+    // ── Provider vision-capability gate (misleading-label defect) ────────────────
+
+    @Test
+    @DisplayName("nonVisionProviderGetsNoSyntheticImageMessage: the model must not be told an image is shown when the serialiser drops attachments")
+    void nonVisionProviderGetsNoSyntheticImageMessage() throws Exception {
+        ToolCall tc = call("files_view");
+
+        invokeAddToolResultMessages(List.of(imageResult(tc, "PNGPIXELS")), /*providerSupportsImages=*/ false);
+
+        List<Message> msgs = state.getMessages();
+        // Only the tool_result text - no user message claiming "shown below for you to see".
+        assertThat(msgs).hasSize(1);
+        assertThat(msgs.get(0).role()).isEqualTo(Message.Role.TOOL);
+    }
+
+    @Test
+    @DisplayName("nonVisionProviderKeepsSequenceValidWithoutTheImageMessage")
+    void nonVisionProviderKeepsSequenceValid() throws Exception {
+        ToolCall a = call("files_view");
+        ToolCall b = call("search");
+        state.getMessages().add(Message.assistantWithToolCalls("", List.of(a, b)));
+
+        invokeAddToolResultMessages(List.of(
+                imageResult(a, "IMG_A"),
+                ToolResult.builder().toolCall(b).success(true).content("plain").build()),
+                /*providerSupportsImages=*/ false);
+
+        List<Message> msgs = state.getMessages();
+        assertThat(msgs).hasSize(3); // assistant + 2 tool results, nothing else
+        ToolCallBatchAppender.ValidationResult validation = ToolCallBatchAppender.validateSequence(msgs);
+        assertThat(validation.valid()).as("sequence errors: %s", validation.errors()).isTrue();
     }
 }

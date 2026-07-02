@@ -82,6 +82,12 @@ public class ClaudeProvider extends AbstractLLMProvider {
         return "anthropic";
     }
 
+    /** This serialiser emits USER image attachments as native Anthropic image blocks. */
+    @Override
+    public boolean supportsImageAttachments() {
+        return true;
+    }
+
     @Override
     public String getDefaultModel() {
         return configuredModels != null && !configuredModels.isEmpty()

@@ -44,6 +44,32 @@ test('a malformed credential falls back to the default', () => {
   assert.equal(resolveInactivityMs(null, { __inactivityTimeoutSeconds__: 'abc' }), DEFAULT_INACTIVITY_MS);
 });
 
+test('a malformed credential falls through to the DTO field when present', () => {
+  assert.equal(resolveInactivityMs(45, { __inactivityTimeoutSeconds__: 'abc' }), 45000);
+});
+
 test('DTO field 0 disables the watchdog', () => {
   assert.equal(resolveInactivityMs(0, undefined), 0);
+});
+
+// Range enforcement on the credential channel (parity with Java
+// AgentLoopService.resolveInactivityWindowMs): 0 = disabled, 10-7200 = custom,
+// anything else is out-of-contract and must not arm a seconds-scale watchdog.
+
+test('a below-contract credential (1-9s) is ignored, not armed', () => {
+  assert.equal(resolveInactivityMs(null, { __inactivityTimeoutSeconds__: 3 }), DEFAULT_INACTIVITY_MS);
+  assert.equal(resolveInactivityMs(45, { __inactivityTimeoutSeconds__: 3 }), 45000);
+});
+
+test('an above-contract credential (>7200s) is ignored, not clamped', () => {
+  assert.equal(resolveInactivityMs(null, { __inactivityTimeoutSeconds__: 999999 }), DEFAULT_INACTIVITY_MS);
+});
+
+test('a negative credential is out-of-contract (only exactly 0 disables)', () => {
+  assert.equal(resolveInactivityMs(null, { __inactivityTimeoutSeconds__: -5 }), DEFAULT_INACTIVITY_MS);
+});
+
+test('the contract bounds 10 and 7200 are accepted on the credential channel', () => {
+  assert.equal(resolveInactivityMs(null, { __inactivityTimeoutSeconds__: 10 }), 10000);
+  assert.equal(resolveInactivityMs(null, { __inactivityTimeoutSeconds__: 7200 }), 7200000);
 });

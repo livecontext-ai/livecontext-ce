@@ -79,6 +79,12 @@ public class GeminiProvider extends AbstractLLMProvider {
         return "google";
     }
 
+    /** This serialiser emits USER image attachments as native Gemini inlineData parts. */
+    @Override
+    public boolean supportsImageAttachments() {
+        return true;
+    }
+
     @Override
     public String getDefaultModel() {
         return configuredModels != null && !configuredModels.isEmpty()

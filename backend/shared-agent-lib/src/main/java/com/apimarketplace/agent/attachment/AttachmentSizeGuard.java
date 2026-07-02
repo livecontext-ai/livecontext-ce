@@ -49,11 +49,17 @@ public final class AttachmentSizeGuard {
 
     /**
      * Backward-compatible 3-arg overload: applies a single {@code maxInlineBytes} cap to
-     * EVERY attachment type, images included. Prefer the 4-arg overload so images get the
-     * larger {@link #DEFAULT_MAX_INLINE_IMAGE_BYTES} ceiling.
+     * EVERY attachment type, images included.
+     *
+     * @deprecated use the 4-arg overload in providers - applying the uniform (256 KB) cap
+     *     to IMAGE attachments silently rewrites essentially every real screenshot/photo
+     *     to a text placeholder and re-introduces the bridge/direct-API vision-parity bug
+     *     this class exists to prevent. No main-source caller remains; kept only so
+     *     pre-existing external callers keep compiling and are warned at the call site.
      *
      * <p>Never returns {@code null}. A {@code null} input is returned as-is.
      */
+    @Deprecated
     public static MessageAttachment enforceSizeCap(
             MessageAttachment attachment,
             int maxInlineBytes,

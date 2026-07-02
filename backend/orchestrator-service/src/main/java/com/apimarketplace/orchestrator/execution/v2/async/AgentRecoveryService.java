@@ -329,7 +329,27 @@ public class AgentRecoveryService {
                 .collect(Collectors.toList()));
         }
         int replayed = 0;
+        int claimedElsewhere = 0;
         for (RedisInFlightStore.InFlightEntry e : staged) {
+            String correlationId = e.pending().correlationId();
+            if (correlationId == null || correlationId.isEmpty()) {
+                // Malformed staged entry (no correlation id): nothing downstream could match
+                // it either - skip it explicitly rather than mislabeling it as peer-claimed.
+                logger.warn("[AgentRecovery] in_flight replay skipped - staged entry has no correlationId: runId={}",
+                    e.pending().runId());
+                continue;
+            }
+            // Cross-pod claim: during a rolling restart two replicas boot near-simultaneously
+            // and both enumerate the same staged entries. Step-row persistence is idempotent
+            // (idx_workflow_step_data_unique_v6) but successor traversal can re-fire
+            // non-idempotent side-effecting nodes, so exactly one pod may replay each entry.
+            // tryClaimReplay fails open on Redis errors (returns true) - at-least-once wins.
+            if (inFlightStore != null && !inFlightStore.tryClaimReplay(correlationId)) {
+                claimedElsewhere++;
+                logger.info("[AgentRecovery] in_flight replay skipped - claimed by another replica: correlationId={}, runId={}",
+                    correlationId, e.pending().runId());
+                continue;
+            }
             try {
                 // The original Redis pending key was already GETDEL'd pre-crash. Replaying
                 // must therefore bypass PendingAgentRegistry.consume(), whose Redis path
@@ -337,11 +357,20 @@ public class AgentRecoveryService {
                 boolean accepted = completionService.replayInFlightResult(e);
                 if (accepted) replayed++;
             } catch (Exception ex) {
+                // Best-effort claim release. On most throw paths the delivery pipeline's own
+                // finally has ALREADY cleared the staged entry (nothing left to re-scan), so
+                // this only matters for the narrow pre-delivery throws (e.g. org-scope
+                // binding) where the entry survives - there, holding the claim would delay
+                // the retry by the claim TTL for no reason.
+                if (inFlightStore != null) {
+                    inFlightStore.releaseReplayClaim(correlationId);
+                }
                 logger.warn("[AgentRecovery] in_flight replay failed: correlationId={}, runId={}, error={}",
-                    e.pending().correlationId(), e.pending().runId(), ex.getMessage());
+                    correlationId, e.pending().runId(), ex.getMessage());
             }
         }
-        logger.info("[AgentRecovery] in_flight replay complete: staged={}, replayed={}", staged.size(), replayed);
+        logger.info("[AgentRecovery] in_flight replay complete: staged={}, replayed={}, claimedElsewhere={}",
+            staged.size(), replayed, claimedElsewhere);
     }
 
     /**

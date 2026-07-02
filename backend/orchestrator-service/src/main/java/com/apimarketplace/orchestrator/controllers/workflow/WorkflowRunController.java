@@ -323,7 +323,6 @@ public class WorkflowRunController {
         }
     }
 
-
     /**
      * Retrieves the complete state of a workflow run.
      *
@@ -715,7 +714,7 @@ public class WorkflowRunController {
             // In STEP_BY_STEP mode, the user manually triggers each step via the UI
             // and the status is set back to PAUSED.
             if (!result.readySteps().isEmpty()) {
-                autoExecuteAfterRerun(runId, result.readySteps());
+                autoExecuteAfterRerun(runId, result.readySteps(), result.ownerTriggerId(), result.epoch());
             } else {
                 // No ready steps - still need to set PAUSED for SBS mode
                 // (rerunFromStep sets RUNNING unconditionally)
@@ -724,6 +723,10 @@ public class WorkflowRunController {
                         run.setStatus(RunStatus.PAUSED);
                         workflowRunRepository.save(run);
                         logger.info("[Rerun] No ready steps, setting SBS run back to PAUSED for runId={}", runId);
+                    } else {
+                        // AUTO mode with nothing to execute: the rerun still re-opened the
+                        // epoch, so close the cycle now or the run is stuck RUNNING forever.
+                        stepRerunService.closeCycleAfterAutoExecution(runId, result.ownerTriggerId(), result.epoch());
                     }
                 });
             }
@@ -872,7 +875,8 @@ public class WorkflowRunController {
      * @param runId      The workflow run ID
      * @param readySteps Initial set of ready steps from the rerun result
      */
-    private void autoExecuteAfterRerun(String runId, Set<String> readySteps) {
+    private void autoExecuteAfterRerun(String runId, Set<String> readySteps,
+                                       String ownerTriggerId, int rerunEpoch) {
         if (v2StepByStepService == null) {
             logger.warn("[Rerun] V2StepByStepService not available, skipping auto-execution for runId={}", runId);
             return;
@@ -908,6 +912,9 @@ public class WorkflowRunController {
 
         if (currentReady.isEmpty()) {
             logger.info("[Rerun] No non-trigger ready steps to auto-execute for runId={}", runId);
+            // The rerun still re-opened the epoch: close the cycle now or the run
+            // never re-arms (only triggers were ready, nothing will run this epoch).
+            stepRerunService.closeCycleAfterAutoExecution(runId, ownerTriggerId, rerunEpoch);
             return;
         }
 
@@ -991,6 +998,19 @@ public class WorkflowRunController {
         }
 
         logger.info("[Rerun] Auto-execution after rerun completed: {} iterations for runId={}", iteration, runId);
+
+        // The rerun executed OUTSIDE a trigger fire, so no fire-path cycle close covers
+        // the epoch it re-opened. When the auto-execution ran to quiescence synchronously
+        // (no ready work left - true even when quiescence lands exactly on the last
+        // allowed wave), close the cycle here; when it yielded (awaitingSignal covers
+        // both blocking signals and async-running agent offloads), the matching resume
+        // path (SignalResumeService / AgentAsyncCompletionService) performs the same
+        // deferred reset once the pending work resolves - do not double-close under it.
+        // An iteration-cap TRUNCATION (ready work remains) is not quiescence: leave the
+        // run visibly RUNNING instead of masking the truncation with a clean cycle end.
+        if (!awaitingSignal && currentReady.isEmpty()) {
+            stepRerunService.closeCycleAfterAutoExecution(runId, ownerTriggerId, rerunEpoch);
+        }
     }
 
     /**

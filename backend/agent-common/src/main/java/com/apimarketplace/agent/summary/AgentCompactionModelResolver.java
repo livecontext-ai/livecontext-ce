@@ -7,7 +7,7 @@ import java.util.Objects;
  * COLD summariser on a given agent. Pure 3-branch decision.
  *
  * <p><b>Why a dedicated resolver.</b> The summariser runs on a model
- * the user picks per agent (V104 migration adds {@code
+ * the user picks per agent (V106 migration adds {@code
  * compaction_model_provider} / {@code compaction_model_name} on
  * {@code agent.agents}, both nullable). The compaction cost is
  * attributed via {@code COMPACTION_SUMMARY} source type (5.2c), so we

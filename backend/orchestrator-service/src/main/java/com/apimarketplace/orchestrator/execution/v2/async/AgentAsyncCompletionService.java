@@ -1048,7 +1048,10 @@ public class AgentAsyncCompletionService {
      * may leave it unset, and the legacy engine-wide reset path does not apply to the
      * per-DAG scoping we need here.</p>
      */
-    private void triggerDeferredResetIfDrained(String runId, String dagTriggerId, int epoch, String correlationId) {
+    // Package-private for direct unit testing (same rationale as ensureSplitBarrier):
+    // reaching this method through onAgentResult requires stubbing the whole delivery
+    // pipeline; the drain decision itself is a small, safety-critical predicate.
+    void triggerDeferredResetIfDrained(String runId, String dagTriggerId, int epoch, String correlationId) {
         if (dagTriggerId == null) {
             logger.debug("[AgentAsyncCompletion] Skipping deferred reset - dagTriggerId unset: runId={}", runId);
             return;
@@ -2420,7 +2423,9 @@ public class AgentAsyncCompletionService {
      * first {@code executeNode}, state has mutated (a row was persisted) so subsequent
      * iterations clear the preload and let the engine re-fetch.
      */
-    private void executeReadyNodesLoop(String runId, String itemId, String dagTriggerId, int epoch,
+    // Package-private for direct unit testing of the readiness-invalidation contract
+    // (same rationale as triggerDeferredResetIfDrained).
+    void executeReadyNodesLoop(String runId, String itemId, String dagTriggerId, int epoch,
                                         Set<String> alreadyDispatched,
                                         com.apimarketplace.orchestrator.execution.v2.cache.ExecutionCacheManager.LoadedExecution preloaded) {
         // Drop this run's stale readiness-context cache entries BEFORE computing ready nodes.

@@ -22,8 +22,7 @@ import { useValidation } from '../../contexts/ValidationContext';
 import {
   NodeHeader,
   useHoverVisibility,
-  getStatusBorderColor,
-} from './shared';
+  getStatusBorderColor, ReadyShimmerOverlay } from './shared';
 import { getProviderIconSlug } from '@/lib/ai-providers/providerIcons';
 import { getEffectiveDefaultProvider } from '@/hooks/useModels';
 import { NodeStatusBadge } from '../NodeStatusBadge';
@@ -173,6 +172,9 @@ export function BrowserAgentNode({ data, selected, id }: NodeProps<BuilderNodeDa
               animation: 'shimmer-scan 2.5s ease-in-out infinite',
             }}
           />
+        )}
+        {executionStatus.isStepByStepMode && effectiveStatus === 'ready' && (
+          <ReadyShimmerOverlay className="absolute inset-0 pointer-events-none rounded-[26px]" />
         )}
 
         <NodeHeader

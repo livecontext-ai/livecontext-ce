@@ -48,7 +48,12 @@ public class UserChatDefaultsService {
             // V350 - per-(user, workspace) default compaction enable + cadence (flat keys;
             // seeded into a new conversation's chatConfig.compaction by the frontend).
             "compactionEnabled",
-            "compactionAfterTurns"
+            "compactionAfterTurns",
+            // Per-(user, workspace) default compaction SUMMARISER model (flat keys, same
+            // seeding path as enable/cadence; consumed as chatConfig.compaction.modelProvider
+            // / .modelName by ChatCompactionOrchestrator).
+            "compactionModelProvider",
+            "compactionModelName"
     );
 
     private final UserChatDefaultsRepository repository;

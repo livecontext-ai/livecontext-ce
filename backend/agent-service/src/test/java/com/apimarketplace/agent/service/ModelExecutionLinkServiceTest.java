@@ -308,6 +308,71 @@ class ModelExecutionLinkServiceTest {
         assertThat(service.resolve("anthropic", "claude-opus-4-8", "CHAT")).isPresent();
     }
 
+    // ── resolveSingleCompletionTarget (json-completion, third link consumer) ─────
+
+    @Test
+    @DisplayName("singleCompletion: no link keeps the requested pair verbatim")
+    void singleCompletionNoLinkVerbatim() {
+        when(repository.findAll()).thenReturn(List.of());
+
+        ModelExecutionLinkService.SingleCompletionTarget target =
+            service.resolveSingleCompletionTarget("anthropic", "claude-haiku-4-5");
+
+        assertThat(target.provider()).isEqualTo("anthropic");
+        assertThat(target.model()).isEqualTo("claude-haiku-4-5");
+    }
+
+    @Test
+    @DisplayName("singleCompletion: an ALL-scope link to an API provider swaps the execution pair (compaction summariser gap)")
+    void singleCompletionApiLinkSwaps() {
+        when(repository.findAll()).thenReturn(List.of(
+            link("anthropic", "claude-haiku-4-5", "openrouter", "anthropic/claude-haiku", ModelExecutionLinkScope.ALL, true)));
+
+        ModelExecutionLinkService.SingleCompletionTarget target =
+            service.resolveSingleCompletionTarget("anthropic", "claude-haiku-4-5");
+
+        assertThat(target.provider()).isEqualTo("openrouter");
+        assertThat(target.model()).isEqualTo("anthropic/claude-haiku");
+    }
+
+    @Test
+    @DisplayName("singleCompletion: a bridge-target link throws BRIDGE_EXECUTION_NOT_RELAYABLE instead of silently hitting the billed key")
+    void singleCompletionBridgeLinkThrows() {
+        when(repository.findAll()).thenReturn(List.of(
+            link("anthropic", "claude-opus-4-8", "claude-code", null, ModelExecutionLinkScope.ALL, true)));
+
+        assertThatThrownBy(() -> service.resolveSingleCompletionTarget("anthropic", "claude-opus-4-8"))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("BRIDGE_EXECUTION_NOT_RELAYABLE")
+            .hasMessageContaining("claude-code");
+    }
+
+    @Test
+    @DisplayName("singleCompletion: only ALL-scope links apply - a surface-scoped link is ignored (no activity source on a bare completion)")
+    void singleCompletionIgnoresSurfaceScopedLinks() {
+        when(repository.findAll()).thenReturn(List.of(
+            link("anthropic", "claude-haiku-4-5", "openrouter", "or-model", ModelExecutionLinkScope.CHAT, true)));
+
+        ModelExecutionLinkService.SingleCompletionTarget target =
+            service.resolveSingleCompletionTarget("anthropic", "claude-haiku-4-5");
+
+        assertThat(target.provider()).isEqualTo("anthropic");
+        assertThat(target.model()).isEqualTo("claude-haiku-4-5");
+    }
+
+    @Test
+    @DisplayName("singleCompletion: a disabled link keeps the requested pair verbatim")
+    void singleCompletionDisabledLinkVerbatim() {
+        when(repository.findAll()).thenReturn(List.of(
+            link("anthropic", "claude-haiku-4-5", "openrouter", "or-model", ModelExecutionLinkScope.ALL, false)));
+
+        ModelExecutionLinkService.SingleCompletionTarget target =
+            service.resolveSingleCompletionTarget("anthropic", "claude-haiku-4-5");
+
+        assertThat(target.provider()).isEqualTo("anthropic");
+        assertThat(target.model()).isEqualTo("claude-haiku-4-5");
+    }
+
     private static ModelExecutionLinkEntity link(String billedProvider, String billedModel,
                                                  String executionProvider, String executionModel,
                                                  ModelExecutionLinkScope scope, boolean enabled) {

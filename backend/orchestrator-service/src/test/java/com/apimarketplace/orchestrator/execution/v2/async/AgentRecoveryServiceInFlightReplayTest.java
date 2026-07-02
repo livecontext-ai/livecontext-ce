@@ -65,6 +65,10 @@ class AgentRecoveryServiceInFlightReplayTest {
             stepCompletionOrchestrator, stepDataRepository,
             1_800_000L);
         ReflectionTestUtils.setField(service, "inFlightStore", inFlightStore);
+        // Default: this replica wins every cross-pod replay claim. Claim-contention
+        // scenarios override per-test. Lenient because several tests never reach the
+        // replay loop (empty SCAN / absent store).
+        org.mockito.Mockito.lenient().when(inFlightStore.tryClaimReplay(any())).thenReturn(true);
     }
 
     @Test
@@ -234,6 +238,68 @@ class AgentRecoveryServiceInFlightReplayTest {
         verify(registry, never()).registerFromRecovery(any());
         verify(completionService, never()).replayInFlightResult(any());
         verify(completionService, never()).onAgentResult(any());
+    }
+
+    @Test
+    @DisplayName("secondReplicaSkipsInFlightEntriesAlreadyClaimedForReplayByAPeer: rolling-restart double-replay guard")
+    void secondReplicaSkipsEntriesClaimedByPeer() {
+        PendingAgent p1 = pending("cid-claimed");
+        PendingAgent p2 = pending("cid-free");
+        RedisInFlightStore.InFlightEntry e1 = new RedisInFlightStore.InFlightEntry(p1, result("cid-claimed"));
+        RedisInFlightStore.InFlightEntry e2 = new RedisInFlightStore.InFlightEntry(p2, result("cid-free"));
+        when(inFlightStore.listAll()).thenReturn(List.of(e1, e2));
+        when(inFlightStore.tryClaimReplay("cid-claimed")).thenReturn(false);
+        when(inFlightStore.tryClaimReplay("cid-free")).thenReturn(true);
+
+        ReflectionTestUtils.invokeMethod(service, "replayInFlightEntries");
+
+        verify(completionService, never()).replayInFlightResult(e1);
+        verify(completionService).replayInFlightResult(e2);
+    }
+
+    @Test
+    @DisplayName("failedReplayReleasesTheClaimAsBestEffort: only matters for pre-delivery throws where the staged entry survives")
+    void failedReplayReleasesClaim() {
+        // Most throw paths clear the staged entry in the delivery pipeline's own finally
+        // (nothing left for a later scan); the release covers the narrow pre-delivery
+        // throws (e.g. org-scope binding) where the entry DOES survive - holding the
+        // claim there would delay that retry by the claim TTL for no reason.
+        PendingAgent p = pending("cid-transient");
+        RedisInFlightStore.InFlightEntry entry = new RedisInFlightStore.InFlightEntry(p, result("cid-transient"));
+        when(inFlightStore.listAll()).thenReturn(List.of(entry));
+        when(completionService.replayInFlightResult(entry))
+            .thenThrow(new IllegalStateException("pre-delivery failure"));
+
+        ReflectionTestUtils.invokeMethod(service, "replayInFlightEntries");
+
+        verify(inFlightStore).releaseReplayClaim("cid-transient");
+    }
+
+    @Test
+    @DisplayName("stagedEntryWithoutCorrelationIdIsSkippedExplicitlyNotMislabeledAsPeerClaimed")
+    void nullCorrelationIdSkippedExplicitly() {
+        PendingAgent broken = new PendingAgent(null, "run-broken", "agent:a", "A", "trigger:t", 0, 0, null,
+            "agent", "t1", null, null, null, null, null, "m", null, null, Instant.now(), "o1");
+        RedisInFlightStore.InFlightEntry entry = new RedisInFlightStore.InFlightEntry(broken, result("cid-x"));
+        when(inFlightStore.listAll()).thenReturn(List.of(entry));
+
+        ReflectionTestUtils.invokeMethod(service, "replayInFlightEntries");
+
+        verify(inFlightStore, never()).tryClaimReplay(any());
+        verify(completionService, never()).replayInFlightResult(any());
+    }
+
+    @Test
+    @DisplayName("successfulReplayKeepsTheClaimMarkerToExpireNaturally")
+    void successfulReplayKeepsClaim() {
+        PendingAgent p = pending("cid-ok");
+        RedisInFlightStore.InFlightEntry entry = new RedisInFlightStore.InFlightEntry(p, result("cid-ok"));
+        when(inFlightStore.listAll()).thenReturn(List.of(entry));
+        when(completionService.replayInFlightResult(entry)).thenReturn(true);
+
+        ReflectionTestUtils.invokeMethod(service, "replayInFlightEntries");
+
+        verify(inFlightStore, never()).releaseReplayClaim(any());
     }
 
     private static PendingAgent pending(String cid) {

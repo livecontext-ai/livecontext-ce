@@ -207,6 +207,57 @@ public class RedisInFlightStore {
         return false;
     }
 
+    /** Key prefix for the startup-replay claim markers ({@link #tryClaimReplay}). */
+    static final String REPLAY_CLAIM_PREFIX = "agent:in_flight_replay:";
+
+    /**
+     * TTL for replay-claim markers. Long enough to cover a full replay pass; short
+     * enough that a pod crashing mid-replay only delays the retry by ~2 min (the
+     * staged {@code agent:in_flight:*} entry survives, so no work is lost).
+     */
+    static final Duration REPLAY_CLAIM_TTL = Duration.ofSeconds(120);
+
+    /**
+     * Cross-pod claim barrier for the startup/scan in-flight replay. Two replicas
+     * booting near-simultaneously (rolling restart) both enumerate the same staged
+     * entries; without a claim both replay, and non-idempotent side-effecting
+     * successors (send_email, http_request) can double-fire. SETNX-with-TTL makes
+     * exactly one pod win per correlationId.
+     *
+     * <p><b>Failure mode: fail-open.</b> A Redis error returns {@code true} (proceed
+     * with the replay) - preserving at-least-once delivery matters more than the
+     * narrow duplicate window that only exists while Redis is erroring.
+     */
+    public boolean tryClaimReplay(String correlationId) {
+        if (correlationId == null || correlationId.isEmpty()) return false;
+        try {
+            Boolean won = redisTemplate.opsForValue().setIfAbsent(
+                REPLAY_CLAIM_PREFIX + correlationId, "1",
+                REPLAY_CLAIM_TTL.toMillis(), TimeUnit.MILLISECONDS);
+            return !Boolean.FALSE.equals(won);
+        } catch (Exception e) {
+            logger.warn("[InFlightStore] tryClaimReplay failed for correlationId={} - proceeding (fail-open): {}",
+                correlationId, e.getMessage());
+            return true;
+        }
+    }
+
+    /**
+     * Release a replay claim after a FAILED replay. Best-effort: on most throw paths
+     * the delivery pipeline's own finally has already cleared the staged entry, so
+     * this only matters for the narrow pre-delivery throws where the entry survives -
+     * holding the claim there would delay that retry by {@link #REPLAY_CLAIM_TTL}.
+     */
+    public void releaseReplayClaim(String correlationId) {
+        if (correlationId == null || correlationId.isEmpty()) return;
+        try {
+            redisTemplate.delete(REPLAY_CLAIM_PREFIX + correlationId);
+        } catch (Exception e) {
+            logger.warn("[InFlightStore] releaseReplayClaim failed for correlationId={}: {}",
+                correlationId, e.getMessage());
+        }
+    }
+
     /** Paired (pending, result) entry recovered from the in-flight store. */
     public record InFlightEntry(PendingAgent pending, AgentResultMessage result) {}
 

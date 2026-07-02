@@ -8645,7 +8645,12 @@
     "compactionEnabledLabel": "Compactage du contexte",
     "compactionEnabledInfo": "Résume les anciens tours quand la conversation s'allonge, pour rester dans la fenêtre de contexte du modèle. Désactivé par défaut ; hérite du réglage de la plateforme si laissé tel quel.",
     "compactionAfterTurnsLabel": "Compacter après N tours",
-    "compactionAfterTurnsInfo": "Nombre minimum de nouveaux tours avant de re-résumer la conversation. Plus bas = compacte plus souvent."
+    "compactionAfterTurnsInfo": "Nombre minimum de nouveaux tours avant de re-résumer la conversation. Plus bas = compacte plus souvent.",
+    "compactionModelLabel": "Modèle de synthèse",
+    "compactionModelInfo": "Modèle qui rédige les résumés de la conversation lors du compactage. Laissez désactivé pour hériter : les conversations d'agent utilisent le modèle de compactage de l'agent s'il est défini, sinon le modèle par défaut de la plateforme (un modèle économique).",
+    "compactionModelProviderLabel": "Fournisseur",
+    "compactionModelNameLabel": "Modèle",
+    "compactionModelPlatformDefault": "Les résumés utilisent le modèle par défaut."
   },
   "customApis": {
     "title": "APIs personnalisées",
@@ -9149,8 +9154,8 @@
     "howToUpdate": "Comment mettre à jour",
     "releaseNotes": "Notes de version",
     "lastChecked": "Vérifié {date}",
-    "updateIntro": "Récupérez la dernière image et redémarrez votre stack. Les migrations de base de données s’exécutent automatiquement au démarrage.",
-    "updateRunFrom": "Exécutez ces commandes depuis le dossier contenant votre fichier Docker Compose :",
+    "updateIntro": "Récupérez la dernière version et redémarrez votre stack. Le fichier Compose épingle le tag d’image de la version, exécutez donc git pull d’abord. Vos données sont conservées et les migrations de base de données s’exécutent automatiquement au démarrage.",
+    "updateRunFrom": "Exécutez ces commandes depuis votre dossier LiveContext cloné :",
     "copy": "Copier",
     "copied": "Copié"
   },

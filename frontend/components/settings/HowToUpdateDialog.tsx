@@ -11,10 +11,14 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 
-const UPDATE_COMMANDS = 'docker compose pull\ndocker compose up -d';
+// git pull MUST come first: the public compose pins the release's image tag
+// (__LC_VERSION__ substitution at export), so without it `docker compose pull`
+// re-pulls the OLD pinned tag and the update is a silent no-op. Keep this
+// sequence in sync with the publish-ce.yml release-notes template.
+const UPDATE_COMMANDS = 'git pull\ndocker compose pull\ndocker compose up -d';
 
 /**
- * Self-hosted "How to update" instructions: copy-paste docker compose commands +
+ * Self-hosted "How to update" instructions: copy-paste update commands +
  * a link to the release notes. We intentionally do NOT auto-update the container
  * from the app (it cannot safely restart itself + run migrations); we show the
  * exact steps instead, matching n8n/Grafana.

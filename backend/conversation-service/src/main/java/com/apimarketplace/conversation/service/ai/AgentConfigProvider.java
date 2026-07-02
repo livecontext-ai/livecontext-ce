@@ -307,12 +307,16 @@ public class AgentConfigProvider {
     }
 
     /**
-     * Per-agent compaction overrides (enable + cadence). Both nullable: {@code null}
-     * means "agent does not override this tier" so the caller falls back to the
-     * conversation / YAML tiers (see {@code CompactionConfigResolver}).
+     * Per-agent compaction overrides (enable + cadence + summariser model). All
+     * nullable: {@code null} means "agent does not override this tier" so the caller
+     * falls back to the conversation / YAML tiers (see {@code CompactionConfigResolver}
+     * for enable/cadence, {@code AgentCompactionModelResolver} for the model). The
+     * model pair is all-or-nothing: a partial pair (provider without name or vice
+     * versa) is treated as unset - same refuse-to-guess rule as the resolver.
      */
-    public record CompactionOverride(Boolean enabled, Integer afterTurns) {
-        static final CompactionOverride NONE = new CompactionOverride(null, null);
+    public record CompactionOverride(Boolean enabled, Integer afterTurns,
+                                     String modelProvider, String modelName) {
+        static final CompactionOverride NONE = new CompactionOverride(null, null, null, null);
     }
 
     /**
@@ -349,7 +353,14 @@ public class AgentConfigProvider {
                     ? agent.get("compactionEnabled").asBoolean()
                     : null;
             Integer afterTurns = readPositiveInt(agent, "compactionAfterTurns");
-            return new CompactionOverride(enabled, afterTurns);
+            String modelProvider = readNonBlankText(agent, "compactionModelProvider");
+            String modelName = readNonBlankText(agent, "compactionModelName");
+            if (modelProvider == null || modelName == null) {
+                // Partial pair = unset (refuse to guess, mirrors AgentCompactionModelResolver).
+                modelProvider = null;
+                modelName = null;
+            }
+            return new CompactionOverride(enabled, afterTurns, modelProvider, modelName);
         } catch (Exception e) {
             log.debug("Failed to fetch compaction override for agent {}: {}", agentId, e.getMessage());
             return CompactionOverride.NONE;
@@ -470,6 +481,15 @@ public class AgentConfigProvider {
         }
         int value = node.asInt();
         return value > 0 ? value : null;
+    }
+
+    /** Text field or {@code null} when absent / non-text / blank (never a coerced number). */
+    private String readNonBlankText(JsonNode agent, String field) {
+        if (!agent.has(field) || !agent.get(field).isTextual()) {
+            return null;
+        }
+        String value = agent.get(field).asText().trim();
+        return value.isEmpty() ? null : value;
     }
 
     @SuppressWarnings("unchecked")

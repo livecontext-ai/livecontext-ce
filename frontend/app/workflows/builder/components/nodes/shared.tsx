@@ -676,3 +676,24 @@ export function NodeHeader({
     </div>
   );
 }
+
+/**
+ * Green "focused and playable" scan overlay for step-by-step READY nodes.
+ * Same visual language as the blue running shimmer (shimmer-scan keyframes in
+ * globals.css); the green matches the ready border (#22c55e) and the play
+ * button's ready shimmer, so the whole node reads as "you can execute this one
+ * now". Callers pass the same positioning classes their running shimmer uses.
+ */
+export function ReadyShimmerOverlay({ className }: { className: string }) {
+  return (
+    <div
+      data-testid="ready-shimmer"
+      className={className}
+      style={{
+        background: 'linear-gradient(90deg, transparent 0%, rgba(34, 197, 94, 0.15) 50%, transparent 100%)',
+        backgroundSize: '200% 100%',
+        animation: 'shimmer-scan 2.5s ease-in-out infinite',
+      }}
+    />
+  );
+}

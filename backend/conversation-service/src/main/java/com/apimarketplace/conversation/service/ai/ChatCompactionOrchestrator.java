@@ -204,11 +204,13 @@ public class ChatCompactionOrchestrator {
 
         // ---- resolve EFFECTIVE compaction config (conversation > agent > YAML) ----
         // Replaces the old single global gate (config.isEnabled()): a user can now
-        // enable/disable compaction and set its cadence per conversation, per agent,
-        // or via the workspace default. We load the conversation once here and reuse
-        // it for the prior-coverage read below (no double fetch).
+        // enable/disable compaction, set its cadence AND pick the summariser model
+        // per conversation, per agent, or via the workspace default. We load the
+        // conversation once here and reuse it for the prior-coverage read below
+        // (no double fetch).
         Conversation conversation = conversationRepository.findById(conversationId).orElse(null);
-        CompactionConfigResolver.Effective effective = resolveEffectiveCompaction(conversation, tenantId);
+        ResolvedCompaction resolved = resolveEffectiveCompaction(conversation, tenantId);
+        CompactionConfigResolver.Effective effective = resolved.effective();
         if (!effective.enabled()) {
             return new SummarizeOutcome.SkippedGate();
         }
@@ -274,15 +276,8 @@ public class ChatCompactionOrchestrator {
         String latestUser = findLatestUserContent(all);
         boolean keywordHit = ColdSummaryInvalidationKeywords.matchesStrict(latestUser);
 
-        // ---- resolve summariser model (YAML-tier only in chat path) -------
-        // Chat doesn't carry per-agent compaction overrides - that's agent
-        // execution's domain. We intentionally pass null overrides so the
-        // YAML default always wins; the resolver throws if the YAML binding
-        // is absent, which is a config error we want loud.
-        ModelRef summariserModel = AgentCompactionModelResolver.resolve(
-                null, null, null, null,
-                config.getCompactionModel().getProvider(),
-                config.getCompactionModel().getName());
+        // ---- summariser model (conversation > agent > YAML, resolved above) ----
+        ModelRef summariserModel = resolved.summariserModel();
 
         // ---- cold cap from the chat provider ------------------------------
         int coldCap = resolveColdCap(chatProvider);
@@ -419,9 +414,17 @@ public class ChatCompactionOrchestrator {
      * <p>The per-agent RPC is paid ONLY when the conversation does not already pin
      * both fields and an agent is attached - most general chats skip it entirely.
      */
-    private CompactionConfigResolver.Effective resolveEffectiveCompaction(Conversation conversation, String tenantId) {
+    /**
+     * Effective enable/cadence pair plus the resolved summariser model for one
+     * compaction pass. Bundled so the per-agent RPC is paid at most once per turn.
+     */
+    record ResolvedCompaction(CompactionConfigResolver.Effective effective, ModelRef summariserModel) {}
+
+    private ResolvedCompaction resolveEffectiveCompaction(Conversation conversation, String tenantId) {
         Boolean convEnabled = null;
         Integer convAfterTurns = null;
+        String convModelProvider = null;
+        String convModelName = null;
         String agentId = null;
         if (conversation != null) {
             agentId = conversation.getAgentId();
@@ -433,21 +436,57 @@ public class ChatCompactionOrchestrator {
                 if (comp.get("afterTurns") instanceof Number n && n.intValue() >= 1) {
                     convAfterTurns = n.intValue();
                 }
+                if (comp.get("modelProvider") instanceof String p && !p.isBlank()) {
+                    convModelProvider = p.trim();
+                }
+                if (comp.get("modelName") instanceof String m && !m.isBlank()) {
+                    convModelName = m.trim();
+                }
+                if (convModelProvider == null || convModelName == null) {
+                    // Partial pair = unset for this tier (refuse to guess, mirrors
+                    // AgentCompactionModelResolver's either-or rule).
+                    convModelProvider = null;
+                    convModelName = null;
+                }
             }
         }
 
         Boolean agentEnabled = null;
         Integer agentAfterTurns = null;
-        if (agentId != null && !agentId.isBlank() && (convEnabled == null || convAfterTurns == null)) {
+        String agentModelProvider = null;
+        String agentModelName = null;
+        boolean convPinsModel = convModelProvider != null;
+        if (agentId != null && !agentId.isBlank()
+                && (convEnabled == null || convAfterTurns == null || !convPinsModel)) {
             AgentConfigProvider.CompactionOverride ov = agentConfigProvider.getCompactionOverride(agentId, tenantId);
             agentEnabled = ov.enabled();
             agentAfterTurns = ov.afterTurns();
+            agentModelProvider = ov.modelProvider();
+            agentModelName = ov.modelName();
         }
 
-        return CompactionConfigResolver.resolve(
-                convEnabled, convAfterTurns,
-                agentEnabled, agentAfterTurns,
-                config.isEnabled(), config.getCadenceTurns());
+        // Summariser model ladder maps 1:1 onto the resolver's three tiers:
+        // conversation override > agent compaction override > YAML default. The
+        // agent's PRIMARY model is deliberately NOT a tier here (matches the
+        // pre-feature chat behavior): the summariser stays on the cost-sensitive
+        // platform default unless someone explicitly picked a compaction model.
+        // Note: resolved even when compaction ends up disabled - the YAML defaults
+        // are hardcoded non-blank (CompactionDefaultsConfig.ModelRef), so the
+        // resolver's fail-loud on an all-blank ladder can only fire if a deployment
+        // explicitly blanks conversation.compaction.compaction-model.*, which is a
+        // config error we WANT surfaced (caught + counted by the async wrapper).
+        ModelRef summariserModel = AgentCompactionModelResolver.resolve(
+                convModelProvider, convModelName,
+                agentModelProvider, agentModelName,
+                config.getCompactionModel().getProvider(),
+                config.getCompactionModel().getName());
+
+        return new ResolvedCompaction(
+                CompactionConfigResolver.resolve(
+                        convEnabled, convAfterTurns,
+                        agentEnabled, agentAfterTurns,
+                        config.isEnabled(), config.getCadenceTurns()),
+                summariserModel);
     }
 
     static int resolveColdCap(String chatProvider) {

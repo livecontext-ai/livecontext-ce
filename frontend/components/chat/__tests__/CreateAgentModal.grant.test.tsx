@@ -118,6 +118,9 @@ vi.mock('@/lib/api/orchestrator/schedule-settings.service', () => ({
 vi.mock('@/lib/providers/smart-providers', () => ({ useAuth: () => ({ hasRole: () => false }) }));
 vi.mock('@/hooks/useModels', () => ({
   useVisibleModels: () => ({ providers: [], defaultModel: null, defaultProvider: null, isLoading: false }),
+  getModelsCache: () => null,
+  isEmptySelectedModel: (sel: { id?: string } | null | undefined) => !sel || !sel.id,
+  toNonBridgeSelectedModel: (seed: unknown) => seed,
 }));
 vi.mock('@/app/workflows/builder/hooks/useMcpData', () => ({
   useMcpApis: () => ({ data: { pages: [] }, isLoading: false, isFetching: false, fetchNextPage: vi.fn(), hasNextPage: false }),

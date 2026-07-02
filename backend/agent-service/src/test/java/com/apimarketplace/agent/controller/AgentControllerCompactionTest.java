@@ -192,4 +192,132 @@ class AgentControllerCompactionTest {
         verify(agentService, never()).setCompactionOverrides(any(), any(), any(),
             anyBoolean(), any(), anyBoolean(), any());
     }
+
+    // -----------------------------------------------------------------
+    // compaction SUMMARISER model pair (compactionModelProvider/Name)
+    // -----------------------------------------------------------------
+
+    @Test
+    @DisplayName("create with a full model pair routes to setCompactionModel with both values")
+    void createForwardsCompactionModel() {
+        when(tenantResolver.resolveOrNull(request)).thenReturn(TENANT_ID);
+        when(tenantResolver.resolveOrgId(request)).thenReturn(ORG_ID);
+        AgentEntity created = stubCreate();
+        when(agentService.setCompactionModel(AGENT_ID, TENANT_ID, ORG_ID, "openai", "gpt-5-mini"))
+            .thenReturn(created);
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("name", "Worker");
+        body.put("compactionModelProvider", "openai");
+        body.put("compactionModelName", "gpt-5-mini");
+
+        var response = controller.createAgent(request, body);
+
+        assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
+        verify(agentService).setCompactionModel(AGENT_ID, TENANT_ID, ORG_ID, "openai", "gpt-5-mini");
+    }
+
+    @Test
+    @DisplayName("create with a partial model pair → 400 invalid_compaction_model, agent never created")
+    void createRejectsPartialModelPair() {
+        when(tenantResolver.resolveOrNull(request)).thenReturn(TENANT_ID);
+        when(tenantResolver.resolveOrgId(request)).thenReturn(ORG_ID);
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("name", "Worker");
+        body.put("compactionModelProvider", "openai"); // name missing → partial pair
+
+        var response = controller.createAgent(request, body);
+
+        assertThat(response.getStatusCode().value()).isEqualTo(400);
+        assertThat(((Map<?, ?>) response.getBody()).get("error")).isEqualTo("invalid_compaction_model");
+        verify(agentService, never()).createAgent(any(), any(), any(), any(), any(), any(), any(), any(),
+            any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+        verify(agentService, never()).setCompactionModel(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("create without model keys → setCompactionModel never called (inherit)")
+    void createOmitsCompactionModel() {
+        when(tenantResolver.resolveOrNull(request)).thenReturn(TENANT_ID);
+        when(tenantResolver.resolveOrgId(request)).thenReturn(ORG_ID);
+        stubCreate();
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("name", "Worker");
+
+        controller.createAgent(request, body);
+
+        verify(agentService, never()).setCompactionModel(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("create with a NUMERIC model value → 400 invalid_compaction_model, never toString-coerced into a model id (the 106735 corruption class)")
+    void createRejectsNumericModelValue() {
+        when(tenantResolver.resolveOrNull(request)).thenReturn(TENANT_ID);
+        when(tenantResolver.resolveOrgId(request)).thenReturn(ORG_ID);
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("name", "Worker");
+        body.put("compactionModelProvider", 42);
+        body.put("compactionModelName", 106735);
+
+        var response = controller.createAgent(request, body);
+
+        assertThat(response.getStatusCode().value()).isEqualTo(400);
+        assertThat(((Map<?, ?>) response.getBody()).get("error")).isEqualTo("invalid_compaction_model");
+        verify(agentService, never()).setCompactionModel(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("update with a full model pair routes to setCompactionModel with both values")
+    void updateForwardsCompactionModel() {
+        when(tenantResolver.resolveOrNull(request)).thenReturn(TENANT_ID);
+        AgentEntity updated = stubUpdate();
+        when(agentService.setCompactionModel(AGENT_ID, TENANT_ID, ORG_ID, "google", "gemini-3-flash"))
+            .thenReturn(updated);
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("name", "Worker");
+        body.put("compactionModelProvider", "google");
+        body.put("compactionModelName", "gemini-3-flash");
+
+        var response = controller.updateAgent(AGENT_ID, request, ORG_ID, body);
+
+        assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
+        verify(agentService).setCompactionModel(AGENT_ID, TENANT_ID, ORG_ID, "google", "gemini-3-flash");
+    }
+
+    @Test
+    @DisplayName("update with a partial model pair → 400 invalid_compaction_model, agent never updated")
+    void updateRejectsPartialModelPair() {
+        when(tenantResolver.resolveOrNull(request)).thenReturn(TENANT_ID);
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("name", "Worker");
+        body.put("compactionModelName", "gpt-5-mini"); // provider missing → partial pair
+
+        var response = controller.updateAgent(AGENT_ID, request, ORG_ID, body);
+
+        assertThat(response.getStatusCode().value()).isEqualTo(400);
+        assertThat(((Map<?, ?>) response.getBody()).get("error")).isEqualTo("invalid_compaction_model");
+        verify(agentService, never()).updateAgent(any(), any(), any(), any(), any(), any(), any(), any(),
+            any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
+            anyBoolean());
+        verify(agentService, never()).setCompactionModel(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("update without model keys → setCompactionModel never called (unchanged)")
+    void updateOmitsCompactionModel() {
+        when(tenantResolver.resolveOrNull(request)).thenReturn(TENANT_ID);
+        stubUpdate();
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("name", "Worker");
+
+        controller.updateAgent(AGENT_ID, request, ORG_ID, body);
+
+        verify(agentService, never()).setCompactionModel(any(), any(), any(), any(), any());
+    }
 }

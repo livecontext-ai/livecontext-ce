@@ -1107,6 +1107,50 @@ public class AgentService {
     }
 
     /**
+     * Patch the per-agent compaction SUMMARISER model override (V106 columns,
+     * user-facing write path). Runs the EXACT same org-scope + write-access gate as
+     * {@link #setCompactionOverrides}. The pair is all-or-nothing: both non-blank
+     * sets the override, both {@code null}/blank clears it (back to inherit), a
+     * partial pair throws - {@code AgentCompactionModelResolver} treats partial
+     * pairs as unset, so persisting one would silently do nothing.
+     */
+    public AgentEntity setCompactionModel(UUID id, String tenantId, String callerOrgId,
+                                          String compactionModelProvider, String compactionModelName) {
+        String provider = compactionModelProvider == null || compactionModelProvider.isBlank()
+            ? null : compactionModelProvider.trim();
+        String name = compactionModelName == null || compactionModelName.isBlank()
+            ? null : compactionModelName.trim();
+        if ((provider == null) != (name == null)) {
+            throw new IllegalArgumentException(
+                "compactionModelProvider and compactionModelName must be set together (or both cleared)");
+        }
+        AgentEntity existing = agentRepository.findById(id)
+            .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + id));
+
+        String agentOrgId = existing.getOrganizationId();
+        if (!isInScope(existing, tenantId, callerOrgId)) {
+            if (agentOrgId != null) {
+                logger.warn("OrgAccess denied: user {} (active org {}) not in scope to set compaction model on agent {} (org {})",
+                        tenantId, callerOrgId, id, agentOrgId);
+                throw new com.apimarketplace.auth.client.access.OrgAccessDeniedException("agent", id.toString());
+            }
+            throw new IllegalArgumentException("Agent tenant mismatch");
+        }
+        String callerOrgRole = com.apimarketplace.common.web.TenantResolver.currentRequestOrganizationRole();
+        assertNotViewerWrite(agentOrgId, tenantId, callerOrgRole, id, "set compaction model on");
+        if (agentOrgId != null
+                && !orgAccessService.canWrite(agentOrgId, tenantId, "agent", id.toString(), callerOrgRole)) {
+            logger.warn("OrgAccess deny-list: user {} (role {}) restricted from setting compaction model on agent {} in org {}",
+                    tenantId, callerOrgRole, id, agentOrgId);
+            throw new com.apimarketplace.auth.client.access.OrgAccessDeniedException("agent", id.toString());
+        }
+
+        existing.setCompactionModelProvider(provider);
+        existing.setCompactionModelName(name);
+        return agentRepository.save(existing);
+    }
+
+    /**
      * Per-resource write-access gate for an agent's <em>satellite</em> config
      * (webhook / schedule / widget) that lives in side tables or in an external
      * service, so it is mutated without going through {@link #updateAgent}.

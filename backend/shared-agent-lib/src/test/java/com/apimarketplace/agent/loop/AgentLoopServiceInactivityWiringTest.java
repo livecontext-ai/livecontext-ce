@@ -181,4 +181,83 @@ class AgentLoopServiceInactivityWiringTest {
             .build();
         assertThat(AgentLoopService.resolveInactivityWindowMs(ctx)).isEqualTo(5 * 60 * 1000L);
     }
+
+    // ── Range enforcement at the chokepoint (workflow/sub-agent producers pass raw values) ──
+
+    @Test
+    @DisplayName("resolveInactivityWindowMs: a below-contract override (1-9s) is ignored so a stray small value cannot arm a seconds-scale watchdog")
+    void belowContractOverrideIgnored() {
+        AgentLoopContext ctx = AgentLoopContext.builder()
+            .credentials(java.util.Map.of("__inactivityTimeoutSeconds__", 3))
+            .build();
+        assertThat(AgentLoopService.resolveInactivityWindowMs(ctx)).isEqualTo(5 * 60 * 1000L);
+    }
+
+    @Test
+    @DisplayName("resolveInactivityWindowMs: an above-contract override (>7200s) is ignored, not clamped")
+    void aboveContractOverrideIgnored() {
+        AgentLoopContext ctx = AgentLoopContext.builder()
+            .credentials(java.util.Map.of("__inactivityTimeoutSeconds__", 999_999))
+            .build();
+        assertThat(AgentLoopService.resolveInactivityWindowMs(ctx)).isEqualTo(5 * 60 * 1000L);
+    }
+
+    @Test
+    @DisplayName("resolveInactivityWindowMs: a negative override is out-of-contract (only exactly 0 disables)")
+    void negativeOverrideIgnored() {
+        AgentLoopContext ctx = AgentLoopContext.builder()
+            .credentials(java.util.Map.of("__inactivityTimeoutSeconds__", -5))
+            .build();
+        assertThat(AgentLoopService.resolveInactivityWindowMs(ctx)).isEqualTo(5 * 60 * 1000L);
+    }
+
+    @Test
+    @DisplayName("resolveInactivityWindowMs: the contract bounds (10 and 7200) are accepted")
+    void contractBoundsAccepted() {
+        assertThat(AgentLoopService.resolveInactivityWindowMs(AgentLoopContext.builder()
+            .credentials(java.util.Map.of("__inactivityTimeoutSeconds__", 10)).build()))
+            .isEqualTo(10_000L);
+        assertThat(AgentLoopService.resolveInactivityWindowMs(AgentLoopContext.builder()
+            .credentials(java.util.Map.of("__inactivityTimeoutSeconds__", 7200)).build()))
+            .isEqualTo(7_200_000L);
+    }
+
+    // ── cancelFinishReason (streamed finishReason vs persisted stopReason parity) ──
+
+    @Test
+    @DisplayName("cancelFinishReason: a tripped watchdog streams inactivity_timeout, matching the reclassified stop reason")
+    void trippedWatchdogStreamsInactivityTimeout() throws InterruptedException {
+        com.apimarketplace.agent.streaming.StreamingCallback delegate =
+            org.mockito.Mockito.mock(com.apimarketplace.agent.streaming.StreamingCallback.class);
+        InactivityWatchdogCallback watchdog = new InactivityWatchdogCallback(delegate, 10L);
+        long deadline = System.currentTimeMillis() + 2_000L;
+        while (!watchdog.shouldStop() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(20L);
+        }
+
+        assertThat(watchdog.isIdleTripped()).isTrue();
+        assertThat(AgentLoopService.cancelFinishReason(watchdog)).isEqualTo("inactivity_timeout");
+    }
+
+    @Test
+    @DisplayName("cancelFinishReason: a real user cancel still streams stopped_by_user")
+    void userCancelStreamsStoppedByUser() {
+        com.apimarketplace.agent.streaming.StreamingCallback delegate =
+            org.mockito.Mockito.mock(com.apimarketplace.agent.streaming.StreamingCallback.class);
+        org.mockito.Mockito.when(delegate.shouldStop()).thenReturn(true);
+        InactivityWatchdogCallback watchdog = new InactivityWatchdogCallback(delegate, 60_000L);
+
+        assertThat(watchdog.shouldStop()).isTrue();
+        assertThat(watchdog.isIdleTripped()).isFalse();
+        assertThat(AgentLoopService.cancelFinishReason(watchdog)).isEqualTo("stopped_by_user");
+    }
+
+    @Test
+    @DisplayName("cancelFinishReason: a plain callback (no watchdog) streams stopped_by_user")
+    void plainCallbackStreamsStoppedByUser() {
+        com.apimarketplace.agent.streaming.StreamingCallback plain =
+            org.mockito.Mockito.mock(com.apimarketplace.agent.streaming.StreamingCallback.class);
+
+        assertThat(AgentLoopService.cancelFinishReason(plain)).isEqualTo("stopped_by_user");
+    }
 }

@@ -16,7 +16,10 @@ import com.apimarketplace.orchestrator.services.state.StateSnapshotService;
 import com.apimarketplace.orchestrator.services.state.WorkflowGraph;
 import com.apimarketplace.orchestrator.services.state.WorkflowGraphBuilder;
 import com.apimarketplace.orchestrator.services.state.WorkflowNode;
+import com.apimarketplace.orchestrator.domain.workflow.Trigger;
+import com.apimarketplace.orchestrator.execution.v2.services.SignalResumeService;
 import com.apimarketplace.orchestrator.execution.v2.services.UnifiedSignalService;
+import com.apimarketplace.orchestrator.trigger.TriggerType;
 import com.apimarketplace.orchestrator.trigger.TriggerEpochManager;
 import com.apimarketplace.orchestrator.validation.DAGIndependenceValidator;
 import org.slf4j.Logger;
@@ -73,6 +76,15 @@ public class StepRerunService {
      */
     @Autowired(required = false)
     private com.apimarketplace.orchestrator.services.streaming.WsEventSequencer wsEventSequencer;
+
+    /**
+     * Cycle-close funnel for the AUTO-mode rerun path (see
+     * {@link #closeCycleAfterAutoExecution}). Optional + lazy so unit fixtures that
+     * construct this service directly stay unaffected.
+     */
+    @Autowired(required = false)
+    @Lazy
+    private SignalResumeService signalResumeService;
 
     public StepRerunService(
             WorkflowRunRepository runRepository,
@@ -299,7 +311,8 @@ public class StepRerunService {
                 stepsToReset,
                 newState.readySteps(),
                 newState.status().getValue(),
-                currentSeq
+                currentSeq,
+                ownerTriggerId
         );
     }
 
@@ -358,6 +371,52 @@ public class StepRerunService {
     }
 
     /**
+     * Close the trigger cycle after a rerun's AUTO-mode auto-execution ran to quiescence.
+     *
+     * <p>A rerun re-opens the armed epoch ({@code resetDagAndSetReady}) and executes
+     * OUTSIDE a trigger fire, so the fire-path cycle close never runs for it. Without
+     * this call the re-opened epoch stays in activeEpochs forever, hasAnyActiveEpoch()
+     * never drops back to false, and the run can never re-arm to WAITING_TRIGGER - the
+     * zombie scanner (OrchestrationRecoveryService) then fails the armed run after the
+     * no-progress threshold.
+     *
+     * <p>Reusable-owner runs only: re-arming is the reusable cycle's semantic; one-shot
+     * runs are finalized by the normal completion path. The owner trigger is resolved
+     * through the canonical plan parser ({@code WorkflowPlan.fromMap} +
+     * {@code Trigger.getNormalizedKey}), so label-less triggers (id-keyed) and type-less
+     * triggers (record defaults) behave exactly like the rerun's own owner resolution.
+     * Best-effort: failures are logged, never thrown - the rerun itself succeeded, only
+     * the re-arm is at stake. Delegates to
+     * {@link SignalResumeService#performDeferredReset}, the shared single reset entry
+     * point, which self-defers while blocking signals or async agents are still pending
+     * for the epoch.
+     */
+    public void closeCycleAfterAutoExecution(String runId, String ownerTriggerId, int rerunEpoch) {
+        if (signalResumeService == null || ownerTriggerId == null) {
+            return;
+        }
+        try {
+            WorkflowRunEntity run = runRepository.findByRunIdPublic(runId).orElse(null);
+            if (run == null || run.getPlan() == null || run.getPlan().isEmpty()) {
+                return;
+            }
+            WorkflowPlan plan = WorkflowPlan.fromMap(run.getPlan(),
+                    run.getWorkflow() != null ? run.getWorkflow().getId().toString() : runId,
+                    run.getTenantId());
+            Trigger owner = plan.getTriggers() == null ? null : plan.getTriggers().stream()
+                    .filter(t -> ownerTriggerId.equals(t.getNormalizedKey()))
+                    .findFirst().orElse(null);
+            if (owner == null || !TriggerType.isReusable(owner)) {
+                return;
+            }
+            signalResumeService.performDeferredReset(runId, ownerTriggerId, rerunEpoch);
+        } catch (Exception e) {
+            logger.warn("[RerunService] Cycle close after rerun failed for runId={} triggerId={} epoch={}: {}",
+                    runId, ownerTriggerId, rerunEpoch, e.getMessage(), e);
+        }
+    }
+
+    /**
      * Gets the number of re-run attempts for a specific step.
      *
      * @param runId  The workflow run ID
@@ -396,13 +455,17 @@ public class StepRerunService {
     /**
      * Result of a re-run operation.
      *
-     * @param runId        The workflow run ID
-     * @param stepId       The step that was re-run from
-     * @param epoch        The epoch number (unchanged during rerun)
-     * @param spawn        The new spawn number
-     * @param resetSteps   The set of steps that were reset
-     * @param readySteps   The new set of ready steps
-     * @param status       The current workflow status
+     * @param runId          The workflow run ID
+     * @param stepId         The step that was re-run from
+     * @param epoch          The epoch number (unchanged during rerun)
+     * @param spawn          The new spawn number
+     * @param resetSteps     The set of steps that were reset
+     * @param readySteps     The new set of ready steps
+     * @param status         The current workflow status
+     * @param ownerTriggerId The trigger/DAG owning the rerun target - the caller needs it
+     *                       to close the re-opened epoch once the auto-execution finishes
+     *                       (a rerun runs outside a trigger fire, so the normal fire-path
+     *                       cycle close never covers it)
      */
     public record RerunResult(
             String runId,
@@ -412,7 +475,8 @@ public class StepRerunService {
             Set<String> resetSteps,
             Set<String> readySteps,
             String status,
-            long seq
+            long seq,
+            String ownerTriggerId
     ) {}
 
     /**

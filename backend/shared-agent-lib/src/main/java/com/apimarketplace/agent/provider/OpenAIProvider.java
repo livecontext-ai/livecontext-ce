@@ -70,6 +70,12 @@ public class OpenAIProvider extends AbstractLLMProvider {
         return "openai";
     }
 
+    /** This serialiser emits USER image attachments as native image_url content parts. */
+    @Override
+    public boolean supportsImageAttachments() {
+        return true;
+    }
+
     @Override
     public String getDefaultModel() {
         return configuredModels != null && !configuredModels.isEmpty()

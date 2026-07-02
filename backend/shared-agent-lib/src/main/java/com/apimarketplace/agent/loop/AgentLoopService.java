@@ -354,12 +354,39 @@ public class AgentLoopService {
             try {
                 long seconds = override instanceof Number n
                     ? n.longValue() : Long.parseLong(override.toString().trim());
-                return seconds > 0 ? seconds * 1000L : 0L;
+                // Contract for the credential channel: 0 = disabled, 10-7200 = custom window.
+                // Anything else (negative, 1-9, > 7200) is out-of-contract - producers other
+                // than chat forward the raw value unvalidated, so enforcing the range HERE
+                // (the single chokepoint every surface funnels through) prevents a stray
+                // small value (e.g. 3) from arming a seconds-scale watchdog that false-kills
+                // healthy agents. Out-of-contract -> ignore the override, use the default.
+                if (seconds == 0) {
+                    return 0L;
+                }
+                if (seconds >= 10 && seconds <= 7200) {
+                    return seconds * 1000L;
+                }
+                log.warn("Ignoring out-of-contract __inactivityTimeoutSeconds__ override {} "
+                    + "(expected 0=disabled or 10-7200s) - falling back to the default window", seconds);
             } catch (NumberFormatException ignore) {
                 // malformed override -> fall through to the context default
             }
         }
         return context.getInactivityTimeoutMsOrDefault();
+    }
+
+    /**
+     * The finishReason string to STREAM when a run stops via the cancel channel. The
+     * inactivity watchdog trips through the same {@code shouldStop()} channel as a user
+     * cancel, so without this check the live stream tells the frontend
+     * {@code stopped_by_user} while observability later records
+     * {@code INACTIVITY_TIMEOUT} (via {@link #reclassifyInactivity}) - a telemetry/UX
+     * mismatch. The persisted {@code AgentLoopResult.stopReason} is still promoted by
+     * {@code reclassifyInactivity}; this only aligns the streamed event with it.
+     */
+    static String cancelFinishReason(StreamingCallback callback) {
+        return (callback instanceof InactivityWatchdogCallback w && w.isIdleTripped())
+            ? "inactivity_timeout" : "stopped_by_user";
     }
 
     /**
@@ -523,11 +550,12 @@ public class AgentLoopService {
             // Check for stop request
             if (callback.shouldStop()) {
                 log.info("⏹️ [AGENT-LOOP] Hard stop requested - exiting (iteration {})", state.getIterations());
+                String cancelReason = cancelFinishReason(callback);
                 agentLogger.logExecutionEnd(runId, false, state.getIterations(),
-                    state.getAllToolResults().size(), state.getDuration(), "STOPPED_BY_USER");
+                    state.getAllToolResults().size(), state.getDuration(), cancelReason.toUpperCase(java.util.Locale.ROOT));
                 callback.onComplete(CompletionResponse.builder()
                     .content(state.getFullContent().toString())
-                    .finishReason("stopped_by_user")
+                    .finishReason(cancelReason)
                     .usage(state.buildUsageInfo())
                     .model(model)
                     .build());
@@ -570,12 +598,13 @@ public class AgentLoopService {
 
             if (result.isComplete()) {
                 boolean wasStoppedByUser = callback.shouldStop();
-                String status = wasStoppedByUser ? "STOPPED_BY_USER" : "COMPLETED";
+                String cancelReason = cancelFinishReason(callback);
+                String status = wasStoppedByUser ? cancelReason.toUpperCase(java.util.Locale.ROOT) : "COMPLETED";
                 agentLogger.logExecutionEnd(runId, !wasStoppedByUser, state.getIterations(),
                     state.getAllToolResults().size(), state.getDuration(), status);
                 callback.onComplete(CompletionResponse.builder()
                     .content(state.getFullContent().toString())
-                    .finishReason(wasStoppedByUser ? "stopped_by_user" : "stop")
+                    .finishReason(wasStoppedByUser ? cancelReason : "stop")
                     .usage(state.buildUsageInfo())
                     .model(model)
                     .build());
@@ -607,11 +636,12 @@ public class AgentLoopService {
             // re-poll (TTL race on long iterations).
             if (result.isCancelled()) {
                 log.info("⏹️ [AGENT-LOOP] Cancel result from processIteration - exiting (iteration {})", state.getIterations());
+                String cancelReason = cancelFinishReason(callback);
                 agentLogger.logExecutionEnd(runId, false, state.getIterations(),
-                    state.getAllToolResults().size(), state.getDuration(), "STOPPED_BY_USER");
+                    state.getAllToolResults().size(), state.getDuration(), cancelReason.toUpperCase(java.util.Locale.ROOT));
                 callback.onComplete(CompletionResponse.builder()
                     .content(state.getFullContent().toString())
-                    .finishReason("stopped_by_user")
+                    .finishReason(cancelReason)
                     .usage(state.buildUsageInfo())
                     .model(model)
                     .build());
@@ -622,11 +652,12 @@ public class AgentLoopService {
             // Check for stop after tool execution
             if (callback.shouldStop()) {
                 log.info("⏹️ [AGENT-LOOP] Hard stop after tools - exiting (iteration {})", state.getIterations());
+                String cancelReason = cancelFinishReason(callback);
                 agentLogger.logExecutionEnd(runId, false, state.getIterations(),
-                    state.getAllToolResults().size(), state.getDuration(), "STOPPED_BY_USER");
+                    state.getAllToolResults().size(), state.getDuration(), cancelReason.toUpperCase(java.util.Locale.ROOT));
                 callback.onComplete(CompletionResponse.builder()
                     .content(state.getFullContent().toString())
-                    .finishReason("stopped_by_user")
+                    .finishReason(cancelReason)
                     .usage(state.buildUsageInfo())
                     .model(model)
                     .build());
@@ -751,7 +782,7 @@ public class AgentLoopService {
      * Build the effective tool list for this loop invocation. Tools are accumulated into a
      * name-keyed LinkedHashMap so a later source can never silently overwrite an earlier one
      * and we never ship duplicates to the provider. Prior to BUG-10 we assembled a list and
-     * called {@link #deduplicateTools} at the end - that still worked, but produced
+     * deduplicated post-hoc at the end - that still worked, but produced
      * {@code [TOOL DEDUP] Duplicate 'get_task' removed ×3} warnings on every prompt, and
      * burned prompt-cache bandwidth building-then-discarding ~3KB of repeats per call.
      * Filtering at add-time eliminates both.
@@ -802,33 +833,4 @@ public class AgentLoopService {
         }
     }
 
-    /**
-     * Legacy post-hoc deduplication, retained for callers that still pass us a pre-assembled
-     * list they cannot (or do not) filter at the source. New callers should use
-     * {@link #addUniqueTools} instead so duplicates are skipped at add-time.
-     */
-    private List<ToolDefinition> deduplicateTools(List<ToolDefinition> tools) {
-        if (tools == null || tools.isEmpty()) return tools;
-
-        Map<String, ToolDefinition> unique = new LinkedHashMap<>();
-        int duplicates = 0;
-
-        for (ToolDefinition tool : tools) {
-            if (tool.name() != null) {
-                if (unique.containsKey(tool.name())) {
-                    duplicates++;
-                    log.warn("⚠️ [TOOL DEDUP] Duplicate '{}' removed", tool.name());
-                } else {
-                    unique.put(tool.name(), tool);
-                }
-            }
-        }
-
-        if (duplicates > 0) {
-            log.warn("⚠️ [TOOL DEDUP] Removed {} duplicate(s) ({} → {} tools)",
-                duplicates, tools.size(), unique.size());
-        }
-
-        return new ArrayList<>(unique.values());
-    }
 }

@@ -90,4 +90,17 @@ public interface LLMProvider {
     default int getDisplayOrder() {
         return 100;
     }
+
+    /**
+     * True when this provider SERIALISES user-message image attachments
+     * ({@code MessageAttachment} of type IMAGE) into its native vision block. The
+     * agent loop consults this before appending the synthetic "image shown below"
+     * USER message for tool-result {@code __media__} images: a provider that drops
+     * attachments at serialisation time must not have the model told an image is
+     * visible (misleading-prompt defect). Default {@code false} - only providers
+     * whose request serialiser actually emits the image bytes override to true.
+     */
+    default boolean supportsImageAttachments() {
+        return false;
+    }
 }

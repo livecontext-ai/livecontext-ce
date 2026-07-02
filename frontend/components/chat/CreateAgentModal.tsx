@@ -22,7 +22,7 @@ import { useQuery, useQueryClient, useInfiniteQuery } from '@tanstack/react-quer
 import { useToast } from '@/components/Toast';
 import Toast from '@/components/Toast';
 import { useTranslations } from 'next-intl';
-import { useVisibleModels } from '@/hooks/useModels';
+import { useVisibleModels, getModelsCache, isEmptySelectedModel, toNonBridgeSelectedModel } from '@/hooks/useModels';
 import { ModelPicker } from '@/components/ai/ModelPicker';
 import { useMcpApis, fetchApiTools, ApiTool } from '@/app/workflows/builder/hooks/useMcpData';
 import { apiClient } from '@/lib/api/api-client';
@@ -536,6 +536,13 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
   const compactionInitials = initialCompaction(agent);
   const [compactionEnabled, setCompactionEnabled] = useState<boolean>(compactionInitials.compactionEnabled);
   const [compactionAfterTurns, setCompactionAfterTurns] = useState<number>(compactionInitials.compactionAfterTurns);
+  // Summariser-model override ('' pair = inherit). Both-or-neither: the ModelPicker
+  // writes both halves together, and the OFF toggle blanks both (explicit clear).
+  const [compactionModelProvider, setCompactionModelProvider] = useState<string>(compactionInitials.compactionModelProvider);
+  const [compactionModelName, setCompactionModelName] = useState<string>(compactionInitials.compactionModelName);
+  const [compactionModelOpen, setCompactionModelOpen] = useState<boolean>(
+    compactionInitials.compactionModelProvider !== '' && compactionInitials.compactionModelName !== '',
+  );
   const scheduleRestoredRef = React.useRef(false);
 
   // Step 3: Integration - Widget
@@ -1397,9 +1404,11 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
           { maxPerResourcePerTurn, loopIdenticalStop, loopConsecutiveStop },
           turnLimitInitials,
         ),
-        // V350 - compaction enable + cadence, sent only when changed (else inherit).
+        // V350 - compaction enable + cadence + summariser model, sent only when
+        // changed (else inherit). The model pair goes out whole: both non-blank =
+        // override, both "" = explicit clear.
         ...buildChangedCompaction(
-          { compactionEnabled, compactionAfterTurns },
+          { compactionEnabled, compactionAfterTurns, compactionModelProvider, compactionModelName },
           compactionInitials,
         ),
       };
@@ -2707,6 +2716,70 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                             max={100}
                             className="w-28 shrink-0 text-right"
                           />
+                        </div>
+                      )}
+                      {/* Summariser-model override - off = inherit (conversations on this
+                          agent use this compaction model if set, otherwise the platform
+                          default; the primary chat model is never a tier). Toggling ON
+                          seeds the pair from the primary model selection so the shown pick
+                          is what gets saved - unless that pick is a CLI bridge, which can
+                          never serve the summariser's bare single completion; then the
+                          seed falls back to the first non-bridge provider's default.
+                          Toggling OFF blanks both halves (explicit clear). */}
+                      {compactionEnabled && (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between gap-3">
+                            <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary min-w-0">
+                              <span className="min-w-0">{tc('compactionModelLabel')}</span>
+                              <TooltipProvider delayDuration={0}>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help shrink-0" />
+                                  </TooltipTrigger>
+                                  <TooltipContent side="top" className="max-w-xs">
+                                    <p className="text-xs">{tc('compactionModelInfo')}</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
+                            </label>
+                            <Switch
+                              checked={compactionModelOpen}
+                              onCheckedChange={(checked) => {
+                                setCompactionModelOpen(checked);
+                                if (checked) {
+                                  if (!compactionModelProvider && !compactionModelName) {
+                                    const seed = toNonBridgeSelectedModel(
+                                      { provider: modelProvider, id: modelName },
+                                      getModelsCache(),
+                                    );
+                                    if (!isEmptySelectedModel(seed)) {
+                                      setCompactionModelProvider(seed.provider);
+                                      setCompactionModelName(seed.id);
+                                    }
+                                  }
+                                } else {
+                                  setCompactionModelProvider('');
+                                  setCompactionModelName('');
+                                }
+                              }}
+                              aria-label={tc('compactionModelLabel')}
+                            />
+                          </div>
+                          {compactionModelOpen ? (
+                            <ModelPicker
+                              value={{ provider: compactionModelProvider, id: compactionModelName }}
+                              onChange={(next) => {
+                                setCompactionModelProvider(next.provider);
+                                setCompactionModelName(next.id);
+                              }}
+                              disabled={modelsLoading}
+                              providerLabel={tc('compactionModelProviderLabel')}
+                              modelLabel={tc('compactionModelNameLabel')}
+                              excludeBridgeProviders
+                            />
+                          ) : (
+                            <p className="text-xs text-theme-secondary">{tc('compactionModelPlatformDefault')}</p>
+                          )}
                         </div>
                       )}
                     </div>
