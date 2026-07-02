@@ -13,6 +13,13 @@ test('the bridge Docker context excludes every local node_modules directory', ()
   assert.match(dockerignore, /^\*\*\/node_modules\/$/m);
 });
 
+test('the bridge Docker context excludes the test tree (repo-excluded e2e suites must not ship in the public image)', () => {
+  // The public bridge image builds from this PRIVATE context while the e2e test
+  // files are excluded from the public repo; without this ignore they would ship
+  // in the image and bypass the CE export gates.
+  assert.match(dockerignore, /^bridge\/test\/$/m);
+});
+
 test('bridge dependencies are installed after the final source copy', () => {
   const sourceCopy = dockerfile.indexOf('COPY bridge/ ./bridge/');
   const dependencyInstall = dockerfile.indexOf('RUN cd bridge && npm ci --omit=dev');

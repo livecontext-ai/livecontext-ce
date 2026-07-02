@@ -204,6 +204,39 @@
                 -->
                 <spring-boot.repackage.skip>true</spring-boot.repackage.skip>
             </properties>
+            <build>
+                <plugins>
+                    <!--
+                        CE jars must not carry the cloud/dev-only Spring profile files.
+                        The public CE image is built from the PRIVATE repo (publish-ce.yml),
+                        so anything packaged into the jars ships publicly (inside the
+                        monolith fat jar's BOOT-INF/lib) even though the repo export
+                        excludes these files (deploy/ce-export/exclude-paths.txt); a secret
+                        committed to one of them would bypass every export gate.
+
+                        Excluding at the JAR level (not <resources>) because (a) a parent
+                        profile's <resources> does not propagate to child modules, while
+                        inherited plugin configuration does, and (b) target/classes keeps
+                        the files, so local `-Pce test` runs are unaffected. The `ce`
+                        runtime profile never loads local/dev/prod, and cloud builds
+                        (no -Pce) are unaffected. publish-ce.yml's "Image content gate"
+                        fails the release if this ever regresses.
+                    -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-jar-plugin</artifactId>
+                        <version>3.4.1</version>
+                        <configuration>
+                            <excludes>
+                                <!-- **/ also covers Spring's classpath:/config/ location. -->
+                                <exclude>**/application-local.*</exclude>
+                                <exclude>**/application-dev.*</exclude>
+                                <exclude>**/application-prod.*</exclude>
+                            </excludes>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
         </profile>
     </profiles>
 

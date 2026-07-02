@@ -56,6 +56,21 @@ ENV NEXT_PUBLIC_POSTHOG_KEY=$NEXT_PUBLIC_POSTHOG_KEY
 ENV NEXT_PUBLIC_POSTHOG_HOST=$NEXT_PUBLIC_POSTHOG_HOST
 ENV NEXT_PUBLIC_GOOGLE_PICKER_API_KEY=$NEXT_PUBLIC_GOOGLE_PICKER_API_KEY
 
+# CE image parity with the public CE repo: the hosted-SaaS legal pages
+# (app/legal, which name a natural person for legal reasons) must not be
+# compiled into the CE image, and the unused landing media (CE bypasses the
+# marketing landing page) is dead weight. The public repo export already
+# excludes both (exclude-paths.txt + export-ce.sh step 5c); without this,
+# `COPY . .` from the PRIVATE repo would bake them into the published image
+# anyway. Only string hrefs point at /legal/* (no imports), so the build is
+# unaffected - the public-tree build (gate D) already proves Next builds
+# without app/legal. publish-ce.yml's image content gate pins the legal-page
+# absence pre-push.
+RUN if [ "$NEXT_PUBLIC_APP_EDITION" = "ce" ]; then \
+      rm -rf app/legal public/landing/screenshots \
+      && rm -f public/landing/videos/builder-built-by-chat.webm; \
+    fi
+
 RUN npm run build
 
 # ---- Runtime stage ----

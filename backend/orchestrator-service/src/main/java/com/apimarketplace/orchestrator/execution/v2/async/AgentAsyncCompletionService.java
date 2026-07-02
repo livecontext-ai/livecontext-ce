@@ -231,6 +231,34 @@ public class AgentAsyncCompletionService {
     private com.apimarketplace.orchestrator.services.state.StateSnapshotService stateSnapshotService;
 
     /**
+     * Readiness-context cache invalidation on async completion.
+     *
+     * <p>The inline completion path invalidates this cache inside
+     * {@code NodeCompletionService.emitNodeComplete}, and the signal-resume path does so in
+     * {@code SignalResumeService}, so that the NEXT {@code getReadyNodes} for the run sees the
+     * fresh post-completion state (see {@link com.apimarketplace.orchestrator.services.context.ReadinessContextCache}).
+     * The async agent path persists via {@code StepCompletionOrchestrator.complete} and never
+     * touches {@code emitNodeComplete}, so it was the one completion path NOT invalidating the
+     * cache.
+     *
+     * <p><b>Bug this closes (fork -&gt; N async agents -&gt; merge, merge never fires):</b>
+     * parallel fork branches given the same prompt finish near-simultaneously, i.e. within the
+     * cache's {@code TTL} (500ms). Sibling completions serialize under the per-run stripe lock;
+     * the first one populates the readiness context (showing only itself completed) and the
+     * later ones hit that STALE cached context, never observing the siblings' just-persisted
+     * completions. The merge's predecessor set is therefore never seen as fully {@code COMPLETED},
+     * so the merge (and everything downstream, e.g. the interface) is permanently stranded with
+     * no error. Invalidating at the top of {@link #executeReadyNodesLoop} - under the same lock,
+     * before readiness is computed - makes each completion's ready-node calculation reflect the
+     * fresh state, so the last sibling to complete drives the merge.
+     *
+     * <p>{@code required = false} so focused unit fixtures that don't wire the cache fall through
+     * to the always-fresh (uncached) path; production always has the bean.
+     */
+    @Autowired(required = false)
+    private com.apimarketplace.orchestrator.services.context.ReadinessContextCache readinessCache;
+
+    /**
      * Stateless traversal helper that searches an execution tree for a node by id.
      * Direct injection (not lazy) because it has no cyclical dependencies.
      */
@@ -589,7 +617,7 @@ public class AgentAsyncCompletionService {
             //    close the cycle - equivalent to the "last signal resolved" path in the
             //    signal subsystem. Without this, ReusableTriggerService never gets notified
             //    that the async I/O is done and the run stays RUNNING forever.
-            triggerDeferredResetIfDrained(runId, pending.dagTriggerId(), pending.epoch());
+            triggerDeferredResetIfDrained(runId, pending.dagTriggerId(), pending.epoch(), pending.correlationId());
             logger.info("[AgentAsyncCompletion] Completed async agent: correlationId={}, runId={}, nodeId={}",
                 pending.correlationId(), runId, nodeId);
             return true;
@@ -823,7 +851,7 @@ public class AgentAsyncCompletionService {
         executeReadyNodesLoop(runId, parentItemId, pending.dagTriggerId(), pending.epoch(), dispatched, loaded);
         // Split barrier seal is the last item for this (runId, dagTriggerId, epoch) -
         // propagate the cycle reset the same way the non-split path does.
-        triggerDeferredResetIfDrained(runId, pending.dagTriggerId(), pending.epoch());
+        triggerDeferredResetIfDrained(runId, pending.dagTriggerId(), pending.epoch(), pending.correlationId());
         return true;
     }
 
@@ -1020,14 +1048,40 @@ public class AgentAsyncCompletionService {
      * may leave it unset, and the legacy engine-wide reset path does not apply to the
      * per-DAG scoping we need here.</p>
      */
-    private void triggerDeferredResetIfDrained(String runId, String dagTriggerId, int epoch) {
+    private void triggerDeferredResetIfDrained(String runId, String dagTriggerId, int epoch, String correlationId) {
         if (dagTriggerId == null) {
             logger.debug("[AgentAsyncCompletion] Skipping deferred reset - dagTriggerId unset: runId={}", runId);
             return;
         }
+        // Clear THIS delivery's own in-flight stage BEFORE the sibling check below, so the "is any
+        // sibling still in flight?" decision is race-free. Rationale: the last two near-simultaneous
+        // deliveries could otherwise each observe the OTHER still staged and BOTH defer, leaving the
+        // epoch permanently un-closed (no re-check fires afterwards). Because each delivery now checks
+        // strictly AFTER clearing itself, a symmetric double-defer is impossible: the delivery whose
+        // clear lands last sees an empty set and closes (ordering contradiction rules out both
+        // deferring). The outer finally in deliverConsumedPending still clears unconditionally so the
+        // failure / terminal / exception paths (which never reach this method) are covered; a second
+        // clear here is an idempotent Redis DELETE. performDeferredReset is itself idempotent (no-ops
+        // once the run is WAITING_TRIGGER), so a cross-replica double-close is safe too.
+        if (inFlightStore != null && correlationId != null) {
+            inFlightStore.clear(correlationId);
+        }
         if (registry.hasPendingFor(runId, dagTriggerId, epoch)) {
             logger.debug("[AgentAsyncCompletion] Deferred reset not yet - async agents still in flight: runId={}, triggerId={}, epoch={}",
                 runId, dagTriggerId, epoch);
+            return;
+        }
+        // A sibling completion whose pending entry was already GETDEL'd by consume() but whose
+        // deliverUnderLock has not run yet is invisible to registry.hasPendingFor above - it lives
+        // only in the in-flight store (staged at consume, cleared after delivery). Closing the epoch
+        // now would prune the state the sibling AND the downstream merge still need, so the merge
+        // would never fire (fork -> N parallel async agents -> merge, siblings finishing within the
+        // same delivery window). Defer until the genuinely-last delivery; whichever delivery clears
+        // itself last (above) is the one that observes an empty set here and closes.
+        if (inFlightStore != null
+                && inFlightStore.hasOtherInFlightForEpoch(runId, dagTriggerId, epoch, correlationId)) {
+            logger.debug("[AgentAsyncCompletion] Deferred reset not yet - sibling async agents consumed but not yet delivered: runId={}, triggerId={}, epoch={}, self={}",
+                runId, dagTriggerId, epoch, correlationId);
             return;
         }
         try {
@@ -2369,6 +2423,19 @@ public class AgentAsyncCompletionService {
     private void executeReadyNodesLoop(String runId, String itemId, String dagTriggerId, int epoch,
                                         Set<String> alreadyDispatched,
                                         com.apimarketplace.orchestrator.execution.v2.cache.ExecutionCacheManager.LoadedExecution preloaded) {
+        // Drop this run's stale readiness-context cache entries BEFORE computing ready nodes.
+        // The async completion just persisted a node via StepCompletionOrchestrator.complete
+        // (and, on the split path, recordSplitAggregateIfMissing) without going through
+        // NodeCompletionService.emitNodeComplete - the site where the inline path invalidates
+        // this cache. Without this, sibling fork branches that complete within the cache TTL
+        // reuse a stale context that still shows the just-persisted siblings as pending, so a
+        // downstream merge's predecessor set never reads as fully COMPLETED and the merge is
+        // permanently stranded. We are under the per-run lock here (deliverUnderLock), so the
+        // invalidate + getReadyNodes below is atomic for this run. See the readinessCache field.
+        if (readinessCache != null) {
+            readinessCache.invalidateRun(runId);
+        }
+
         // Correlation token for this traversal - each async agent completion arrives on a
         // separate redisMessageListenerContainer thread and independently runs the loop,
         // which produces multiple interleaved ReadyNodeCalculator traces. Without a token
@@ -2385,6 +2452,7 @@ public class AgentAsyncCompletionService {
             ? v2StepByStepService.getReadyNodes(runId, itemId, epoch, preloaded)
             : v2StepByStepService.getReadyNodes(runId, itemId, epoch);
         currentReady = filterTriggers(currentReady);
+        currentReady = filterOutInFlight(currentReady, runId, epoch);
         if (alreadyDispatched != null && !alreadyDispatched.isEmpty()) {
             Set<String> filtered = new HashSet<>(currentReady);
             filtered.removeAll(alreadyDispatched);
@@ -2454,6 +2522,7 @@ public class AgentAsyncCompletionService {
             }
             currentReady = v2StepByStepService.getReadyNodes(runId, itemId, epoch);
             currentReady = filterTriggers(currentReady);
+            currentReady = filterOutInFlight(currentReady, runId, epoch);
         }
 
         if (iteration >= MAX_LOOP_ITERATIONS) {
@@ -2474,5 +2543,46 @@ public class AgentAsyncCompletionService {
         return ready.stream()
             .filter(id -> !id.startsWith("trigger:"))
             .collect(Collectors.toSet());
+    }
+
+    /**
+     * Drop ready nodes that are already RUNNING (dispatched, not yet completed) in this epoch.
+     *
+     * <p>When a fork branch's async agent completes, the sibling branches are typically still
+     * in flight - dispatched and awaiting their own results. The readiness calculator returns
+     * those siblings as "ready" (they are not COMPLETED), so the successor loop would call
+     * {@code executeNode} on them again. Because an already-dispatched async agent's re-execution
+     * is an idempotent no-op that neither completes the node nor yields pending, the loop makes no
+     * progress and spins to {@code MAX_LOOP_ITERATIONS} (100), paying a {@code reconstructState}
+     * per turn. Filtering the in-flight set out here lets the loop finish immediately for the
+     * non-last completions; the genuinely-ready merge (whose predecessors are all COMPLETED, so it
+     * is not RUNNING) is unaffected and still executes on the last completion.
+     *
+     * <p>Fail-open: a null tracker / empty map / Redis read failure returns the input unchanged,
+     * so the pre-existing {@code isPending()} guard + iteration cap remain the backstop.
+     */
+    private Set<String> filterOutInFlight(Set<String> ready, String runId, int epoch) {
+        if (ready == null || ready.isEmpty() || runningNodeTracker == null) {
+            return ready == null ? Set.of() : ready;
+        }
+        Map<String, Integer> running;
+        try {
+            running = runningNodeTracker.getRunningCounts(runId, epoch);
+        } catch (Exception e) {
+            return ready;
+        }
+        if (running == null || running.isEmpty()) {
+            return ready;
+        }
+        Set<String> filtered = new LinkedHashSet<>(ready);
+        boolean removed = filtered.removeIf(id -> {
+            Integer c = running.get(id);
+            return c != null && c > 0;
+        });
+        if (removed) {
+            logger.debug("[AgentAsyncCompletion] Skipping ready nodes already in flight (RUNNING) this epoch: runId={}, epoch={}, remaining={}",
+                runId, epoch, filtered);
+        }
+        return filtered;
     }
 }

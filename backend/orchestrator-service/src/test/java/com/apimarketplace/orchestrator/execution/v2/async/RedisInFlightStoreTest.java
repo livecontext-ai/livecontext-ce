@@ -4,11 +4,16 @@ import com.apimarketplace.orchestrator.domain.execution.AgentResultMessage;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
 
 /**
  * Round-trip tests for {@link RedisInFlightStore} serialization. The store talks to Redis,
@@ -92,5 +97,56 @@ class RedisInFlightStoreTest {
 
         assertThat(round.pending().correlationId()).isEqualTo("cid-j");
         assertThat(round.result().result()).containsEntry("k", "v");
+    }
+
+    // ── hasOtherInFlightForEpoch: the async-drain guard against premature epoch close ──
+    // The filter over listAll() is what stops the first-delivered fork-branch agent from
+    // pruning the epoch while siblings are consumed-but-not-yet-delivered (which stranded
+    // a downstream merge). listAll() talks to Redis, so it is stubbed via a spy here.
+
+    private static RedisInFlightStore.InFlightEntry entry(
+            String correlationId, String runId, String dagTriggerId, int epoch) {
+        PendingAgent p = new PendingAgent(
+            correlationId, runId, "agent:x", "X", dagTriggerId, epoch, 0, "0", "agent",
+            "t1", null, null, null, null, null, "deepseek-chat", null, null, Instant.now(), "o1");
+        AgentResultMessage r = new AgentResultMessage(
+            correlationId, runId, "agent:x", Map.of(), true, null, "agent", Instant.now());
+        return new RedisInFlightStore.InFlightEntry(p, r);
+    }
+
+    private static RedisInFlightStore storeReturning(List<RedisInFlightStore.InFlightEntry> staged) {
+        RedisInFlightStore store = spy(new RedisInFlightStore(mock(StringRedisTemplate.class), new ObjectMapper()));
+        doReturn(staged).when(store).listAll();
+        return store;
+    }
+
+    @Test
+    @DisplayName("hasOtherInFlightForEpochSeesSiblingConsumedButNotDelivered: a staged sibling in the same epoch (excluding self) is detected")
+    void hasOtherDetectsSibling() {
+        RedisInFlightStore store = storeReturning(List.of(
+            entry("cid-self", "run-1", "trigger:ask", 1),
+            entry("cid-sibling", "run-1", "trigger:ask", 1)));
+
+        assertThat(store.hasOtherInFlightForEpoch("run-1", "trigger:ask", 1, "cid-self")).isTrue();
+    }
+
+    @Test
+    @DisplayName("hasOtherInFlightForEpochExcludesSelf: the last delivery, whose only staged entry is its own, reports drained")
+    void hasOtherExcludesSelf() {
+        RedisInFlightStore store = storeReturning(List.of(
+            entry("cid-self", "run-1", "trigger:ask", 1)));
+
+        assertThat(store.hasOtherInFlightForEpoch("run-1", "trigger:ask", 1, "cid-self")).isFalse();
+    }
+
+    @Test
+    @DisplayName("hasOtherInFlightForEpochScopesByRunTriggerEpoch: staged entries from other runs/triggers/epochs do not block this epoch's reset")
+    void hasOtherScopesStrictly() {
+        RedisInFlightStore store = storeReturning(List.of(
+            entry("cid-otherrun", "run-2", "trigger:ask", 1),
+            entry("cid-othertrigger", "run-1", "trigger:other", 1),
+            entry("cid-otherepoch", "run-1", "trigger:ask", 2)));
+
+        assertThat(store.hasOtherInFlightForEpoch("run-1", "trigger:ask", 1, "cid-self")).isFalse();
     }
 }

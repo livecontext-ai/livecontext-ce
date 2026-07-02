@@ -2,4 +2,9 @@
 **/.npm/
 **/*.log
 .git/
-
+# The bridge test tree must NOT reach the image: the runtime never needs it, and
+# its e2e suites are excluded from the PUBLIC repo (deploy/ce-export/exclude-paths.txt)
+# while the public bridge image builds from this PRIVATE context - shipping them
+# would bypass the repo export gates. Pinned by dockerContextHygiene.test.mjs and
+# publish-ce.yml's image content gate.
+bridge/test/

@@ -161,6 +161,52 @@ public class RedisInFlightStore {
         return listAll().size();
     }
 
+    /**
+     * True when at least one staged in-flight entry exists for the given
+     * {@code (runId, dagTriggerId, epoch)} whose correlationId is NOT
+     * {@code excludeCorrelationId}.
+     *
+     * <p><b>Why the async drain check needs this.</b> {@link PendingAgentRegistry#consume}
+     * GETDELs a completion's pending entry at the very start of {@code onAgentResult} - so by
+     * the time the FIRST of N parallel fork-branch agents reaches its post-delivery drain check,
+     * its siblings' results may already have been consumed (registry-empty) while their
+     * {@code deliverUnderLock} is still queued behind the per-run lock. Closing the epoch on that
+     * false "registry drained" signal prunes the epoch state the siblings (and the downstream
+     * merge) still need, so the merge never fires. Those consumed-but-not-yet-delivered siblings
+     * ARE recorded here (staged at consume, cleared only after delivery), so this lets the drain
+     * check see them and defer the reset until the genuinely-last delivery. Cross-replica safe:
+     * the store is Redis-backed, unlike the per-JVM {@code runLockStripes}.
+     *
+     * <p>Bounded cost: the store only ever holds agents mid-delivery (cleared in a finally after
+     * each delivery), so the {@link #listAll()} SCAN it runs is over a small key set.
+     */
+    public boolean hasOtherInFlightForEpoch(String runId, String dagTriggerId, int epoch,
+                                            String excludeCorrelationId) {
+        if (runId == null) {
+            return false;
+        }
+        for (InFlightEntry entry : listAll()) {
+            PendingAgent p = entry.pending();
+            if (p == null) {
+                continue;
+            }
+            if (!runId.equals(p.runId())) {
+                continue;
+            }
+            if (dagTriggerId != null && !dagTriggerId.equals(p.dagTriggerId())) {
+                continue;
+            }
+            if (p.epoch() != epoch) {
+                continue;
+            }
+            if (excludeCorrelationId != null && excludeCorrelationId.equals(p.correlationId())) {
+                continue;
+            }
+            return true;
+        }
+        return false;
+    }
+
     /** Paired (pending, result) entry recovered from the in-flight store. */
     public record InFlightEntry(PendingAgent pending, AgentResultMessage result) {}
 
