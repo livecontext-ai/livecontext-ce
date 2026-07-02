@@ -3048,12 +3048,14 @@
       "publishTitle": "发布新包",
       "signingKey": "签名密钥",
       "statusActive": "活动",
+      "notLinkedHint": "此安装尚未连接云端，这是全新安装的正常状态。请在“连接”标签页中完成连接以接收更新。",
       "statusCode": {
         "APPLY_FAILED": "应用失败",
         "CHECKSUM_INVALID": "校验和无效",
         "HTTP_ERROR": "HTTP 错误",
         "NETWORK_ERROR": "网络错误",
         "NOT_CONFIGURED": "未配置",
+        "NOT_LINKED": "未连接",
         "NO_ACTIVE": "没有活动的包",
         "OK": "OK",
         "PAYLOAD_MALFORMED": "负载格式错误",
@@ -3286,6 +3288,7 @@
         "clientIdRequired": "Client ID是必需的",
         "clientSecretRequired": "Client Secret是必需的",
         "failedToInitiate": "启动OAuth2流程失败",
+        "missingOAuthHostVar": "请输入你的{field}以进行连接",
         "credentialsNotConfigured": "此服务暂不可用",
         "contactAdmin": "此集成即将上线。如需紧急使用，请联系支持。"
       },
@@ -4860,6 +4863,7 @@
         "lastAppliedAt": "上次应用时间",
         "consecutiveFailures": "连续失败次数",
         "never": "从不",
+        "notLinkedHint": "此安装尚未连接云端，这是全新安装的正常状态。请在“连接”标签页中完成连接以接收更新。",
         "statusCode": {
           "OK": "OK",
           "NO_ACTIVE": "没有活动的包",

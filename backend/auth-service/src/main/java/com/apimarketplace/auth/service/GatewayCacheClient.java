@@ -1,5 +1,7 @@
 package com.apimarketplace.auth.service;
 
+import com.apimarketplace.common.event.EventBus;
+import com.apimarketplace.common.scope.GatewayUserCacheInvalidation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -25,6 +27,13 @@ import java.util.Map;
  * naturally expire within 5min and self-heal. The set-default DB write
  * already committed, so no business invariant is at stake here.
  *
+ * <p>Multi-pod: the HTTP POST reaches only the ONE gateway replica the
+ * Service/LB routes to. The {@code EventBus} publish on
+ * {@link GatewayUserCacheInvalidation#CHANNEL} is what evicts the entry on
+ * EVERY replica (each gateway subscribes via
+ * {@code UserCacheInvalidationSubscriber}); the POST is kept as an immediate,
+ * Redis-independent fallback.
+ *
  * <p>Authentication is via the {@code X-Internal-Auth} header carrying the
  * shared {@code gateway.filter.secret-key} secret. The gateway controller
  * validates this with constant-time comparison.
@@ -35,15 +44,18 @@ public class GatewayCacheClient {
     private static final Logger log = LoggerFactory.getLogger(GatewayCacheClient.class);
 
     private final RestTemplate restTemplate;
+    private final EventBus eventBus;
     private final String gatewayUrl;
     private final String internalSecret;
     private final boolean monolithMode;
 
     public GatewayCacheClient(RestTemplate restTemplate,
+                              EventBus eventBus,
                               @Value("${services.gateway-url:http://localhost:8080}") String gatewayUrl,
                               @Value("${gateway.filter.secret-key:}") String internalSecret,
                               @Value("${deployment.mode:microservice}") String deploymentMode) {
         this.restTemplate = restTemplate;
+        this.eventBus = eventBus;
         this.gatewayUrl = gatewayUrl;
         this.internalSecret = internalSecret;
         this.monolithMode = "monolith".equalsIgnoreCase(deploymentMode);
@@ -67,8 +79,20 @@ public class GatewayCacheClient {
             log.warn("Skipping cache invalidation - providerId is null/blank");
             return;
         }
+        // Fan-out FIRST: the pub/sub reaches EVERY gateway replica. The HTTP POST
+        // below only lands on the one replica the Service/LB picks - with 2+
+        // replicas a demotion/removal left the others serving the stale role for
+        // up to the 5-min TTL. Both paths are best-effort and idempotent.
+        try {
+            eventBus.publish(
+                    GatewayUserCacheInvalidation.CHANNEL,
+                    GatewayUserCacheInvalidation.messageFor(providerId));
+        } catch (Exception | LinkageError e) {
+            log.warn("Failed to publish gateway user-cache invalidation for providerId={}: {}",
+                    providerId, e.getMessage());
+        }
         if (internalSecret == null || internalSecret.isBlank()) {
-            log.warn("Skipping cache invalidation - gateway.filter.secret-key is not configured");
+            log.warn("Skipping cache invalidation HTTP call - gateway.filter.secret-key is not configured");
             return;
         }
         String url = gatewayUrl + "/api/gateway/cache/invalidate/" + providerId;

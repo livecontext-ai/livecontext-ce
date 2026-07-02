@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { Switch } from '@/components/ui/switch';
 import { PublicationStatusIcon } from '@/components/publications/PublicationStatusIcon';
+import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 
 import type { SkillFolder, Skill } from '@/lib/api';
 
@@ -86,6 +87,10 @@ export function SkillFolderTree({
   const t = useTranslations('emptyState.skill');
   const tCommon = useTranslations('common');
   const tMarketplace = useTranslations('marketplace');
+  // Audit 2026-07-02 - VIEWER role in an org workspace is read-only: hide the
+  // create/rename/delete/move/share affordances on skills AND folders. The
+  // per-user active toggle stays (it only writes the caller's own override).
+  const canMutate = useCanMutateInCurrentOrg();
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [dragItem, setDragItem] = useState<DragItem | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
@@ -269,8 +274,10 @@ export function SkillFolderTree({
   const menuItemClass = "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-colors text-theme-primary hover:bg-gray-100 dark:hover:bg-gray-800";
   const menuItemDangerClass = "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-colors text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30";
 
-  // "+" button with popover menu
+  // "+" button with popover menu (hidden entirely for read-only VIEWERs -
+  // both items create resources).
   const renderAddButton = (folderId: string | null) => {
+    if (!canMutate) return null;
     const addKey = `add:${folderId ?? '__root__'}`;
 
     return (
@@ -326,15 +333,17 @@ export function SkillFolderTree({
     const isGlobalSkill = !!skill.isGlobal;
     // Globals live outside any tenant's folder hierarchy - don't let non-admins
     // drag them around (the move endpoint also rejects this server-side).
-    const canDrag = !isGlobalSkill || isAdmin;
-    const canDelete = !skill.defaultKey && (!isGlobalSkill || isAdmin);
+    // Every capability below is additionally gated on canMutate: a VIEWER in an
+    // org workspace is read-only.
+    const canDrag = canMutate && (!isGlobalSkill || isAdmin);
+    const canDelete = canMutate && !skill.defaultKey && (!isGlobalSkill || isAdmin);
     // Publishing a global to the marketplace is incoherent (already visible to all);
     // also block non-admins from attempting to share a skill they don't own.
-    const canShare = !isGlobalSkill;
+    const canShare = canMutate && !isGlobalSkill;
     // V275 - the owner of a personal skill sets is_default_active; for a global
     // skill that capability follows the admin gate (backend enforces).
-    const canEditDefaultActive = !!onToggleSkillIsDefaultActive && (!isGlobalSkill || isAdmin);
-    const canEditGlobal = !!onToggleSkillGlobal && isAdmin;
+    const canEditDefaultActive = canMutate && !!onToggleSkillIsDefaultActive && (!isGlobalSkill || isAdmin);
+    const canEditGlobal = canMutate && !!onToggleSkillGlobal && isAdmin;
 
     // V276 - effective active state for THIS user (override wins, else fall back
     // to the skill-level default). Used to position the toggle next to the row.
@@ -348,7 +357,7 @@ export function SkillFolderTree({
     // V275 (2026-05-21) hides the trigger in that case.
     const hasMenuItems =
       (!!onShareSkill && canShare && !isPublished && !isPendingReview) ||
-      (!!onUnshareSkill && isPublished) ||
+      (!!onUnshareSkill && canMutate && isPublished) ||
       isPendingReview ||
       canEditDefaultActive ||
       canEditGlobal ||
@@ -452,7 +461,7 @@ export function SkillFolderTree({
                     <span className="text-sm">{tCommon('share')}</span>
                   </button>
                 )}
-                {onUnshareSkill && isPublished && (
+                {onUnshareSkill && canMutate && isPublished && (
                   <button
                     onClick={(e) => { e.stopPropagation(); setOpenMenuId(null); onUnshareSkill(skill.id); }}
                     className={menuItemDangerClass}
@@ -496,11 +505,12 @@ export function SkillFolderTree({
 
     const isGlobalFolder = !!node.folder.isGlobal;
     // V275 - non-admins can't rename / delete a global folder (the backend
-    // rejects too); the move endpoint already gates server-side.
-    const canRename = !isGlobalFolder || isAdmin;
-    const canDeleteFolder = !isGlobalFolder || isAdmin;
-    const canEditFolderGlobal = !!onToggleFolderGlobal && isAdmin;
-    const canDragFolder = !isGlobalFolder || isAdmin;
+    // rejects too); the move endpoint already gates server-side. All folder
+    // capabilities are additionally gated on canMutate (VIEWER = read-only).
+    const canRename = canMutate && (!isGlobalFolder || isAdmin);
+    const canDeleteFolder = canMutate && (!isGlobalFolder || isAdmin);
+    const canEditFolderGlobal = canMutate && !!onToggleFolderGlobal && isAdmin;
+    const canDragFolder = canMutate && (!isGlobalFolder || isAdmin);
     // Hide the 3-dots trigger entirely when no menu item would render -
     // mirrors the skill row fix above.
     const folderHasMenuItems = canRename || canDeleteFolder || canEditFolderGlobal;

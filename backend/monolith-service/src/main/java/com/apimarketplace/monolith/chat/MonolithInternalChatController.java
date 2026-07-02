@@ -64,7 +64,11 @@ public class MonolithInternalChatController {
                 .body(Map.of("success", false, "error", "conversationId is required"));
         }
 
-        if (!creditClient.checkCredits(userId)) {
+        // Source-type-scoped gate (cloud parity): FREE monthly workflow credits
+        // must not admit a scheduled/webhook chat turn. No-op in CE unlimited
+        // mode where the check always allows.
+        if (!creditClient.checkCredits(userId,
+                com.apimarketplace.common.credit.CreditConsumptionClient.SOURCE_TYPE_CHAT_CONVERSATION)) {
             // Persist the attempt + a typed error message in the conversation so the
             // user sees the schedule was skipped, instead of an empty conv that
             // looks broken. Mirrors the cloud InternalChatController fix so CE

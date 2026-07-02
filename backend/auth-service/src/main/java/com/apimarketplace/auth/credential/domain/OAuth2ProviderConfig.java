@@ -167,6 +167,25 @@ public record OAuth2ProviderConfig(
                 grantType);
     }
 
+    /**
+     * Return a copy with the authorization and token URLs replaced, every other field preserved.
+     *
+     * <p>Used to resolve per-instance host placeholders (Shopify {@code {shop}}, Zendesk
+     * {@code {subdomain}}, NetSuite {@code {account_id}}, Workday {@code {tenant}}/{@code {hostname}},
+     * Marketo {@code {munchkin_id}}) in the OAuth authorize/token URLs before the redirect. The
+     * values come from the user at connect time (collected as credential fields the importer
+     * derived from the URL templates), so this substitution is fully data-driven - no per-provider
+     * code. A {@code null} argument keeps the current URL unchanged.
+     */
+    public OAuth2ProviderConfig withUrls(String newAuthorizationUrl, String newTokenUrl) {
+        return new OAuth2ProviderConfig(
+                newAuthorizationUrl != null ? newAuthorizationUrl : authorizationUrl,
+                newTokenUrl != null ? newTokenUrl : tokenUrl,
+                refreshUrl, scopes, scopeDelimiter,
+                tokenAuthMethod, tokenParamsLocation, pkceEnabled, authorizeExtraParams, refresh,
+                grantType);
+    }
+
     /** Token endpoint falls back to {@code tokenUrl} when {@code refreshUrl} is not set. */
     public String effectiveRefreshUrl() {
         return refreshUrl != null && !refreshUrl.isBlank() ? refreshUrl : tokenUrl;

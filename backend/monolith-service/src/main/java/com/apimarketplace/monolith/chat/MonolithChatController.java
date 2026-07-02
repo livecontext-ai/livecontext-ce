@@ -77,7 +77,10 @@ public class MonolithChatController {
                 request.getMessage() != null ? request.getMessage().length() : 0,
                 request.getConversationId(), provider, model);
 
-        if (!creditClient.checkCredits(userId)) {
+        // Source-type-scoped gate (cloud ChatControllerV3 parity): chat draws the
+        // PAYG bucket alone on the FREE plan. No-op in CE unlimited mode.
+        if (!creditClient.checkCredits(userId,
+                com.apimarketplace.common.credit.CreditConsumptionClient.SOURCE_TYPE_CHAT_CONVERSATION)) {
             return ResponseEntity.status(HttpStatus.PAYMENT_REQUIRED)
                     .body(Map.of("error", "Insufficient credits"));
         }

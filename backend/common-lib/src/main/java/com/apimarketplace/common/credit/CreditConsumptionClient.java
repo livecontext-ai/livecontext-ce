@@ -50,6 +50,15 @@ public class CreditConsumptionClient {
     private static final String SIGNATURE_PREFIX = "gw_";
     private static final String INTERNAL_PROVIDER_ID = "internal-credit-client";
 
+    /**
+     * Source type for chat/agent turn gates. Pass to {@link #checkCredits(String, String)}
+     * so the server applies the FREE-plan bucket scoping (chat draws the PAYG
+     * bucket alone on FREE). Shared constant so the four chat gate call-sites
+     * and any future one cannot drift by typo (a typo would be fail-safe -
+     * more restrictive - but silently wrong).
+     */
+    public static final String SOURCE_TYPE_CHAT_CONVERSATION = "CHAT_CONVERSATION";
+
     private final RestTemplate restTemplate;
     private final String authServiceUrl;
     private final boolean enabled;
@@ -193,14 +202,34 @@ public class CreditConsumptionClient {
     }
 
     /**
-     * Check if user has sufficient credits.
+     * Check if user has sufficient credits (legacy total-balance form, used by
+     * workflow launch gates where the FREE monthly bucket IS eligible).
      * Fail-closed: returns false if auth-service is unreachable and no cache.
      */
     public boolean checkCredits(String userId) {
+        return checkCredits(userId, null);
+    }
+
+    /**
+     * Source-type-aware credit check. Pass the spend's source type (e.g.
+     * {@code CHAT_CONVERSATION} from the internal/scheduled chat gates) so the
+     * server applies the FREE-plan bucket scoping: a Free user with monthly
+     * workflow-only credits but no PAYG top-up is refused up-front instead of
+     * running the LLM and overshooting the PAYG bucket negative post-flight.
+     * {@code null} keeps the legacy total-balance semantics.
+     *
+     * <p>The cache key includes the sourceType - the scoped and unscoped
+     * questions have different answers for a FREE account, so a cached
+     * workflow-gate "allowed" must never be served back to a chat gate.
+     */
+    public boolean checkCredits(String userId, String sourceType) {
         if (!enabled) return true;
         if (userId == null || userId.isBlank()) return true;
 
-        String url = authServiceUrl + "/api/credits/check";
+        String url = authServiceUrl + "/api/credits/check"
+                + (sourceType != null && !sourceType.isBlank() ? "?sourceType=" + sourceType : "");
+        String cacheKey = scopedUserKey(userId)
+                + (sourceType != null && !sourceType.isBlank() ? ":" + sourceType : "");
         HttpHeaders headers = userHeaders(userId, null);
 
         try {
@@ -209,22 +238,22 @@ public class CreditConsumptionClient {
             if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
                 Object allowed = response.getBody().get("allowed");
                 boolean result = Boolean.TRUE.equals(allowed);
-                creditCheckCache.put(scopedUserKey(userId), new CachedCheck(result, Instant.now()));
+                creditCheckCache.put(cacheKey, new CachedCheck(result, Instant.now()));
                 return result;
             }
             if (response.getStatusCode().value() == 402) {
-                creditCheckCache.put(scopedUserKey(userId), new CachedCheck(false, Instant.now()));
+                creditCheckCache.put(cacheKey, new CachedCheck(false, Instant.now()));
                 return false;
             }
-            return useCacheOrFailClosed(scopedUserKey(userId), "unexpected status " + response.getStatusCode());
+            return useCacheOrFailClosed(cacheKey, "unexpected status " + response.getStatusCode());
         } catch (org.springframework.web.client.HttpClientErrorException e) {
             if (e.getStatusCode().value() == 402) {
-                creditCheckCache.put(scopedUserKey(userId), new CachedCheck(false, Instant.now()));
+                creditCheckCache.put(cacheKey, new CachedCheck(false, Instant.now()));
                 return false;
             }
-            return useCacheOrFailClosed(scopedUserKey(userId), e.getMessage());
+            return useCacheOrFailClosed(cacheKey, e.getMessage());
         } catch (Exception e) {
-            return useCacheOrFailClosed(scopedUserKey(userId), e.getMessage());
+            return useCacheOrFailClosed(cacheKey, e.getMessage());
         }
     }
 

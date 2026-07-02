@@ -14,6 +14,18 @@ import java.util.Optional;
 @Repository
 public interface StoredFileRepository extends JpaRepository<StoredFile, Long> {
 
+    /**
+     * TOLERANT (cross-workspace) finder family - {@code findByUserId*} /
+     * {@code findByIdAndUserId} filter by owner only, WITHOUT an org predicate.
+     * Post-V263 every row carries a non-null {@code organization_id}, and all
+     * user-facing traffic reaches {@code StorageService} WITH the gateway-injected
+     * org header (which routes to the {@code *AndOrganizationId} strict variants).
+     * These owner-only finders serve the null-org branch: INTERNAL/daemon callers
+     * with no request context, which legitimately see the user's rows across
+     * their workspaces (same user - never cross-user). Do NOT use them on a
+     * gateway-facing path: that would leak org-workspace rows into personal
+     * scope, violating the ScopeGuard strict-isolation contract.
+     */
     List<StoredFile> findByUserId(Long userId);
 
     List<StoredFile> findByUserIdAndOrganizationId(Long userId, String organizationId);

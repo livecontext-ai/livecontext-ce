@@ -289,7 +289,9 @@ public class AgentLoopExecutor {
         return taskId instanceof String s && !s.isBlank();
     }
 
-    private CompletionRequest buildCompletionRequest(
+    // Package-private (visible for testing): AgentLoopExecutorRequestWiringTest
+    // pins that context fields reach the CompletionRequest unchanged.
+    CompletionRequest buildCompletionRequest(
             AgentLoopContext context, String model, String systemPrompt,
             List<Message> messages, List<ToolDefinition> tools, boolean stream) {
         // Stage 1a.1 - pass both the legacy string and the layered block list.
@@ -309,6 +311,11 @@ public class AgentLoopExecutor {
             .stream(stream)
             .purpose(context.purpose())
             .thinkingLevel(resolveAdaptiveThinkingLevel(context, tools))
+            // Resolved effort rides on the DIRECT-API request too: ClaudeProvider
+            // maps it to Anthropic output_config.effort on supporting models.
+            // Bridge providers get it via their own dispatch DTO; other direct
+            // providers ignore the field.
+            .reasoningEffort(context.reasoningEffort())
             .build();
     }
 

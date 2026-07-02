@@ -129,13 +129,15 @@ export function MCPTable({ className = '' }: MCPTableProps) {
                             <p className="text-sm text-theme-secondary">{mcps.length} MCP{mcps.length !== 1 ? 's' : ''}</p>
                         </div>
                     </div>
-                    <Button
-                        onClick={() => router.push('/app/settings/developers')}
-                        className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full border border-transparent font-medium tracking-wide transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)] disabled:pointer-events-none disabled:opacity-60 disabled:cursor-not-allowed bg-[var(--accent-primary)] text-[var(--accent-foreground)] shadow-[0_10px_28px_var(--shadow-color)] hover:bg-[var(--accent-hover)] hover:text-[var(--accent-foreground)] hover:shadow-[0_12px_32px_var(--shadow-color)] h-11 px-6 text-sm"
-                    >
-                        <Plus className="w-4 h-4" />
-                        {t('emptyState.mcp.addButton')}
-                    </Button>
+                    {canMutate && (
+                        <Button
+                            onClick={() => router.push('/app/settings/developers')}
+                            className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full border border-transparent font-medium tracking-wide transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)] disabled:pointer-events-none disabled:opacity-60 disabled:cursor-not-allowed bg-[var(--accent-primary)] text-[var(--accent-foreground)] shadow-[0_10px_28px_var(--shadow-color)] hover:bg-[var(--accent-hover)] hover:text-[var(--accent-foreground)] hover:shadow-[0_12px_32px_var(--shadow-color)] h-11 px-6 text-sm"
+                        >
+                            <Plus className="w-4 h-4" />
+                            {t('emptyState.mcp.addButton')}
+                        </Button>
+                    )}
                 </div>
             )}
 
@@ -279,7 +281,7 @@ export function MCPTable({ className = '' }: MCPTableProps) {
                                 ? t('emptyState.mcp.addFirstMCP')
                                 : t('emptyState.mcp.noMatchingMCPs')}
                         </p>
-                        {mcps.length === 0 && (
+                        {canMutate && mcps.length === 0 && (
                             <div className="mt-6 flex justify-center gap-2">
                                 <Button
                                     variant="default"

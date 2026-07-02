@@ -389,8 +389,8 @@ export default function SettingsOverviewPage() {
 
         {/* ===== SETTINGS TABS SECTION ===== */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <div className="relative mb-6 sm:mb-8 flex justify-center overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
-            <div className="relative inline-flex items-center gap-0.5 sm:gap-1 p-1 sm:p-1.5 bg-theme-tertiary rounded-full" ref={tabContainerRef}>
+          <div className="relative mb-6 sm:mb-8 flex max-w-full overflow-x-auto scrollbar-hide">
+            <div className="relative mx-auto inline-flex w-max items-center gap-0.5 sm:gap-1 p-1 sm:p-1.5 bg-theme-tertiary rounded-full" ref={tabContainerRef}>
               {/* Slider highlight */}
               <div
                 className="absolute top-1 sm:top-1.5 bottom-1 sm:bottom-1.5 rounded-full bg-[var(--bg-primary)] transition-all duration-300 ease-out"

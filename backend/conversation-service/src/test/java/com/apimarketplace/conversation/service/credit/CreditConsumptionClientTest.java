@@ -539,6 +539,83 @@ class CreditConsumptionClientTest {
             assertThat(entityCaptor.getValue().getHeaders().getFirst("X-User-ID")).isEqualTo(USER_ID);
         }
 
+        // ── Source-type-scoped overload (regression: FREE user without top-up
+        //    passed the internal/scheduled chat gate via the unscoped check) ──
+
+        @Test
+        @DisplayName("Scoped overload appends ?sourceType=CHAT_CONVERSATION so the server applies FREE-plan bucket scoping")
+        void scopedOverloadAppendsSourceTypeQueryParam() {
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                    .thenReturn(checkAllowedResponse(true));
+
+            boolean result = client.checkCredits(USER_ID, "CHAT_CONVERSATION");
+
+            assertThat(result).isTrue();
+            verify(restTemplate).exchange(
+                    eq(AUTH_SERVICE_URL + "/api/credits/check?sourceType=CHAT_CONVERSATION"),
+                    eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class));
+        }
+
+        @Test
+        @DisplayName("Legacy 1-arg overload keeps the unscoped /api/credits/check URL (back-compat for workflow launch gates)")
+        void legacyOverloadKeepsUnscopedUrl() {
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                    .thenReturn(checkAllowedResponse(true));
+
+            client.checkCredits(USER_ID);
+
+            verify(restTemplate).exchange(
+                    eq(AUTH_SERVICE_URL + "/api/credits/check"),
+                    eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class));
+        }
+
+        @Test
+        @DisplayName("Unscoped cached allowed=true is NOT served to the scoped chat check on transport failure (fail-closed) - regression: workflow-gate cache must not admit a chat turn")
+        void unscopedCacheNotServedToScopedCheck() {
+            // Arrange - unscoped success caches allowed=true under the unscoped key.
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                    .thenReturn(checkAllowedResponse(true));
+            assertThat(client.checkCredits(USER_ID)).isTrue();
+
+            // Act - the scoped chat check hits a transport failure.
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                    .thenThrow(new ResourceAccessException("Connection refused"));
+            boolean result = client.checkCredits(USER_ID, "CHAT_CONVERSATION");
+
+            // Assert - fail-closed: the workflow-gate cache entry lives under a
+            // different key and must not answer the CHAT_CONVERSATION question.
+            assertThat(result).isFalse();
+        }
+
+        @Test
+        @DisplayName("Scoped cached allowed=true is NOT served to the unscoped check on transport failure (fail-closed) - distinct keys in both directions")
+        void scopedCacheNotServedToUnscopedCheck() {
+            // Arrange - scoped success caches allowed=true under the scoped key.
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                    .thenReturn(checkAllowedResponse(true));
+            assertThat(client.checkCredits(USER_ID, "CHAT_CONVERSATION")).isTrue();
+
+            // Act - the unscoped check hits a transport failure.
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                    .thenThrow(new ResourceAccessException("Connection refused"));
+
+            // Assert - fail-closed: no unscoped cache entry exists.
+            assertThat(client.checkCredits(USER_ID)).isFalse();
+        }
+
+        @Test
+        @DisplayName("Scoped check reuses its OWN cached result on transport failure (positive control for the key split)")
+        void scopedCheckUsesOwnCacheOnError() {
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                    .thenReturn(checkAllowedResponse(true));
+            client.checkCredits(USER_ID, "CHAT_CONVERSATION");
+
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                    .thenThrow(new ResourceAccessException("Connection refused"));
+
+            assertThat(client.checkCredits(USER_ID, "CHAT_CONVERSATION")).isTrue();
+        }
+
         // ── Null/blank userId bypass ──
 
         @Test

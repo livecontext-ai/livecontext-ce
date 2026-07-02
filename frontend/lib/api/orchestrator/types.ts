@@ -986,6 +986,11 @@ export interface CredentialProperty {
     hide?: Record<string, unknown[]>;
   };
   options?: PropertyOption[];
+  // True when this field is a per-instance host placeholder that lives in the OAuth
+  // authorize/token URL (Shopify {shop}, Zendesk {subdomain}, ...). The importer derives it from
+  // the URL templates; the wizard must collect it BEFORE the OAuth redirect and send it as a
+  // template var so the backend can substitute it into the authorize/token URLs.
+  oauthUrlVar?: boolean;
 }
 
 export interface PropertyOption {
@@ -1012,6 +1017,10 @@ export interface OAuth2InitiateRequest {
   environment?: string;
   integration?: string;
   return_url?: string;
+  // Per-instance URL host placeholders the user supplies at connect time, keyed by placeholder
+  // name ({shop} -> "shop"). Collected before the redirect for providers whose OAuth URL host is
+  // per-store/tenant (Shopify, Zendesk, ...). Absent for the vast majority of providers.
+  template_vars?: Record<string, string>;
 }
 
 export interface OAuth2SimpleInitiateRequest {

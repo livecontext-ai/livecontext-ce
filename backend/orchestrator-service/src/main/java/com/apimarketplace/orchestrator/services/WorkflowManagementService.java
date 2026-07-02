@@ -365,6 +365,16 @@ public class WorkflowManagementService implements WorkflowCrud {
     public SaveResult saveWorkflow(WorkflowPlan plan, Map<String, Object> dataInputs, UUID workflowId,
                                    String organizationId, String orgRole) {
         UUID finalWorkflowId = resolveWorkflowId(plan.getId(), workflowId);
+        // Role-level read-only gate: a VIEWER in an org workspace can neither create
+        // nor update workflows. The per-resource canWrite gate below only fires for
+        // an EXISTING row (a new workflow has no resource to restrict yet), so the
+        // create path needs the role gate explicitly.
+        if (OrgAccessGuard.isRoleWriteBlocked(organizationId, orgRole)) {
+            logger.warn("OrgAccess denied: VIEWER user {} attempted to save workflow {} in org {}",
+                    plan.getTenantId(), finalWorkflowId, organizationId);
+            throw new com.apimarketplace.auth.client.access.OrgAccessDeniedException(
+                    "workflow", finalWorkflowId.toString());
+        }
         workflowRepository.findById(finalWorkflowId).ifPresent(existing -> {
             String entityOrgId = existing.getOrganizationId();
             if (entityOrgId != null

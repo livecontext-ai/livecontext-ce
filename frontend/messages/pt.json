@@ -3048,12 +3048,14 @@
       "publishTitle": "Publicar um novo pacote",
       "signingKey": "Chave de assinatura",
       "statusActive": "ativo",
+      "notLinkedHint": "Esta instalação ainda não está vinculada à nuvem: é o estado normal de uma instalação nova. Vincule-a na aba Conexão para receber atualizações.",
       "statusCode": {
         "APPLY_FAILED": "falha ao aplicar",
         "CHECKSUM_INVALID": "checksum inválido",
         "HTTP_ERROR": "erro HTTP",
         "NETWORK_ERROR": "erro de rede",
         "NOT_CONFIGURED": "não configurado",
+        "NOT_LINKED": "não vinculado",
         "NO_ACTIVE": "nenhum pacote ativo",
         "OK": "OK",
         "PAYLOAD_MALFORMED": "payload malformado",
@@ -3286,6 +3288,7 @@
         "clientIdRequired": "Client ID e obrigatorio",
         "clientSecretRequired": "Client Secret e obrigatorio",
         "failedToInitiate": "Falha ao iniciar fluxo OAuth2",
+        "missingOAuthHostVar": "Informe seu {field} para conectar",
         "credentialsNotConfigured": "Este servico ainda nao esta disponivel",
         "contactAdmin": "Esta integracao estara disponivel em breve. Entre em contato com o suporte se precisar com urgencia."
       },
@@ -4860,6 +4863,7 @@
         "lastAppliedAt": "Última aplicação em",
         "consecutiveFailures": "Falhas consecutivas",
         "never": "nunca",
+        "notLinkedHint": "Esta instalação ainda não está vinculada à nuvem: é o estado normal de uma instalação nova. Vincule-a na aba Conexão para receber atualizações.",
         "statusCode": {
           "OK": "OK",
           "NO_ACTIVE": "nenhum pacote ativo",

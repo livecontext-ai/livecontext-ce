@@ -26,6 +26,7 @@ import { WorkflowSaveWithVersions } from "@/components/workflow/WorkflowVersionH
 import { MarketplaceHeaderActions } from "@/components/marketplace/MarketplaceHeaderActions";
 import { NotificationBell } from "@/components/chat/NotificationBell";
 import { ApplicationActivationButton } from "@/components/applications/ApplicationActivationButton";
+import { useCanMutateInCurrentOrg } from "@/lib/stores/current-org-store";
 
 /**
  * Header-side model row. Inherits the full {@link AIModel} payload (capability
@@ -240,6 +241,11 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
 
   // Get pathname early to determine run mode
   const pathname = usePathname();
+
+  // Audit 2026-07-02 - VIEWER role in an org workspace is read-only: the Run
+  // button is hidden because POST /v2/workflows/dag/execute auto-saves the plan
+  // and the backend rejects VIEWER with 403 "Workflow access is read-only".
+  const canMutate = useCanMutateInCurrentOrg();
 
   // Determine run mode from pathname (more reliable than prop)
   const isRunModeFromPath = pathname?.includes('/run/') || false;
@@ -909,22 +915,25 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
                 </>
               ) : (
                 <>
-                  {/* RUN BUTTON (Desktop version) */}
-                  <Button
-                    variant="default"
-                    size="sm"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      window.dispatchEvent(new CustomEvent('workflowViewStart', {
-                        detail: { workflowId }
-                      }));
-                    }}
-                    title={t('actions.run')}
-                    className="h-8 px-2 lg:px-3"
-                  >
-                    <Play className="w-4 h-4 lg:mr-1" />
-                    <span className="hidden lg:inline">{t('actions.run')}</span>
-                  </Button>
+                  {/* RUN BUTTON (Desktop version) - hidden for org VIEWERs: the
+                      execute endpoint auto-saves the plan and 403s read-only roles. */}
+                  {canMutate && (
+                    <Button
+                      variant="default"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        window.dispatchEvent(new CustomEvent('workflowViewStart', {
+                          detail: { workflowId }
+                        }));
+                      }}
+                      title={t('actions.run')}
+                      className="h-8 px-2 lg:px-3"
+                    >
+                      <Play className="w-4 h-4 lg:mr-1" />
+                      <span className="hidden lg:inline">{t('actions.run')}</span>
+                    </Button>
+                  )}
                 </>
               )}
               {/* History button removed - use WorkflowRunsHistoryPanel from toggle instead */}
@@ -1194,21 +1203,23 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
                 </>
               ) : (
                 <>
-                  {/* RUN BUTTON (Mobile version) */}
-                  <Button
-                    variant="default"
-                    size="sm"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      window.dispatchEvent(new CustomEvent('workflowViewStart', {
-                        detail: { workflowId }
-                      }));
-                    }}
-                    title={t('actions.run')}
-                    className="h-8 px-2"
-                  >
-                    <Play className="w-4 h-4" />
-                  </Button>
+                  {/* RUN BUTTON (Mobile version) - same VIEWER gate as desktop. */}
+                  {canMutate && (
+                    <Button
+                      variant="default"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        window.dispatchEvent(new CustomEvent('workflowViewStart', {
+                          detail: { workflowId }
+                        }));
+                      }}
+                      title={t('actions.run')}
+                      className="h-8 px-2"
+                    >
+                      <Play className="w-4 h-4" />
+                    </Button>
+                  )}
                 </>
               )}
               {/* History button removed - use WorkflowRunsHistoryPanel from toggle instead */}

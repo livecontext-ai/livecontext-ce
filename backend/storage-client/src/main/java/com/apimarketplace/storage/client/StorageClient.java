@@ -172,6 +172,12 @@ public class StorageClient {
                 return (String) response.getBody().get("url");
             }
             return null;
+        } catch (org.springframework.web.client.HttpClientErrorException.Forbidden e) {
+            // Same key-owner contract as download(): presign 403 means the wrong
+            // tenant was presented for the key (org-shared file → pass the owner's).
+            log.warn("Presign 403 (key-owner mismatch): key='{}' sent X-User-ID='{}'. "
+                    + "Org-shared files must be presigned with the key OWNER's tenant.", key, tenantId);
+            return null;
         } catch (Exception e) {
             log.error("Failed to generate download URL: key={}, error={}", key, e.getMessage());
             return null;
@@ -195,6 +201,14 @@ public class StorageClient {
                 url, HttpMethod.GET, entity, byte[].class);
 
             return response.getBody();
+        } catch (org.springframework.web.client.HttpClientErrorException.Forbidden e) {
+            // The internal download authorizes by KEY-OWNER prefix. A 403 almost
+            // always means the caller passed its own/current-request tenant for a
+            // key owned by someone else (org-shared file). After authorizing the
+            // entity upstream, pass the OWNER tenant (StorageEntity.getTenantId()).
+            log.warn("Download 403 (key-owner mismatch): key='{}' sent X-User-ID='{}'. "
+                    + "Org-shared files must be fetched with the key OWNER's tenant.", key, tenantId);
+            return null;
         } catch (Exception e) {
             log.error("Failed to download file: key={}, error={}", key, e.getMessage());
             return null;

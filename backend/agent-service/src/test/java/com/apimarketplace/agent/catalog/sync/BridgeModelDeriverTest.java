@@ -140,6 +140,26 @@ class BridgeModelDeriverTest {
     }
 
     @Test
+    @DisplayName("claude-fable-5 (new fable family) derives under claude-code; mythos never does")
+    void derivesFableFiveButNeverMythos() {
+        List<Map<String, Object>> feed = List.of(
+                cloud("anthropic", "claude-fable-5", "10", "50"),
+                cloud("anthropic", "claude-mythos-5", "10", "50"));
+
+        List<Map<String, Object>> rows = deriver.derive(feed);
+
+        Map<String, Object> fable = find(rows, "claude-code", "claude-fable-5");
+        assertThat(fable).as("claude-fable-5 derived under claude-code").isNotNull();
+        assertThat(fable.get("providerKind")).isEqualTo("bridge");
+        assertThat(fable.get("displayName")).isEqualTo("Claude Fable 5");
+        assertThat(fable.get("priceInput")).isEqualTo("10");
+        assertThat(fable.get("priceOutput")).isEqualTo("50");
+        // Approved-orgs-only model must not become a bridge row (CLI can't route it).
+        assertThat(find(rows, "claude-code", "claude-mythos-5"))
+                .as("claude-mythos-5 must not be derived").isNull();
+    }
+
+    @Test
     @DisplayName("Two-segment dated Anthropic pins are not auto-derived (no 'Claude Opus 4.20250514' row)")
     void datedPinNotAutoDiscovered() {
         // claude-opus-4-20250514 is live in the feed and not deduped (no canonical twin).

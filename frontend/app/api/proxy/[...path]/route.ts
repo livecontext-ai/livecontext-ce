@@ -247,7 +247,9 @@ function createResponseHeaders(requestId: string, contentType?: string): Headers
   responseHeaders.set('Access-Control-Allow-Origin', '*');
   responseHeaders.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
   responseHeaders.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-Request-Id, X-Active-Organization-ID');
-  responseHeaders.set('Access-Control-Allow-Credentials', 'true');
+  // No Access-Control-Allow-Credentials: the wildcard origin above is invalid alongside
+  // credentialed CORS (browsers reject the pair), and auth is Bearer-token in the
+  // Authorization header, never an ambient cookie, so credentials mode is not needed.
   responseHeaders.set('Access-Control-Expose-Headers', 'X-Request-Id');
   responseHeaders.set('X-Request-Id', requestId);
   if (contentType) {

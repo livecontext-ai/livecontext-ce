@@ -158,9 +158,43 @@ class CreditServiceFreeWorkflowScopingTest {
             // Overshoot lands on PAYG, NOT on the monthly workflow grant.
             assertThat(s.getRemainingCredits()).isEqualByComparingTo("1000.00");
             assertThat(s.getPaygRemainingCredits()).isEqualByComparingTo("-10.00");
-            // Total stays positive (sub masks it), so the account is not flagged
-            // delinquent - workflows keep running while chat needs a PAYG top-up.
             assertThat(s.getTotalBalance()).isEqualByComparingTo("990.00");
+        }
+
+        @Test
+        @DisplayName("FREE + chat overshoot flags the account delinquent even though the monthly grant keeps the total positive")
+        void freeChatOvershootSetsDelinquentDespiteMaskedTotal() {
+            // Regression: pre-fix the delinquent set keyed on totalBalance < 0 only.
+            // A Free chat overshoot left payg negative while the untouched monthly
+            // grant kept the total positive, so the delinquency gate never fired
+            // and the overshoot was repeatable without bound, turn after turn.
+            Subscription s = sub("FREE", new BigDecimal("1000.00"), BigDecimal.ZERO);
+            when(subscriptionRepository.findActiveByUserIdForUpdate(USER_ID)).thenReturn(Optional.of(s));
+            when(pricingService.calculateCost("anthropic", "claude-3-5-sonnet", LlmTokenBreakdown.of(1000, 500)))
+                    .thenReturn(new BigDecimal("10.00"));
+
+            cloud.consumeForChat(USER_ID, "conv-1", "anthropic", "claude-3-5-sonnet", 1000, 500);
+
+            assertThat(s.getPaygRemainingCredits()).isEqualByComparingTo("-10.00");
+            assertThat(s.getTotalBalance()).isEqualByComparingTo("990.00");
+            assertThat(s.getDelinquent()).isTrue();
+        }
+
+        @Test
+        @DisplayName("PAID chat overshoot with positive total does NOT flag delinquent - the payg-owed leg is Free-scoping only")
+        void paidChatOvershootWithPositiveTotalStaysClean() {
+            // On a paid plan the debit is sub-eligible: splitBuckets routes overshoot
+            // onto the sub bucket and payg never goes negative, so neither delinquency
+            // leg (total <= 0, payg < 0) can fire while the total stays positive.
+            Subscription s = sub("PRO", new BigDecimal("6.00"), BigDecimal.ZERO);
+            when(subscriptionRepository.findActiveByUserIdForUpdate(USER_ID)).thenReturn(Optional.of(s));
+            when(pricingService.calculateCost("anthropic", "claude-3-5-sonnet", LlmTokenBreakdown.of(1000, 500)))
+                    .thenReturn(new BigDecimal("5.00"));
+
+            cloud.consumeForChat(USER_ID, "conv-2", "anthropic", "claude-3-5-sonnet", 1000, 500);
+
+            assertThat(s.getRemainingCredits()).isEqualByComparingTo("1.00");
+            assertThat(s.getPaygRemainingCredits()).isEqualByComparingTo("0.00");
             assertThat(s.getDelinquent()).isFalse();
         }
 
@@ -233,6 +267,162 @@ class CreditServiceFreeWorkflowScopingTest {
             when(subscriptionRepository.findActiveByUserId(USER_ID)).thenReturn(Optional.of(s));
 
             assertThat(cloud.canAfford(USER_ID, new BigDecimal("5.00"), "CHAT_CONVERSATION")).isTrue();
+        }
+    }
+
+    // ==========================================================================
+    // Generic /check gate (hasSufficientCredits) - internal / scheduled chat
+    // ==========================================================================
+
+    @Nested
+    @DisplayName("generic /check gate (hasSufficientCredits)")
+    class GenericCheckGate {
+
+        @Test
+        @DisplayName("FREE /check with CHAT_CONVERSATION is refused when only monthly (sub) credits exist - scheduled/internal chat cannot spend the workflow grant")
+        void freeCheckWithChatSourceRefusedWithSubOnly() {
+            // Regression: pre-fix the internal/scheduled chat gate called the
+            // total-balance form. A Free user with 1000 monthly workflow-only
+            // credits and 0 PAYG passed the gate, the LLM ran, and the post-flight
+            // debit pushed the PAYG bucket negative.
+            Subscription s = sub("FREE", new BigDecimal("1000.00"), BigDecimal.ZERO);
+            when(subscriptionRepository.findActiveByUserId(USER_ID)).thenReturn(Optional.of(s));
+
+            assertThat(cloud.hasSufficientCredits(USER_ID, "CHAT_CONVERSATION")).isFalse();
+        }
+
+        @Test
+        @DisplayName("FREE /check with CHAT_CONVERSATION is allowed when a PAYG top-up covers at least 1 credit")
+        void freeCheckWithChatSourceAllowedWithPayg() {
+            Subscription s = sub("FREE", new BigDecimal("1000.00"), new BigDecimal("10.00"));
+            when(subscriptionRepository.findActiveByUserId(USER_ID)).thenReturn(Optional.of(s));
+
+            assertThat(cloud.hasSufficientCredits(USER_ID, "CHAT_CONVERSATION")).isTrue();
+        }
+
+        @Test
+        @DisplayName("FREE /check with a sub-1-credit PAYG balance is refused - the minimum-1-credit rule applies to the eligible bucket")
+        void freeCheckWithTinyPaygRefused() {
+            Subscription s = sub("FREE", new BigDecimal("1000.00"), new BigDecimal("0.50"));
+            when(subscriptionRepository.findActiveByUserId(USER_ID)).thenReturn(Optional.of(s));
+
+            assertThat(cloud.hasSufficientCredits(USER_ID, "CHAT_CONVERSATION")).isFalse();
+        }
+
+        @Test
+        @DisplayName("FREE legacy /check (null sourceType) keeps the total-balance semantics - workflow launch gates still admit the monthly grant")
+        void freeCheckLegacyNullSourceUsesTotal() {
+            Subscription s = sub("FREE", new BigDecimal("1000.00"), BigDecimal.ZERO);
+            when(subscriptionRepository.findActiveByUserId(USER_ID)).thenReturn(Optional.of(s));
+
+            assertThat(cloud.hasSufficientCredits(USER_ID, null)).isTrue();
+            assertThat(cloud.hasSufficientCredits(USER_ID)).isTrue();
+        }
+
+        @Test
+        @DisplayName("PAID /check with CHAT_CONVERSATION is allowed against the sub bucket - scoping is FREE-only")
+        void paidCheckWithChatSourceAllowed() {
+            Subscription s = sub("PRO", new BigDecimal("1000.00"), BigDecimal.ZERO);
+            when(subscriptionRepository.findActiveByUserId(USER_ID)).thenReturn(Optional.of(s));
+
+            assertThat(cloud.hasSufficientCredits(USER_ID, "CHAT_CONVERSATION")).isTrue();
+        }
+
+        @Test
+        @DisplayName("/check without an active subscription is refused regardless of sourceType")
+        void checkWithoutSubscriptionRefused() {
+            when(subscriptionRepository.findActiveByUserId(USER_ID)).thenReturn(Optional.empty());
+
+            assertThat(cloud.hasSufficientCredits(USER_ID, "CHAT_CONVERSATION")).isFalse();
+            assertThat(cloud.hasSufficientCredits(USER_ID, null)).isFalse();
+        }
+    }
+
+    // ==========================================================================
+    // Delinquency lifecycle under Free scoping (set by PAYG debt, cleared only
+    // when both buckets are settled)
+    // ==========================================================================
+
+    @Nested
+    @DisplayName("delinquency lifecycle under Free scoping")
+    class DelinquencyLifecycle {
+
+        @Test
+        @DisplayName("a sub-bucket grant (monthly renewal) does NOT clear delinquency while the PAYG debt is unpaid")
+        void subGrantDoesNotClearPaygDebt() {
+            // Regression: clearDelinquentIfPositive used to key on total > 0 alone.
+            // The monthly renewal re-inflates the sub bucket, the total goes
+            // positive, and the flag would have been cleared even though the chat
+            // debt (negative PAYG) is still unpaid - re-opening the overshoot loop.
+            Subscription s = sub("FREE", BigDecimal.ZERO, new BigDecimal("-10.00"));
+            s.setDelinquent(true);
+            when(subscriptionRepository.findActiveByUserIdForUpdate(USER_ID)).thenReturn(Optional.of(s));
+
+            cloud.grantCredits(USER_ID, new BigDecimal("1000.00"), "PLAN_GRANT", "renewal-1", "monthly grant");
+
+            assertThat(s.getRemainingCredits()).isEqualByComparingTo("1000.00");
+            assertThat(s.getPaygRemainingCredits()).isEqualByComparingTo("-10.00");
+            assertThat(s.getDelinquent()).isTrue();
+        }
+
+        @Test
+        @DisplayName("a PAYG top-up that settles the negative bucket clears delinquency")
+        void paygTopupSettlingDebtClearsDelinquent() {
+            Subscription s = sub("FREE", new BigDecimal("1000.00"), new BigDecimal("-10.00"));
+            s.setDelinquent(true);
+            when(subscriptionRepository.findActiveByUserIdForUpdate(USER_ID)).thenReturn(Optional.of(s));
+
+            cloud.grantCredits(USER_ID, new BigDecimal("25.00"), "PAYG_TOPUP", "topup-1", "top-up small");
+
+            assertThat(s.getPaygRemainingCredits()).isEqualByComparingTo("15.00");
+            assertThat(s.getDelinquent()).isFalse();
+        }
+
+        @Test
+        @DisplayName("a PAYG top-up too small to settle the debt keeps the account delinquent")
+        void partialPaygTopupKeepsDelinquent() {
+            Subscription s = sub("FREE", new BigDecimal("1000.00"), new BigDecimal("-10.00"));
+            s.setDelinquent(true);
+            when(subscriptionRepository.findActiveByUserIdForUpdate(USER_ID)).thenReturn(Optional.of(s));
+
+            cloud.grantCredits(USER_ID, new BigDecimal("4.00"), "PAYG_TOPUP", "topup-2", "top-up tiny");
+
+            assertThat(s.getPaygRemainingCredits()).isEqualByComparingTo("-6.00");
+            assertThat(s.getDelinquent()).isTrue();
+        }
+
+        @Test
+        @DisplayName("PAID delinquent account clears on renewal even with a negative PAYG bucket - the payg-debt leg is FREE-only")
+        void paidDelinquentClearsOnRenewalDespiteNegativePayg() {
+            // Regression (audit F1): an over-eager clear condition (payg >= 0 on ALL
+            // plans) would leave a PAYING customer permanently delinquent: nothing on
+            // a paid plan ever re-credits PAYG, and every paid-plan debit nets against
+            // the TOTAL, so a positive total means the debt is already recovered.
+            // Pre-V379 behavior for paid plans must be preserved exactly.
+            Subscription s = sub("PRO", BigDecimal.ZERO, new BigDecimal("-8.00"));
+            s.setDelinquent(true); // set when total went <= 0 (classic V148 path)
+            when(subscriptionRepository.findActiveByUserIdForUpdate(USER_ID)).thenReturn(Optional.of(s));
+
+            cloud.grantCredits(USER_ID, new BigDecimal("1000.00"), "PLAN_GRANT", "renewal-pro-1", "monthly grant");
+
+            assertThat(s.getPaygRemainingCredits()).isEqualByComparingTo("-8.00");
+            assertThat(s.getTotalBalance()).isEqualByComparingTo("992.00");
+            assertThat(s.getDelinquent()).isFalse();
+        }
+
+        @Test
+        @DisplayName("a PAYG top-up that exactly zeroes the debt clears delinquency when the total is positive")
+        void paygTopupZeroingDebtClearsWhenTotalPositive() {
+            // payg == 0 satisfies the payg >= 0 leg; the positive sub bucket
+            // satisfies total > 0. Both legs settled -> flag clears.
+            Subscription s = sub("FREE", new BigDecimal("1000.00"), new BigDecimal("-10.00"));
+            s.setDelinquent(true);
+            when(subscriptionRepository.findActiveByUserIdForUpdate(USER_ID)).thenReturn(Optional.of(s));
+
+            cloud.grantCredits(USER_ID, new BigDecimal("10.00"), "PAYG_TOPUP", "topup-3", "top-up exact");
+
+            assertThat(s.getPaygRemainingCredits()).isEqualByComparingTo("0.00");
+            assertThat(s.getDelinquent()).isFalse();
         }
     }
 

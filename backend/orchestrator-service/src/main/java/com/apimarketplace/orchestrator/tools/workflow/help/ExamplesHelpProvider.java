@@ -58,6 +58,11 @@ public final class ExamplesHelpProvider {
         edgePorts.put("classify", "agent:label:category_0, agent:label:category_1... (NOTE: agent: prefix, not core:)");
         edgePorts.put("guardrail", "agent:label:pass, agent:label:fail (NOTE: agent: prefix, not core:)");
         edgePorts.put("format", "Replace 'label' with the normalized node label. Most port nodes use core: prefix. Classify and guardrail use agent: prefix.");
+        edgePorts.put("declared_outputs_rule", "Ports must reference DECLARED outputs. connect without an explicit port auto-assigns the next free declared port. " +
+            "When every declared port is already wired: fork and decision AUTO-EXTEND their declaration (a new branch_N / elseif_N is added for you); " +
+            "option, classify and switch REFUSE the connect (their outputs carry meaning you must declare first: add the choice/category/case " +
+            "via action='modify' on the node, then connect). validate flags edges on undeclared ports as PORT_INDEX_OUT_OF_RANGE. " +
+            "One port = one target: a second edge from the same port is always rejected (insert a fork to parallelize).");
         result.put("edge_ports", edgePorts);
 
         result.put("example", Map.of(

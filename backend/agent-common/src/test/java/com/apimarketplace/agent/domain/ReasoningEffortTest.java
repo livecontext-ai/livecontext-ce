@@ -15,6 +15,9 @@ class ReasoningEffortTest {
         assertThat(ReasoningEffort.fromString("high")).isEqualTo(ReasoningEffort.HIGH);
         assertThat(ReasoningEffort.fromString("  HIGH ")).isEqualTo(ReasoningEffort.HIGH);
         assertThat(ReasoningEffort.fromString("XHigh")).isEqualTo(ReasoningEffort.XHIGH);
+        // Contract v2: max exists on the Anthropic side (API output_config.effort
+        // + Claude Code CLI) - codex has no max and clamps at the adapter.
+        assertThat(ReasoningEffort.fromString("max")).isEqualTo(ReasoningEffort.MAX);
     }
 
     @Test
@@ -41,5 +44,6 @@ class ReasoningEffortTest {
         assertThat(ReasoningEffort.HIGH.wire()).isEqualTo("high");
         assertThat(ReasoningEffort.XHIGH.wire()).isEqualTo("xhigh");
         assertThat(ReasoningEffort.MINIMAL.wire()).isEqualTo("minimal");
+        assertThat(ReasoningEffort.MAX.wire()).isEqualTo("max");
     }
 }

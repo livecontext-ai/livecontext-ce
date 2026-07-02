@@ -120,7 +120,11 @@ vi.mock('@/components/Toast', () => ({ useToast: () => ({ toasts: [], addToast: 
 vi.mock('@/hooks/useAuthToken', () => ({ useAuthToken: () => 'token' }));
 vi.mock('@/hooks/useDebouncedValue', () => ({ useDebouncedValue: (v: unknown) => v }));
 vi.mock('@/lib/hooks/useOrgScopedReset', () => ({ useOrgScopedReset: () => {} }));
-vi.mock('@/lib/stores/current-org-store', () => ({ getActiveOrgHeaderForRequest: () => ({}) }));
+vi.mock('@/lib/stores/current-org-store', () => ({
+  getActiveOrgHeaderForRequest: () => ({}),
+  // Folder tests exercise the write paths - run them as a non-VIEWER.
+  useCanMutateInCurrentOrg: () => true,
+}));
 vi.mock('@/lib/api/orchestrator/file.service', () => ({ fileService: { downloadAndSave: vi.fn(), uploadGeneric: vi.fn() } }));
 
 import { FileBrowser } from '../FileBrowser';

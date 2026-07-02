@@ -40,7 +40,7 @@ class MonolithInternalChatControllerTest {
         request.setSource("TASK");
         request.setTaskId("task-1");
 
-        when(creditClient.checkCredits("tenant-42")).thenReturn(true);
+        when(creditClient.checkCredits("tenant-42", "CHAT_CONVERSATION")).thenReturn(true);
         when(agentService.executeSync(request, "conv-1"))
             .thenReturn(Map.of("success", true, "content", "done", "conversationId", "conv-1"));
 
@@ -68,7 +68,7 @@ class MonolithInternalChatControllerTest {
     void ceSyncChatEndpointRejectsMissingConversationIdBeforeExecuting() {
         ChatRequest request = new ChatRequest();
         request.setMessage("missing conversation");
-        when(creditClient.checkCredits("tenant-42")).thenReturn(true);
+        when(creditClient.checkCredits("tenant-42", "CHAT_CONVERSATION")).thenReturn(true);
 
         var response = controller.chatSync(request, "tenant-42", null);
 

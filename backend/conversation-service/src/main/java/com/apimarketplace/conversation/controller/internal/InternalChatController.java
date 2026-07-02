@@ -55,7 +55,12 @@ public class InternalChatController {
         log.info("Internal chat (async) - User: {} (org: {}), Conversation: {}, Source: {}",
                 userId, organizationId, request.getConversationId(), request.getSource());
 
-        if (!creditClient.checkCredits(userId)) {
+        // Source-type-scoped gate: on the FREE plan chat/agent turns draw the
+        // PAYG bucket alone, so the check must not pass on monthly workflow-only
+        // credits (pre-fix, an unscoped total-balance check let the LLM run and
+        // pushed the PAYG bucket negative post-flight).
+        if (!creditClient.checkCredits(userId,
+                com.apimarketplace.common.credit.CreditConsumptionClient.SOURCE_TYPE_CHAT_CONVERSATION)) {
             return Mono.just(ResponseEntity.status(HttpStatus.PAYMENT_REQUIRED)
                     .body(Map.of("error", "Insufficient credits")));
         }
@@ -105,7 +110,10 @@ public class InternalChatController {
                                                                String userId,
                                                                String organizationId,
                                                                String conversationId) {
-        if (!creditClient.checkCredits(userId)) {
+        // Source-type-scoped gate (see the async endpoint above): FREE monthly
+        // workflow credits must not admit a scheduled/webhook chat turn.
+        if (!creditClient.checkCredits(userId,
+                com.apimarketplace.common.credit.CreditConsumptionClient.SOURCE_TYPE_CHAT_CONVERSATION)) {
             // Persist the attempt + a typed error message in the conversation so the
             // user actually sees the schedule was skipped, instead of an empty conv
             // that looks broken. Pre-fix: this branch returned 402 with zero side

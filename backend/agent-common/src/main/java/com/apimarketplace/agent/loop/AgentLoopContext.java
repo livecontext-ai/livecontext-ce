@@ -227,12 +227,15 @@ public record AgentLoopContext(
     ThinkingLevel thinkingLevel,
 
     /**
-     * Resolved reasoning-effort level for CLI/bridge providers (claude-code,
-     * codex): canonical lowercase {@code minimal|low|medium|high|xhigh}, or
-     * {@code null} to inherit the CLI's own default. Resolved by
-     * {@code ReasoningEffortResolver} (per-conversation override > per-agent >
-     * per-model default) at context-build time and carried verbatim into the
-     * bridge request DTO. Ignored by non-bridge providers.
+     * Resolved reasoning-effort level: canonical lowercase
+     * {@code minimal|low|medium|high|xhigh|max}, or {@code null} to inherit
+     * the provider's own default. Resolved by {@code ReasoningEffortResolver}
+     * (per-conversation override > per-agent > per-model default) at
+     * context-build time. Carried verbatim into the bridge request DTO for
+     * CLI providers (claude-code, codex), and forwarded on the direct-API
+     * {@code CompletionRequest} where {@code ClaudeProvider} maps it to
+     * Anthropic {@code output_config.effort} on supporting models. Other
+     * direct providers ignore it.
      */
     String reasoningEffort,
 

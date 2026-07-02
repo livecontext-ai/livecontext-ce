@@ -692,10 +692,10 @@ export default function OrganizationSettingsPage() {
           view; only the section below the toggle swaps. */}
       {currentOrg && (
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <div className="relative mb-6 flex justify-center overflow-x-auto" style={{ scrollbarWidth: "none" }}>
+          <div className="relative mb-6 flex max-w-full overflow-x-auto scrollbar-hide">
             <div
               ref={tabContainerRef}
-              className="relative inline-flex items-center gap-0.5 sm:gap-1 p-1 sm:p-1.5 bg-theme-tertiary rounded-full"
+              className="relative mx-auto inline-flex w-max items-center gap-0.5 sm:gap-1 p-1 sm:p-1.5 bg-theme-tertiary rounded-full"
             >
               {/* Slider highlight */}
               <div
@@ -843,6 +843,11 @@ export default function OrganizationSettingsPage() {
 
                 {/* Actions */}
                 <div className="flex items-center gap-1">
+                  {/* Role dropdown is OWNER-only ON PURPOSE (not canEdit): the backend
+                      (OrganizationMemberService.changeRole) rejects any non-OWNER
+                      requester, forbids changing your own role, and never promotes to
+                      OWNER (use ownership transfer). This gate mirrors those rules -
+                      widening it to ADMIN would only surface a 403. */}
                   {isOwner && member.role !== "OWNER" && member.email !== user?.email && (
                     <Popover
                       open={roleDropdownOpen === member.userId}

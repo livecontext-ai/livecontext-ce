@@ -50,7 +50,7 @@ class MonolithChatControllerTest {
         when(llmProviderFactory.getAllModelsInfo()).thenReturn(Map.of(
                 "defaultProvider", "deepseek",
                 "defaultModel", "deepseek-chat"));
-        when(creditClient.checkCredits("user-7")).thenReturn(true);
+        when(creditClient.checkCredits("user-7", "CHAT_CONVERSATION")).thenReturn(true);
         // No chatConfig and no skill selection on the request → the mapper yields
         // null and the create is called with a null config (column skipped).
         when(conversationHistoryService.createConversation(
@@ -90,7 +90,7 @@ class MonolithChatControllerTest {
         when(llmProviderFactory.getAllModelsInfo()).thenReturn(Map.of(
                 "defaultProvider", "deepseek",
                 "defaultModel", "deepseek-chat"));
-        when(creditClient.checkCredits("user-7")).thenReturn(true);
+        when(creditClient.checkCredits("user-7", "CHAT_CONVERSATION")).thenReturn(true);
 
         // Fifth arg = X-User-Roles header (platform roles); required=false, absent here.
         var response = controller.chat(request, "user-7", "org-7", "MEMBER", null);
@@ -125,7 +125,7 @@ class MonolithChatControllerTest {
         when(llmProviderFactory.getAllModelsInfo()).thenReturn(Map.of(
                 "defaultProvider", "deepseek",
                 "defaultModel", "deepseek-chat"));
-        when(creditClient.checkCredits("user-7")).thenReturn(true);
+        when(creditClient.checkCredits("user-7", "CHAT_CONVERSATION")).thenReturn(true);
         when(conversationHistoryService.createConversation(
                 eq("user-7"), eq("org-7"), eq("Generating Title..."), eq("deepseek-chat"), eq("deepseek"),
                 eq(null), any(Map.class)))
@@ -159,7 +159,7 @@ class MonolithChatControllerTest {
         when(llmProviderFactory.getAllModelsInfo()).thenReturn(Map.of(
                 "defaultProvider", "deepseek",
                 "defaultModel", "deepseek-chat"));
-        when(creditClient.checkCredits("user-7")).thenReturn(true);
+        when(creditClient.checkCredits("user-7", "CHAT_CONVERSATION")).thenReturn(true);
 
         var response = controller.chat(request, "user-7", "org-7", "MEMBER", null);
 

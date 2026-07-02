@@ -3,6 +3,7 @@ package com.apimarketplace.orchestrator.tools.workflow.builder.creators;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
 import com.apimarketplace.datasource.client.DataSourceClient;
 import com.apimarketplace.datasource.client.dto.DataSourceDto;
+import com.apimarketplace.orchestrator.tools.workflow.builder.BranchPortOverflowException;
 import com.apimarketplace.orchestrator.tools.workflow.builder.WorkflowBuilderSession;
 import com.apimarketplace.orchestrator.tools.workflow.builder.WorkflowBuilderSessionStore;
 import com.apimarketplace.orchestrator.utils.EdgeRefParser;
@@ -675,7 +676,19 @@ public abstract class CreatorBase {
 
         // Auto-assign port for branching nodes (fork, decision, switch, option, classify, guardrail)
         // When connect_after references a branching node without explicit port, assign next available port
-        resolvedFrom = autoAssignBranchPort(session, resolvedFrom);
+        try {
+            resolvedFrom = autoAssignBranchPort(session, resolvedFrom);
+        } catch (BranchPortOverflowException e) {
+            // Same contract as the already-wired-port skip below: the edge is NOT
+            // created (never an out-of-range port) and the node itself stays.
+            // KNOWN GAP: the add_node response still reports connection.status
+            // "connected" (finalizeNode keys isOrphaned off connect_after being
+            // blank, not off actual edge creation) - the orphan only surfaces at
+            // the next validate/finish. Threading a skipped-edge signal into
+            // every creator's response is a follow-up.
+            log.warn("connect_after port overflow - skipping edge: {}", e.getMessage());
+            return;
+        }
 
         // Create final copies for lambda expression
         final String finalResolvedFrom = resolvedFrom;
@@ -841,10 +854,23 @@ public abstract class CreatorBase {
                 if (type == null) continue;
 
                 if ("fork".equals(type)) {
+                    List<Map<String, Object>> forkOutputs = (List<Map<String, Object>>) core.get("forkOutputs");
+                    int branchCount = forkOutputs != null ? forkOutputs.size() : 0;
                     List<Map<String, Object>> existing = session.getOutgoingConnections(fromNodeId);
-                    String ported = fromNodeId + ":branch_" + existing.size();
-                    log.info("Auto-assigned fork port in connect_after: {} → {}", fromNodeId, ported);
-                    return ported;
+                    int nextBranch = existing.size();
+                    if (nextBranch < branchCount) {
+                        String ported = fromNodeId + ":branch_" + nextBranch;
+                        log.info("Auto-assigned fork port in connect_after: {} → {}", fromNodeId, ported);
+                        return ported;
+                    }
+                    // Auto-extend the declaration so declared == wired stays true
+                    // (mirrors WorkflowBuilderConnectionManager - the old code emitted
+                    // branch_N past the declared count, which collapsed onto a
+                    // declared branch at runtime).
+                    String newForkPort = ForkMergeNodeCreator.expandForkOutputs(core, forkOutputs, nextBranch);
+                    log.info("Auto-extended fork outputs in connect_after: {} now has {} branches → {}:{}",
+                            fromNodeId, nextBranch + 1, fromNodeId, newForkPort);
+                    return fromNodeId + ":" + newForkPort;
                 }
 
                 if ("decision".equals(type)) {
@@ -876,13 +902,31 @@ public abstract class CreatorBase {
                         if ("default".equals(caseType)) return fromNodeId + ":default";
                         return fromNodeId + ":case_" + nextIdx;
                     }
+                    // Overflow: a switch case carries a condition we cannot invent.
+                    throw new BranchPortOverflowException(
+                        "Cannot connect after '" + fromNodeId + "': all " + switchCases.size()
+                        + " declared switch cases already have an outgoing edge, so no edge was created "
+                        + "(the node is added but not connected). Add a case with workflow(action='modify', "
+                        + "node='" + fromNodeId + "', switch_cases=[...]), then wire the node with action='connect'.");
                 }
 
                 if ("option".equals(type)) {
+                    List<Map<String, Object>> optionChoices = (List<Map<String, Object>>) core.get("optionChoices");
+                    if (optionChoices == null || optionChoices.isEmpty()) break; // mirror ConnectionManager: unconfigured option gets a port-less edge
+                    int choiceCount = optionChoices.size();
                     List<Map<String, Object>> existing = session.getOutgoingConnections(fromNodeId);
-                    String ported = fromNodeId + ":choice_" + existing.size();
-                    log.info("Auto-assigned option port in connect_after: {} → {}", fromNodeId, ported);
-                    return ported;
+                    int nextIdx = existing.size();
+                    if (nextIdx < choiceCount) {
+                        String ported = fromNodeId + ":choice_" + nextIdx;
+                        log.info("Auto-assigned option port in connect_after: {} → {}", fromNodeId, ported);
+                        return ported;
+                    }
+                    // Overflow: an option choice is user-facing - we cannot invent one.
+                    throw new BranchPortOverflowException(
+                        "Cannot connect after '" + fromNodeId + "': all " + choiceCount
+                        + " declared choices already have an outgoing edge, so no edge was created "
+                        + "(the node is added but not connected). Add a choice with workflow(action='modify', "
+                        + "node='" + fromNodeId + "', choices=[...]), then wire the node with action='connect'.");
                 }
 
                 if ("loop".equals(type)) {
@@ -918,9 +962,18 @@ public abstract class CreatorBase {
                     List<Map<String, Object>> classifyOutputs = (List<Map<String, Object>>) mcp.get("classifyOutputs");
                     if (classifyOutputs == null || classifyOutputs.isEmpty()) break;
                     List<Map<String, Object>> existing = session.getOutgoingConnections(fromNodeId);
-                    String ported = fromNodeId + ":category_" + existing.size();
-                    log.info("Auto-assigned classify port in connect_after: {} → {}", fromNodeId, ported);
-                    return ported;
+                    int nextIdx = existing.size();
+                    if (nextIdx < classifyOutputs.size()) {
+                        String ported = fromNodeId + ":category_" + nextIdx;
+                        log.info("Auto-assigned classify port in connect_after: {} → {}", fromNodeId, ported);
+                        return ported;
+                    }
+                    // Overflow: a classify category is what the LLM routes on - we cannot invent one.
+                    throw new BranchPortOverflowException(
+                        "Cannot connect after '" + fromNodeId + "': all " + classifyOutputs.size()
+                        + " declared categories already have an outgoing edge, so no edge was created "
+                        + "(the node is added but not connected). Add a category with workflow(action='modify', "
+                        + "node='" + fromNodeId + "', categories=[...]), then wire the node with action='connect'.");
                 }
 
                 if (Boolean.TRUE.equals(mcp.get("isGuardrail"))) {

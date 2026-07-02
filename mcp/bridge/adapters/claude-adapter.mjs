@@ -275,11 +275,13 @@ export class ClaudeAdapter {
    * Claude Code needs CLAUDECODE and CLAUDE_CODE_ENTRYPOINT removed
    * to allow spawning from within a Claude Code session.
    *
-   * Reasoning effort: Claude Code has no categorical effort flag, so the level
-   * is mapped to an extended-thinking token budget exported via the env var the
-   * CLI reads (see {@code claudeReasoningEnv}). Unset/unknown level → no env
-   * change → CLI default. The env-var name is verified at e2e and swapped in one
-   * place ({@code lib/reasoningEffort.mjs}) if the installed CLI differs.
+   * Reasoning effort: exported as the categorical CLAUDE_CODE_EFFORT_LEVEL env
+   * (see {@code claudeReasoningEnv}) - the CLI accepts low|medium|high|xhigh|max
+   * and this env takes precedence over its configured effortLevel setting.
+   * Unset/unknown level → no env change → CLI default (high on Fable 5/Opus 4.8/
+   * Sonnet 5, xhigh on Opus 4.7). The former MAX_THINKING_TOKENS budget was a
+   * silent no-op on every adaptive-reasoning model. Verified at e2e; the mapping
+   * is swapped in one place ({@code lib/reasoningEffort.mjs}) if the CLI differs.
    */
   buildChildEnv(_tmpDir, reasoningEffort) {
     // Dropped from the child's environment:

@@ -21,16 +21,22 @@ import com.apimarketplace.auth.service.SubscriptionService;
 import com.apimarketplace.auth.util.NonceUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.stripe.StripeClient;
+import com.stripe.exception.ApiException;
 import com.stripe.exception.InvalidRequestException;
 import com.stripe.exception.StripeException;
+import com.stripe.model.Invoice;
+import com.stripe.model.StripeCollection;
 import com.stripe.model.checkout.Session;
+import com.stripe.param.InvoiceListParams;
 import com.stripe.service.CheckoutService;
+import com.stripe.service.InvoiceService;
 import com.stripe.service.checkout.SessionService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.MediaType;
@@ -45,6 +51,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -1598,6 +1605,250 @@ class BillingControllerIntegrationTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.state").value("provisioned"))
                     .andExpect(jsonPath("$.subscriptionId").value("sub_detail_err"));
+        }
+    }
+
+    // ======================== GET /api/billing/invoices ========================
+
+    @Nested
+    @DisplayName("GET /api/billing/invoices")
+    class GetInvoices {
+
+        private InvoiceService invoiceService;
+
+        @BeforeEach
+        void setUpInvoiceService() {
+            // lenient: the no-BillingCustomer branch returns before touching Stripe.
+            invoiceService = mock(InvoiceService.class);
+            lenient().when(stripeClient.invoices()).thenReturn(invoiceService);
+        }
+
+        /** A fully populated paid Stripe invoice (epoch seconds are round UTC dates). */
+        private Invoice buildStripeInvoice(String id) {
+            Invoice inv = new Invoice();
+            inv.setId(id);
+            inv.setNumber("INV-" + id);
+            inv.setAmountPaid(4900L);
+            inv.setAmountDue(0L);
+            inv.setCurrency("usd");
+            inv.setStatus("paid");
+            inv.setCreated(1735689600L);     // 2025-01-01T00:00:00Z
+            inv.setPeriodStart(1733011200L); // 2024-12-01T00:00:00Z
+            inv.setPeriodEnd(1735689600L);   // 2025-01-01T00:00:00Z
+            inv.setHostedInvoiceUrl("https://invoice.stripe.com/i/" + id);
+            inv.setInvoicePdf("https://pay.stripe.com/invoice/" + id + "/pdf");
+            return inv;
+        }
+
+        /**
+         * Build the mocked collection BEFORE any outer {@code when(...)} call -
+         * this helper stubs {@code getData()}, and nesting it inside a
+         * {@code thenReturn(...)} would interleave two stubbings
+         * (UnfinishedStubbingException).
+         */
+        private StripeCollection<Invoice> collectionOf(List<Invoice> data) {
+            @SuppressWarnings("unchecked")
+            StripeCollection<Invoice> collection = mock(StripeCollection.class);
+            when(collection.getData()).thenReturn(data);
+            return collection;
+        }
+
+        private void givenStripeReturnsInvoices(List<Invoice> data) throws com.stripe.exception.StripeException {
+            StripeCollection<Invoice> collection = collectionOf(data);
+            when(invoiceService.list(any(InvoiceListParams.class))).thenReturn(collection);
+        }
+
+        private void givenBillingCustomerExists() {
+            User user = buildUser(USER_ID);
+            BillingCustomer bc = buildBillingCustomer(1L, user); // providerCustomerId = cus_test_1
+            when(billingCustomerRepository.findByUserId(USER_ID)).thenReturn(Optional.of(bc));
+        }
+
+        @Test
+        @DisplayName("returns empty list with 200 and never calls Stripe when the user has no BillingCustomer (regression: GET /invoices had zero tests)")
+        void invoicesWithoutBillingCustomer_returnsEmptyList() throws Exception {
+            when(billingCustomerRepository.findByUserId(USER_ID)).thenReturn(Optional.empty());
+
+            mockMvc.perform(get("/api/billing/invoices")
+                            .header("X-User-ID", USER_ID_STR))
+                    .andExpect(status().isOk())
+                    .andExpect(header().string("Cache-Control", "no-store"))
+                    .andExpect(jsonPath("$.invoices").isArray())
+                    .andExpect(jsonPath("$.invoices", hasSize(0)));
+
+            verify(stripeClient, never()).invoices();
+        }
+
+        @Test
+        @DisplayName("returns empty list when a BillingCustomer row exists but has no providerCustomerId (never-checked-out user)")
+        void invoicesWithBillingCustomerButNoProviderId_returnsEmptyList() throws Exception {
+            User user = buildUser(USER_ID);
+            BillingCustomer bc = buildBillingCustomer(1L, user);
+            bc.setProviderCustomerId(null);
+            when(billingCustomerRepository.findByUserId(USER_ID)).thenReturn(Optional.of(bc));
+
+            mockMvc.perform(get("/api/billing/invoices")
+                            .header("X-User-ID", USER_ID_STR))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.invoices", hasSize(0)));
+
+            verify(stripeClient, never()).invoices();
+        }
+
+        @Test
+        @DisplayName("maps every Stripe invoice field to the DTO (number, status, amounts, UTC dates, hosted URL, PDF) preserving Stripe order")
+        void invoicesHappyPath_mapsFullDto() throws Exception {
+            givenBillingCustomerExists();
+
+            Invoice paid = buildStripeInvoice("in_001");
+            Invoice open = buildStripeInvoice("in_002");
+            open.setStatus("open");
+            open.setAmountPaid(0L);
+            open.setAmountDue(4900L);
+
+            givenStripeReturnsInvoices(List.of(paid, open));
+
+            mockMvc.perform(get("/api/billing/invoices")
+                            .header("X-User-ID", USER_ID_STR))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.invoices", hasSize(2)))
+                    // newest-first Stripe order is preserved as-is
+                    .andExpect(jsonPath("$.invoices[0].id").value("in_001"))
+                    .andExpect(jsonPath("$.invoices[0].number").value("INV-in_001"))
+                    .andExpect(jsonPath("$.invoices[0].status").value("paid"))
+                    .andExpect(jsonPath("$.invoices[0].amountPaid").value(4900))
+                    .andExpect(jsonPath("$.invoices[0].amountDue").value(0))
+                    .andExpect(jsonPath("$.invoices[0].currency").value("usd"))
+                    // Instant fields: the standalone-MockMvc ObjectMapper (no Boot
+                    // auto-config) writes Instant as epoch seconds; assert the epoch
+                    // value so the test pins the DTO carrying the RIGHT instant
+                    // (1735689600 = 2025-01-01T00:00:00Z) without depending on the
+                    // harness's date rendering. Prod Boot Jackson renders ISO-8601.
+                    .andExpect(jsonPath("$.invoices[0].created",
+                            org.hamcrest.Matchers.hasToString(org.hamcrest.Matchers.startsWith("1735689600"))))
+                    .andExpect(jsonPath("$.invoices[0].periodStart",
+                            org.hamcrest.Matchers.hasToString(org.hamcrest.Matchers.startsWith("1733011200"))))
+                    .andExpect(jsonPath("$.invoices[0].periodEnd",
+                            org.hamcrest.Matchers.hasToString(org.hamcrest.Matchers.startsWith("1735689600"))))
+                    .andExpect(jsonPath("$.invoices[0].hostedInvoiceUrl").value("https://invoice.stripe.com/i/in_001"))
+                    .andExpect(jsonPath("$.invoices[0].invoicePdf").value("https://pay.stripe.com/invoice/in_001/pdf"))
+                    .andExpect(jsonPath("$.invoices[1].id").value("in_002"))
+                    .andExpect(jsonPath("$.invoices[1].status").value("open"))
+                    .andExpect(jsonPath("$.invoices[1].amountPaid").value(0))
+                    .andExpect(jsonPath("$.invoices[1].amountDue").value(4900));
+        }
+
+        @Test
+        @DisplayName("requests Stripe with the customer's providerCustomerId and the 12-invoice cap")
+        void invoicesListParams_scopedToCustomerAndCapped() throws Exception {
+            givenBillingCustomerExists();
+            givenStripeReturnsInvoices(List.of(buildStripeInvoice("in_cap")));
+
+            mockMvc.perform(get("/api/billing/invoices")
+                            .header("X-User-ID", USER_ID_STR))
+                    .andExpect(status().isOk());
+
+            ArgumentCaptor<InvoiceListParams> captor = ArgumentCaptor.forClass(InvoiceListParams.class);
+            verify(invoiceService).list(captor.capture());
+            assertThat(captor.getValue().getCustomer()).isEqualTo("cus_test_1");
+            assertThat(captor.getValue().getLimit()).isEqualTo(12L);
+        }
+
+        @Test
+        @DisplayName("sets Cache-Control: no-store on the listing (hostedInvoiceUrl/invoicePdf are expiring signed URLs)")
+        void invoicesResponse_hasNoStoreHeader() throws Exception {
+            givenBillingCustomerExists();
+            givenStripeReturnsInvoices(List.of(buildStripeInvoice("in_hdr")));
+
+            mockMvc.perform(get("/api/billing/invoices")
+                            .header("X-User-ID", USER_ID_STR))
+                    .andExpect(status().isOk())
+                    .andExpect(header().string("Cache-Control", "no-store"));
+        }
+
+        @Test
+        @DisplayName("returns empty list when the Stripe collection carries null data")
+        void invoicesNullStripeData_returnsEmptyList() throws Exception {
+            givenBillingCustomerExists();
+            givenStripeReturnsInvoices(null);
+
+            mockMvc.perform(get("/api/billing/invoices")
+                            .header("X-User-ID", USER_ID_STR))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.invoices", hasSize(0)));
+        }
+
+        @Test
+        @DisplayName("serializes null timestamps and null URLs as JSON null for draft invoices (toInvoiceDto null-safety)")
+        void invoicesDraftWithNullFields_serializedAsNull() throws Exception {
+            givenBillingCustomerExists();
+
+            Invoice draft = new Invoice();
+            draft.setId("in_draft");
+            draft.setStatus("draft");
+            draft.setAmountDue(1900L);
+            draft.setAmountPaid(0L);
+            draft.setCurrency("usd");
+            // number, created, periodStart, periodEnd, hostedInvoiceUrl, invoicePdf all left null
+
+            givenStripeReturnsInvoices(List.of(draft));
+
+            mockMvc.perform(get("/api/billing/invoices")
+                            .header("X-User-ID", USER_ID_STR))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.invoices[0].id").value("in_draft"))
+                    .andExpect(jsonPath("$.invoices[0].number").value(nullValue()))
+                    .andExpect(jsonPath("$.invoices[0].created").value(nullValue()))
+                    .andExpect(jsonPath("$.invoices[0].periodStart").value(nullValue()))
+                    .andExpect(jsonPath("$.invoices[0].periodEnd").value(nullValue()))
+                    .andExpect(jsonPath("$.invoices[0].hostedInvoiceUrl").value(nullValue()))
+                    .andExpect(jsonPath("$.invoices[0].invoicePdf").value(nullValue()));
+        }
+
+        @Test
+        @DisplayName("returns 401 without X-User-ID header")
+        void invoicesWithoutUserHeader_returns401() throws Exception {
+            mockMvc.perform(get("/api/billing/invoices"))
+                    .andExpect(status().isUnauthorized())
+                    .andExpect(jsonPath("$.error").value("User not authenticated"));
+        }
+
+        @Test
+        @DisplayName("propagates StripeException to @ControllerAdvice: resource_missing maps to 404 not_found (controller has no catch)")
+        void invoicesStripeResourceMissing_propagatesAs404() throws Exception {
+            MockMvc mvcWithAdvice = MockMvcBuilders.standaloneSetup(billingController)
+                    .setControllerAdvice(new StripeExceptionHandler())
+                    .defaultRequest(post("/").header("X-Organization-Role", "OWNER"))
+                    .build();
+
+            givenBillingCustomerExists();
+            InvalidRequestException stripeError = new InvalidRequestException(
+                    "No such customer: 'cus_test_1'", null, "req_inv_404",
+                    "resource_missing", 404, null);
+            when(invoiceService.list(any(InvoiceListParams.class))).thenThrow(stripeError);
+
+            mvcWithAdvice.perform(get("/api/billing/invoices")
+                            .header("X-User-ID", USER_ID_STR))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.error").value("not_found"));
+        }
+
+        @Test
+        @DisplayName("propagates generic Stripe ApiException to @ControllerAdvice as 500 payment_error")
+        void invoicesStripeApiException_propagatesAs500() throws Exception {
+            MockMvc mvcWithAdvice = MockMvcBuilders.standaloneSetup(billingController)
+                    .setControllerAdvice(new StripeExceptionHandler())
+                    .defaultRequest(post("/").header("X-Organization-Role", "OWNER"))
+                    .build();
+
+            givenBillingCustomerExists();
+            when(invoiceService.list(any(InvoiceListParams.class)))
+                    .thenThrow(new ApiException("Stripe internal error", "req_inv_500", null, 500, null));
+
+            mvcWithAdvice.perform(get("/api/billing/invoices")
+                            .header("X-User-ID", USER_ID_STR))
+                    .andExpect(status().isInternalServerError())
+                    .andExpect(jsonPath("$.error").value("payment_error"));
         }
     }
 

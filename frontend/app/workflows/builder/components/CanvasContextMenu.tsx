@@ -32,6 +32,7 @@ import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
 import { useNodeExecutionStatus } from '../contexts/StepByStepContext';
 import { deriveNodeContextFlags, useNodeContextualButtons } from '../hooks/useNodeContextualButtons';
 import { useTriggerPinDisplay, requestTriggerPin } from '../hooks/useTriggerPin';
+import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 import { findNodeClassById } from '../nodes/nodeClasses';
 
 /** Operations the node menu delegates back to the canvas (all operate on raw graph state). */
@@ -233,6 +234,10 @@ export function NodeContextMenu({
   // Same read-only pin state the bottom-bar pin button shows; the actual flow
   // runs on the mounted button (it owns the confirmation modal) via an event.
   const pinDisplay = useTriggerPinDisplay();
+  // Audit 2026-07-02 - VIEWER role in an org workspace is read-only: launching a
+  // run auto-saves the plan and the backend 403s VIEWER, so the run entries hide
+  // (useWorkflowExecution also no-ops the dispatched events).
+  const canMutate = useCanMutateInCurrentOrg();
 
   const run = (fn: () => void) => () => {
     fn();
@@ -254,7 +259,7 @@ export function NodeContextMenu({
   // pin/unpin affordance - the menu mirrors the buttons that render under the
   // node, gated per node type / mode exactly like NodeBottomBar.
   const hasRunActions = exec.canExecute || exec.canRerun || exec.pendingSignalCount > 0;
-  const showLauncher = editable && flags.isTriggerNode;
+  const showLauncher = editable && flags.isTriggerNode && canMutate;
   const showPin = !isPreviewOnly && flags.isTriggerNode && !!workflowId && pinDisplay.shouldRender;
   const showViewInterface = isRunMode && flags.isInterfaceNode && !!interfaceId;
   const hasTopGroup = hasRunActions || showLauncher || showPin;

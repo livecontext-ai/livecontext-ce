@@ -88,6 +88,20 @@ public class StorageClientAdapter implements FileStorageService {
     }
 
     @Override
+    public String generateDownloadUrl(String ownerTenantId, String key, Duration duration) {
+        // Owner-aware presign: the internal presign route authorizes by KEY-OWNER
+        // prefix (isKeyOwnedByTenant), so org-shared files must present the
+        // OWNER's tenant, not the caller's request context - else a teammate's
+        // preview/download 403s silently. See FileStorageService javadoc.
+        int minutes = (int) duration.toMinutes();
+        String url = storageClient.generateDownloadUrl(ownerTenantId, key, minutes);
+        if (url == null) {
+            throw new RuntimeException("Failed to generate download URL for: " + key);
+        }
+        return url;
+    }
+
+    @Override
     public Optional<byte[]> download(String key) {
         byte[] content = storageClient.download(null, key);
         return Optional.ofNullable(content);

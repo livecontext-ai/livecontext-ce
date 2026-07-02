@@ -39,13 +39,17 @@ function derive(schema) {
   const levelNames = schema.levels.map((l) => l.name);
   const enumNames = levelNames.map((n) => n.toUpperCase());
   const codexMaxOnly = schema.levels.filter((l) => l.codexMaxOnly).map((l) => l.name);
-  // A codex-max-only level (e.g. xhigh) clamps down to the highest level that is
-  // NOT max-only, on non-codex-max models.
-  const nonMaxOnly = schema.levels.filter((l) => !l.codexMaxOnly).map((l) => l.name);
-  const clampTarget = nonMaxOnly[nonMaxOnly.length - 1];
-  const claudeBudget = {};
-  for (const l of schema.levels) claudeBudget[l.name] = String(l.claudeThinkingBudget);
-  return { levelNames, enumNames, codexMaxOnly, clampTarget, claudeBudget };
+  // A codex-max-only level (xhigh, max) clamps down to the codexEffort of the
+  // highest level that is NOT max-only, on non-codex-max models.
+  const nonMaxOnly = schema.levels.filter((l) => !l.codexMaxOnly);
+  const clampTarget = nonMaxOnly[nonMaxOnly.length - 1].codexEffort;
+  const claudeEffort = {};
+  const codexEffort = {};
+  for (const l of schema.levels) {
+    claudeEffort[l.name] = l.claudeCodeEffort;
+    codexEffort[l.name] = l.codexEffort;
+  }
+  return { levelNames, enumNames, codexMaxOnly, clampTarget, claudeEffort, codexEffort };
 }
 
 const GEN_NOTE_JS = [
@@ -64,18 +68,22 @@ function emitJava(schema, d) {
 import java.util.Locale;
 
 /**
- * Categorical reasoning-effort intent for CLI-backed (bridge) providers.
+ * Categorical reasoning-effort intent for the providers that honor it: the
+ * CLI-backed bridges (claude-code, codex) and the direct Anthropic API.
  *
  * <p><strong>GENERATED FILE - do not edit by hand.</strong> Source of truth:
  * {@code shared/contracts/reasoning-effort.json}. Re-run
  * {@code node shared/contracts/scripts/generate-reasoning-effort.js} after editing the JSON.
  *
- * <p>Mapped to each CLI's concrete flag at the bridge adapter leaf (e.g. Codex
- * {@code -c model_reasoning_effort="<level>"}); the canonical {@link #wire()}
- * value is the lowercase string the CLIs expect. Unknown/unsupported levels are
- * dropped at the adapter so the CLI falls back to its own default. Precedence
- * (per-conversation override > per-agent > per-model default) is handled by the
- * hand-written {@code ReasoningEffortResolver}.
+ * <p>Mapped to each consumer's concrete knob at the leaf: Codex
+ * {@code -c model_reasoning_effort=<level>}, Claude Code the
+ * {@code CLAUDE_CODE_EFFORT_LEVEL} env, and the direct Anthropic API
+ * {@code output_config.effort} ({@code ClaudeProvider}, clamped per model).
+ * The canonical {@link #wire()} value is the lowercase level string.
+ * Unknown/unsupported levels are dropped or clamped at the leaf so the
+ * consumer falls back to its own default. Precedence (per-conversation
+ * override > per-agent > per-model default) is handled by the hand-written
+ * {@code ReasoningEffortResolver}.
  */
 public enum ReasoningEffort {
 ${constants}
@@ -114,6 +122,21 @@ ${constants}
     public String wire() {
         return name().toLowerCase(Locale.ROOT);
     }
+
+    /**
+     * Comma-separated canonical wire values, for validation error messages.
+     * Derived from the enum so the message can never drift from the contract.
+     */
+    public static String validValuesCsv() {
+        StringBuilder sb = new StringBuilder();
+        for (ReasoningEffort level : values()) {
+            if (sb.length() > 0) {
+                sb.append(", ");
+            }
+            sb.append(level.wire());
+        }
+        return sb.toString();
+    }
 }
 `;
 }
@@ -121,8 +144,10 @@ ${constants}
 // ─── JS (bridge) ─────────────────────────────────────────────────────────────
 
 function emitJs(schema, d) {
-  const budgetLines = d.levelNames
-    .map((n) => `  ${n}: '${d.claudeBudget[n]}',`).join('\n');
+  const claudeLines = d.levelNames
+    .map((n) => `  ${n}: '${d.claudeEffort[n]}',`).join('\n');
+  const codexLines = d.levelNames
+    .map((n) => `  ${n}: '${d.codexEffort[n]}',`).join('\n');
   const codexMaxOnlySet = d.codexMaxOnly.map((n) => `'${n}'`).join(', ');
   return `${GEN_NOTE_JS.join('\n')}
 //
@@ -134,14 +159,22 @@ function emitJs(schema, d) {
 /** Canonical levels, low→high. */
 export const EFFORT_LEVELS = ${JSON.stringify(d.levelNames)};
 
-/** Codex levels accepted only on codex-max model variants (clamped down elsewhere). */
+/** Canonical levels accepted only on codex-max model variants (clamped down elsewhere). */
 const CODEX_MAX_ONLY = new Set([${codexMaxOnlySet}]);
 const CODEX_MAX_PATTERN = /${schema.codexMaxModelPattern}/i;
 const CODEX_CLAMP_TARGET = '${d.clampTarget}';
 
-/** Claude Code extended-thinking token budget per level (env: MAX_THINKING_TOKENS). */
-const CLAUDE_THINKING_BUDGET = Object.freeze({
-${budgetLines}
+/** Codex CLI wire value per canonical level (codex has no \`max\`: it maps to xhigh). */
+const CODEX_EFFORT = Object.freeze({
+${codexLines}
+});
+
+/**
+ * Claude Code categorical effort per canonical level (env: ${schema.claudeCodeEffortEnv}).
+ * The CLI accepts low|medium|high|xhigh|max - \`minimal\` clamps to \`low\`.
+ */
+const CLAUDE_CODE_EFFORT = Object.freeze({
+${claudeLines}
 });
 
 /**
@@ -155,22 +188,24 @@ export function normalizeEffort(level) {
 }
 
 /**
- * Codex CLI: \`codex exec -c model_reasoning_effort=<level>\`. A max-only level
- * (e.g. xhigh) clamps to the highest non-max level on non-codex-max models so the
- * CLI doesn't reject the run. Returns the argv fragment, or [] when nothing to set.
+ * Codex CLI: \`codex exec -c model_reasoning_effort=<level>\`. Each canonical
+ * level maps to the codex wire value first (codex has no \`max\`, so it rides as
+ * xhigh); a max-only level (xhigh, max) then clamps to the highest non-max wire
+ * value on non-codex-max models so the CLI doesn't reject the run. Returns the
+ * argv fragment, or [] when nothing to set.
  *
  * The value is emitted BARE (no inner quotes): codex parses a \`-c\` value as JSON
  * and falls back to a raw string when JSON parsing fails, so a whitelisted bare
  * word like \`high\` becomes the string "high". Bare is also shell-robust - on the
  * Windows \`shell:true\` spawn path cmd.exe would strip inner double-quotes, making
  * the quoted form arrive differently than on Linux (\`shell:false\`); bare is
- * identical on both. \`effective\` is always one of the whitelisted levels, so
- * there is no injection surface.
+ * identical on both. \`effective\` is always one of the whitelisted wire values,
+ * so there is no injection surface.
  */
 export function codexReasoningArgs(level, model) {
   const v = normalizeEffort(level);
   if (!v) return [];
-  let effective = v;
+  let effective = CODEX_EFFORT[v];
   if (CODEX_MAX_ONLY.has(v) && !CODEX_MAX_PATTERN.test(model || '')) {
     effective = CODEX_CLAMP_TARGET;
   }
@@ -178,21 +213,24 @@ export function codexReasoningArgs(level, model) {
 }
 
 /**
- * Claude Code: map the level to an extended-thinking token budget exported via
- * the MAX_THINKING_TOKENS env var, returned as an env patch the adapter merges.
- * Unknown level → {} (no env change → CLI default).
+ * Claude Code: map the level to the categorical ${schema.claudeCodeEffortEnv} env
+ * value, returned as an env patch the adapter merges. Unknown level → {} (no env
+ * change → CLI default: high on Fable 5/Opus 4.8/Sonnet 5, xhigh on Opus 4.7).
  *
- * CAVEAT: unlike codex's per-run flag, setting MAX_THINKING_TOKENS makes Claude
- * Code spend extended thinking on EVERY turn at this budget (no per-turn opt-out)
- * - a deliberate cost/latency tradeoff. We only set it when a level is explicitly
- * chosen, so the default (unset) keeps Claude's normal behavior. The exact env-var
- * name is verified against the installed CLI at e2e; if it changes, this is the
- * single swap point.
+ * Why categorical and not MAX_THINKING_TOKENS: every current adaptive-reasoning
+ * model (Fable 5, Sonnet 5, Opus 4.7+) ignores the fixed thinking budget - and
+ * the 4.6 family only honors it under CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1 -
+ * so the old budget env was a silent no-op (code.claude.com/docs/en/model-config).
+ * ${schema.claudeCodeEffortEnv} takes precedence over the CLI's configured
+ * effortLevel setting and accepts \`max\` (session-scoped only elsewhere). On a
+ * model that lacks a level (e.g. xhigh on Opus 4.6), the CLI itself falls back
+ * to the highest supported level at or below it. Verified against the installed
+ * CLI at e2e; if the env name changes, this is the single swap point.
  */
 export function claudeReasoningEnv(level) {
   const v = normalizeEffort(level);
   if (!v) return {};
-  return { MAX_THINKING_TOKENS: CLAUDE_THINKING_BUDGET[v] };
+  return { ${schema.claudeCodeEffortEnv}: CLAUDE_CODE_EFFORT[v] };
 }
 `;
 }
@@ -205,7 +243,8 @@ function emitTs(schema, d) {
 //
 // Shared reasoning-effort constants/helpers for the three UI surfaces (per-model
 // admin default, per-conversation chat selector, per-agent setting). The effort
-// knob only applies to bridge/CLI providers; others ignore it.
+// knob applies to the providers in EFFORT_PROVIDERS (bridge CLIs + the direct
+// Anthropic API); others ignore it.
 
 /** Canonical levels, low→high, matching the backend enum's wire form. */
 export const REASONING_EFFORT_LEVELS = [${levelsLiteral}] as const;
@@ -215,8 +254,11 @@ export type ReasoningEffortLevel = (typeof REASONING_EFFORT_LEVELS)[number];
 export const BRIDGE_PROVIDERS = ${JSON.stringify(schema.bridgeProviders)};
 
 /**
- * Bridge providers whose adapter actually maps an effort level today. The other
- * bridges ignore the value, so we must NOT advertise the control for them.
+ * Providers that actually honor the effort level today: the bridge CLIs whose
+ * adapter maps it (claude-code, codex) plus the direct Anthropic API
+ * (ClaudeProvider → output_config.effort, clamped per model). gemini-cli and
+ * mistral-vibe expose no usable knob, so we must NOT advertise the control
+ * for them.
  */
 export const EFFORT_PROVIDERS = ${JSON.stringify(schema.effortProviders)};
 

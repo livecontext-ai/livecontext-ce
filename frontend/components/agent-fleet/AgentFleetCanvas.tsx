@@ -48,6 +48,7 @@ import { AgentPickerPanel } from './AgentPickerPanel';
 import { CreateAgentModal } from '@/components/chat/CreateAgentModal';
 import { useTranslations } from 'next-intl';
 import { useAgentActivitySubscriber } from './hooks/useAgentActivityStream';
+import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 import { ConnectionTypeSelector, type ConnectionType } from '@/app/workflows/builder/components/ConnectionTypeSelector';
 
 // ─── Fleet edge types ───
@@ -523,8 +524,10 @@ export function AgentFleetCanvas({ singleAgentId, snapshot, snapshotMode = false
     }
   }, [isAllCollapsed, collapsibleGroupIds, isSingleAgent]);
 
-  // ── Edit mode (ON by default; forced off for read-only / snapshot) ──
-  const canEdit = !readOnly && !isSnapshotMode;
+  // ── Edit mode (ON by default; forced off for read-only / snapshot, and for
+  // VIEWERs in an org workspace - the fleet edit affordances all mutate agents) ──
+  const canMutate = useCanMutateInCurrentOrg();
+  const canEdit = !readOnly && !isSnapshotMode && canMutate;
   const [isEditMode, setIsEditMode] = useState(canEdit);
   useEffect(() => { if (!canEdit) setIsEditMode(false); }, [canEdit]);
 
@@ -958,8 +961,9 @@ export function AgentFleetCanvas({ singleAgentId, snapshot, snapshotMode = false
                   </defs>
                 </svg>
 
-                {/* Edit button (top-right) - hidden in snapshot/preview/read-only mode */}
-                {!isSnapshotMode && !readOnly && !isSettingsOpen && !isAgentPickerOpen && (
+                {/* Edit button (top-right) - hidden in snapshot/preview/read-only mode
+                    and for read-only VIEWERs (canEdit folds all three in). */}
+                {canEdit && !isSettingsOpen && !isAgentPickerOpen && (
                   <Button
                     onClick={handleEditClick}
                     className="absolute top-4 right-4 z-10 w-11 h-11 rounded-full p-0 shadow-none"

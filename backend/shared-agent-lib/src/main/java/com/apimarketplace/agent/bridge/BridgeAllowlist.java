@@ -73,6 +73,7 @@ public final class BridgeAllowlist {
             // https://code.claude.com/docs/en/model-config
             // https://platform.claude.com/docs/en/about-claude/models/overview
             "claude-code",  Set.of(
+                    "claude-fable-5",
                     "claude-opus-4-7",
                     "claude-opus-4-6",
                     "claude-sonnet-4-6",
@@ -161,14 +162,18 @@ public final class BridgeAllowlist {
      */
     public static final Map<String, List<Pattern>> DISCOVERY_PATTERNS = Map.of(
             // claude-code → anthropic. The Claude Code CLI routes every Anthropic
-            // API id of the opus/sonnet/haiku families. Matches "claude-opus-4-8",
-            // "claude-sonnet-4-6"; rejects legacy "claude-3-opus-…" (wrong shape)
-            // and dated pins: the minor-version group is capped at 2 digits, so
-            // 6-8 digit date suffixes never match -- neither the 3-segment
+            // API id of the opus/sonnet/haiku/fable families. Matches
+            // "claude-opus-4-8", "claude-sonnet-4-6", "claude-fable-5"; rejects
+            // legacy "claude-3-opus-…" (wrong shape) and dated pins: the
+            // minor-version group is capped at 2 digits, so 6-8 digit date
+            // suffixes never match -- neither the 3-segment
             // "claude-opus-4-7-20260416" (also deduped upstream) NOR the
             // 2-segment "claude-opus-4-20250514" (which is NOT deduped, since it
             // has no canonical "claude-opus-4" twin in the feed).
-            "claude-code", List.of(Pattern.compile("^claude-(opus|sonnet|haiku)-\\d+(-\\d{1,2})?$")),
+            // "mythos" is deliberately NOT routed: claude-mythos-5 is gated to
+            // approved orgs (Project Glasswing), so the public Claude Code CLI
+            // subscription cannot run it.
+            "claude-code", List.of(Pattern.compile("^claude-(opus|sonnet|haiku|fable)-\\d+(-\\d{1,2})?$")),
 
             // codex → openai. Tight to the GPT-5.x reasoning family codex routes.
             // Matches "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2";

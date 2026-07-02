@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { getClientLocale } from "@/lib/utils/locale";
 import {
@@ -951,11 +951,29 @@ export function CredentialWizard({
       };
       sessionStorage.setItem("oauth_wizard_state", JSON.stringify(wizardState));
 
+      // Per-instance host vars (Shopify store, Zendesk subdomain, ...) must be present before we
+      // can build the provider-specific authorize URL. Block the redirect with a clear error
+      // otherwise (a missing value would otherwise redirect to a literal {shop}.host -> DNS error).
+      const missingHostVar = oauthHostVarProps.find(
+        (p) => p.required !== false && !(oauthHostVars[p.name] || "").trim(),
+      );
+      if (missingHostVar) {
+        setError(tConfig("errors.missingOAuthHostVar", { field: missingHostVar.displayName }));
+        setIsSubmitting(false);
+        return;
+      }
+      const templateVars = Object.fromEntries(
+        oauthHostVarProps
+          .map((p) => [p.name, (oauthHostVars[p.name] || "").trim()] as const)
+          .filter(([, v]) => v.length > 0),
+      );
+
       const request: OAuth2InitiateRequest = {
         credential_template_id: template.id,
         credential_name: credentialName.trim() || undefined,
         // Don't send integration - backend will use icon_slug from template
         return_url: returnUrl,  // Send returnUrl to backend for post-auth redirection
+        ...(Object.keys(templateVars).length > 0 ? { template_vars: templateVars } : {}),
       };
 
       // Forward the app UI locale (next-intl) so the provider's consent screen + scope
@@ -999,6 +1017,16 @@ export function CredentialWizard({
     }
     return [];
   }, [template]);
+
+  // Per-instance OAuth URL host vars (Shopify {shop}, Zendesk {subdomain}, ...) the importer
+  // derived from the OAuth authorize/token URL templates. For OAuth2 these MUST be collected
+  // BEFORE the redirect and sent as template_vars so the backend can substitute them into the
+  // provider-specific authorize/token URLs. Empty for the vast majority of providers.
+  const oauthHostVarProps = useMemo<CredentialProperty[]>(
+    () => getTemplateProperties().filter((p) => p.oauthUrlVar === true),
+    [getTemplateProperties],
+  );
+  const [oauthHostVars, setOauthHostVars] = useState<Record<string, string>>({});
 
   // Credential properties BEYOND the primary auth field(s) - i.e. importer-registered
   // URL-template / account identifiers (Bandwidth account_id, Sinch project + service-plan
@@ -2100,6 +2128,39 @@ export function CredentialWizard({
               <div className="flex items-start gap-2.5 rounded-xl border border-blue-200 dark:border-blue-800/50 bg-blue-50 dark:bg-blue-900/20 px-3 py-2.5 text-sm text-blue-800 dark:text-blue-200">
                 <Info className="mt-0.5 h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400" />
                 <span>{tConfig("unverifiedNotice")}</span>
+              </div>
+            )}
+
+            {/* Per-instance OAuth host fields (e.g. Shopify store domain, Zendesk subdomain).
+                Collected BEFORE the redirect because the OAuth authorize URL host is per-store /
+                per-tenant for these providers. Data-driven: the importer derives which fields
+                appear here from the OAuth URL templates ({shop}, {subdomain}, ...). */}
+            {isOAuth2 && oauthHostVarProps.length > 0 && (
+              <div className="space-y-4">
+                {oauthHostVarProps.map((prop) => (
+                  <div key={prop.name} className="space-y-2">
+                    <Label
+                      htmlFor={`oauthvar-${prop.name}`}
+                      className="text-sm font-semibold text-slate-500 dark:text-slate-400"
+                    >
+                      {prop.displayName}
+                      {prop.required !== false && <span className="ml-1 text-red-500">*</span>}
+                    </Label>
+                    <Input
+                      id={`oauthvar-${prop.name}`}
+                      placeholder={prop.placeholder || prop.description || prop.displayName}
+                      value={oauthHostVars[prop.name] || ""}
+                      onChange={(e) =>
+                        setOauthHostVars((prev) => ({ ...prev, [prop.name]: e.target.value }))
+                      }
+                      autoComplete="off"
+                      className="rounded-xl border border-theme bg-transparent"
+                    />
+                    {prop.description && (
+                      <p className="text-xs text-theme-secondary">{prop.description}</p>
+                    )}
+                  </div>
+                ))}
               </div>
             )}
 

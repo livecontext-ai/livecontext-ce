@@ -80,7 +80,9 @@ public class ModelConfigController {
                 String effort = effortRaw == null ? null : effortRaw.toString();
                 if (!com.apimarketplace.agent.domain.ReasoningEffort.isValidOrBlank(effort)) {
                     return badRequest("Invalid defaultReasoningEffort '" + effort
-                            + "'. Expected one of: minimal, low, medium, high, xhigh (or empty to clear).");
+                            + "'. Expected one of: "
+                            + com.apimarketplace.agent.domain.ReasoningEffort.validValuesCsv()
+                            + " (or empty to clear).");
                 }
                 // Empty string is allowed through (saveOverride normalizes blank -> clear).
                 entity.setDefaultReasoningEffort(effort);

@@ -50,6 +50,7 @@ import { formatCost } from '@/lib/format-cost';
 import { getProviderIconSrc, getProviderDisplayName } from '@/lib/ai-providers/providerIcons';
 import { REASONING_EFFORT_LEVELS, supportsReasoningEffort } from '@/lib/ai-providers/reasoningEffort';
 import { useAuth } from '@/lib/providers/smart-providers';
+import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 
 /** Fallback: synthetic Skill objects for defaults not yet seeded in DB */
 const DEFAULT_SKILLS_FALLBACK: Skill[] = DEFAULT_SKILLS.map(ds => ({
@@ -381,6 +382,10 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
   const { toasts, addToast, removeToast } = useToast();
   const { hasRole } = useAuth();
   const isAdmin = hasRole('ADMIN');
+  // Audit 2026-07-02 - VIEWER role in an org workspace is read-only: creating or
+  // updating an agent must not be submittable (the Save button is disabled and
+  // handleSave guards defensively; the modal stays browsable).
+  const canMutate = useCanMutateInCurrentOrg();
   const queryClient = useQueryClient();
 
   // Step management - open on `initialStep` (clamped) when provided (e.g. fleet model
@@ -1330,6 +1335,7 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
   // Save handler
   const handleSave = async () => {
     if (!name.trim()) return;
+    if (!canMutate) return; // read-only VIEWER in an org workspace
 
     try {
       setIsCreating(true);
@@ -3321,7 +3327,7 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                   <ArrowRight className="h-4 w-4 ml-2" />
                 </Button>
               ) : (
-                <Button onClick={handleSave} disabled={!name.trim() || isCreating}>
+                <Button onClick={handleSave} disabled={!name.trim() || isCreating || !canMutate}>
                   {isCreating ? (
                     <>
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />

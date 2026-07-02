@@ -52,6 +52,12 @@ function formatBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+// "Setup / not synced yet" states are informational (blue), NOT errors (red): a fresh or
+// not-yet-bootstrapped CE legitimately sits here before its first sync - it must not look alarming.
+function isInformationalStatus(status: string | null | undefined): boolean {
+  return status === "NO_ACTIVE" || status === "NOT_LINKED" || status === "TRUST_UNCONFIGURED";
+}
+
 function StatusBadge({
   status,
   neverLabel,
@@ -70,10 +76,7 @@ function StatusBadge({
     );
   }
   const ok = status === "OK";
-  // "Setup / not synced yet" states are informational (blue), NOT errors (red): a fresh or
-  // not-yet-bootstrapped CE legitimately sits here before its first sync - it must not look alarming.
-  const informational =
-    status === "NO_ACTIVE" || status === "NOT_LINKED" || status === "TRUST_UNCONFIGURED";
+  const informational = isInformationalStatus(status);
   const cls = ok
     ? "bg-green-500/15 text-green-700 dark:text-green-400"
     : informational
@@ -274,14 +277,28 @@ export default function ApiCatalogBundlesPanel() {
           </dl>
 
           {syncStatus?.lastFetchError && (
-            <div className="mt-4 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-3">
-              <div className="flex items-start gap-2">
-                <AlertTriangle className="w-4 h-4 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
-                <p className="text-xs text-red-800 dark:text-red-300 break-all font-mono">
-                  {syncStatus.lastFetchError}
-                </p>
+            isInformationalStatus(syncStatus?.lastFetchStatus) ? (
+              // Setup states (not linked / nothing published yet) are NORMAL on a
+              // fresh install: explain instead of alarming - the red error box is
+              // for real failures only.
+              <div className="mt-4 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-3">
+                <div className="flex items-start gap-2">
+                  <Cloud className="w-4 h-4 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-blue-800 dark:text-blue-300 break-words">
+                    {syncStatus.lastFetchError}
+                  </p>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="mt-4 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-3">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-red-800 dark:text-red-300 break-all font-mono">
+                    {syncStatus.lastFetchError}
+                  </p>
+                </div>
+              </div>
+            )
           )}
         </div>
       )}

@@ -66,6 +66,23 @@ class BridgeAllowlistDiscoveryPatternTest {
     }
 
     @Test
+    @DisplayName("Fable family is routed (curated + discoverable); Mythos stays out - regression for claude-fable-5")
+    void fableFamilyRoutedMythosExcluded() {
+        // Curated floor carries the released model.
+        assertThat(BridgeAllowlist.MODELS.get("claude-code")).contains("claude-fable-5");
+        assertThat(BridgeAllowlist.matchesDiscoveryPattern("claude-code", "claude-fable-5")).isTrue();
+        // Future fable versions auto-discover like any routed family.
+        assertThat(BridgeAllowlist.matchesDiscoveryPattern("claude-code", "claude-fable-6")).isTrue();
+        assertThat(BridgeAllowlist.matchesDiscoveryPattern("claude-code", "claude-fable-5-1")).isTrue();
+        // Dated pins stay rejected (2-digit minor-version cap).
+        assertThat(BridgeAllowlist.matchesDiscoveryPattern("claude-code", "claude-fable-5-20260624")).isFalse();
+        // claude-mythos-5 is gated to approved orgs (Project Glasswing): the
+        // public Claude Code CLI cannot route it, so it must never leak in.
+        assertThat(BridgeAllowlist.matchesDiscoveryPattern("claude-code", "claude-mythos-5")).isFalse();
+        assertThat(BridgeAllowlist.MODELS.get("claude-code")).doesNotContain("claude-mythos-5");
+    }
+
+    @Test
     @DisplayName("Unrelated, legacy and cross-bridge ids never match a pattern")
     void rejectsUnrelatedAndCrossBridgeIds() {
         // Legacy Anthropic shape (claude-3-…) is not the opus/sonnet/haiku family form.

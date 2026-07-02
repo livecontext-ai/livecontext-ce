@@ -10,6 +10,7 @@ import LoadingSpinner from '@/components/LoadingSpinner';
 import { Button } from '@/components/ui/button';
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select';
 import { matchesVisibilityFilter, type VisibilityFilter } from '@/lib/utils/visibility';
+import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 import { useWorkflowBoard, type WorkflowBoardSource } from './useWorkflowBoard';
 import { WorkflowBoardCard } from './WorkflowBoardCard';
 import { PinVersionModal } from './PinVersionModal';
@@ -85,6 +86,11 @@ export function WorkflowKanbanBoard({ source = 'workflow' }: { source?: Workflow
   const tCommon = useTranslations('common');
   const router = useRouter();
   const isApp = source === 'application';
+  // Audit 2026-07-02 - VIEWER role in an org workspace is read-only: dragging a
+  // card to another column persists a status change, so it never starts, and both
+  // header CTAs (create workflow / install application) are hidden - install ends
+  // in acquire endpoints the backend 403s for VIEWER. Browsing/filtering stays.
+  const canMutate = useCanMutateInCurrentOrg();
   const {
     columns, totalCount, initialLoading, errorCode, dismissError, moveCard, canDrop,
     pinRequest, closePinRequest, confirmPin, loadMore,
@@ -151,8 +157,9 @@ export function WorkflowKanbanBoard({ source = 'workflow' }: { source?: Workflow
   }, [columns, searchQuery, sortBy, modifiedFilter, triggerFilter, visibilityFilter]);
 
   const handleDragStart = useCallback((card: CardType) => {
+    if (!canMutate) return; // read-only VIEWER: never arm a drag
     setDragCard(card);
-  }, []);
+  }, [canMutate]);
 
   const handleDragOver = useCallback((e: React.DragEvent, columnKey: WorkflowBoardColumn) => {
     if (!dragCard) return;
@@ -169,11 +176,13 @@ export function WorkflowKanbanBoard({ source = 'workflow' }: { source?: Workflow
   const handleDrop = useCallback(async (e: React.DragEvent, columnKey: WorkflowBoardColumn) => {
     e.preventDefault();
     setDragOverColumn(null);
+    // Defensive mirror of handleDragStart: a VIEWER drop must never call moveCard.
+    if (!canMutate) return;
     if (!dragCard) return;
     if (!canDrop(dragCard, columnKey)) return;
     await moveCard(dragCard, columnKey);
     setDragCard(null);
-  }, [dragCard, canDrop, moveCard]);
+  }, [canMutate, dragCard, canDrop, moveCard]);
 
   const handleDragEnd = useCallback(() => {
     setDragCard(null);
@@ -278,14 +287,19 @@ export function WorkflowKanbanBoard({ source = 'workflow' }: { source?: Workflow
               className="h-7 rounded-md pl-7 pr-2 text-xs border border-slate-200 dark:border-slate-700/50 bg-transparent text-theme-primary placeholder:text-theme-muted w-full sm:w-40 focus:outline-none focus:ring-1 focus:ring-[var(--accent-primary)]"
             />
           </div>
-          <Button
-            onClick={isApp ? () => router.push('/app/marketplace') : () => setShowCreateWorkflow(true)}
-            size="sm"
-            className="h-7 px-3 text-xs gap-1 flex-shrink-0"
-          >
-            {isApp ? <Store className="h-3 w-3" /> : <Plus className="h-3 w-3" />}
-            {isApp ? tApp('actions.installApplication') : t('actions.createWorkflow')}
-          </Button>
+          {/* Both CTAs are VIEWER-gated: creating a workflow mutates directly, and
+              installing an application ends in the acquire endpoints, which the
+              backend rejects for VIEWER (403) - showing it would dead-end. */}
+          {canMutate && (
+            <Button
+              onClick={isApp ? () => router.push('/app/marketplace') : () => setShowCreateWorkflow(true)}
+              size="sm"
+              className="h-7 px-3 text-xs gap-1 flex-shrink-0"
+            >
+              {isApp ? <Store className="h-3 w-3" /> : <Plus className="h-3 w-3" />}
+              {isApp ? tApp('actions.installApplication') : t('actions.createWorkflow')}
+            </Button>
+          )}
         </div>
       </div>
 

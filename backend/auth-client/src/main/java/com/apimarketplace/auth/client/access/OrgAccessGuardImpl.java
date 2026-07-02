@@ -126,6 +126,11 @@ public class OrgAccessGuardImpl implements OrgAccessGuard {
         if (resourceId == null) {
             return false;
         }
+        // Role-level read-only: VIEWER in an org workspace can never write, whatever
+        // the per-resource deny-list says. See OrgAccessGuard.canWrite javadoc.
+        if (OrgAccessGuard.isRoleWriteBlocked(orgId, orgRole)) {
+            return false;
+        }
         Set<String> writeRestricted = getWriteRestrictedResourceIds(orgId, userId, resourceType, orgRole);
         return !writeRestricted.contains(resourceId);
     }

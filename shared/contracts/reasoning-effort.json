@@ -1,14 +1,16 @@
 {
-  "version": 1,
-  "description": "Source of truth for reasoning-effort levels (CLI/bridge providers: claude-code, codex). Consumed by Java backend (agent-common ReasoningEffort), Node bridge (mcp/bridge/lib/reasoningEffort.mjs), and frontend (frontend/lib/ai-providers/reasoningEffort.ts). Do NOT edit the generated files directly - edit this JSON then re-run scripts/generate-reasoning-effort.js. ReasoningEffortResolver.java (precedence logic) is hand-written and NOT generated.",
+  "version": 2,
+  "description": "Source of truth for reasoning-effort levels (CLI/bridge providers: claude-code, codex). Consumed by Java backend (agent-common ReasoningEffort), Node bridge (mcp/bridge/lib/reasoningEffort.mjs), and frontend (frontend/lib/ai-providers/reasoningEffort.ts). Do NOT edit the generated files directly - edit this JSON then re-run scripts/generate-reasoning-effort.js. ReasoningEffortResolver.java (precedence logic) is hand-written and NOT generated. Per-CLI knobs: claude-code maps each level to the categorical CLAUDE_CODE_EFFORT_LEVEL env value (claudeCodeEffort; the CLI accepts low|medium|high|xhigh|max - minimal clamps to low). The former MAX_THINKING_TOKENS budget mapping was a no-op on every adaptive-reasoning model (Fable 5, Sonnet 5, Opus 4.7+; and 4.6-family without CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1) per code.claude.com/docs/en/model-config. codex maps each level to -c model_reasoning_effort=<codexEffort> (per developers.openai.com/codex/config-reference the CLI accepts minimal|low|medium|high|xhigh - no max, so max maps to xhigh); levels flagged codexMaxOnly clamp down to the highest non-max-only level on models not matching codexMaxModelPattern. gemini-cli and mistral-vibe are deliberately ABSENT from effortProviders (verified 2026-07-02): gemini-cli exposes NO headless effort knob (no flag/env; the only path is a modelConfigs.customAliases settings alias, which is version-fragile - gemini-cli#18423 - and thinking_level errors on pre-Gemini-3 models), and mistral-vibe has no reasoning knob at all (devstral is not a reasoning model; config.toml reasoning_field_name is response parsing, not a control). The UI hides the effort control for both via effortProviders.",
   "levels": [
-    { "name": "minimal", "claudeThinkingBudget": 1024 },
-    { "name": "low",     "claudeThinkingBudget": 4096 },
-    { "name": "medium",  "claudeThinkingBudget": 8192 },
-    { "name": "high",    "claudeThinkingBudget": 16384 },
-    { "name": "xhigh",   "claudeThinkingBudget": 32000, "codexMaxOnly": true }
+    { "name": "minimal", "claudeCodeEffort": "low",    "codexEffort": "minimal" },
+    { "name": "low",     "claudeCodeEffort": "low",    "codexEffort": "low" },
+    { "name": "medium",  "claudeCodeEffort": "medium", "codexEffort": "medium" },
+    { "name": "high",    "claudeCodeEffort": "high",   "codexEffort": "high" },
+    { "name": "xhigh",   "claudeCodeEffort": "xhigh",  "codexEffort": "xhigh", "codexMaxOnly": true },
+    { "name": "max",     "claudeCodeEffort": "max",    "codexEffort": "xhigh", "codexMaxOnly": true }
   ],
+  "claudeCodeEffortEnv": "CLAUDE_CODE_EFFORT_LEVEL",
   "bridgeProviders": ["claude-code", "codex", "gemini-cli", "mistral-vibe"],
-  "effortProviders": ["claude-code", "codex"],
+  "effortProviders": ["claude-code", "codex", "anthropic"],
   "codexMaxModelPattern": "codex-max"
 }

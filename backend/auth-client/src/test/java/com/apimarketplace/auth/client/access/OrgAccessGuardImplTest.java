@@ -108,6 +108,68 @@ class OrgAccessGuardImplTest {
     }
 
     @Nested
+    @DisplayName("VIEWER role-level read-only (regression: VIEWER could write unrestricted org resources)")
+    class ViewerReadOnly {
+
+        @Test
+        @DisplayName("canWrite is false for VIEWER even with an empty per-resource deny-list")
+        void viewerCannotWriteUnrestrictedResource() {
+            // Pre-fix, VIEWER was treated identically to MEMBER: with no individual
+            // restriction on the resource, canWrite returned true and a VIEWER could
+            // delete/save/restore org workflows whose endpoints had no ad-hoc
+            // isViewerRole gate. The role boundary is now enforced centrally.
+            assertThat(guard.canWrite(ORG, USER, TYPE, "r1", "VIEWER")).isFalse();
+            verifyNoInteractions(authClient);
+        }
+
+        @Test
+        @DisplayName("VIEWER match is case-insensitive and trims whitespace")
+        void viewerMatchIsLenient() {
+            assertThat(guard.canWrite(ORG, USER, TYPE, "r1", "viewer")).isFalse();
+            assertThat(guard.canWrite(ORG, USER, TYPE, "r1", " Viewer ")).isFalse();
+        }
+
+        @Test
+        @DisplayName("VIEWER outside an org workspace (null/blank orgId) is not blocked by the role gate")
+        void viewerWithoutOrgIsNotRoleBlocked() {
+            // Personal workspace: no org context, the role header is meaningless.
+            // getWriteRestrictedResourceIds(null org) short-circuits to empty.
+            assertThat(guard.canWrite(null, USER, TYPE, "r1", "VIEWER")).isTrue();
+            assertThat(guard.canWrite("  ", USER, TYPE, "r1", "VIEWER")).isTrue();
+        }
+
+        @Test
+        @DisplayName("VIEWER read path is untouched: canAccess and filterAccessible behave like MEMBER")
+        void viewerReadsAreUnaffected() {
+            when(authClient.getRestrictedResourceIds(ORG, USER, TYPE)).thenReturn(Set.of("hidden"));
+
+            assertThat(guard.canAccess(ORG, USER, TYPE, "visible", "VIEWER")).isTrue();
+            assertThat(guard.canAccess(ORG, USER, TYPE, "hidden", "VIEWER")).isFalse();
+            assertThat(guard.filterAccessible(List.of("visible", "hidden"), ORG, USER, TYPE, "VIEWER", s -> s))
+                    .containsExactly("visible");
+        }
+
+        @Test
+        @DisplayName("MEMBER write behaviour is unchanged by the VIEWER gate")
+        void memberUnchanged() {
+            when(authClient.getWriteRestrictedResourceIds(ORG, USER, TYPE)).thenReturn(Set.of());
+
+            assertThat(guard.canWrite(ORG, USER, TYPE, "r1", "MEMBER")).isTrue();
+        }
+
+        @Test
+        @DisplayName("isRoleWriteBlocked exposes the same boundary for id-less call sites (create, bulk)")
+        void isRoleWriteBlockedContract() {
+            assertThat(OrgAccessGuard.isRoleWriteBlocked(ORG, "VIEWER")).isTrue();
+            assertThat(OrgAccessGuard.isRoleWriteBlocked(ORG, "viewer ")).isTrue();
+            assertThat(OrgAccessGuard.isRoleWriteBlocked(null, "VIEWER")).isFalse();
+            assertThat(OrgAccessGuard.isRoleWriteBlocked(" ", "VIEWER")).isFalse();
+            assertThat(OrgAccessGuard.isRoleWriteBlocked(ORG, "MEMBER")).isFalse();
+            assertThat(OrgAccessGuard.isRoleWriteBlocked(ORG, null)).isFalse();
+        }
+    }
+
+    @Nested
     @DisplayName("Restriction lookup")
     class RestrictionLookup {
 

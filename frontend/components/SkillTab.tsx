@@ -22,6 +22,7 @@ import { useToast } from '@/components/Toast';
 import Toast from '@/components/Toast';
 import PublishResourceModal from '@/components/marketplace/PublishResourceModal';
 import { useAuth } from '@/lib/providers/smart-providers';
+import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 
 interface SkillTabProps {
   className?: string;
@@ -32,6 +33,9 @@ export function SkillTab({ className = '' }: SkillTabProps) {
   const { toasts, addToast, removeToast } = useToast();
   const { hasRole } = useAuth();
   const isAdmin = hasRole('ADMIN');
+  // Audit 2026-07-02 - VIEWER role in an org workspace is read-only: hide the
+  // empty-state create CTAs (the tree gates its own row/folder actions).
+  const canMutate = useCanMutateInCurrentOrg();
   const {
     allFolders,
     allSkills,
@@ -294,7 +298,7 @@ export function SkillTab({ className = '' }: SkillTabProps) {
           icon={<Zap className="h-8 w-8 text-theme-tertiary" />}
           title={t('emptyState.skill.noSkillsFound')}
           subtitle={t('emptyState.skill.createFirstSkill')}
-          actions={
+          actions={canMutate ? (
             <div className="flex gap-2">
               <Button variant="outline" onClick={() => { setCreateFolderParentId(null); setShowCreateFolderDialog(true); }}>
                 <FolderPlus className="w-4 h-4 mr-1.5" />
@@ -305,7 +309,7 @@ export function SkillTab({ className = '' }: SkillTabProps) {
                 {t('emptyState.skill.createButton')}
               </Button>
             </div>
-          }
+          ) : undefined}
         />
       ) : (
         <div className="w-full">

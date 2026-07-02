@@ -483,6 +483,10 @@ public class CloudLlmRelayController {
                 .purpose(source.purpose())
                 .systemBlocks(source.systemBlocks())
                 .lastTurnAt(source.lastTurnAt())
+                // Keep the CE-resolved reasoning effort: ClaudeProvider maps it to
+                // output_config.effort on supporting models - dropping it here would
+                // silently reset a relayed request to the API default (high).
+                .reasoningEffort(source.reasoningEffort())
                 .build();
     }
 

@@ -829,7 +829,14 @@ public class DecisionNodeCreator extends CreatorBase {
             conditions.add(elseCond);
             return "else";
         } else {
-            int elseifIdx = nextIdx - 1;
+            // Port index must match the RUNTIME numbering (Core.getDecisionPorts:
+            // elseif_N = position in decisionConditions minus 1). The new elseif is
+            // inserted just before the trailing else, so its position is
+            // conditions.size()-1 post-insert => index conditions.size()-2 pre-insert.
+            // The old nextIdx-1 also counted the WIRED else edge, yielding an
+            // elseif_N one above the declared port - the same declared-vs-wired
+            // desync as the fork/option/classify overflow, just off by one.
+            int elseifIdx = Math.max(0, conditions.size() - 2);
             Map<String, Object> elseifCond = new LinkedHashMap<>();
             elseifCond.put("id", normalizedLabel + "-elseif-" + elseifIdx);
             elseifCond.put("type", "elseif");

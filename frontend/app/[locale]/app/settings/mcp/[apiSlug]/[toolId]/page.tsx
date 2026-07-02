@@ -298,8 +298,8 @@ export default function ToolEditPage() {
                 )}
 
                 {/* Tab Navigation */}
-                <div className="mb-8 flex justify-center">
-                    <div ref={tabContainerRef} className="relative inline-flex items-center gap-1 p-1.5 bg-theme-tertiary rounded-full">
+                <div className="mb-8 flex max-w-full overflow-x-auto scrollbar-hide">
+                    <div ref={tabContainerRef} className="relative mx-auto inline-flex w-max items-center gap-1 p-1.5 bg-theme-tertiary rounded-full">
                         <div className="absolute top-1.5 h-[calc(100%-12px)] rounded-full bg-[var(--bg-primary)] transition-all duration-300 ease-out"
                             style={{ left: `${tabSliderStyle.left}px`, width: `${tabSliderStyle.width}px` }} />
                         {tabs.map((tab) => {

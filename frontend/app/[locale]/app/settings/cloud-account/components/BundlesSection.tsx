@@ -88,10 +88,10 @@ export default function BundlesSection() {
   return (
     <div className="space-y-6">
       {/* Catalog sub-toggle: model vs API */}
-      <div className="flex justify-center">
+      <div className="flex max-w-full overflow-x-auto scrollbar-hide">
         <div
           ref={tabContainerRef}
-          className="relative inline-flex items-center gap-1 p-1.5 bg-theme-tertiary rounded-full w-max"
+          className="relative mx-auto inline-flex items-center gap-1 p-1.5 bg-theme-tertiary rounded-full w-max"
         >
           {/* Slider highlight */}
           <div

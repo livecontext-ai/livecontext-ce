@@ -3048,12 +3048,14 @@
       "publishTitle": "Neues Bundle veröffentlichen",
       "signingKey": "Signierschlüssel",
       "statusActive": "aktiv",
+      "notLinkedHint": "Diese Installation ist noch nicht mit der Cloud verbunden. Das ist der Normalzustand einer frischen Installation. Verbinden Sie sie über den Tab Verbindung, um Updates zu erhalten.",
       "statusCode": {
         "APPLY_FAILED": "Anwendung fehlgeschlagen",
         "CHECKSUM_INVALID": "Prüfsumme ungültig",
         "HTTP_ERROR": "HTTP-Fehler",
         "NETWORK_ERROR": "Netzwerkfehler",
         "NOT_CONFIGURED": "nicht konfiguriert",
+        "NOT_LINKED": "nicht verbunden",
         "NO_ACTIVE": "kein aktives Bundle",
         "OK": "OK",
         "PAYLOAD_MALFORMED": "Payload fehlerhaft",
@@ -3286,6 +3288,7 @@
         "clientIdRequired": "Client-ID ist erforderlich",
         "clientSecretRequired": "Client-Geheimnis ist erforderlich",
         "failedToInitiate": "OAuth2-Ablauf konnte nicht initiiert werden",
+        "missingOAuthHostVar": "Geben Sie {field} ein, um sich zu verbinden",
         "credentialsNotConfigured": "Dieser Dienst ist noch nicht verfügbar",
         "contactAdmin": "Diese Integration wird bald verfügbar sein. Kontaktieren Sie den Support, wenn Sie sie dringend benötigen."
       },
@@ -4860,6 +4863,7 @@
         "lastAppliedAt": "Zuletzt angewendet am",
         "consecutiveFailures": "Aufeinanderfolgende Fehler",
         "never": "nie",
+        "notLinkedHint": "Diese Installation ist noch nicht mit der Cloud verbunden. Das ist der Normalzustand einer frischen Installation. Verbinden Sie sie über den Tab Verbindung, um Updates zu erhalten.",
         "statusCode": {
           "OK": "OK",
           "NO_ACTIVE": "kein aktives Bundle",

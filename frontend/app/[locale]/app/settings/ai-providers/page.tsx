@@ -320,8 +320,8 @@ export default function AiProvidersPage() {
       </div>
 
       {/* Connection mode toggle */}
-      <div className="flex justify-center max-w-full overflow-x-auto scrollbar-hide -mx-1 px-1">
-        <div className="relative inline-flex items-center gap-1 p-1.5 bg-theme-tertiary rounded-full w-max" ref={tabContainerRef}>
+      <div className="flex max-w-full overflow-x-auto scrollbar-hide -mx-1 px-1">
+        <div className="relative mx-auto inline-flex items-center gap-1 p-1.5 bg-theme-tertiary rounded-full w-max" ref={tabContainerRef}>
           <div
             className="absolute top-1.5 bottom-1.5 rounded-full bg-[var(--bg-primary)] transition-all duration-300 ease-out"
             style={{

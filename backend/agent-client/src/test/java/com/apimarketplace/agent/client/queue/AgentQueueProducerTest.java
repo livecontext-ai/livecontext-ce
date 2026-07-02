@@ -288,6 +288,64 @@ class AgentQueueProducerTest {
     }
 
     @Test
+    @DisplayName("Org backstop: orgId/orgRole from payload credentials are mirrored into structured metadata")
+    void enqueueMirrorsCredentialsOrgIntoMetadata() throws Exception {
+        when(redisTemplate.opsForList()).thenReturn(listOps);
+
+        producer.enqueue(AgentExecutionRequestMessage.create(
+            "corr-org", "run-1", "node-1", "tenant-1", "agent",
+            "deepseek", "deepseek-chat",
+            Map.of("prompt", "hello",
+                   "credentials", Map.of("__orgId__", "org-1", "__orgRole__", "MEMBER"))));
+
+        ArgumentCaptor<String> jsonCaptor = ArgumentCaptor.forClass(String.class);
+        verify(listOps).leftPush(anyString(), jsonCaptor.capture());
+        Map<String, Object> task = objectMapper.readValue(jsonCaptor.getValue(), new TypeReference<>() {});
+        @SuppressWarnings("unchecked")
+        Map<String, Object> metadata = (Map<String, Object>) task.get("metadata");
+        assertThat(metadata)
+                .containsEntry("orgId", "org-1")
+                .containsEntry("orgRole", "MEMBER");
+    }
+
+    @Test
+    @DisplayName("Org backstop: falls back to the thread org binding (runWithOrgScope) when credentials carry no org")
+    void enqueueFallsBackToThreadOrgBinding() throws Exception {
+        when(redisTemplate.opsForList()).thenReturn(listOps);
+
+        com.apimarketplace.common.web.TenantResolver.runWithOrgScope("org-ctx", "ADMIN", () ->
+            producer.enqueue(AgentExecutionRequestMessage.create(
+                "corr-ctx", "run-1", "node-1", "tenant-1", "agent",
+                "deepseek", "deepseek-chat", Map.of("prompt", "no credentials"))));
+
+        ArgumentCaptor<String> jsonCaptor = ArgumentCaptor.forClass(String.class);
+        verify(listOps).leftPush(anyString(), jsonCaptor.capture());
+        Map<String, Object> task = objectMapper.readValue(jsonCaptor.getValue(), new TypeReference<>() {});
+        @SuppressWarnings("unchecked")
+        Map<String, Object> metadata = (Map<String, Object>) task.get("metadata");
+        assertThat(metadata)
+                .containsEntry("orgId", "org-ctx")
+                .containsEntry("orgRole", "ADMIN");
+    }
+
+    @Test
+    @DisplayName("Org backstop: no org anywhere leaves the metadata keys absent (warned at enqueue, never blank)")
+    void enqueueOmitsOrgKeysWhenNoOrgAnywhere() throws Exception {
+        when(redisTemplate.opsForList()).thenReturn(listOps);
+
+        producer.enqueue(AgentExecutionRequestMessage.create(
+            "corr-orgless", "run-1", "node-1", "tenant-1", "agent",
+            "deepseek", "deepseek-chat", Map.of("prompt", "orgless")));
+
+        ArgumentCaptor<String> jsonCaptor = ArgumentCaptor.forClass(String.class);
+        verify(listOps).leftPush(anyString(), jsonCaptor.capture());
+        Map<String, Object> task = objectMapper.readValue(jsonCaptor.getValue(), new TypeReference<>() {});
+        @SuppressWarnings("unchecked")
+        Map<String, Object> metadata = (Map<String, Object>) task.get("metadata");
+        assertThat(metadata).doesNotContainKeys("orgId", "orgRole");
+    }
+
+    @Test
     @DisplayName("Redis failure surfaces as RuntimeException - caller must decide retry policy")
     void enqueueWrapsRedisFailure() {
         when(redisTemplate.opsForList()).thenReturn(listOps);

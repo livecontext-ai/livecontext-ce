@@ -2,6 +2,7 @@ package com.apimarketplace.auth.web;
 
 import com.apimarketplace.auth.domain.BillingCustomer;
 import com.apimarketplace.auth.domain.BillingEvent;
+import com.apimarketplace.auth.domain.PendingCreditUpgrade;
 import com.apimarketplace.auth.domain.Plan;
 import com.apimarketplace.auth.domain.Subscription;
 import com.apimarketplace.auth.domain.User;
@@ -1935,6 +1936,162 @@ class WebhookControllerTest {
             performWebhookPost("{\"type\":\"checkout.session.completed\"}", event, 200);
 
             verify(creditAttributionService).grantPaygTopup(any(), any(), any(), any());
+        }
+    }
+
+    @Nested
+    @DisplayName("invoice.payment_failed Handler (Option A credit upgrade)")
+    class InvoicePaymentFailed {
+
+        /** Builds a PendingCreditUpgrade row keyed on the given Stripe invoice id. */
+        private PendingCreditUpgrade buildPending(String invoiceId, String status) {
+            PendingCreditUpgrade pending = new PendingCreditUpgrade();
+            pending.setId(7L);
+            pending.setUserId(42L);
+            pending.setSubscriptionId(11L);
+            pending.setProviderSubscriptionId("sub_pending_42");
+            pending.setStripeInvoiceId(invoiceId);
+            pending.setStripeInvoiceItemId("ii_pending_42");
+            pending.setTargetTierIndex(2);
+            pending.setTargetCreditQuantity(500);
+            pending.setTargetCreditPriceId("price_credit_tier2");
+            pending.setStatus(status);
+            return pending;
+        }
+
+        /** Builds a typed failed Invoice mock with the given metadata. */
+        private Invoice buildFailedInvoice(String invoiceId, java.util.Map<String, String> metadata) {
+            Invoice invoice = mock(Invoice.class);
+            lenient().when(invoice.getId()).thenReturn(invoiceId);
+            lenient().when(invoice.getStatus()).thenReturn("open");
+            lenient().when(invoice.getMetadata()).thenReturn(metadata);
+            return invoice;
+        }
+
+        @Test
+        @DisplayName("62. invoice.payment_failed with kind=credit_upgrade marks the matching PendingCreditUpgrade FAILED (regression: payment_failed had zero direct tests)")
+        void paymentFailed_creditUpgrade_marksPendingFailed() throws Exception {
+            Invoice invoice = buildFailedInvoice("in_pf_62", java.util.Map.of("kind", "credit_upgrade"));
+            PendingCreditUpgrade pending = buildPending("in_pf_62", PendingCreditUpgrade.STATUS_PAID_SUB_PENDING);
+            when(pendingCreditUpgradeRepository.findByStripeInvoiceId("in_pf_62"))
+                    .thenReturn(Optional.of(pending));
+
+            Event event = createMockEvent("evt_pf_62", "invoice.payment_failed", invoice);
+            when(billingEventRepository.existsByEventId("evt_pf_62")).thenReturn(false);
+            when(billingEventRepository.save(any(BillingEvent.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            performWebhookPost("{\"type\":\"invoice.payment_failed\"}", event, 200);
+
+            verify(pendingCreditUpgradeRepository).save(same(pending));
+            assertThat(pending.getStatus()).isEqualTo(PendingCreditUpgrade.STATUS_FAILED);
+            assertThat(pending.getErrorMessage()).isEqualTo("invoice.payment_failed");
+        }
+
+        @Test
+        @DisplayName("63. invoice.payment_failed without credit_upgrade metadata and no pending row is ignored (renewal failure: Stripe dunning owns it)")
+        void paymentFailed_notOurs_isIgnored() throws Exception {
+            Invoice invoice = buildFailedInvoice("in_pf_63", java.util.Map.of()); // no kind
+            when(pendingCreditUpgradeRepository.findByStripeInvoiceId("in_pf_63"))
+                    .thenReturn(Optional.empty());
+
+            Event event = createMockEvent("evt_pf_63", "invoice.payment_failed", invoice);
+            when(billingEventRepository.existsByEventId("evt_pf_63")).thenReturn(false);
+            when(billingEventRepository.save(any(BillingEvent.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            performWebhookPost("{\"type\":\"invoice.payment_failed\"}", event, 200);
+
+            // The handler DOES look the invoice up (even without metadata) but must not mutate anything.
+            verify(pendingCreditUpgradeRepository).findByStripeInvoiceId("in_pf_63");
+            verify(pendingCreditUpgradeRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("64. invoice.payment_failed with kind=credit_upgrade but no PendingCreditUpgrade row logs a warning and saves nothing")
+        void paymentFailed_creditUpgradeWithoutPendingRow_savesNothing() throws Exception {
+            Invoice invoice = buildFailedInvoice("in_pf_64", java.util.Map.of("kind", "credit_upgrade"));
+            when(pendingCreditUpgradeRepository.findByStripeInvoiceId("in_pf_64"))
+                    .thenReturn(Optional.empty());
+
+            Event event = createMockEvent("evt_pf_64", "invoice.payment_failed", invoice);
+            when(billingEventRepository.existsByEventId("evt_pf_64")).thenReturn(false);
+            when(billingEventRepository.save(any(BillingEvent.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            performWebhookPost("{\"type\":\"invoice.payment_failed\"}", event, 200);
+
+            verify(pendingCreditUpgradeRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("65. invoice.payment_failed on an already-terminal pending row is a no-op (Stripe webhook replay safety)")
+        void paymentFailed_terminalPending_isNoOp() throws Exception {
+            Invoice invoice = buildFailedInvoice("in_pf_65", java.util.Map.of("kind", "credit_upgrade"));
+            PendingCreditUpgrade pending = buildPending("in_pf_65", PendingCreditUpgrade.STATUS_COMPLETED);
+            when(pendingCreditUpgradeRepository.findByStripeInvoiceId("in_pf_65"))
+                    .thenReturn(Optional.of(pending));
+
+            Event event = createMockEvent("evt_pf_65", "invoice.payment_failed", invoice);
+            when(billingEventRepository.existsByEventId("evt_pf_65")).thenReturn(false);
+            when(billingEventRepository.save(any(BillingEvent.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            performWebhookPost("{\"type\":\"invoice.payment_failed\"}", event, 200);
+
+            verify(pendingCreditUpgradeRepository, never()).save(any());
+            assertThat(pending.getStatus()).isEqualTo(PendingCreditUpgrade.STATUS_COMPLETED);
+            assertThat(pending.getErrorMessage()).isNull();
+        }
+
+        @Test
+        @DisplayName("66. invoice.payment_failed WITHOUT metadata but WITH a matching pending row still marks it FAILED (lookup is by invoice id, not metadata)")
+        void paymentFailed_noMetadataButPendingRow_stillMarksFailed() throws Exception {
+            Invoice invoice = buildFailedInvoice("in_pf_66", null); // Stripe may strip/omit metadata
+            PendingCreditUpgrade pending = buildPending("in_pf_66", PendingCreditUpgrade.STATUS_PENDING_3DS);
+            when(pendingCreditUpgradeRepository.findByStripeInvoiceId("in_pf_66"))
+                    .thenReturn(Optional.of(pending));
+
+            Event event = createMockEvent("evt_pf_66", "invoice.payment_failed", invoice);
+            when(billingEventRepository.existsByEventId("evt_pf_66")).thenReturn(false);
+            when(billingEventRepository.save(any(BillingEvent.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            performWebhookPost("{\"type\":\"invoice.payment_failed\"}", event, 200);
+
+            verify(pendingCreditUpgradeRepository).save(same(pending));
+            assertThat(pending.getStatus()).isEqualTo(PendingCreditUpgrade.STATUS_FAILED);
+        }
+
+        @Test
+        @DisplayName("67. invoice.payment_failed whose deserialized object is not an Invoice is ignored by the dispatch guard")
+        void paymentFailed_nonInvoiceObject_isIgnored() throws Exception {
+            // Deserializer yields a StripeObject of the wrong type: the dispatch instanceof guard must drop it.
+            Session notAnInvoice = mock(Session.class);
+
+            Event event = createMockEvent("evt_pf_67", "invoice.payment_failed", notAnInvoice);
+            when(billingEventRepository.existsByEventId("evt_pf_67")).thenReturn(false);
+            when(billingEventRepository.save(any(BillingEvent.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            performWebhookPost("{\"type\":\"invoice.payment_failed\"}", event, 200);
+
+            verifyNoInteractions(pendingCreditUpgradeRepository);
+        }
+
+        @Test
+        @DisplayName("68. invoice.payment_failed that fails SDK deserialization has NO raw fallback: default warn branch, no mutation, 200")
+        void paymentFailed_rawFallback_doesNotExist() throws Exception {
+            // Deserializer empty -> raw switch has no invoice.payment_failed case -> default branch only logs.
+            String rawJson = "{\"id\":\"in_pf_68\",\"object\":\"invoice\",\"metadata\":{\"kind\":\"credit_upgrade\"}}";
+            StripeObject rawObj = createRawStripeObject(rawJson);
+
+            Event event = createMockEvent("evt_pf_68", "invoice.payment_failed", null);
+            Event.Data eventData = event.getData();
+            lenient().when(eventData.getObject()).thenReturn(rawObj);
+
+            when(billingEventRepository.existsByEventId("evt_pf_68")).thenReturn(false);
+            when(billingEventRepository.save(any(BillingEvent.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            performWebhookPost("{\"type\":\"invoice.payment_failed\"}", event, 200);
+
+            // Pins current behavior: a non-deserializable payment_failed is dropped silently
+            // (unlike invoice.paid / payment_succeeded which have raw fallbacks).
+            verifyNoInteractions(pendingCreditUpgradeRepository);
         }
     }
 }

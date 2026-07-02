@@ -118,6 +118,9 @@ class CloudLlmRelayControllerTest {
         assertThat(cloudRequest.model()).isEqualTo(MODEL);
         assertThat(cloudRequest.stream()).isFalse();
         assertThat(cloudRequest.tools()).extracting(ToolDefinition::name).containsExactly("local_lookup");
+        // Regression: the tenant rewrite used to DROP the CE-resolved reasoning
+        // effort, silently resetting relayed requests to the API default (high).
+        assertThat(cloudRequest.reasoningEffort()).isEqualTo("xhigh");
     }
 
     @Test
@@ -748,6 +751,9 @@ class CloudLlmRelayControllerTest {
                         .description("Local tool that must not run in Cloud")
                         .build()))
                 .stream(stream)
+                // CE-resolved effort must survive the tenant rewrite (ClaudeProvider
+                // maps it to output_config.effort on supporting models).
+                .reasoningEffort("xhigh")
                 .build();
     }
 

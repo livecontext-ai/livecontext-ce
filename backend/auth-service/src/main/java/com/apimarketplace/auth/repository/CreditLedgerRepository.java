@@ -362,6 +362,21 @@ public interface CreditLedgerRepository extends JpaRepository<CreditLedgerEntry,
     BigDecimal sumAmountByUserId(@Param("userId") Long userId);
 
     /**
+     * Lifetime ledger sum for balance reconciliation, excluding released
+     * markup reservations. A {@code PLATFORM_MARKUP_RELEASED*} row keeps its
+     * original {@code -reserved} amount as an audit trail while
+     * {@code releaseReservation} refunds the same amount back to the balance:
+     * the release is balance-neutral but leaves the raw ledger sum short by
+     * {@code reserved}, permanently, for every released reservation (partial
+     * catalog results, sweeper timeouts - routine traffic). Excluding those
+     * rows restores the invariant this sum exists to check:
+     * {@code sum(ledger) == current balance} when no movement was lost.
+     */
+    @Query("SELECT COALESCE(SUM(e.amount), 0) FROM CreditLedgerEntry e WHERE e.userId = :userId " +
+           "AND (e.sourceType IS NULL OR e.sourceType NOT LIKE 'PLATFORM_MARKUP_RELEASED%')")
+    BigDecimal sumAmountByUserIdExcludingReleasedReserves(@Param("userId") Long userId);
+
+    /**
      * Sum ledger amounts for a user within a billing period.
      */
     @Query("SELECT COALESCE(SUM(e.amount), 0) FROM CreditLedgerEntry e WHERE e.userId = :userId AND e.createdAt >= :periodStart")

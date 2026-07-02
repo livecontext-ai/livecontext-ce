@@ -373,7 +373,7 @@ export default function DataSourceTable({
           <h1 className="text-lg font-semibold text-theme-primary">{t('data.title')}</h1>
           <p className="text-sm text-theme-secondary mt-0.5">{t('data.subtitle')}</p>
         </div>
-        {!loading && (totalCount > 0 || debouncedSearch.trim().length > 0) && (
+        {canMutate && !loading && (totalCount > 0 || debouncedSearch.trim().length > 0) && (
           <Button
             variant="default"
             size="sm"
@@ -426,11 +426,13 @@ export default function DataSourceTable({
       {/* Actions contextuelles - floating bottom-center bar (mirrors the task board). */}
       {selectedDataSources.size > 0 && (
         <SelectionActionBar count={selectedDataSources.size} onClear={clearDataSourceSelection}>
-          <BulkBarButton onClick={cloneSelectedDataSources}>
-            <Copy className="h-3.5 w-3.5" />
-            {t('common.clone')} ({selectedDataSources.size})
-          </BulkBarButton>
-          {selectedDataSources.size === 1 && (() => {
+          {canMutate && (
+            <BulkBarButton onClick={cloneSelectedDataSources}>
+              <Copy className="h-3.5 w-3.5" />
+              {t('common.clone')} ({selectedDataSources.size})
+            </BulkBarButton>
+          )}
+          {canMutate && selectedDataSources.size === 1 && (() => {
             const selectedId = String(Array.from(selectedDataSources)[0]);
             const isPublished = publishedDataSourceIds.has(selectedId);
             const isPendingReview = pendingReviewDataSourceIds.has(selectedId);
@@ -475,7 +477,7 @@ export default function DataSourceTable({
             subtitle={totalCount === 0 && debouncedSearch.trim().length === 0
               ? t('data.createFirstTable')
               : t('data.noMatchingTables')}
-            actions={totalCount === 0 && debouncedSearch.trim().length === 0 ? (
+            actions={canMutate && totalCount === 0 && debouncedSearch.trim().length === 0 ? (
               <Button
                 variant="default"
                 onClick={() => setShowCreateDataModal(true)}

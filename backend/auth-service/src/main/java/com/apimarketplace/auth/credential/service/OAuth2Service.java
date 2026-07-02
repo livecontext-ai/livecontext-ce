@@ -341,6 +341,26 @@ public class OAuth2Service {
                     iconUrl);
         }
 
+        // Resolve per-instance URL host placeholders (Shopify {shop}, Zendesk {subdomain},
+        // NetSuite {account_id}, Workday {tenant}/{hostname}, ...) from the values the user
+        // supplied at connect time. This is fully data-driven: the importer derived which
+        // credential fields feed these placeholders from the OAuth URL templates, the wizard
+        // collected them BEFORE the redirect, and they arrive in request.templateVars(). Values
+        // are normalized against the URL template (scheme/path stripped, a pasted host suffix like
+        // ".myshopify.com" removed) so both the redirect and the stored value stay consistent.
+        // No-op for the vast majority of providers (empty map -> URLs unchanged).
+        Map<String, String> templateVars =
+                normalizeHostVarsAgainstTemplate(request.templateVarsOrEmpty(), providerConfig.authorizationUrl());
+        if (!templateVars.isEmpty()) {
+            providerConfig = providerConfig.withUrls(
+                    substituteHostVars(providerConfig.authorizationUrl(), templateVars),
+                    substituteHostVars(providerConfig.tokenUrl(), templateVars));
+        }
+        // Fail fast if a required host placeholder is still unresolved: a literal {var} left in the
+        // host produces a DNS failure at redirect time with no actionable error (the exact bug this
+        // feature fixes). Path/query placeholders are a different mechanism and are not checked here.
+        assertHostFullyResolved(providerConfig.authorizationUrl(), integrationName);
+
         // Persist state (including PKCE verifier + active workspace) to Redis with TTL.
         OAuth2State oAuth2State = new OAuth2State(
                 userId,
@@ -360,7 +380,10 @@ public class OAuth2Service {
                 // PR19: capture-at-initiate so callback can tag the new
                 // credential with the right org_id, even if the user switches
                 // workspace mid-flow (the state blob is the source of truth).
-                organizationId
+                organizationId,
+                // Captured so the callback can resolve the token URL and persist these into
+                // credential_data for runtime base-URL substitution.
+                templateVars.isEmpty() ? null : templateVars
         );
         saveStateToRedis(state, oAuth2State);
 
@@ -394,6 +417,14 @@ public class OAuth2Service {
         if (platformRow != null && platformRow.customFields() != null) {
             credentialData.putAll(platformRow.customFields());
         }
+        // Per-instance host vars supplied at connect time (Marketo {munchkin_id}, ...). Merged into
+        // credential_data BEFORE the token request so resolveCredentialTemplateUrl below resolves the
+        // token URL host, AND so the runtime base-URL + refresh URL resolve later. Normalized against
+        // the token URL template so a pasted full host collapses to the bare id. The
+        // authorization_code branch handles its own vars earlier (this path returns before it); this
+        // is the client_credentials counterpart. No-op for providers with no host vars.
+        credentialData.putAll(
+                normalizeHostVarsAgainstTemplate(request.templateVarsOrEmpty(), providerConfig.tokenUrl()));
 
         HttpEntity<MultiValueMap<String, String>> requestEntity =
                 engine.buildClientCredentialsRequest(providerConfig, clientId, clientSecret);
@@ -485,7 +516,8 @@ public class OAuth2Service {
                 null,
                 request.environment(),
                 request.integration(),
-                null
+                null,
+                request.templateVars()
         );
         return initiate(fullRequest, userId, organizationId, uiLocale);
     }
@@ -576,13 +608,18 @@ public class OAuth2Service {
                     oAuth2State.codeVerifier()
             );
 
+            // Resolve any per-instance host placeholder in the token URL from the values captured
+            // at initiate (Shopify {shop}, Zendesk {subdomain}, ...). No-op when none were captured
+            // (the vast majority of providers), keeping the token URL byte-identical.
+            String resolvedTokenUrl = substituteHostVars(providerConfig.tokenUrl(), oAuth2State.templateVarsOrEmpty());
+
             log.info("Token exchange request - tokenUrl: {}, authMethod: {}, pkce: {}",
-                    providerConfig.tokenUrl(),
+                    resolvedTokenUrl,
                     providerConfig.tokenAuthMethod(),
                     oAuth2State.codeVerifier() != null);
 
             OAuth2Engine.TokenRequest tokenRequest = engine.materializeTokenRequest(
-                    providerConfig, providerConfig.tokenUrl(), request);
+                    providerConfig, resolvedTokenUrl, request);
             ResponseEntity<JsonNode> response = restTemplate.postForEntity(
                     tokenRequest.url(), tokenRequest.entity(), JsonNode.class);
 
@@ -594,6 +631,10 @@ public class OAuth2Service {
 
             // Persist credential.
             Map<String, Object> credentialData = new HashMap<>();
+            // Persist the per-instance URL host vars (shop, subdomain, ...) so runtime base-URL
+            // substitution (HttpExecutionService.replaceUrlTemplateVariables) can rebuild the
+            // provider host at API-call time. Keyed by the placeholder name; empty for most providers.
+            oAuth2State.templateVarsOrEmpty().forEach(credentialData::put);
             credentialData.put("client_id", oAuth2State.clientId());
             credentialData.put("oauth_client_id", oAuth2State.clientId());
             credentialData.put("oauth_client_secret", encryptionService.encrypt(oAuth2State.clientSecret()));
@@ -1086,6 +1127,115 @@ public class OAuth2Service {
             }
         }
         return resolved;
+    }
+
+    /**
+     * Normalize the user-supplied per-instance host vars against a URL template. For each
+     * placeholder present in {@code urlTemplate} (e.g. {@code {shop}} in
+     * {@code https://{shop}.myshopify.com/...}) the value is cleaned: scheme + path stripped, and a
+     * pasted host suffix matching the literal that follows the placeholder in the template
+     * (e.g. {@code .myshopify.com}) removed - so "store", "store.myshopify.com" and
+     * "https://store.myshopify.com/admin" all normalize to "store". Deriving the suffix from the
+     * template keeps this generic across providers (no per-provider constant). Empty results are
+     * dropped so the fail-fast guard can flag a required-but-missing var.
+     */
+    Map<String, String> normalizeHostVarsAgainstTemplate(Map<String, String> vars, String urlTemplate) {
+        if (vars == null || vars.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, String> out = new LinkedHashMap<>();
+        for (Map.Entry<String, String> e : vars.entrySet()) {
+            if (e.getKey() == null || e.getValue() == null) {
+                continue;
+            }
+            String cleaned = normalizeHostVarValue(e.getValue(), hostSuffixFor(urlTemplate, e.getKey()));
+            if (!cleaned.isEmpty()) {
+                out.put(e.getKey(), cleaned);
+            }
+        }
+        return out;
+    }
+
+    /** Literal text following {@code {key}} in {@code url}, up to the next path/port/placeholder. */
+    private String hostSuffixFor(String url, String key) {
+        if (url == null) {
+            return "";
+        }
+        String token = "{" + key + "}";
+        int idx = url.indexOf(token);
+        if (idx < 0) {
+            return "";
+        }
+        int start = idx + token.length();
+        int end = start;
+        while (end < url.length() && "/:?{".indexOf(url.charAt(end)) < 0) {
+            end++;
+        }
+        return url.substring(start, end);
+    }
+
+    /** Strip scheme/path from a user-entered host var and remove a pasted template suffix. */
+    private String normalizeHostVarValue(String raw, String suffix) {
+        if (raw == null) {
+            return "";
+        }
+        String v = raw.trim();
+        int scheme = v.indexOf("://");
+        if (scheme >= 0) {
+            v = v.substring(scheme + 3);
+        }
+        int slash = v.indexOf('/');
+        if (slash >= 0) {
+            v = v.substring(0, slash);
+        }
+        v = v.trim();
+        if (suffix != null && !suffix.isBlank()
+                && v.toLowerCase(Locale.ROOT).endsWith(suffix.toLowerCase(Locale.ROOT))) {
+            v = v.substring(0, v.length() - suffix.length());
+        }
+        while (v.endsWith(".")) {
+            v = v.substring(0, v.length() - 1);
+        }
+        return v.trim();
+    }
+
+    /** Replace {@code {key}} placeholders in {@code url} with the (already normalized) values. */
+    String substituteHostVars(String url, Map<String, String> vars) {
+        if (url == null || vars == null || vars.isEmpty() || !url.contains("{")) {
+            return url;
+        }
+        String resolved = url;
+        for (Map.Entry<String, String> e : vars.entrySet()) {
+            if (e.getKey() != null && e.getValue() != null) {
+                resolved = resolved.replace("{" + e.getKey() + "}", e.getValue());
+            }
+        }
+        return resolved;
+    }
+
+    /**
+     * Guard against a literal {@code {var}} left in the authorization URL HOST - it would produce a
+     * DNS failure at redirect time with no actionable error (the exact bug this feature fixes). Only
+     * the host is checked; a placeholder in the path/query is a different (path-param) mechanism.
+     */
+    void assertHostFullyResolved(String authorizationUrl, String integration) {
+        if (authorizationUrl == null) {
+            return;
+        }
+        int schemeEnd = authorizationUrl.indexOf("://");
+        int hostStart = schemeEnd >= 0 ? schemeEnd + 3 : 0;
+        int hostEnd = hostStart;
+        while (hostEnd < authorizationUrl.length()
+                && "/?".indexOf(authorizationUrl.charAt(hostEnd)) < 0) {
+            hostEnd++;
+        }
+        String host = authorizationUrl.substring(hostStart, hostEnd);
+        if (host.contains("{") && host.contains("}")) {
+            throw new IllegalArgumentException(
+                    "Connecting " + integration + " needs an instance value (e.g. your store domain "
+                    + "or subdomain) before it can start: the authorization URL host still contains an "
+                    + "unresolved placeholder. Provide the required field and try again.");
+        }
     }
 
     private void handleRefreshFailure(

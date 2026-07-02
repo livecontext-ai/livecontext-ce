@@ -79,8 +79,29 @@ public interface OrgAccessGuard {
      * Check whether a member can WRITE (delete / assign / modify) a specific resource.
      * Returns false if the resource carries ANY restriction (DENY or READ-only).
      * OWNER/ADMIN always return true.
+     *
+     * <p><b>VIEWER is read-only at the role level:</b> when {@code orgId} is present
+     * (org workspace) and {@code orgRole} is VIEWER, this returns {@code false}
+     * regardless of per-resource restrictions. Historically this boundary was
+     * enforced only by ad-hoc {@code isViewerRole} checks copy-pasted per
+     * controller, which left ungated endpoints writable by VIEWER (e.g. workflow
+     * delete/save/restore). The guard is now the single source of truth; the
+     * remaining per-controller checks are an earlier, clearer 403 for the same
+     * decision.
      */
     boolean canWrite(String orgId, String userId, String resourceType, String resourceId, String orgRole);
+
+    /**
+     * Role-level write gate, for call sites that have no per-resource id: creation
+     * endpoints, and bulk mutations driven by the {@link #getWriteRestrictedResourceIds}
+     * exclusion set (which cannot express "everything is restricted" for a VIEWER).
+     * True when the caller is in an org workspace ({@code orgId} present) with the
+     * read-only VIEWER role. {@link #canWrite} applies this internally.
+     */
+    static boolean isRoleWriteBlocked(String orgId, String orgRole) {
+        return orgId != null && !orgId.isBlank()
+                && orgRole != null && "VIEWER".equalsIgnoreCase(orgRole.trim());
+    }
 
     /**
      * Filter a list of resources, removing the restricted ones.

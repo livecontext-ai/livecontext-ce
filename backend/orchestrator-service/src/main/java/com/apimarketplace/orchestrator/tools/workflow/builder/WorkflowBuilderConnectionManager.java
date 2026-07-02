@@ -2,6 +2,8 @@ package com.apimarketplace.orchestrator.tools.workflow.builder;
 
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
 import com.apimarketplace.orchestrator.tools.workflow.builder.creators.DecisionNodeCreator;
+import com.apimarketplace.orchestrator.tools.workflow.builder.creators.ForkMergeNodeCreator;
+import com.apimarketplace.orchestrator.tools.workflow.builder.validation.EdgeValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -114,7 +116,11 @@ public class WorkflowBuilderConnectionManager {
 
         // Auto-assign port for branching nodes (fork, decision)
         // When LLM connects from a fork/decision without port qualifier, assign the next available port
-        fromNodeId = autoAssignBranchPort(session, fromNodeId, toNodeId);
+        try {
+            fromNodeId = autoAssignBranchPort(session, fromNodeId, toNodeId);
+        } catch (BranchPortOverflowException e) {
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE, e.getMessage());
+        }
 
         // Auto-assign iterate port for loop target nodes
         // When LLM connects TO a loop without port qualifier, and the loop already has an entry edge, assign :iterate
@@ -130,7 +136,18 @@ public class WorkflowBuilderConnectionManager {
         // closes the agent/MCP path, which previously only caught exact duplicates.
         // Nodes WITHOUT a named port (trigger, plain step) are untouched - their
         // multiple outgoing edges are a legitimate implicit fork (parallel).
-        String fromPort = EdgeRefParser.splitPort(fromNodeId)[1];
+        String[] fromSplit = EdgeRefParser.splitPort(fromNodeId);
+        String fromPort = fromSplit[1];
+        // Explicit ported refs skip auto-assign entirely, so range-check them
+        // inline (parity with the one-port-one-target guard below): without
+        // this, connect(from='core:pick:choice_5') on a 2-choice option
+        // returned success and only validate/finish contradicted it later.
+        if (fromPort != null) {
+            String rangeError = EdgeValidator.indexedPortRangeError(session, fromSplit[0], fromPort);
+            if (rangeError != null) {
+                return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE, rangeError);
+            }
+        }
         if (fromPort != null) {
             final String portedFrom = fromNodeId;
             final String targetTo = toNodeId;
@@ -483,10 +500,16 @@ public class WorkflowBuilderConnectionManager {
                     log.info("[CONNECT] Auto-assigned fork port: {} → {}", fromNodeId, ported);
                     return ported;
                 }
-                // If all branches used, still add the port (overflow)
-                String ported = fromNodeId + ":branch_" + nextBranch;
-                log.warn("[CONNECT] Fork port overflow: {} has {} branches but connecting branch_{}", fromNodeId, branchCount, nextBranch);
-                return ported;
+                // All declared branches are wired: auto-extend the declaration so
+                // declared == wired stays true (fork branches are anonymous parallel
+                // lanes - same auto-expansion pattern as decision's elseif). The old
+                // behaviour emitted the out-of-range port with only a warn, and the
+                // undeclared branch collapsed onto a declared one at RUNTIME (two
+                // successors on one branch, one branch never firing).
+                String newForkPort = ForkMergeNodeCreator.expandForkOutputs(core, forkOutputs, nextBranch);
+                log.info("[CONNECT] Auto-extended fork outputs: {} now has {} branches → {}:{}",
+                        fromNodeId, nextBranch + 1, fromNodeId, newForkPort);
+                return fromNodeId + ":" + newForkPort;
             }
 
             if ("decision".equals(type)) {
@@ -544,6 +567,16 @@ public class WorkflowBuilderConnectionManager {
                     log.info("[CONNECT] Auto-assigned switch port: {} → {}", fromNodeId, ported);
                     return ported;
                 }
+                // Overflow: every declared case (incl. default) already has an edge.
+                // A switch case carries a matching condition we cannot invent - fail
+                // loudly instead of the old silent fall-through that produced a
+                // port-less edge with undefined routing.
+                throw new BranchPortOverflowException(
+                    "Cannot connect from '" + fromNodeId + "': every declared switch port ("
+                    + switchCases.size() + " cases, default included when present) already has an "
+                    + "outgoing edge. Add a case to the switch first with workflow(action='modify', "
+                    + "node='" + fromNodeId + "', switch_cases=[...]) including the new case, "
+                    + "or free an existing port with action='disconnect' and reconnect from it explicitly.");
             }
 
             if ("option".equals(type)) {
@@ -559,10 +592,16 @@ public class WorkflowBuilderConnectionManager {
                     log.info("[CONNECT] Auto-assigned option port: {} → {}", fromNodeId, ported);
                     return ported;
                 }
-                // Overflow
-                String ported = fromNodeId + ":choice_" + nextIdx;
-                log.warn("[CONNECT] Option port overflow: {} has {} choices but connecting choice_{}", fromNodeId, optionChoices.size(), nextIdx);
-                return ported;
+                // Overflow: an option choice is shown to the user at runtime - we
+                // cannot invent one. Fail loudly instead of emitting the undeclared
+                // port (which collapsed onto a declared choice at runtime).
+                throw new BranchPortOverflowException(
+                    "Cannot connect from '" + fromNodeId + "': all " + optionChoices.size()
+                    + " declared choices (choice_0..choice_" + (optionChoices.size() - 1)
+                    + ") already have an outgoing edge. Add a choice to the option node first "
+                    + "with workflow(action='modify', node='" + fromNodeId + "', choices=[...]) "
+                    + "including the new choice, or free an existing port with action='disconnect' "
+                    + "and reconnect from it explicitly (for example '" + fromNodeId + ":choice_0').");
             }
 
             break; // Found the core node, no need to continue
@@ -591,10 +630,17 @@ public class WorkflowBuilderConnectionManager {
                         log.info("[CONNECT] Auto-assigned classify port: {} → {}", fromNodeId, ported);
                         return ported;
                     }
-                    // Overflow
-                    String ported = fromNodeId + ":category_" + nextIdx;
-                    log.warn("[CONNECT] Classify port overflow: {} has {} categories but connecting category_{}", fromNodeId, classifyOutputs.size(), nextIdx);
-                    return ported;
+                    // Overflow: a classify category is what the LLM routes on - we
+                    // cannot invent one. Fail loudly instead of emitting the
+                    // undeclared port (which collapsed onto a declared category at
+                    // runtime, silently merging two routes).
+                    throw new BranchPortOverflowException(
+                        "Cannot connect from '" + fromNodeId + "': all " + classifyOutputs.size()
+                        + " declared categories (category_0..category_" + (classifyOutputs.size() - 1)
+                        + ") already have an outgoing edge. Add a category to the classify node first "
+                        + "with workflow(action='modify', node='" + fromNodeId + "', categories=[...]) "
+                        + "including the new category, or free an existing port with action='disconnect' "
+                        + "and reconnect from it explicitly.");
                 }
 
                 if (Boolean.TRUE.equals(mcp.get("isGuardrail"))) {

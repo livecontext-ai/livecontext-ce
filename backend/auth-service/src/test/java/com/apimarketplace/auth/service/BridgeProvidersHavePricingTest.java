@@ -28,10 +28,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   <li>{@code ai.agent.providers.{claude-code,codex,gemini-cli,mistral-vibe}.models}
  *       in {@code agent-service/application.yml} - consumed at boot by
  *       {@code LLMProviderFactory}.</li>
- *   <li>V128 Flyway migration
- *       ({@code migration-service/.../V128__bridge_catalog_allowlist_v1.sql})
- *       - seeds {@code agent.model_config_overrides} + {@code auth.model_pricing}
- *       from the same list.</li>
+ *   <li>The bridge-catalog SEED migrations
+ *       ({@code migration-service/.../V128__bridge_catalog_allowlist_v1.sql}
+ *       plus every later {@code Vxxx__bridge_catalog_sync_*.sql}) - together
+ *       they seed {@code agent.model_config_overrides} +
+ *       {@code auth.model_pricing} from the same list. Applied migrations are
+ *       immutable (Flyway checksums), so a new allowlist entry ships as a NEW
+ *       sync migration added to {@link #SEED_MIGRATION_RELS}, never as an
+ *       edit to V128.</li>
  * </ol>
  *
  * <p>Any drift between the three (add a model in one, forget another) is an
@@ -46,7 +50,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * so version selection is honoured. See the V128 migration docblock for
  * full context.
  */
-@DisplayName("BridgeAllowlist ↔ application.yml ↔ V128 parity")
+@DisplayName("BridgeAllowlist ↔ application.yml ↔ seed migrations parity")
 class BridgeProvidersHavePricingTest {
 
     private static final Set<String> BRIDGE_PROVIDERS =
@@ -55,20 +59,44 @@ class BridgeProvidersHavePricingTest {
     private static final String AGENT_YML_REL =
             "agent-service/src/main/resources/application.yml";
 
+    /** CE monolith boot seed - must carry the same bridge lists as the cloud yml. */
+    private static final String MONOLITH_CE_YML_REL =
+            "monolith-service/src/main/resources/application-ce.yml";
+
     private static final String ALLOWLIST_JAVA_REL =
             "shared-agent-lib/src/main/java/com/apimarketplace/agent/bridge/BridgeAllowlist.java";
 
-    private static final String V128_MIGRATION_REL =
-            "migration-service/src/main/resources/db/migration/V128__bridge_catalog_allowlist_v1.sql";
+    /**
+     * The bridge-catalog seed migrations, in order. V128 is the initial
+     * allowlist reconciliation; every later allowlist addition gets its own
+     * {@code Vxxx__bridge_catalog_sync_*.sql} listed here (Flyway migrations
+     * are immutable once applied, so V128 is never edited).
+     */
+    private static final List<String> SEED_MIGRATION_RELS = List.of(
+            "migration-service/src/main/resources/db/migration/V128__bridge_catalog_allowlist_v1.sql",
+            "migration-service/src/main/resources/db/migration/V378__bridge_catalog_sync_fable_5.sql");
 
     @Test
     @DisplayName("application.yml bridge models == BridgeAllowlist MODELS")
     void yamlMatchesAllowlist() throws IOException {
-        Map<String, List<String>> yaml = readBridgeProvidersFromYaml();
+        assertYamlMatchesAllowlist(AGENT_YML_REL);
+    }
+
+    @Test
+    @DisplayName("CE monolith application-ce.yml bridge models == BridgeAllowlist MODELS")
+    void ceMonolithYamlMatchesAllowlist() throws IOException {
+        // Regression guard: the CE seed had silently drifted from the
+        // allowlist (codex missing gpt-5.2, gemini-cli listing the
+        // non-routable gemini-3.1-flash) until the claude-fable-5 sync.
+        assertYamlMatchesAllowlist(MONOLITH_CE_YML_REL);
+    }
+
+    private static void assertYamlMatchesAllowlist(String ymlRel) throws IOException {
+        Map<String, List<String>> yaml = readBridgeProvidersFromYaml(ymlRel);
         Map<String, Set<String>> allowlist = readBridgeAllowlistFromJava();
 
         assertThat(yaml.keySet())
-                .as("yaml declares all 4 bridge providers")
+                .as("%s declares all 4 bridge providers", ymlRel)
                 .containsExactlyInAnyOrderElementsOf(BRIDGE_PROVIDERS);
         assertThat(allowlist.keySet())
                 .as("allowlist declares all 4 bridge providers")
@@ -78,51 +106,71 @@ class BridgeProvidersHavePricingTest {
             Set<String> yamlSet = Set.copyOf(yaml.get(provider));
             Set<String> listSet = allowlist.get(provider);
             assertThat(yamlSet)
-                    .as("yaml↔allowlist drift on %s", provider)
+                    .as("%s↔allowlist drift on %s", ymlRel, provider)
                     .isEqualTo(listSet);
         }
     }
 
     @Test
-    @DisplayName("V128 migration seeds exactly the BridgeAllowlist pairs - no '-cc' anywhere")
-    void v128SeedsAllowlistAndHasNoCcSuffix() throws IOException {
+    @DisplayName("Seed migrations (V128 + syncs) together seed exactly the BridgeAllowlist pairs - no '-cc' anywhere")
+    void seedMigrationsCoverAllowlistAndHaveNoCcSuffix() throws IOException {
         Map<String, Set<String>> allowlist = readBridgeAllowlistFromJava();
-        String v128 = Files.readString(resolveBackendFile(V128_MIGRATION_REL));
 
-        // Strip SQL comment lines (-- …) before checking for the legacy
-        // suffix: the docblock mentions "-cc" when describing V120's
-        // historical state, which is intentional documentation.
-        String executableSql = Arrays.stream(v128.split("\n"))
-                .filter(line -> !line.stripLeading().startsWith("--"))
-                .collect(Collectors.joining("\n"));
+        StringBuilder unionNormalized = new StringBuilder();
 
-        assertThat(executableSql)
-                .as("V128 executable SQL must not contain the legacy '-cc' suffix")
-                .doesNotContain("-cc'")
-                .doesNotContain("-cc\"");
+        for (String rel : SEED_MIGRATION_RELS) {
+            String sql = Files.readString(resolveBackendFile(rel));
 
-        String normalized = normalizeWhitespace(v128);
+            // Strip SQL comment lines (-- …) before checking for the legacy
+            // suffix: the docblocks mention "-cc" when describing V120's
+            // historical state, which is intentional documentation.
+            String executableSql = Arrays.stream(sql.split("\n"))
+                    .filter(line -> !line.stripLeading().startsWith("--"))
+                    .collect(Collectors.joining("\n"));
 
+            assertThat(executableSql)
+                    .as("%s executable SQL must not contain the legacy '-cc' suffix", rel)
+                    .doesNotContain("-cc'")
+                    .doesNotContain("-cc\"");
+
+            // Sanity on the 'bridge' literal count PER migration - use the
+            // comment-stripped SQL so prose mentions are excluded. Every seed
+            // migration inserts into 2 tables, each row carrying one 'bridge'
+            // literal plus one ON CONFLICT update clause per table. Seeded
+            // rows are counted as occurrences of the "('provider', 'model',"
+            // pair prefix (each pair appears once per table), so:
+            // bridgeLiterals = pairPrefixOccurrences + 2.
+            String executableNormalized = normalizeWhitespace(executableSql);
+            long pairPrefixOccurrences = 0;
+            for (var entry : allowlist.entrySet()) {
+                for (String model : entry.getValue()) {
+                    pairPrefixOccurrences += countOccurrences(
+                            executableNormalized, "('" + entry.getKey() + "', '" + model + "',");
+                }
+            }
+            long bridgeLiterals = countOccurrences(executableNormalized, "'bridge'");
+            assertThat(bridgeLiterals)
+                    .as("%s 'bridge' literal count = seeded rows + 2 ON CONFLICT clauses", rel)
+                    .isEqualTo(pairPrefixOccurrences + 2);
+
+            // Coverage is checked against EXECUTABLE SQL only, so a pair
+            // tuple mentioned in a docblock comment can never satisfy it.
+            unionNormalized.append(executableNormalized).append('\n');
+        }
+
+        // Union coverage: every allowlist pair must be seeded by at least one
+        // seed migration (a pair missing everywhere = picker model without a
+        // pricing row on a fresh install).
+        String union = unionNormalized.toString();
         for (var entry : allowlist.entrySet()) {
             String provider = entry.getKey();
             for (String model : entry.getValue()) {
                 String expected = "('" + provider + "', '" + model + "',";
-                assertThat(normalized)
-                        .as("V128 must seed (%s, %s)", provider, model)
+                assertThat(union)
+                        .as("some seed migration must seed (%s, %s)", provider, model)
                         .contains(expected);
             }
         }
-
-        // Sanity on the 'bridge' literal count - use the comment-stripped SQL
-        // so the docblock (which legitimately mentions 'bridge' in prose) is
-        // excluded. Expected = rowCount per table + 1 ON CONFLICT update
-        // clause per table = 2 * (total_rows + 1).
-        String executableNormalized = normalizeWhitespace(executableSql);
-        long rowCount = allowlist.values().stream().mapToLong(Set::size).sum();
-        long bridgeLiterals = countOccurrences(executableNormalized, "'bridge'");
-        assertThat(bridgeLiterals)
-                .as("V128 executable SQL 'bridge' literal count = 2×(rowCount + 1) [2 tables, 1 update clause each]")
-                .isEqualTo((rowCount + 1) * 2);
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────
@@ -149,9 +197,9 @@ class BridgeProvidersHavePricingTest {
     }
 
     @SuppressWarnings("unchecked")
-    private static Map<String, List<String>> readBridgeProvidersFromYaml() throws IOException {
+    private static Map<String, List<String>> readBridgeProvidersFromYaml(String ymlRel) throws IOException {
         Yaml yaml = new Yaml();
-        Map<String, Object> root = yaml.load(Files.readString(resolveBackendFile(AGENT_YML_REL)));
+        Map<String, Object> root = yaml.load(Files.readString(resolveBackendFile(ymlRel)));
         Map<String, Object> ai = (Map<String, Object>) root.get("ai");
         Map<String, Object> agent = (Map<String, Object>) ai.get("agent");
         Map<String, Object> providers = (Map<String, Object>) agent.get("providers");

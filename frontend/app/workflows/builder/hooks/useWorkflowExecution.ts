@@ -15,6 +15,7 @@ import { normalizeLabel } from '../utils/labelNormalizer';
 import type { WorkflowExecutionMode } from './useWorkflowPauseResume';
 import { markRunAsJustExecuted } from './useWorkflowLoader';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
+import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 
 export interface ValidationError {
   elementKey?: string;
@@ -142,6 +143,12 @@ export function useWorkflowExecution(config: UseWorkflowExecutionConfig): UseWor
   } = config;
 
   const { isPreviewOnly } = useWorkflowMode();
+  // Audit 2026-07-02 - VIEWER role in an org workspace is read-only: the execute
+  // endpoint auto-saves the plan, so the backend 403s VIEWER ("Workflow access is
+  // read-only"). This is the single choke point for EVERY run dispatcher (header
+  // Run button, trigger-node launcher, canvas context menu, inspector
+  // step-by-step) - the events no-op client-side instead of dead-ending in a 403.
+  const canMutate = useCanMutateInCurrentOrg();
   const [backendValidationErrors, setBackendValidationErrors] = React.useState<ValidationError[]>([]);
 
   // Ref for pauseResumeActions to avoid dependency changes
@@ -288,6 +295,10 @@ export function useWorkflowExecution(config: UseWorkflowExecutionConfig): UseWor
         console.warn('Cannot start workflow: workflow is in preview-only mode');
         return;
       }
+      if (!canMutate) {
+        console.warn('Cannot start workflow: workspace access is read-only (VIEWER role)');
+        return;
+      }
       if (!workflowId) {
         console.error('Cannot start workflow: workflowId is required');
         return;
@@ -384,7 +395,7 @@ export function useWorkflowExecution(config: UseWorkflowExecutionConfig): UseWor
     return () => {
       window.removeEventListener('workflowViewStart', handleStartEvent as EventListener);
     };
-  }, [workflowId, nodes, edges, router, setWorkflowStatus, isPreviewOnly]);
+  }, [workflowId, nodes, edges, router, setWorkflowStatus, isPreviewOnly, canMutate]);
 
   // ==================== Step-by-step execution ====================
 
@@ -392,6 +403,10 @@ export function useWorkflowExecution(config: UseWorkflowExecutionConfig): UseWor
     const handleStepByStepStart = async (event: CustomEvent) => {
       if (isPreviewOnly) {
         console.warn('Cannot start workflow: workflow is in preview-only mode');
+        return;
+      }
+      if (!canMutate) {
+        console.warn('Cannot start workflow: workspace access is read-only (VIEWER role)');
         return;
       }
       if (!workflowId) {
@@ -463,7 +478,7 @@ export function useWorkflowExecution(config: UseWorkflowExecutionConfig): UseWor
     return () => {
       window.removeEventListener('workflowStartStepByStep', handleStepByStepStart as EventListener);
     };
-  }, [workflowId, nodes, edges, router, setWorkflowStatus, isPreviewOnly]);
+  }, [workflowId, nodes, edges, router, setWorkflowStatus, isPreviewOnly, canMutate]);
 
   return {
     backendValidationErrors,

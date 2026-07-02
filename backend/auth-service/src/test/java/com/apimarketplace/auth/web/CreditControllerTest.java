@@ -561,6 +561,70 @@ class CreditControllerTest {
         }
     }
 
+    // ---- GET /api/credits/check ----
+
+    @Nested
+    @DisplayName("GET /api/credits/check (generic gate, optional sourceType scoping)")
+    class CheckCreditsTests {
+
+        @Test
+        @DisplayName("passes the sourceType through to the service so the FREE bucket scoping applies - regression for the unscoped internal-chat gate")
+        void forwardsSourceTypeToService() {
+            // Regression: pre-fix the endpoint had no sourceType parameter, so the
+            // internal/scheduled chat gate could only ask the total-balance question
+            // and a Free user with monthly workflow-only credits passed it.
+            when(creditService.hasSufficientCredits(USER_ID, "CHAT_CONVERSATION")).thenReturn(false);
+            when(creditService.getBalance(USER_ID)).thenReturn(new BigDecimal("1000.00"));
+
+            ResponseEntity<Map<String, Object>> response =
+                    controller.checkCredits(USER_ID, "CHAT_CONVERSATION");
+
+            assertThat(response.getStatusCode().value()).isEqualTo(402);
+            assertThat(response.getBody()).containsEntry("allowed", false);
+            verify(creditService).hasSufficientCredits(USER_ID, "CHAT_CONVERSATION");
+        }
+
+        @Test
+        @DisplayName("returns 200 allowed=true when the scoped check passes")
+        void returns200WhenScopedCheckPasses() {
+            when(creditService.hasSufficientCredits(USER_ID, "CHAT_CONVERSATION")).thenReturn(true);
+            when(creditService.getBalance(USER_ID)).thenReturn(new BigDecimal("15.00"));
+
+            ResponseEntity<Map<String, Object>> response =
+                    controller.checkCredits(USER_ID, "CHAT_CONVERSATION");
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(response.getBody())
+                    .containsEntry("allowed", true)
+                    .containsEntry("balance", new BigDecimal("15.00"));
+        }
+
+        @Test
+        @DisplayName("blank sourceType (?sourceType=) is normalized to null - must not silently apply the FREE PAYG scoping")
+        void blankSourceTypeNormalizedToNull() {
+            when(creditService.hasSufficientCredits(USER_ID, null)).thenReturn(true);
+            when(creditService.getBalance(USER_ID)).thenReturn(new BigDecimal("1000.00"));
+
+            ResponseEntity<Map<String, Object>> response = controller.checkCredits(USER_ID, "  ");
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            verify(creditService).hasSufficientCredits(USER_ID, null);
+        }
+
+        @Test
+        @DisplayName("omitted sourceType keeps the legacy total-balance semantics (null forwarded to the service)")
+        void nullSourceTypeKeepsLegacySemantics() {
+            when(creditService.hasSufficientCredits(USER_ID, null)).thenReturn(true);
+            when(creditService.getBalance(USER_ID)).thenReturn(new BigDecimal("1000.00"));
+
+            ResponseEntity<Map<String, Object>> response = controller.checkCredits(USER_ID, null);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(response.getBody()).containsEntry("allowed", true);
+            verify(creditService).hasSufficientCredits(USER_ID, null);
+        }
+    }
+
     // ---- POST /api/credits/check-chat ----
 
     @Nested

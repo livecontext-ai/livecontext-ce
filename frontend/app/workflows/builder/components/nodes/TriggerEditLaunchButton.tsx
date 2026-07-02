@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom';
 import { Play, Bug } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
+import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 import type { TriggerButtonVariant } from '../NodePlayButton';
 
 interface TriggerEditLaunchButtonProps {
@@ -47,6 +48,10 @@ const SHIMMER_BY_VARIANT: Record<TriggerButtonVariant, string> = {
  */
 export function TriggerEditLaunchButton({ nodeId, variant, borderColor }: TriggerEditLaunchButtonProps) {
   const t = useTranslations('workflowBuilder.canvas');
+  // Audit 2026-07-02 - VIEWER role in an org workspace is read-only: launching a
+  // run auto-saves the plan and the backend 403s VIEWER, so the launcher hides
+  // (useWorkflowExecution also no-ops the events as a second line of defense).
+  const canMutate = useCanMutateInCurrentOrg();
   const [open, setOpen] = React.useState(false);
   const [rect, setRect] = React.useState<{ left: number; top: number } | null>(null);
   const buttonRef = React.useRef<HTMLButtonElement>(null);
@@ -107,6 +112,9 @@ export function TriggerEditLaunchButton({ nodeId, variant, borderColor }: Trigge
       detail: { startFromNode: nodeId },
     }));
   }, [nodeId]);
+
+  // After every hook (rules of hooks): read-only VIEWERs get no launcher at all.
+  if (!canMutate) return null;
 
   const borderStyle = { borderWidth: 2, borderStyle: 'solid' as const, borderColor };
   const shimmerColor = SHIMMER_BY_VARIANT[variant] ?? SHIMMER_BY_VARIANT.play;

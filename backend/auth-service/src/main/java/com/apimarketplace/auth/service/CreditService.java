@@ -218,9 +218,21 @@ public class CreditService {
      */
     private boolean subBucketEligible(Subscription sub, String sourceType) {
         if (unlimited) return true;
-        if (sub == null || sub.getPlan() == null) return true;
-        if (!WORKFLOW_CREDITS_ONLY_PLAN_CODE.equalsIgnoreCase(sub.getPlan().getCode())) return true;
+        if (!isWorkflowCreditsOnlyPlan(sub)) return true;
         return sourceType != null && WORKFLOW_SUB_ELIGIBLE_SOURCE_TYPES.contains(sourceType);
+    }
+
+    /**
+     * True when {@code sub} is on the FREE plan whose monthly bucket is
+     * workflow-scoped. Both the bucket routing ({@link #subBucketEligible})
+     * and the PAYG-debt leg of the delinquency lifecycle apply ONLY here:
+     * on paid plans every debit nets against the two-bucket total, so a
+     * positive total means any PAYG deficit is already economically
+     * recovered and must not block the account.
+     */
+    private boolean isWorkflowCreditsOnlyPlan(Subscription sub) {
+        if (unlimited || sub == null || sub.getPlan() == null) return false;
+        return WORKFLOW_CREDITS_ONLY_PLAN_CODE.equalsIgnoreCase(sub.getPlan().getCode());
     }
 
     /**
@@ -872,14 +884,36 @@ public class CreditService {
     /**
      * Owner-pays: the executor's pre-flight "do I have credits?" question
      * resolves against the PAYER's wallet - the only one their consumes will
-     * ever debit. {@link #getBalance} already routes through {@link #resolvePayer}
-     * so this is a straight passthrough.
+     * ever debit. Legacy total-balance form - callers gating a spend whose
+     * source type is known (chat, agent) should use the source-type-aware
+     * overload so the FREE-plan bucket scoping applies.
      */
     @Transactional(readOnly = true)
     public boolean hasSufficientCredits(Long userId) {
+        return hasSufficientCredits(userId, null);
+    }
+
+    /**
+     * Source-type-aware existence check for the generic {@code /check} gate.
+     * On the FREE plan (Cloud), a non-workflow {@code sourceType} is checked
+     * against the PAYG bucket alone, mirroring the {@link #canAfford} pre-flight
+     * and the post-flight {@link #deductCredits} bucket routing. Pre-fix, the
+     * internal/scheduled chat gate called the total-balance form: a Free user
+     * holding monthly workflow-only credits but no PAYG top-up passed the gate,
+     * the LLM ran, and the post-flight debit drove the PAYG bucket negative.
+     * A {@code null} sourceType keeps the legacy total-balance check (workflow
+     * launch gates, where the Free monthly bucket IS eligible). Unlimited (CE)
+     * and paid plans are unaffected (eligible balance == total balance).
+     */
+    @Transactional(readOnly = true)
+    public boolean hasSufficientCredits(Long userId, String sourceType) {
         if (unlimited) return true;
-        BigDecimal balance = getBalance(userId);
-        return balance.compareTo(BigDecimal.ONE) >= 0; // minimum 1 credit needed
+        Subscription sub = resolveActiveSubscription(userId);
+        if (sub == null) return false;
+        BigDecimal available = sourceType == null
+                ? sub.getTotalBalance()
+                : eligibleBalance(sub, sourceType);
+        return available.compareTo(BigDecimal.ONE) >= 0; // minimum 1 credit needed
     }
 
     /**
@@ -1378,18 +1412,28 @@ public class CreditService {
         // to PAYG so the monthly workflow grant stays untouched.
         applyDebit(sub, cost, subEligible);
         BigDecimal newBalance = sub.getTotalBalance();
-        if (newBalance.signum() < 0) {
-            log.warn("User {} {} debited despite insufficient credits: totalBalance went {} -> {} (cost={}, sub={}, payg={}). " +
+        // Free workflow-credit scoping: a PAYG-routed overshoot (!subEligible,
+        // allowNegative post-flight) drives the PAYG bucket negative while the
+        // monthly workflow grant keeps the TOTAL positive. That debt is just as
+        // real as a negative total - the sub bucket can never repay it (it is
+        // not eligible for this source type). Without this branch the delinquent
+        // gate never fired for Free accounts: each chat turn's overshoot was
+        // unbounded and repeatable as long as the monthly grant masked the total.
+        boolean paygOwed = !subEligible && sub.getPaygRemainingCredits().signum() < 0;
+        if (newBalance.signum() < 0 || paygOwed) {
+            log.warn("User {} {} debited despite insufficient credits: totalBalance went {} -> {} (cost={}, sub={}, payg={}, paygOwed={}). " +
                             "allowNegative=true post-flight reconciliation.",
                     userId, sourceType, currentBalance, newBalance, cost,
-                    sub.getRemainingCredits(), sub.getPaygRemainingCredits());
-            // Honour the V148 invariant (V250 updated for 2-bucket):
-            //   delinquent = TRUE  ⇒  (remaining_credits + payg_remaining_credits) ≤ 0
+                    sub.getRemainingCredits(), sub.getPaygRemainingCredits(), paygOwed);
+            // Honour the V148 invariant (V250 2-bucket, extended for Free scoping):
+            //   delinquent = TRUE  ⇒  (total ≤ 0  OR  (FREE plan AND payg < 0))
+            // (paygOwed can only be true on FREE - !subEligible never holds on
+            // paid plans - so this branch never widens paid-plan delinquency.)
             // Setting the flag now blocks any subsequent reserve / workflow-init via
             // {@link #tryReserveMarkup} until the user tops up - preventing unbounded
             // debt accumulation through new workflow runs while a chat overshoot is
             // unresolved. {@link #clearDelinquentIfPositive} flips it back when the
-            // next grant/purchase brings the balance positive.
+            // next grant/purchase settles both buckets.
             if (!unlimited) sub.setDelinquent(true);
         }
         subscriptionRepository.save(sub);
@@ -1899,16 +1943,29 @@ public class CreditService {
     }
 
     /**
-     * Helper: clear the {@code delinquent} flag if the post-update TOTAL
-     * balance (sub + payg) is positive. Invoked AFTER any positive-balance
-     * transition: {@link #grantCredits}, {@link #releaseReservation}.
+     * Helper: clear the {@code delinquent} flag once the wallet no longer owes
+     * anything: the TOTAL balance (sub + payg) is positive AND the PAYG bucket
+     * is not negative. Invoked AFTER any positive-balance transition:
+     * {@link #grantCredits}, {@link #releaseReservation}.
      *
-     * <p>Rule is strictly {@code &gt; 0} (zero does not clear) so a user whose
-     * refund just zeros their account stays delinquent until they actually
-     * top up with positive balance.
+     * <p>Rule is strictly {@code &gt; 0} on the total (zero does not clear) so a
+     * user whose refund just zeros their account stays delinquent until they
+     * actually top up with positive balance.
      *
-     * <p>Invariant maintained (V250 updated for 2-bucket model):
-     * {@code delinquent = TRUE ⇒ (remaining_credits + payg_remaining_credits) ≤ 0}.
+     * <p>The {@code payg &gt;= 0} leg applies ONLY on the FREE plan
+     * ({@link #isWorkflowCreditsOnlyPlan}) and mirrors the Free-scoping
+     * delinquency set in {@link #deductCredits}: there, a chat overshoot leaves
+     * the PAYG bucket negative while the monthly workflow grant keeps the total
+     * positive, and the sub bucket can never repay that debt (it is not eligible
+     * for chat). A monthly renewal must NOT clear it - only a PAYG top-up that
+     * settles the negative bucket does. On PAID plans the leg is skipped: every
+     * paid-plan debit nets against the two-bucket total, so a positive total
+     * means any PAYG deficit is already recovered and the renewal grant clears
+     * the flag exactly as pre-V379 (a paying customer with a positive balance
+     * must never stay gated).
+     *
+     * <p>Invariant maintained (V250 2-bucket, extended for Free scoping):
+     * {@code delinquent = TRUE ⇒ (total ≤ 0 OR (FREE plan AND payg_remaining_credits < 0))}.
      *
      * <p>Critical fix vs pre-V250: an apparently delinquent user who tops up
      * PAYG only (sub still 0, payg now positive) now clears their delinquent
@@ -1920,7 +1977,10 @@ public class CreditService {
         if (sub == null) return;
         if (!Boolean.TRUE.equals(sub.getDelinquent())) return;
         BigDecimal total = sub.getTotalBalance();
-        if (total.signum() > 0) {
+        if (total.signum() <= 0) return;
+        boolean unpayablePaygDebt = isWorkflowCreditsOnlyPlan(sub)
+                && sub.getPaygRemainingCredits().signum() < 0;
+        if (!unpayablePaygDebt) {
             sub.setDelinquent(false);
             log.info("Cleared delinquent flag for subscription {} (totalBalance now {} = sub {} + payg {})",
                     sub.getId(), total, sub.getRemainingCredits(), sub.getPaygRemainingCredits());
@@ -1938,8 +1998,12 @@ public class CreditService {
     // back to the plan's monthly quota but leave `payg_remaining_credits`
     // untouched - PAYG persists across billing cycles.
     //
-    // Invariant V148 updated:
+    // Invariant V148 updated (extended for Free workflow-credit scoping):
     //   delinquent = TRUE  ⇒  (remaining_credits + payg_remaining_credits) ≤ 0
+    //                          OR (FREE plan AND payg_remaining_credits < 0)
+    // The payg-negative leg is only ever SET on FREE accounts (the debit that
+    // creates it is the !subBucketEligible branch) and only BLOCKS the clear
+    // on FREE accounts - paid plans keep the pure total-based lifecycle.
     //
     // {@link Subscription#getTotalBalance} returns the sum; getBalance + canAfford
     // + clearDelinquentIfPositive all key on the sum.

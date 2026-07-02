@@ -94,6 +94,28 @@ public interface FileStorageService {
     }
 
     /**
+     * Owner-aware presign, mirror of {@link #download(String, String)}: remote
+     * implementations authorize the internal presign by the KEY-OWNER tenant
+     * prefix, so an org teammate previewing a shared file must present the
+     * owner's tenant (the entity is already authorized upstream via the
+     * org-scoped lookup), not the caller's. Passing the caller's id for a
+     * teammate-owned key 403s and the preview silently breaks. Local/mock
+     * implementations ignore the tenant.
+     *
+     * @param ownerTenantId tenant that owns the key ({@code StorageEntity.getTenantId()})
+     * @param key           S3 object key
+     * @param duration      URL validity duration
+     */
+    default String generateDownloadUrl(String ownerTenantId, String key, Duration duration) {
+        return generateDownloadUrl(key, duration);
+    }
+
+    /** Owner-aware presign with default expiry (15 minutes). */
+    default String generateDownloadUrl(String ownerTenantId, String key) {
+        return generateDownloadUrl(ownerTenantId, key, Duration.ofMinutes(15));
+    }
+
+    /**
      * Downloads file content.
      *
      * @param key S3 object key

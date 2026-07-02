@@ -377,12 +377,17 @@ class DecisionNodeCreatorTest {
             // nextIdx=2 means both if and else ports are used, need a 3rd
             String port = DecisionNodeCreator.expandDecisionConditions(core, conditions, 2);
 
-            assertThat(port).isEqualTo("elseif_1");
+            // Runtime numbering (Core.getDecisionPorts) is position-1: the new
+            // elseif lands at position 1 of [if, elseif, else] => elseif_0. The
+            // old spec pinned elseif_1 (nextIdx-1 also counted the wired else
+            // edge), a port the runtime never declares - the same
+            // declared-vs-wired desync as the fork branch overflow.
+            assertThat(port).isEqualTo("elseif_0");
             assertThat(conditions).hasSize(3);
             // elseif should be inserted before else
             assertThat(conditions.get(1).get("type")).isEqualTo("elseif");
-            assertThat(conditions.get(1).get("id")).isEqualTo("check_status-elseif-1");
-            assertThat(conditions.get(1).get("label")).isEqualTo("Else If 2");
+            assertThat(conditions.get(1).get("id")).isEqualTo("check_status-elseif-0");
+            assertThat(conditions.get(1).get("label")).isEqualTo("Else If 1");
             // else should remain last
             assertThat(conditions.get(2).get("type")).isEqualTo("else");
         }
@@ -397,17 +402,17 @@ class DecisionNodeCreatorTest {
             conditions.add(new LinkedHashMap<>(Map.of("id", "route-if", "type", "if", "expression", "{{x}} > 100")));
             conditions.add(new LinkedHashMap<>(Map.of("id", "route-else", "type", "else", "expression", "default")));
 
-            // First expansion: nextIdx=2
+            // First expansion: [if, else] => insert at position 1 => elseif_0
             String port1 = DecisionNodeCreator.expandDecisionConditions(core, conditions, 2);
-            assertThat(port1).isEqualTo("elseif_1");
+            assertThat(port1).isEqualTo("elseif_0");
             assertThat(conditions).hasSize(3);
 
-            // Second expansion: nextIdx=3
+            // Second expansion: [if, elseif, else] => insert at position 2 => elseif_1
             String port2 = DecisionNodeCreator.expandDecisionConditions(core, conditions, 3);
-            assertThat(port2).isEqualTo("elseif_2");
+            assertThat(port2).isEqualTo("elseif_1");
             assertThat(conditions).hasSize(4);
 
-            // Order: if, elseif_1, elseif_2, else
+            // Order: if, elseif_0, elseif_1, else - contiguous runtime ports
             assertThat(conditions.get(0).get("type")).isEqualTo("if");
             assertThat(conditions.get(1).get("type")).isEqualTo("elseif");
             assertThat(conditions.get(2).get("type")).isEqualTo("elseif");

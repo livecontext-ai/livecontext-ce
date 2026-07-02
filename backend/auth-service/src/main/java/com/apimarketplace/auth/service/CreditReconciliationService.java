@@ -37,6 +37,18 @@ import java.util.List;
  * during the current billing period: the grant inflates the ledger sum but the sub
  * bucket is unchanged, generating a phantom "drift" equal to the PAYG amount.
  *
+ * <p>PAYG carry-over (cross-period): a PAYG balance bought in an EARLIER period
+ * persists across renewals but has no ledger row inside the current period, so the
+ * period-scoped comparison reports a phantom positive drift equal to the carried
+ * balance - for every such user, every day. When a period drift is detected, the
+ * LIFETIME ledger sum is checked (balance starts at 0 - no baseline problem;
+ * released markup reservations are excluded because a RELEASED row keeps its
+ * -reserved audit amount while the release refunded the balance, so raw lifetime
+ * sums under-count by exactly the released total): if the lifetime books balance,
+ * the drift is the carry-over artifact and is logged as explained. A real drift
+ * (lost or duplicated movement) is off in the lifetime sum too and stays
+ * unexplained.
+ *
  * <p>Cross-references pending dead-letter entries to distinguish explained drift
  * (pending retries) from unexplained drift (real issue).
  *
@@ -111,18 +123,35 @@ public class CreditReconciliationService {
 
                 if (drift.abs().compareTo(DRIFT_THRESHOLD) > 0) {
                     int pendingDl = countPendingDeadLetters(String.valueOf(userId));
-                    boolean isExplained = pendingDl > 0;
+
+                    // PAYG carry-over is NOT drift: the PAYG bucket persists across
+                    // renewals (V250) but no ledger row re-asserts it at period start,
+                    // so the period-scoped sum under-counts by exactly the balance
+                    // carried in. The lifetime books have no such baseline problem
+                    // (balance starts at 0): when they balance, the period "drift" is
+                    // the carry-over artifact, not a lost/duplicated movement. A REAL
+                    // drift (missing or double row) is off in the lifetime sum too and
+                    // stays unexplained. One class of rows must be excluded for the
+                    // lifetime invariant to hold: PLATFORM_MARKUP_RELEASED* rows keep
+                    // their -reserved amount as an audit trail while the release
+                    // refunded the balance - balance-neutral but sum-visible (see the
+                    // repository method's javadoc).
+                    BigDecimal lifetimeDrift = balance.subtract(
+                            ledgerRepository.sumAmountByUserIdExcludingReleasedReserves(userId));
+                    boolean lifetimeBalanced = lifetimeDrift.abs().compareTo(DRIFT_THRESHOLD) <= 0;
+
+                    boolean isExplained = pendingDl > 0 || lifetimeBalanced;
 
                     reconciliationLogRepository.save(new CreditReconciliationLog(
                             userId, balance, periodLedgerSum, drift, pendingDl, isExplained));
 
                     if (isExplained) {
-                        log.info("CREDIT DRIFT (explained): user={}, drift={}, pending_dead_letters={}, period_start={}",
-                                userId, drift, pendingDl, periodStart);
+                        log.info("CREDIT DRIFT (explained): user={}, drift={}, pending_dead_letters={}, lifetime_balanced={}, period_start={}",
+                                userId, drift, pendingDl, lifetimeBalanced, periodStart);
                         explained++;
                     } else {
-                        log.warn("CREDIT DRIFT (unexplained): user={}, balance={}, ledger_sum={}, drift={}, period_start={}",
-                                userId, balance, periodLedgerSum, drift, periodStart);
+                        log.warn("CREDIT DRIFT (unexplained): user={}, balance={}, ledger_sum={}, drift={}, lifetime_drift={}, period_start={}",
+                                userId, balance, periodLedgerSum, drift, lifetimeDrift, periodStart);
                     }
                     drifted++;
                 }

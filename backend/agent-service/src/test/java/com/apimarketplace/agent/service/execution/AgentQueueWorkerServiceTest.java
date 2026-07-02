@@ -232,6 +232,56 @@ class AgentQueueWorkerServiceTest {
         }
 
         @Test
+        @DisplayName("Regression backstop: org scope binds from structured metadata when the payload "
+                + "credentials were never stamped with __orgId__")
+        void orgScopeBindsFromMetadataWhenPayloadHasNoOrg() throws Exception {
+            // A producer that forgets credentials.__orgId__ used to dequeue into a NULL
+            // org scope: every org-scoped persist on the worker then fail-louded. The
+            // producer now also writes orgId/orgRole into the structured metadata and
+            // the worker falls back to it.
+            String payload = "{\"prompt\":\"no credentials stamp\"}";
+            AgentExecutionTask task = new AgentExecutionTask(
+                "corr-org-meta", AgentExecutionTask.TYPE_AGENT, payload, 0,
+                Map.of("orgId", "org-from-metadata", "orgRole", "MEMBER"));
+            AtomicReference<String> observedOrg = new AtomicReference<>();
+            AtomicReference<String> observedRole = new AtomicReference<>();
+
+            when(executionService.executeByType(AgentExecutionTask.TYPE_AGENT, payload))
+                .thenAnswer(inv -> {
+                    observedOrg.set(TenantResolver.currentRequestOrganizationId());
+                    observedRole.set(TenantResolver.currentRequestOrganizationRole());
+                    return "{\"success\":true}";
+                });
+
+            workerService.processTask(task);
+
+            assertThat(observedOrg).hasValue("org-from-metadata");
+            assertThat(observedRole).hasValue("MEMBER");
+        }
+
+        @Test
+        @DisplayName("Payload credentials org takes precedence over the metadata backstop")
+        void payloadCredentialsOrgWinsOverMetadata() throws Exception {
+            String payload = objectMapper.writeValueAsString(Map.of(
+                "prompt", "both channels",
+                "credentials", Map.of("__orgId__", "org-from-payload")));
+            AgentExecutionTask task = new AgentExecutionTask(
+                "corr-org-both", AgentExecutionTask.TYPE_AGENT, payload, 0,
+                Map.of("orgId", "org-from-metadata"));
+            AtomicReference<String> observedOrg = new AtomicReference<>();
+
+            when(executionService.executeByType(AgentExecutionTask.TYPE_AGENT, payload))
+                .thenAnswer(inv -> {
+                    observedOrg.set(TenantResolver.currentRequestOrganizationId());
+                    return "{\"success\":true}";
+                });
+
+            workerService.processTask(task);
+
+            assertThat(observedOrg).hasValue("org-from-payload");
+        }
+
+        @Test
         @DisplayName("User roles metadata is forwarded to execution router for queued bridge policies")
         void userRolesMetadataForwardedToExecutionRouter() throws Exception {
             String payload = "{\"prompt\":\"admin bridge\"}";

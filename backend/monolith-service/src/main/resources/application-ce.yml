@@ -581,15 +581,15 @@ ai:
       claude-code:
         enabled: ${BRIDGE_CLAUDE_CODE_ENABLED:true}
         display-order: 6
-        models: claude-opus-4-7,claude-opus-4-6,claude-sonnet-4-6,claude-sonnet-4-5,claude-haiku-4-5
+        models: claude-fable-5,claude-opus-4-7,claude-opus-4-6,claude-sonnet-4-6,claude-sonnet-4-5,claude-haiku-4-5
       codex:
         enabled: ${BRIDGE_CODEX_ENABLED:true}
         display-order: 7
-        models: gpt-5.4,gpt-5.4-mini,gpt-5.3-codex
+        models: gpt-5.4,gpt-5.4-mini,gpt-5.3-codex,gpt-5.2
       gemini-cli:
         enabled: ${BRIDGE_GEMINI_CLI_ENABLED:true}
         display-order: 8
-        models: gemini-2.5-pro,gemini-2.5-flash,gemini-3.1-pro-preview,gemini-3.1-flash
+        models: gemini-3.1-pro-preview,gemini-3-flash-preview,gemini-2.5-pro,gemini-2.5-flash
       mistral-vibe:
         enabled: ${BRIDGE_MISTRAL_VIBE_ENABLED:true}
         display-order: 9
@@ -692,6 +692,7 @@ ai:
       deepseek-chat: 15
       deepseek-coder: 16
       claude-opus-4-7: 17
+      claude-fable-5: 18
       "[gpt-5.3-codex]": 20
       "[gemini-2.5-pro]": 21
       "[gemini-2.5-flash]": 22

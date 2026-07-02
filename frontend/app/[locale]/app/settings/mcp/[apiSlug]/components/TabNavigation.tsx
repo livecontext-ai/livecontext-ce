@@ -74,10 +74,10 @@ const TabNavigation: React.FC<TabNavigationProps> = ({
   }, [activeTab]);
 
   return (
-    <div className="mb-8 flex justify-center max-w-full overflow-x-auto scrollbar-hide -mx-1 px-1">
+    <div className="mb-8 flex max-w-full overflow-x-auto scrollbar-hide -mx-1 px-1">
       <div
         ref={containerRef}
-        className="relative inline-flex items-center gap-1 p-1.5 bg-theme-tertiary rounded-full w-max"
+        className="relative mx-auto inline-flex items-center gap-1 p-1.5 bg-theme-tertiary rounded-full w-max"
       >
         {/* Animated slider background */}
         <div

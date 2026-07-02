@@ -3054,8 +3054,10 @@
       "lastAppliedAt": "Last applied at",
       "consecutiveFailures": "Consecutive failures",
       "never": "never",
+      "notLinkedHint": "This install isn't linked to the cloud yet, which is the normal state for a fresh install. Connect it from the Connection tab to start receiving updates.",
       "statusCode": {
         "OK": "OK",
+        "NOT_LINKED": "not linked",
         "NO_ACTIVE": "no active bundle",
         "NOT_CONFIGURED": "not configured",
         "TRUST_UNCONFIGURED": "trust unconfigured",
@@ -3524,6 +3526,7 @@
         "clientIdRequired": "Client ID is required",
         "clientSecretRequired": "Client Secret is required",
         "failedToInitiate": "Failed to initiate OAuth2 flow",
+        "missingOAuthHostVar": "Enter your {field} to connect",
         "credentialsNotConfigured": "This service is not available yet",
         "contactAdmin": "This integration will be available soon. Contact support if you need it urgently."
       }
@@ -5082,6 +5085,7 @@
         "lastAppliedAt": "Last applied at",
         "consecutiveFailures": "Consecutive failures",
         "never": "never",
+        "notLinkedHint": "This install isn't linked to the cloud yet, which is the normal state for a fresh install. Connect it from the Connection tab to start receiving updates.",
         "statusCode": {
           "OK": "OK",
           "NO_ACTIVE": "no active bundle",

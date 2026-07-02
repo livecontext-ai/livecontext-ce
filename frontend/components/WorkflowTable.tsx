@@ -329,7 +329,7 @@ export default function WorkflowTable({
           <h1 className="text-lg font-semibold text-theme-primary">{t('workflow.title')}</h1>
           <p className="text-sm text-theme-secondary mt-0.5">{t('workflow.subtitle')}</p>
         </div>
-        {!loading && (totalCount > 0 || debouncedSearch.trim().length > 0) && (
+        {canMutate && !loading && (totalCount > 0 || debouncedSearch.trim().length > 0) && (
           <Button
             variant="default"
             size="sm"
@@ -385,10 +385,12 @@ export default function WorkflowTable({
       {/* Actions contextuelles - floating bottom-center bar (mirrors the task board). */}
       {selectedWorkflows.size > 0 && (
         <SelectionActionBar count={selectedWorkflows.size} onClear={clearWorkflowSelection}>
-          <BulkBarButton onClick={cloneSelectedWorkflows}>
-            <Copy className="h-3.5 w-3.5" />
-            {t('common.clone')} ({selectedWorkflows.size})
-          </BulkBarButton>
+          {canMutate && (
+            <BulkBarButton onClick={cloneSelectedWorkflows}>
+              <Copy className="h-3.5 w-3.5" />
+              {t('common.clone')} ({selectedWorkflows.size})
+            </BulkBarButton>
+          )}
           {canMutate && (
             <BulkBarButton variant="danger" onClick={deleteSelectedWorkflows} disabled={deletableSelectedCount === 0}>
               <Trash2 className="h-3.5 w-3.5" />
@@ -410,7 +412,7 @@ export default function WorkflowTable({
             subtitle={totalCount === 0 && debouncedSearch.trim().length === 0
               ? t('workflow.createFirstWorkflow')
               : t('workflow.noMatchingWorkflows')}
-            actions={totalCount === 0 && debouncedSearch.trim().length === 0 ? (
+            actions={canMutate && totalCount === 0 && debouncedSearch.trim().length === 0 ? (
               <Button
                 variant="default"
                 onClick={() => setShowCreateWorkflowModal(true)}

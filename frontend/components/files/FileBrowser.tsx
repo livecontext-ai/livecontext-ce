@@ -16,7 +16,7 @@ import { Button } from '@/components/ui/button';
 import { useStorageExplorer } from '@/app/workflows/builder/components/inspector/useStorageExplorer';
 import { storageApi, S3_FILES_FILTER, type StorageExplorerEntry } from '@/lib/api/storage-api';
 import { useAuthToken } from '@/hooks/useAuthToken';
-import { getActiveOrgHeaderForRequest } from '@/lib/stores/current-org-store';
+import { getActiveOrgHeaderForRequest, useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 import { fileService } from '@/lib/api/orchestrator/file.service';
 import { FileDetailView } from '@/components/app/FileDetailView';
 import { FilesExplorerBody } from './FilesExplorerBody';
@@ -71,6 +71,10 @@ export function FileBrowser() {
   const tExp = useTranslations('storageExplorer');
   const tCommon = useTranslations('common');
   const token = useAuthToken();
+  // Audit 2026-07-02 - VIEWER role in an org workspace is read-only: hide every
+  // write affordance (upload, new folder, rename, move, delete). Browsing,
+  // filtering and downloads stay available. Same gating as the tables page.
+  const canMutate = useCanMutateInCurrentOrg();
 
   const {
     entries,
@@ -462,6 +466,9 @@ export function FileBrowser() {
   const [uploading, setUploading] = React.useState(false);
   const [isDragging, setIsDragging] = React.useState(false);
   const handleFiles = React.useCallback(async (files: FileList | File[]) => {
+    // VIEWER (org workspace) cannot upload - also blocks OS drag-and-drop, which
+    // bypasses the (hidden) upload button.
+    if (!canMutate) return;
     const arr = Array.from(files);
     if (arr.length === 0) return;
     setUploading(true);
@@ -486,7 +493,7 @@ export function FileBrowser() {
     if (failed > 0) {
       addToast({ type: 'error', title: t('uploadFailedTitle'), message: t('uploadFailedMessage', { count: failed }) });
     }
-  }, [refresh, addToast, t, currentManualFolderId]);
+  }, [canMutate, refresh, addToast, t, currentManualFolderId]);
 
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -495,6 +502,7 @@ export function FileBrowser() {
   };
   const onDragOver = (e: React.DragEvent) => {
     e.preventDefault();
+    if (!canMutate) return; // read-only: no drop-to-upload overlay
     if (!isDragging) setIsDragging(true);
   };
   const onDragLeave = (e: React.DragEvent) => {
@@ -687,8 +695,9 @@ export function FileBrowser() {
             <div className="flex items-center gap-2">
               {/* New folder - inline name input (V313). Opens an input that creates
                   the folder in the current location on Enter / blur. Hidden inside a
-                  computed VIRTUAL workflow folder (no real parent to attach to). */}
-              {!insideVirtual && (
+                  computed VIRTUAL workflow folder (no real parent to attach to) and
+                  for read-only VIEWERs. */}
+              {canMutate && !insideVirtual && (
                 creatingFolder ? (
                   <input
                     autoFocus
@@ -711,10 +720,12 @@ export function FileBrowser() {
                   </Button>
                 )
               )}
-              <Button variant="default" size="default" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
-                {uploading ? <LoadingSpinner size="xs" className="mr-1.5" /> : <Upload className="h-4 w-4 mr-1.5" />}
-                {t('upload')}
-              </Button>
+              {canMutate && (
+                <Button variant="default" size="default" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+                  {uploading ? <LoadingSpinner size="xs" className="mr-1.5" /> : <Upload className="h-4 w-4 mr-1.5" />}
+                  {t('upload')}
+                </Button>
+              )}
             </div>
           </div>
 
@@ -757,7 +768,7 @@ export function FileBrowser() {
                 <div className="flex items-center gap-1">
                   {/* Rename - only when exactly one FOLDER is selected (V313). An
                       inline input replaces the button while editing. */}
-                  {canRenameFolder && (
+                  {canMutate && canRenameFolder && (
                     renamingFolder ? (
                       <input
                         autoFocus
@@ -785,14 +796,18 @@ export function FileBrowser() {
                     {tExp('downloadSelected')}
                   </Button>
                   {/* Move to… - folder tree picker (complements drag-and-drop). */}
-                  <Button variant="outline" size="default" onClick={() => void openMoveModal()} disabled={deleting || downloading}>
-                    <FolderInput className="h-3.5 w-3.5 mr-1.5" />
-                    {t('moveTo')}
-                  </Button>
-                  <Button variant="destructive" size="default" onClick={() => setShowDeleteModal(true)} disabled={deleting || downloading}>
-                    <Trash2 className="h-3.5 w-3.5 mr-1.5" />
-                    {tExp('deleteSelected')}
-                  </Button>
+                  {canMutate && (
+                    <Button variant="outline" size="default" onClick={() => void openMoveModal()} disabled={deleting || downloading}>
+                      <FolderInput className="h-3.5 w-3.5 mr-1.5" />
+                      {t('moveTo')}
+                    </Button>
+                  )}
+                  {canMutate && (
+                    <Button variant="destructive" size="default" onClick={() => setShowDeleteModal(true)} disabled={deleting || downloading}>
+                      <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                      {tExp('deleteSelected')}
+                    </Button>
+                  )}
                   <Button variant="ghost" size="default" onClick={clearSelection}>
                     {tCommon('clearSelection')}
                   </Button>
@@ -827,10 +842,12 @@ export function FileBrowser() {
                 {!filtersActive && folderTrail.length === 0 && (
                   <>
                     <p className="text-xs mt-1 text-theme-muted">{t('emptyHint')}</p>
-                    <Button variant="default" size="sm" className="mt-4" onClick={() => fileInputRef.current?.click()}>
-                      <Upload className="h-4 w-4 mr-1.5" />
-                      {t('upload')}
-                    </Button>
+                    {canMutate && (
+                      <Button variant="default" size="sm" className="mt-4" onClick={() => fileInputRef.current?.click()}>
+                        <Upload className="h-4 w-4 mr-1.5" />
+                        {t('upload')}
+                      </Button>
+                    )}
                   </>
                 )}
               </div>
@@ -859,14 +876,14 @@ export function FileBrowser() {
                   enableFolders
                   tFiles={t}
                   onOpenFolder={enterFolder}
-                  onDeleteVirtualFolder={setVirtualFolderToDelete}
+                  onDeleteVirtualFolder={canMutate ? setVirtualFolderToDelete : undefined}
                   onOpenFile={setDetailEntry}
                   onDownloadFile={handleDownloadOne}
                   downloadLabel={tExp('download')}
                   selectable
                   selectedIds={selectedIds}
                   onToggleSelect={toggleSelection}
-                  gridDraggable
+                  gridDraggable={canMutate}
                 />
                 {/* Floating thumbnail of the dragged card (instead of nothing). For a
                     multi-selection drag, badge the count being moved. */}

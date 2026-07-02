@@ -107,10 +107,28 @@ public class CreditController {
                 "delinquent", breakdown.delinquent()));
     }
 
+    /**
+     * Generic "has at least 1 credit?" gate. {@code sourceType} is optional:
+     * when present (e.g. {@code CHAT_CONVERSATION} from the internal/scheduled
+     * chat gate) the check applies the FREE-plan bucket scoping - a Free user
+     * holding monthly workflow-only credits but no PAYG top-up is refused a
+     * chat/agent spend up-front instead of overshooting the PAYG bucket
+     * negative post-flight. Absent (workflow launch gates), the legacy
+     * total-balance semantics are preserved: the Free monthly bucket IS
+     * eligible to fund workflow runs.
+     */
     @GetMapping("/check")
     public ResponseEntity<Map<String, Object>> checkCredits(
-            @RequestHeader("X-User-ID") Long userId) {
-        boolean sufficient = creditService.hasSufficientCredits(userId);
+            @RequestHeader("X-User-ID") Long userId,
+            @RequestParam(value = "sourceType", required = false) String sourceType) {
+        // Blank == absent: `?sourceType=` must not silently apply the FREE
+        // PAYG scoping (a blank string is not in the workflow allow-list, so
+        // it would scope) - keep it symmetric with the client, which sends no
+        // param at all for null/blank.
+        if (sourceType != null && sourceType.isBlank()) {
+            sourceType = null;
+        }
+        boolean sufficient = creditService.hasSufficientCredits(userId, sourceType);
         BigDecimal balance = creditService.getBalance(userId);
         if (!sufficient) {
             return ResponseEntity.status(402).body(Map.of("allowed", false, "balance", balance));

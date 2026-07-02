@@ -421,8 +421,14 @@ public class AgentQueueWorkerService implements SmartLifecycle {
             // the serialized DTO's credentials to the worker thread via TenantResolver.
             // Queued worker threads have no RequestContextHolder, so downstream org-scope
             // checks must see both the id and role captured at enqueue time.
-            String orgId = extractOrgIdFromPayload(task.requestPayload());
-            String orgRole = extractOrgRoleFromPayload(task.requestPayload());
+            // The structured metadata carries orgId/orgRole as a backstop for producers
+            // that missed the credentials.__orgId__ stamp (AgentQueueProducer writes both).
+            String orgId = firstNonBlank(
+                    extractOrgIdFromPayload(task.requestPayload()),
+                    metadataValue(task.metadata(), "orgId"));
+            String orgRole = firstNonBlank(
+                    extractOrgRoleFromPayload(task.requestPayload()),
+                    metadataValue(task.metadata(), "orgRole"));
             String userRoles = extractUserRoles(task.metadata());
             String[] resultHolder = new String[1];
             com.apimarketplace.common.web.TenantResolver.runWithOrgScope(orgId, orgRole, () -> {
@@ -508,6 +514,17 @@ public class AgentQueueWorkerService implements SmartLifecycle {
         if (metadata == null) return null;
         String userRoles = metadata.get("userRoles");
         return userRoles != null && !userRoles.isBlank() ? userRoles.trim() : null;
+    }
+
+    /** Structured-metadata org backstop (see AgentQueueProducer): null when absent/blank. */
+    String metadataValue(Map<String, String> metadata, String key) {
+        if (metadata == null) return null;
+        String value = metadata.get(key);
+        return value != null && !value.isBlank() ? value.trim() : null;
+    }
+
+    private static String firstNonBlank(String primary, String fallback) {
+        return primary != null && !primary.isBlank() ? primary : fallback;
     }
 
     /**

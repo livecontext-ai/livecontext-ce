@@ -126,7 +126,8 @@ public class ClaudeProvider extends AbstractLLMProvider {
     protected Map<String, Object> buildRequestBody(CompletionRequest request) {
         Map<String, Object> body = new HashMap<>();
 
-        body.put("model", request.model() != null ? request.model() : getDefaultModel());
+        String model = request.model() != null ? request.model() : getDefaultModel();
+        body.put("model", model);
         body.put("max_tokens", request.maxTokens() != null ? request.maxTokens() : 4096);
 
         // System prompt with caching (separate in Claude API).
@@ -142,10 +143,27 @@ public class ClaudeProvider extends AbstractLLMProvider {
         // Messages (without system)
         body.put("messages", buildClaudeMessages(request));
 
-        // Default temperature to 0.7 to prevent infinite tool call loops
-        body.put("temperature", request.temperature() != null ? request.temperature() : 0.7);
-        if (request.topP() != null) {
-            body.put("top_p", request.topP());
+        // Sampling params are REMOVED from the API on Fable/Mythos (any),
+        // Opus 4.7+, and Sonnet 5+ - sending temperature/top_p there returns
+        // 400 invalid_request_error on every request (platform.claude.com
+        // migration guide, verified 2026-07-02). Same carve-out shape as
+        // OpenAIProvider's reasoning models. Older models keep the historical
+        // default temperature 0.7 (prevents infinite tool call loops).
+        if (!rejectsSamplingParams(model)) {
+            body.put("temperature", request.temperature() != null ? request.temperature() : 0.7);
+            if (request.topP() != null) {
+                body.put("top_p", request.topP());
+            }
+        }
+
+        // Anthropic categorical effort (output_config.effort, GA - no beta
+        // header; default high when omitted). Emitted only when the caller
+        // resolved a level AND the model supports the parameter, clamped to
+        // the nearest level the model accepts (mirrors Claude Code's
+        // fall-back-to-highest-supported-at-or-below behavior).
+        String effort = resolveEffortForModel(request.reasoningEffort(), model);
+        if (effort != null) {
+            body.put("output_config", Map.of("effort", effort));
         }
 
         // Tools (Claude format)
@@ -162,6 +180,98 @@ public class ClaudeProvider extends AbstractLLMProvider {
         }
 
         return body;
+    }
+
+    // ── Anthropic model-capability gates ────────────────────────────────────
+    //
+    // Derived from the model id because the Messages API has no capability
+    // pre-flight. Matrix verified live 2026-07-02 against
+    // platform.claude.com/docs/en/build-with-claude/effort.md and the
+    // migration guide:
+    //   sampling params (temperature/top_p) removed → 400:
+    //       fable/mythos (any), opus >= 4.7, sonnet >= 5
+    //   output_config.effort supported:
+    //       fable/mythos (any), opus >= 4.5, sonnet >= 4.6
+    //   xhigh: fable/mythos, opus >= 4.7, sonnet >= 5
+    //   max:   fable/mythos, opus >= 4.6, sonnet >= 4.6
+    //   haiku: neither effort nor sampling removal (as of Haiku 4.5).
+    //
+    // Id grammar: modern ids are claude-<family>-<major>[-<minor>] where the
+    // minor is 1-2 digits; 6-8 digit DATE segments (claude-opus-4-20250514,
+    // claude-opus-4-7-20260416) never parse as a minor thanks to the
+    // 2-digit cap + boundary lookahead - the same convention BridgeAllowlist
+    // uses. Legacy reversed ids (claude-3-5-sonnet-20241022) don't match and
+    // keep the historical behavior (sampling sent, no effort).
+
+    private static final java.util.regex.Pattern MODERN_CLAUDE_ID =
+        java.util.regex.Pattern.compile("^claude-(opus|sonnet|haiku)-(\\d+)(?:-(\\d{1,2})(?=$|-))?");
+
+    /** family+version as major*100+minor, or -1 when the id is not a modern opus/sonnet/haiku id. */
+    private static int versionOf(String model, String family) {
+        if (model == null) {
+            return -1;
+        }
+        var m = MODERN_CLAUDE_ID.matcher(model.toLowerCase(Locale.ROOT).trim());
+        if (!m.find() || !family.equals(m.group(1))) {
+            return -1;
+        }
+        int major = Integer.parseInt(m.group(2));
+        int minor = m.group(3) != null ? Integer.parseInt(m.group(3)) : 0;
+        return major * 100 + minor;
+    }
+
+    private static boolean isFableFamily(String model) {
+        if (model == null) {
+            return false;
+        }
+        String v = model.toLowerCase(Locale.ROOT);
+        return v.contains("fable") || v.contains("mythos");
+    }
+
+    /** True when the API rejects temperature/top_p with a 400 for this model. */
+    static boolean rejectsSamplingParams(String model) {
+        return isFableFamily(model)
+            || versionOf(model, "opus") >= 407
+            || versionOf(model, "sonnet") >= 500;
+    }
+
+    private static boolean supportsEffort(String model) {
+        return isFableFamily(model)
+            || versionOf(model, "opus") >= 405
+            || versionOf(model, "sonnet") >= 406;
+    }
+
+    private static boolean supportsXhighEffort(String model) {
+        return isFableFamily(model)
+            || versionOf(model, "opus") >= 407
+            || versionOf(model, "sonnet") >= 500;
+    }
+
+    private static boolean supportsMaxEffort(String model) {
+        return isFableFamily(model)
+            || versionOf(model, "opus") >= 406
+            || versionOf(model, "sonnet") >= 406;
+    }
+
+    /**
+     * Map the resolved reasoning-effort level to the {@code output_config.effort}
+     * value this model accepts, or {@code null} to omit the parameter (unknown
+     * level, no level chosen, or model without effort support). Clamping mirrors
+     * Claude Code: an unsupported level falls back to the highest supported
+     * level at or below it ({@code minimal} → {@code low}: the API has no
+     * minimal; {@code xhigh}/{@code max} → {@code high} where unavailable).
+     */
+    static String resolveEffortForModel(String rawEffort, String model) {
+        ReasoningEffort level = ReasoningEffort.fromString(rawEffort);
+        if (level == null || !supportsEffort(model)) {
+            return null;
+        }
+        return switch (level) {
+            case MINIMAL -> "low";
+            case LOW, MEDIUM, HIGH -> level.wire();
+            case XHIGH -> supportsXhighEffort(model) ? "xhigh" : "high";
+            case MAX -> supportsMaxEffort(model) ? "max" : "high";
+        };
     }
 
     /**

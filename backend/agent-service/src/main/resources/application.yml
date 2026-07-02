@@ -184,7 +184,7 @@ ai:
       claude-code:
         enabled: ${BRIDGE_CLAUDE_CODE_ENABLED:true}
         display-order: 6
-        models: claude-opus-4-7,claude-opus-4-6,claude-sonnet-4-6,claude-sonnet-4-5,claude-haiku-4-5
+        models: claude-fable-5,claude-opus-4-7,claude-opus-4-6,claude-sonnet-4-6,claude-sonnet-4-5,claude-haiku-4-5
       codex:
         enabled: ${BRIDGE_CODEX_ENABLED:true}
         display-order: 7
@@ -477,6 +477,11 @@ ai:
         rpm: 50
         tpm-per-tenant: 25000
         rpm-per-tenant: 5
+      claude-fable-5:               # fallback: CLI subscription quota not publicly documented
+        tpm: 500000
+        rpm: 50
+        tpm-per-tenant: 25000
+        rpm-per-tenant: 5
       # Codex CLI bridge (ChatGPT Plus OAuth; draws from gpt-5/gpt-5.4 underlying pool)
       "[gpt-5.3-codex]":            # fallback: ChatGPT Plus session quota not publicly documented
         tpm: 500000
@@ -604,6 +609,7 @@ ai:
       deepseek-coder: 15
       mistral-small-latest: 16
       claude-opus-4-7: 17
+      claude-fable-5: 18
       "[gpt-5.3-codex]": 20
       "[gemini-2.5-pro]": 21
       "[gemini-2.5-flash]": 22
@@ -644,6 +650,7 @@ ai:
       deepseek-coder: budget
       mistral-small-latest: budget
       claude-opus-4-7: top
+      claude-fable-5: top
       "[gpt-5.3-codex]": top
       "[gemini-2.5-pro]": high
       "[gemini-2.5-flash]": mid

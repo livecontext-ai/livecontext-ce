@@ -2713,4 +2713,216 @@ class OAuth2ServiceTest {
                 null, now, now
         );
     }
+
+    @Nested
+    @DisplayName("Per-instance OAuth URL host placeholders ({shop}, {subdomain}, ...)")
+    class HostTemplateVars {
+
+        @Test
+        @DisplayName("substituteHostVars replaces {shop} in authorize + token URLs")
+        void substitutesShopPlaceholder() {
+            Map<String, String> vars = Map.of("shop", "acme");
+            assertThat(oAuth2Service.substituteHostVars(
+                    "https://{shop}.myshopify.com/admin/oauth/authorize", vars))
+                    .isEqualTo("https://acme.myshopify.com/admin/oauth/authorize");
+            assertThat(oAuth2Service.substituteHostVars(
+                    "https://{shop}.myshopify.com/admin/oauth/access_token", vars))
+                    .isEqualTo("https://acme.myshopify.com/admin/oauth/access_token");
+        }
+
+        @Test
+        @DisplayName("substituteHostVars is a no-op with no vars or no placeholder (backward compatible)")
+        void substituteIsNoOpWhenNothingToDo() {
+            String plain = "https://www.linkedin.com/oauth/v2/authorization";
+            assertThat(oAuth2Service.substituteHostVars(plain, Map.of())).isEqualTo(plain);
+            assertThat(oAuth2Service.substituteHostVars(plain, Map.of("shop", "acme"))).isEqualTo(plain);
+            assertThat(oAuth2Service.substituteHostVars(null, Map.of("shop", "acme"))).isNull();
+        }
+
+        @Test
+        @DisplayName("normalize strips scheme/path and a pasted host suffix derived from the template")
+        void normalizesPastedFullHostToSubdomain() {
+            String tpl = "https://{shop}.myshopify.com/admin/oauth/authorize";
+            // bare subdomain, full host, and full URL all normalize to the same subdomain
+            assertThat(oAuth2Service.normalizeHostVarsAgainstTemplate(Map.of("shop", "acme"), tpl))
+                    .containsEntry("shop", "acme");
+            assertThat(oAuth2Service.normalizeHostVarsAgainstTemplate(Map.of("shop", "acme.myshopify.com"), tpl))
+                    .containsEntry("shop", "acme");
+            assertThat(oAuth2Service.normalizeHostVarsAgainstTemplate(
+                    Map.of("shop", "https://acme.myshopify.com/admin"), tpl))
+                    .containsEntry("shop", "acme");
+        }
+
+        @Test
+        @DisplayName("normalize is generic - derives the suffix per provider (Zendesk {subdomain})")
+        void normalizesZendeskSubdomainGenerically() {
+            String tpl = "https://{subdomain}.zendesk.com/oauth/authorizations/new";
+            assertThat(oAuth2Service.normalizeHostVarsAgainstTemplate(
+                    Map.of("subdomain", "acme.zendesk.com"), tpl))
+                    .containsEntry("subdomain", "acme");
+        }
+
+        @Test
+        @DisplayName("normalize drops blank values so the fail-fast guard can flag a missing var")
+        void dropsBlankValues() {
+            String tpl = "https://{shop}.myshopify.com/admin/oauth/authorize";
+            assertThat(oAuth2Service.normalizeHostVarsAgainstTemplate(Map.of("shop", "   "), tpl))
+                    .doesNotContainKey("shop");
+        }
+
+        @Test
+        @DisplayName("assertHostFullyResolved throws when the HOST still has a placeholder (the bug guard)")
+        void failsFastOnUnresolvedHost() {
+            assertThatThrownBy(() -> oAuth2Service.assertHostFullyResolved(
+                    "https://{shop}.myshopify.com/admin/oauth/authorize", "shopify"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("shopify");
+        }
+
+        @Test
+        @DisplayName("assertHostFullyResolved passes for a resolved host and ignores path placeholders")
+        void passesForResolvedHostAndIgnoresPathVars() {
+            // resolved host - fine
+            oAuth2Service.assertHostFullyResolved(
+                    "https://acme.myshopify.com/admin/oauth/authorize", "shopify");
+            // a placeholder in the PATH (not the host) is a different mechanism - must not throw
+            oAuth2Service.assertHostFullyResolved(
+                    "https://api.example.com/v2/{apiVersion}/authorize", "example");
+        }
+
+        @Test
+        @DisplayName("OAuth2ProviderConfig.withUrls replaces both URLs and preserves every other field")
+        void withUrlsPreservesOtherFields() throws Exception {
+            var cfg = com.apimarketplace.auth.credential.domain.OAuth2ProviderConfig.fromJson(
+                    objectMapper.readTree("""
+                    { "authorizationUrl": "https://{shop}.myshopify.com/a",
+                      "tokenUrl": "https://{shop}.myshopify.com/t",
+                      "refreshUrl": "https://{shop}.myshopify.com/r",
+                      "scopes": ["read_products", "write_orders"],
+                      "authMethod": "client_secret_basic", "pkce": true }
+                    """));
+            var out = cfg.withUrls("https://acme.myshopify.com/a", "https://acme.myshopify.com/t");
+            assertThat(out.authorizationUrl()).isEqualTo("https://acme.myshopify.com/a");
+            assertThat(out.tokenUrl()).isEqualTo("https://acme.myshopify.com/t");
+            assertThat(out.refreshUrl()).isEqualTo(cfg.refreshUrl());
+            assertThat(out.scopes()).isEqualTo(cfg.scopes());
+            assertThat(out.tokenAuthMethod()).isEqualTo(cfg.tokenAuthMethod());
+            assertThat(out.pkceEnabled()).isEqualTo(cfg.pkceEnabled());
+            // null args keep the current URL (used when only one side needs resolving)
+            assertThat(cfg.withUrls(null, null).authorizationUrl()).isEqualTo(cfg.authorizationUrl());
+        }
+    }
+
+    @Nested
+    @DisplayName("Host template vars - flow wiring (client_credentials + callback)")
+    class HostTemplateVarsWiring {
+
+        @SuppressWarnings("unchecked")
+        private org.mockito.ArgumentCaptor<Map<String, Object>> captureCreatedCredentialData() {
+            org.mockito.ArgumentCaptor<Map<String, Object>> captor =
+                    org.mockito.ArgumentCaptor.forClass(Map.class);
+            verify(credentialService).createCredential(
+                    anyString(), org.mockito.ArgumentMatchers.<String>any(), anyString(), anyString(),
+                    any(CredentialType.class), any(CredentialEnvironment.class),
+                    anyString(), captor.capture(), anyList(), anyList(),
+                    anyString(), anyString());
+            return captor;
+        }
+
+        @Test
+        @DisplayName("client_credentials (Marketo {munchkin_id}) resolves the token URL AND persists the var")
+        void clientCredentialsResolvesTokenUrlAndPersistsHostVar() throws Exception {
+            // Marketo is grant=client_credentials with a host placeholder in the token URL - the
+            // authorization_code substitution never runs for it, so this path must handle it too.
+            com.apimarketplace.auth.credential.domain.OAuth2ProviderConfig cfg =
+                    com.apimarketplace.auth.credential.domain.OAuth2ProviderConfig.fromJson(objectMapper.readTree("""
+                { "tokenUrl": "https://{munchkin_id}.mktorest.com/identity/oauth/token",
+                  "grantType": "client_credentials", "scopes": [] }
+                """));
+            var request = new com.apimarketplace.auth.credential.domain.OAuth2Models.OAuth2InitiateRequest(
+                    "tpl-marketo", "Marketo", "cid", "csec", "Production", "marketo", null,
+                    Map.of("munchkin_id", "123-ABC-456"));
+
+            org.springframework.web.client.RestTemplate mockRest =
+                    mock(org.springframework.web.client.RestTemplate.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(oAuth2Service, "restTemplate", mockRest);
+            com.fasterxml.jackson.databind.node.ObjectNode tokenBody = objectMapper.createObjectNode();
+            tokenBody.put("access_token", "mkto-at");
+            tokenBody.put("token_type", "Bearer");
+            tokenBody.put("expires_in", 3600);
+            org.mockito.ArgumentCaptor<String> urlCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+            when(mockRest.postForEntity(urlCaptor.capture(),
+                    any(org.springframework.http.HttpEntity.class),
+                    eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                    .thenReturn(new org.springframework.http.ResponseEntity<>(
+                            (com.fasterxml.jackson.databind.JsonNode) tokenBody,
+                            org.springframework.http.HttpStatus.OK));
+            when(encryptionService.encrypt(anyString())).thenAnswer(inv -> "ENC:" + inv.getArgument(0));
+            when(credentialService.createCredential(
+                    anyString(), org.mockito.ArgumentMatchers.<String>any(), anyString(), anyString(),
+                    any(CredentialType.class), any(CredentialEnvironment.class),
+                    anyString(), anyMap(), anyList(), anyList(), anyString(), anyString()))
+                    .thenReturn(buildCredential(1L, USER_ID, Map.of()));
+
+            java.lang.reflect.Method m = OAuth2Service.class.getDeclaredMethod(
+                    "initiateClientCredentials",
+                    com.apimarketplace.auth.credential.domain.OAuth2Models.OAuth2InitiateRequest.class,
+                    String.class, String.class,
+                    com.apimarketplace.auth.credential.domain.OAuth2ProviderConfig.class, String.class, String.class,
+                    com.apimarketplace.auth.credential.domain.PlatformCredentialModels.PlatformCredential.class,
+                    com.fasterxml.jackson.databind.JsonNode.class, String.class, String.class, String.class);
+            m.setAccessible(true);
+            m.invoke(oAuth2Service, request, USER_ID, null, cfg, "cid", "csec", null,
+                    objectMapper.createObjectNode(), "Marketo", "marketo", "icon.svg");
+
+            // token request must hit the RESOLVED host, not the literal {munchkin_id}
+            assertThat(urlCaptor.getValue())
+                    .isEqualTo("https://123-ABC-456.mktorest.com/identity/oauth/token");
+            // and the var must be persisted so runtime base-URL + refresh resolve
+            assertThat(captureCreatedCredentialData().getValue()).containsEntry("munchkin_id", "123-ABC-456");
+        }
+
+        @Test
+        @DisplayName("callback persists the host var (shop) into credential_data for runtime substitution")
+        void callbackPersistsHostVarIntoCredentialData() throws Exception {
+            final String state = "state-shop";
+            var stateRecord = new com.apimarketplace.auth.credential.domain.OAuth2Models.OAuth2State(
+                    USER_ID, "tpl-shopify", "Shopify Credential", "cid", "csec",
+                    "https://acme.myshopify.com/admin/oauth/authorize",
+                    "https://acme.myshopify.com/admin/oauth/access_token",
+                    "read_products", "Production", "shopify", "/icons/services/shopify.svg",
+                    null, Instant.parse("2026-04-17T10:00:00Z"), null, null,
+                    Map.of("shop", "acme"));
+            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            when(valueOperations.get("oauth2:state:" + state))
+                    .thenReturn(objectMapper.writeValueAsString(stateRecord));
+
+            org.springframework.web.client.RestTemplate mockRest =
+                    mock(org.springframework.web.client.RestTemplate.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(oAuth2Service, "restTemplate", mockRest);
+            com.fasterxml.jackson.databind.node.ObjectNode tokenBody = objectMapper.createObjectNode();
+            tokenBody.put("access_token", "shop-at");
+            tokenBody.put("token_type", "Bearer");
+            org.mockito.ArgumentCaptor<String> urlCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+            when(mockRest.postForEntity(urlCaptor.capture(),
+                    any(org.springframework.http.HttpEntity.class),
+                    eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                    .thenReturn(new org.springframework.http.ResponseEntity<>(
+                            (com.fasterxml.jackson.databind.JsonNode) tokenBody,
+                            org.springframework.http.HttpStatus.OK));
+            when(encryptionService.encrypt(anyString())).thenAnswer(inv -> "ENC:" + inv.getArgument(0));
+            when(credentialService.createCredential(
+                    anyString(), org.mockito.ArgumentMatchers.<String>any(), anyString(), anyString(),
+                    any(CredentialType.class), any(CredentialEnvironment.class),
+                    anyString(), anyMap(), anyList(), anyList(), anyString(), anyString()))
+                    .thenReturn(buildCredential(1L, USER_ID, Map.of()));
+
+            oAuth2Service.handleCallback("code", state);
+
+            // The token URL from the state is already resolved; the callback stores the host var so
+            // that HttpExecutionService.replaceUrlTemplateVariables can rebuild the base URL at runtime.
+            assertThat(urlCaptor.getValue()).isEqualTo("https://acme.myshopify.com/admin/oauth/access_token");
+            assertThat(captureCreatedCredentialData().getValue()).containsEntry("shop", "acme");
+        }
+    }
 }

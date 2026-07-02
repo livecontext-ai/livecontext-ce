@@ -474,10 +474,11 @@ public class AgentService {
     /**
      * VIEWER write gate for an org-scoped agent. A VIEWER member has read-only
      * access to org resources, so they must not create/update/delete/clone/reset
-     * or otherwise mutate an org-scoped agent - applied IN ADDITION to the
-     * {@link OrgAccessGuard#canWrite} deny-list (which only bypasses OWNER/ADMIN
-     * and treats VIEWER identically to MEMBER, so it does not block VIEWER on its
-     * own). Mirrors {@code WorkflowCrudController}'s "VIEWER role cannot modify"
+     * or otherwise mutate an org-scoped agent. {@link OrgAccessGuard#canWrite}
+     * now enforces this role boundary centrally ({@code isRoleWriteBlocked});
+     * this local gate is kept as an earlier, clearer 403 and for the create path
+     * (no resource id yet, so {@code canWrite} is never consulted there).
+     * Mirrors {@code WorkflowCrudController}'s "VIEWER role cannot modify"
      * gate. Personal-scope agents ({@code agentOrgId == null}) carry no org role
      * and are unaffected. A null {@code orgRole} (unbound thread / personal scope)
      * fails open - the same fail-open {@code canWrite}'s non-admin default uses -
@@ -1616,7 +1617,8 @@ public class AgentService {
     private void validateReasoningEffort(String reasoningEffort) {
         if (!ReasoningEffort.isValidOrBlank(reasoningEffort)) {
             throw new IllegalArgumentException("Invalid reasoningEffort '" + reasoningEffort
-                + "'. Expected one of: minimal, low, medium, high, xhigh (or empty to inherit).");
+                + "'. Expected one of: " + ReasoningEffort.validValuesCsv()
+                + " (or empty to inherit).");
         }
     }
 

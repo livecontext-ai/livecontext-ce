@@ -2,6 +2,7 @@ package com.apimarketplace.monolith.ws;
 
 import com.apimarketplace.agent.controller.InternalAgentController;
 import com.apimarketplace.common.scope.ScopeGuard;
+import com.apimarketplace.common.scope.TolerantScope;
 import com.apimarketplace.conversation.entity.Conversation;
 import com.apimarketplace.conversation.repository.DmThreadRepository;
 import com.apimarketplace.conversation.repository.ConversationRepository;
@@ -63,6 +64,10 @@ public class MonolithChannelAuthorizer {
      * @param channel       the WS channel the client wants to subscribe to
      * @return true iff the user may subscribe; false (deny) on any mismatch/error/unknown channel
      */
+    @TolerantScope(reason = "WS channel authorization - caller already authenticated by the CE "
+            + "session filter; owner-or-org tolerance mirrors conversation-service's "
+            + "InternalAccessController#checkAccess (the microservice twin), so an org teammate "
+            + "can subscribe to a shared conversation/workflow channel from either workspace")
     public boolean authorize(String numericUserId, String orgId, String channel) {
         if (numericUserId == null || numericUserId.isBlank() || channel == null || channel.isBlank()) {
             return false;

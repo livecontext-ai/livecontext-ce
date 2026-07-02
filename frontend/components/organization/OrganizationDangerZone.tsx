@@ -142,8 +142,16 @@ export default function OrganizationDangerZone({
                 onClick={() => setOpenModal("leave")}
               />
             )}
-            {/* Transfer + Delete hidden for now (kept here as `false &&` so the
-                handlers and copy survive a future re-enable). */}
+            {/* Transfer ownership stays DISABLED on purpose (verified 2026-07-02):
+                the backend flips role + owner_id but Stripe subscription migration
+                is out of scope (see OrganizationMemberService.transferOwnership
+                Javadoc + CREDIT_CONVERGENCE_PLAN.md "Org ownership transfer" -
+                the rebind queue is not implemented). Re-enabling now would let an
+                owner transfer and silently drop the org to FREE (getOwnerPlan
+                resolves via the NEW owner, who has no subscription). Kept as
+                `false &&` so the modal + copy survive the future re-enable.
+                Delete, whose own blocker (credit-ledger orphaning) was solved,
+                was re-enabled in 3c14ccb9b. */}
             {false && isOwner && (
               <DangerRow
                 icon={<Crown className="h-4 w-4" />}

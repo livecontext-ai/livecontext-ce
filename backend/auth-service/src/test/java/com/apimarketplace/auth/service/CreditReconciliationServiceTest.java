@@ -77,16 +77,20 @@ class CreditReconciliationServiceTest {
     @DisplayName("Real drift on the sub bucket is still detected when the PAYG balance is zero")
     void realSubDriftStillDetected() {
         // Sub bucket = 30 but ledger says 100 → 70 credits unaccounted for (drift).
+        // A real drift is off in the lifetime books too (same missing movement),
+        // so it must stay UNEXPLAINED.
         Subscription sub = subWithBuckets(new BigDecimal("30"), BigDecimal.ZERO);
         when(ledgerRepository.findAllDistinctUserIds()).thenReturn(List.of(1L));
         when(subscriptionRepository.findActiveByUserId(1L)).thenReturn(Optional.of(sub));
         when(ledgerRepository.sumAmountByUserIdSince(eq(1L), any())).thenReturn(new BigDecimal("100"));
+        when(ledgerRepository.sumAmountByUserIdExcludingReleasedReserves(1L)).thenReturn(new BigDecimal("100"));
 
         service.reconcile();
 
         ArgumentCaptor<CreditReconciliationLog> logCaptor = ArgumentCaptor.forClass(CreditReconciliationLog.class);
         verify(reconciliationLogRepository).save(logCaptor.capture());
         assertThat(logCaptor.getValue().getDrift()).isEqualByComparingTo("-70");
+        assertThat(logCaptor.getValue().isExplained()).isFalse();
     }
 
     @Test
@@ -97,9 +101,70 @@ class CreditReconciliationServiceTest {
         when(ledgerRepository.findAllDistinctUserIds()).thenReturn(List.of(1L));
         when(subscriptionRepository.findActiveByUserId(1L)).thenReturn(Optional.of(sub));
         when(ledgerRepository.sumAmountByUserIdSince(eq(1L), any())).thenReturn(new BigDecimal("200"));
+        when(ledgerRepository.sumAmountByUserIdExcludingReleasedReserves(1L)).thenReturn(new BigDecimal("200"));
 
         service.reconcile();
 
-        verify(reconciliationLogRepository).save(any(CreditReconciliationLog.class));
+        ArgumentCaptor<CreditReconciliationLog> logCaptor = ArgumentCaptor.forClass(CreditReconciliationLog.class);
+        verify(reconciliationLogRepository).save(logCaptor.capture());
+        assertThat(logCaptor.getValue().isExplained()).isFalse();
+    }
+
+    @Test
+    @DisplayName("PAYG carried over from an earlier period is logged as EXPLAINED - the lifetime books balance, only the period baseline is off")
+    void paygCarryOverFromEarlierPeriodIsExplained() {
+        // Regression: a PAYG top-up bought in a PREVIOUS period persists across
+        // renewal but has no ledger row inside the current period. Pre-fix the
+        // period-scoped comparison reported "CREDIT DRIFT (unexplained)" equal to
+        // the carried balance for every such user, every day - pure alert noise.
+        // Current period: PLAN_RESET(-0) + PLAN_GRANT(+100) → period sum = 100.
+        // Balance = 100 sub + 200 carried PAYG = 300. Period drift = +200.
+        // Lifetime (excluding balance-neutral RELEASED reservation rows, which
+        // keep their -reserved audit amount): sum = 300 = balance.
+        Subscription sub = subWithBuckets(new BigDecimal("100"), new BigDecimal("200"));
+        when(ledgerRepository.findAllDistinctUserIds()).thenReturn(List.of(1L));
+        when(subscriptionRepository.findActiveByUserId(1L)).thenReturn(Optional.of(sub));
+        when(ledgerRepository.sumAmountByUserIdSince(eq(1L), any())).thenReturn(new BigDecimal("100"));
+        when(ledgerRepository.sumAmountByUserIdExcludingReleasedReserves(1L)).thenReturn(new BigDecimal("300"));
+
+        service.reconcile();
+
+        ArgumentCaptor<CreditReconciliationLog> logCaptor = ArgumentCaptor.forClass(CreditReconciliationLog.class);
+        verify(reconciliationLogRepository).save(logCaptor.capture());
+        assertThat(logCaptor.getValue().getDrift()).isEqualByComparingTo("200");
+        assertThat(logCaptor.getValue().isExplained()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Carried PAYG plus a real lifetime discrepancy stays UNEXPLAINED - the lifetime check does not mask genuine drift")
+    void carryOverPlusRealDriftStaysUnexplained() {
+        // Same carry-over shape as above, but the lifetime sum disagrees with the
+        // balance by 50 (a genuinely lost movement). The carry-over must NOT act
+        // as a blanket excuse: lifetime books unbalanced → unexplained.
+        Subscription sub = subWithBuckets(new BigDecimal("100"), new BigDecimal("200"));
+        when(ledgerRepository.findAllDistinctUserIds()).thenReturn(List.of(1L));
+        when(subscriptionRepository.findActiveByUserId(1L)).thenReturn(Optional.of(sub));
+        when(ledgerRepository.sumAmountByUserIdSince(eq(1L), any())).thenReturn(new BigDecimal("100"));
+        when(ledgerRepository.sumAmountByUserIdExcludingReleasedReserves(1L)).thenReturn(new BigDecimal("250"));
+
+        service.reconcile();
+
+        ArgumentCaptor<CreditReconciliationLog> logCaptor = ArgumentCaptor.forClass(CreditReconciliationLog.class);
+        verify(reconciliationLogRepository).save(logCaptor.capture());
+        assertThat(logCaptor.getValue().isExplained()).isFalse();
+    }
+
+    @Test
+    @DisplayName("Zero period drift never queries the lifetime sum - the extra read is drift-gated")
+    void noDriftSkipsLifetimeQuery() {
+        Subscription sub = subWithBuckets(new BigDecimal("100"), new BigDecimal("200"));
+        when(ledgerRepository.findAllDistinctUserIds()).thenReturn(List.of(1L));
+        when(subscriptionRepository.findActiveByUserId(1L)).thenReturn(Optional.of(sub));
+        when(ledgerRepository.sumAmountByUserIdSince(eq(1L), any())).thenReturn(new BigDecimal("300"));
+
+        service.reconcile();
+
+        verify(ledgerRepository, never()).sumAmountByUserIdExcludingReleasedReserves(any());
+        verify(reconciliationLogRepository, never()).save(any(CreditReconciliationLog.class));
     }
 }

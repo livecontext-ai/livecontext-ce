@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Models for OAuth2 authentication flow.
@@ -23,14 +24,32 @@ public final class OAuth2Models {
             @JsonProperty("client_secret") String clientSecret,
             String environment,
             String integration,
-            @JsonProperty("return_url") String returnUrl
+            @JsonProperty("return_url") String returnUrl,
+            // Per-instance URL host placeholders the user supplies at connect time
+            // (Shopify shop, Zendesk subdomain, NetSuite account_id, ...). Keyed by the
+            // placeholder name as it appears in the OAuth/base URL templates ({shop} -> "shop").
+            // The importer derives which fields belong here from the URL templates, so this is
+            // data-driven per provider. Empty/absent for the vast majority of providers.
+            @JsonProperty("template_vars") Map<String, String> templateVars
     ) {
+        /** Back-compat constructor without templateVars (defaults to none). */
+        public OAuth2InitiateRequest(String credentialTemplateId, String credentialName, String clientId,
+                String clientSecret, String environment, String integration, String returnUrl) {
+            this(credentialTemplateId, credentialName, clientId, clientSecret, environment, integration,
+                    returnUrl, null);
+        }
+
         /**
          * Check if user provided their own credentials
          */
         public boolean hasUserCredentials() {
             return clientId != null && !clientId.isBlank()
                 && clientSecret != null && !clientSecret.isBlank();
+        }
+
+        /** Never-null view of the supplied template vars. */
+        public Map<String, String> templateVarsOrEmpty() {
+            return templateVars != null ? templateVars : Map.of();
         }
     }
 
@@ -42,8 +61,16 @@ public final class OAuth2Models {
             @JsonProperty("credential_template_id") String credentialTemplateId,
             @JsonProperty("credential_name") String credentialName,
             String environment,
-            String integration
+            String integration,
+            // Per-instance URL host placeholders (see OAuth2InitiateRequest.templateVars).
+            @JsonProperty("template_vars") Map<String, String> templateVars
     ) {
+        /** Back-compat constructor without templateVars (defaults to none). */
+        public OAuth2SimpleInitiateRequest(String credentialTemplateId, String credentialName,
+                String environment, String integration) {
+            this(credentialTemplateId, credentialName, environment, integration, null);
+        }
+
         /**
          * Convert to full request with platform credentials
          */
@@ -55,7 +82,8 @@ public final class OAuth2Models {
                     clientSecret,
                     environment,
                     integration,
-                    null  // No returnUrl for simple requests
+                    null,  // No returnUrl for simple requests
+                    templateVars
             );
         }
     }
@@ -112,8 +140,18 @@ public final class OAuth2Models {
             // tag the resulting credential with the right organization_id even
             // if the user switches workspace mid-flow. {@code null} = personal
             // scope. Older state blobs (pre-PR19) deserialize with null.
-            String organizationId
+            String organizationId,
+            // Per-instance URL host placeholders (Shopify {shop}, Zendesk {subdomain}, ...) the
+            // user supplied at connect time, captured so the callback can (a) resolve the token
+            // URL and (b) persist them into credential_data for runtime base-URL substitution.
+            // Older state blobs (pre-this-field) deserialize with null.
+            Map<String, String> templateVars
     ) {
+        /** Never-null view of the captured template vars. */
+        public Map<String, String> templateVarsOrEmpty() {
+            return templateVars != null ? templateVars : Map.of();
+        }
+
         /** Convenience constructor for callers that don't use PKCE. */
         public OAuth2State(
                 String userId,
@@ -132,7 +170,7 @@ public final class OAuth2Models {
         ) {
             this(userId, credentialTemplateId, credentialName, clientId, clientSecret, authUrl,
                     accessTokenUrl, scope, environment, integration, iconUrl, returnUrl,
-                    createdAt, null, null);
+                    createdAt, null, null, null);
         }
 
         /** Pre-PR19 PKCE constructor - defaults organizationId to null. */
@@ -154,7 +192,30 @@ public final class OAuth2Models {
         ) {
             this(userId, credentialTemplateId, credentialName, clientId, clientSecret, authUrl,
                     accessTokenUrl, scope, environment, integration, iconUrl, returnUrl,
-                    createdAt, codeVerifier, null);
+                    createdAt, codeVerifier, null, null);
+        }
+
+        /** Pre-templateVars constructor (PKCE + org) - defaults templateVars to null. */
+        public OAuth2State(
+                String userId,
+                String credentialTemplateId,
+                String credentialName,
+                String clientId,
+                String clientSecret,
+                String authUrl,
+                String accessTokenUrl,
+                String scope,
+                String environment,
+                String integration,
+                String iconUrl,
+                String returnUrl,
+                Instant createdAt,
+                String codeVerifier,
+                String organizationId
+        ) {
+            this(userId, credentialTemplateId, credentialName, clientId, clientSecret, authUrl,
+                    accessTokenUrl, scope, environment, integration, iconUrl, returnUrl,
+                    createdAt, codeVerifier, organizationId, null);
         }
     }
 

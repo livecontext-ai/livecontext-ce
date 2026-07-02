@@ -64,6 +64,24 @@ public class AgentQueueProducer {
             if (userRoles != null) {
                 metadata.put("userRoles", userRoles);
             }
+            // Structured org backstop: the worker primarily reads org context from
+            // credentials.__orgId__/__orgRole__ inside the payload (a stringly-typed
+            // contract each producer must remember to stamp). Carrying the org in the
+            // structured metadata as well means a producer that missed the credentials
+            // stamp no longer dequeues into a null org scope (which fail-louds every
+            // org-scoped persist on the worker).
+            String orgId = resolveOrgValue(message, "__orgId__", "X-Organization-ID");
+            String orgRole = resolveOrgValue(message, "__orgRole__", "X-Organization-Role");
+            if (orgId != null) {
+                metadata.put("orgId", orgId);
+            } else {
+                logger.warn("[AgentQueueProducer] Enqueuing without org context: correlationId={}, runId={} "
+                        + "- worker will run in null org scope (org-scoped writes will fail loud)",
+                        message.correlationId(), message.runId());
+            }
+            if (orgRole != null) {
+                metadata.put("orgRole", orgRole);
+            }
 
             // Build AgentExecutionTask-compatible JSON
             Map<String, Object> task = new LinkedHashMap<>();
@@ -95,5 +113,33 @@ public class AgentQueueProducer {
         OrgContextHeaderForwarder.forward(forwarded);
         String userRoles = forwarded.getFirst("X-User-Roles");
         return userRoles != null && !userRoles.isBlank() ? userRoles.trim() : null;
+    }
+
+    /**
+     * Resolve an org value for the structured metadata backstop: the payload's
+     * {@code credentials.<credentialKey>} wins (captured at dispatch time by the
+     * producer), falling back to the caller's request/thread context (header or
+     * {@code TenantResolver.runWithOrgScope} binding via the forwarder).
+     *
+     * <p>Deliberate semantics of the ambient fallback: a producer that enqueues
+     * WITHOUT stamping credentials while its thread carries an org binding now
+     * dequeues under that ambient org instead of a null scope. All real
+     * producers stamp the credentials (payload precedence keeps them exact);
+     * the fallback only rescues a producer that forgot, turning a fail-loud
+     * null-scope worker crash into the org the dispatch actually ran under.
+     */
+    private String resolveOrgValue(AgentExecutionRequestMessage message, String credentialKey, String headerName) {
+        Object credentials = message.requestPayload() != null
+                ? message.requestPayload().get("credentials") : null;
+        if (credentials instanceof Map<?, ?> credentialMap) {
+            Object value = credentialMap.get(credentialKey);
+            if (value instanceof String s && !s.isBlank()) {
+                return s.trim();
+            }
+        }
+        HttpHeaders forwarded = new HttpHeaders();
+        OrgContextHeaderForwarder.forward(forwarded);
+        String value = forwarded.getFirst(headerName);
+        return value != null && !value.isBlank() ? value.trim() : null;
     }
 }

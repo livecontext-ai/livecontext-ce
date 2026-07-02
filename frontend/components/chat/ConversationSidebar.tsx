@@ -50,6 +50,7 @@ import { useOrgScopedQuery } from '@/lib/hooks/useOrgScopedQuery';
 import { AvatarDisplay } from '@/components/agents';
 import { orchestratorApi } from '@/lib/api';
 import { useProjects, useProjectMutations } from '@/hooks/useProjects';
+import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 import { ProjectMultiStepModal } from '@/components/project/ProjectMultiStepModal';
 import type { Project } from '@/lib/api/orchestrator/project.types';
 import { ShareLinkDialog } from '@/components/sharing/ShareLinkDialog';
@@ -187,6 +188,13 @@ export function ConversationSidebar({
   const [projectMenuId, setProjectMenuId] = useState<string | null>(null);
   const { projects, loading: projectsLoading } = useProjects();
   const { deleteProject } = useProjectMutations();
+  // Split gating: CONVERSATION actions (delete/clear) are deliberately NOT
+  // role-gated - conversation-service has no org-role write gate, chat history
+  // is the caller's own. PROJECTS however are orchestrator ProjectService rows:
+  // update/delete run the central canWrite gate (VIEWER 403s), so the project
+  // edit/delete menu is hidden for a VIEWER. Project CREATE is ungated
+  // backend-side, so the "+" stays for everyone.
+  const canMutateProjects = useCanMutateInCurrentOrg();
 
   // Get current view from URL
   const { view: currentView, conversationId: urlConversationId, isDetailPage } = useCurrentView();
@@ -646,6 +654,10 @@ export function ConversationSidebar({
                   <Share2 className="h-4 w-4" />
                   <span className="text-sm">{t('sidebar.shareConversation')}</span>
                 </button>
+                {/* NOT VIEWER-gated on purpose (audit 2026-07-02): conversations and
+                    projects are the caller's own - conversation-service has no
+                    org-role write gate, a VIEWER may delete/clear their own chat
+                    history and manage their projects. */}
                 <button
                   onClick={(e) => {
                     setOpenMenuId(null);
@@ -788,7 +800,9 @@ export function ConversationSidebar({
                     <h3 className="text-sm font-normal truncate text-theme-primary min-w-0">{project.name}</h3>
                   </div>
 
-                  {/* 3-dot menu */}
+                  {/* 3-dot menu - hidden for VIEWER (ProjectService update/delete
+                      run the central canWrite gate and would 403). */}
+                  {canMutateProjects && (
                   <Popover
                     open={projectMenuId === project.id}
                     onOpenChange={(open) => setProjectMenuId(open ? project.id : null)}
@@ -838,6 +852,7 @@ export function ConversationSidebar({
                       </div>
                     </PopoverContent>
                   </Popover>
+                  )}
                 </div>
               )}
               emptyMessage=""

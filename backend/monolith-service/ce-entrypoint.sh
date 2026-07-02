@@ -221,6 +221,47 @@ if is_default_password "$CREDENTIAL_ENCRYPTION_PASSWORD"; then
   echo ""
 fi
 
+# --- Corporate/AV TLS interception support (runtime) ---
+# Installs behind a TLS-intercepting proxy (corporate MITM, some antivirus)
+# present a private root CA on every outbound HTTPS call. The JVM only trusts
+# its bundled cacerts, so cloud calls (API-catalog sync, version check, cloud
+# link) fail with PKIX errors. Mount the intercepting chain as .pem/.crt
+# file(s) into /app/extra-ca (or point CE_EXTRA_CA_DIR elsewhere): each
+# certificate is imported into a COPY of the JRE truststore at startup - the
+# image itself stays generic. The build-time BUILD_EXTRA_CA arg only covers
+# image builds; this is its runtime counterpart. Import failures warn and the
+# app still boots (a bad cert file must not take the install down).
+
+EXTRA_CA_DIR="${CE_EXTRA_CA_DIR:-/app/extra-ca}"
+if ls "$EXTRA_CA_DIR"/*.pem >/dev/null 2>&1 || ls "$EXTRA_CA_DIR"/*.crt >/dev/null 2>&1; then
+  RUNTIME_TRUSTSTORE="/tmp/ce-cacerts"
+  JRE_CACERTS="${JAVA_HOME:-/opt/java/openjdk}/lib/security/cacerts"
+  if [ -f "$JRE_CACERTS" ] && command -v keytool >/dev/null 2>&1; then
+    cp "$JRE_CACERTS" "$RUNTIME_TRUSTSTORE" && chmod u+w "$RUNTIME_TRUSTSTORE"
+    CA_INDEX=0
+    for ca_file in "$EXTRA_CA_DIR"/*.pem "$EXTRA_CA_DIR"/*.crt; do
+      [ -f "$ca_file" ] || continue
+      # A file may carry a whole chain (root + intermediates): split per block.
+      rm -f /tmp/ce-extra-ca-part-*.pem
+      awk '/BEGIN CERTIFICATE/{n++} n{print > ("/tmp/ce-extra-ca-part-" n ".pem")}' "$ca_file"
+      for part in /tmp/ce-extra-ca-part-*.pem; do
+        [ -f "$part" ] || continue
+        CA_INDEX=$((CA_INDEX+1))
+        if keytool -importcert -noprompt -storepass changeit             -keystore "$RUNTIME_TRUSTSTORE" -alias "ce-extra-ca-$CA_INDEX"             -file "$part" >/dev/null 2>&1; then
+          echo "[CE-TLS] Imported extra CA #$CA_INDEX from $ca_file"
+        else
+          echo "[CE-TLS] WARNING: failed to import a certificate from $ca_file (continuing)"
+        fi
+      done
+    done
+    rm -f /tmp/ce-extra-ca-part-*.pem
+    JAVA_OPTS="$JAVA_OPTS -Djavax.net.ssl.trustStore=$RUNTIME_TRUSTSTORE -Djavax.net.ssl.trustStorePassword=changeit"
+    echo "[CE-TLS] Runtime truststore active: $RUNTIME_TRUSTSTORE"
+  else
+    echo "[CE-TLS] WARNING: extra CAs found in $EXTRA_CA_DIR but no JRE cacerts/keytool - skipping"
+  fi
+fi
+
 # --- Launch the application ---
 
 exec java $JAVA_OPTS -jar /app/app.jar --spring.profiles.active=ce

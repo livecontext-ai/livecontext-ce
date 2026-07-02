@@ -242,6 +242,34 @@ Total first boot: **~2-3 minutes**. Subsequent starts: **~30-60 seconds**.
 
 ## Troubleshooting
 
+### Cloud syncs fail with PKIX / certificate errors (TLS-intercepting proxy)
+
+If the Bundles tab shows `PKIX path building failed` or `unable to find valid
+certification path`, your network intercepts outbound HTTPS (corporate proxy or
+antivirus) and re-signs certificates with a private root CA the containers do
+not trust. Fix it at runtime, no rebuild needed:
+
+1. Export your interception root-CA chain as a PEM file (ask IT, or export it
+   from your OS certificate store).
+2. Put it in a folder next to the compose file, e.g. `extra-ca/corp-root.pem`.
+3. Mount the folder on the `livecontext` service and (for the bridge) point
+   Node at the PEM:
+
+```yaml
+services:
+  livecontext:
+    volumes:
+      - ./extra-ca:/app/extra-ca:ro   # entrypoint imports every .pem/.crt at startup
+  bridge:
+    volumes:
+      - ./extra-ca:/app/extra-ca:ro
+    environment:
+      NODE_EXTRA_CA_CERTS: /app/extra-ca/corp-root.pem
+```
+
+4. `docker compose up -d livecontext bridge`. The app logs
+   `[CE-TLS] Imported extra CA ...` on boot and cloud syncs work again.
+
 ### Backend fails to start - Flyway errors
 
 If you see `relation "..." already exists`, the DB volume has stale data from a previous run with a different migration state.

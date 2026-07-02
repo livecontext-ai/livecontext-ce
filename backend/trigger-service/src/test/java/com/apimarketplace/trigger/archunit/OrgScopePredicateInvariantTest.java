@@ -34,7 +34,13 @@ class OrgScopePredicateInvariantTest {
             // V253 - ensureTokenForTrigger stamps tenant+org on create and
             // logs both fields after. Not a scope predicate; the actual
             // predicate lives in deleteTokensForWorkflowScoped (ScopeGuard).
-            "WebhookTokenService#ensureTokenForTrigger"
+            "WebhookTokenService#ensureTokenForTrigger",
+            // Stamping / pure copy: copies the request's tenant + org onto the
+            // subscription row (owner scope for later event dispatch), no
+            // owner-vs-org comparison. Same false-positive category as the
+            // orchestrator-side twin DatasourceSubscriptionSyncService#syncFromPlan
+            // (allow-listed in 646d20fd8).
+            "DatasourceTriggerSubscriptionService#upsert"
     );
 
     private final JavaClasses classes = new ClassFileImporter()

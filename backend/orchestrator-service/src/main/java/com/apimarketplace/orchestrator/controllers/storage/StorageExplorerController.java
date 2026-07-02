@@ -16,6 +16,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -423,7 +424,10 @@ public class StorageExplorerController {
                 // s3Key + metadata, and the UI renders/downloads via the token'd file
                 // proxy, not this downloadUrl. (Mirrors FilesToolsProvider.view.)
                 try {
-                    String url = fileStorageService.generateDownloadUrl(entity.getS3Key());
+                    // Owner-aware presign: the entity may belong to an org teammate
+                    // (already authorized by getEntityByIdForScope above), and the
+                    // internal presign authorizes by KEY-OWNER prefix.
+                    String url = fileStorageService.generateDownloadUrl(entity.getTenantId(), entity.getS3Key());
                     preview.put("downloadUrl", url);
                 } catch (Exception ex) {
                     logger.warn("preview: download URL generation failed for id={}: {}",
@@ -458,7 +462,9 @@ public class StorageExplorerController {
         return switch (entity.getStorageType()) {
             case "S3_FILE" -> {
                 if (fileStorageService != null && entity.getS3Key() != null) {
-                    String url = fileStorageService.generateDownloadUrl(entity.getS3Key());
+                    // Owner-aware presign (org-shared file may be teammate-owned;
+                    // scope already enforced by getEntityByIdForScope above).
+                    String url = fileStorageService.generateDownloadUrl(entity.getTenantId(), entity.getS3Key());
                     yield ResponseEntity.status(302)
                         .header(HttpHeaders.LOCATION, url)
                         .build();
@@ -535,7 +541,7 @@ public class StorageExplorerController {
             Set<String> usedNames = new HashSet<>();
             try (ZipOutputStream zip = new ZipOutputStream(out)) {
                 for (StorageEntity entity : entities) {
-                    byte[] bytes = zipContentBytes(entity, tenantId);
+                    byte[] bytes = zipContentBytes(entity);
                     if (bytes == null) {
                         // Unfetchable (e.g. object storage unreachable) - skip this
                         // entry rather than aborting the whole archive.
@@ -556,16 +562,18 @@ public class StorageExplorerController {
     }
 
     /** Bytes for one storage entry, by type (mirrors {@code download}). null = unfetchable. */
-    private byte[] zipContentBytes(StorageEntity entity, String tenantId) {
+    private byte[] zipContentBytes(StorageEntity entity) {
         return switch (entity.getStorageType()) {
             case "S3_FILE" -> {
                 if (fileStorageService == null || entity.getS3Key() == null) yield null;
                 try {
-                    // Pass the tenant (X-User-ID) so the internal storage download authorizes
-                    // (key is namespaced by tenant; isKeyOwnedByTenant checks key prefix). The
-                    // 1-arg download() sent tenant=null → 403 → S3 files came out empty/missing
-                    // in the zip. Org was already enforced at resolve (getEntityByIdForScope).
-                    yield fileStorageService.download(tenantId, entity.getS3Key()).orElse(null);
+                    // Pass the KEY-OWNER tenant so the internal storage download authorizes
+                    // (key is namespaced by owner tenant; isKeyOwnedByTenant checks key
+                    // prefix). The 1-arg download() sent tenant=null → 403, and passing the
+                    // CALLER's tenant 403'd org-shared files owned by a teammate → they
+                    // came out silently missing from the zip. Org scope was already
+                    // enforced at resolve (getEntityByIdForScope).
+                    yield fileStorageService.download(entity.getTenantId(), entity.getS3Key()).orElse(null);
                 } catch (Exception ex) {
                     logger.warn("download-zip: failed to fetch S3 object for id={}: {}", entity.getId(), ex.getMessage());
                     yield null;
@@ -670,6 +678,13 @@ public class StorageExplorerController {
             @RequestHeader(value = "X-Organization-Role", required = false) String orgRole,
             @RequestBody Map<String, String> body) {
 
+        // Bulk deletes run off the write-restricted EXCLUSION set, which cannot express
+        // "everything" for a read-only VIEWER - gate the role explicitly (canWrite does
+        // this internally for the per-id paths).
+        if (OrgAccessGuard.isRoleWriteBlocked(organizationId, orgRole)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", "VIEWER role cannot delete files"));
+        }
         String dateFromStr = body.get("dateFrom");
         String dateToStr = body.get("dateTo");
         if (dateFromStr == null || dateToStr == null) {
@@ -726,6 +741,12 @@ public class StorageExplorerController {
             @RequestHeader(value = "X-Organization-Role", required = false) String orgRole,
             @RequestBody Map<String, String> body) {
 
+        // Same VIEWER role gate as batch-delete-by-date: the exclusion set cannot
+        // express a role-wide write block.
+        if (OrgAccessGuard.isRoleWriteBlocked(organizationId, orgRole)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", "VIEWER role cannot delete files"));
+        }
         VirtualFolderAddress address = VirtualFolderAddress.parse(body.get("folderRef"));
         if (address == null) {
             return ResponseEntity.badRequest()

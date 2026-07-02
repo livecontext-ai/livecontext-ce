@@ -4,20 +4,24 @@
 //
 // Shared reasoning-effort constants/helpers for the three UI surfaces (per-model
 // admin default, per-conversation chat selector, per-agent setting). The effort
-// knob only applies to bridge/CLI providers; others ignore it.
+// knob applies to the providers in EFFORT_PROVIDERS (bridge CLIs + the direct
+// Anthropic API); others ignore it.
 
 /** Canonical levels, low→high, matching the backend enum's wire form. */
-export const REASONING_EFFORT_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const;
+export const REASONING_EFFORT_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type ReasoningEffortLevel = (typeof REASONING_EFFORT_LEVELS)[number];
 
 /** All CLI-backed (bridge) providers. */
 export const BRIDGE_PROVIDERS = ["claude-code","codex","gemini-cli","mistral-vibe"];
 
 /**
- * Bridge providers whose adapter actually maps an effort level today. The other
- * bridges ignore the value, so we must NOT advertise the control for them.
+ * Providers that actually honor the effort level today: the bridge CLIs whose
+ * adapter maps it (claude-code, codex) plus the direct Anthropic API
+ * (ClaudeProvider → output_config.effort, clamped per model). gemini-cli and
+ * mistral-vibe expose no usable knob, so we must NOT advertise the control
+ * for them.
  */
-export const EFFORT_PROVIDERS = ["claude-code","codex"];
+export const EFFORT_PROVIDERS = ["claude-code","codex","anthropic"];
 
 export function isBridgeProvider(provider?: string | null): boolean {
   return !!provider && BRIDGE_PROVIDERS.includes(provider.toLowerCase());

@@ -3054,8 +3054,10 @@
       "lastAppliedAt": "Dernière application",
       "consecutiveFailures": "Échecs consécutifs",
       "never": "jamais",
+      "notLinkedHint": "Cette installation n'est pas encore connectée au cloud : c'est l'état normal d'une installation neuve. Connectez-la depuis l'onglet Connexion pour recevoir les mises à jour.",
       "statusCode": {
         "OK": "OK",
+        "NOT_LINKED": "non connecté",
         "NO_ACTIVE": "aucun bundle actif",
         "NOT_CONFIGURED": "non configuré",
         "TRUST_UNCONFIGURED": "confiance non configurée",
@@ -3524,6 +3526,7 @@
         "clientIdRequired": "L'ID client est requis",
         "clientSecretRequired": "Le secret client est requis",
         "failedToInitiate": "Échec de l'initiation du flux OAuth2",
+        "missingOAuthHostVar": "Renseignez {field} pour vous connecter",
         "credentialsNotConfigured": "Ce service n'est pas encore disponible",
         "contactAdmin": "Cette intégration sera bientôt disponible. Contactez le support si vous en avez besoin rapidement."
       }
@@ -5082,6 +5085,7 @@
         "lastAppliedAt": "Dernière application",
         "consecutiveFailures": "Échecs consécutifs",
         "never": "jamais",
+        "notLinkedHint": "Cette installation n'est pas encore connectée au cloud : c'est l'état normal d'une installation neuve. Connectez-la depuis l'onglet Connexion pour recevoir les mises à jour.",
         "statusCode": {
           "OK": "OK",
           "NO_ACTIVE": "aucun bundle actif",

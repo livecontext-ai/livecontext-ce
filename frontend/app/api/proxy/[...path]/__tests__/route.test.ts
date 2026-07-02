@@ -106,3 +106,19 @@ describe('proxy route - ?token query handling', () => {
     expect(calledUrl()).toContain('probe=1');
   });
 });
+
+describe('proxy route - CORS response headers', () => {
+  // Regression: the proxy used to emit `Access-Control-Allow-Origin: *` together with
+  // `Access-Control-Allow-Credentials: true`. Browsers reject that pair, and auth is
+  // Bearer-token (never a cookie), so credentials mode must not be advertised. The
+  // wildcard origin stays; the credentials header must be gone.
+  it('sets a wildcard origin without advertising credentials', async () => {
+    const res = await GET(
+      makeReq('http://localhost:3000/api/proxy/users/status'),
+      params(['users', 'status']),
+    );
+
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*');
+    expect(res.headers.get('Access-Control-Allow-Credentials')).toBeNull();
+  });
+});

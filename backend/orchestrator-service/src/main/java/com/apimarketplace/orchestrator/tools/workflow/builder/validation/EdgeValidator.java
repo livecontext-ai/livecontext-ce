@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -35,6 +36,7 @@ public class EdgeValidator implements WorkflowValidator {
         validateEdges(session, graph, result);
         validateIncomingEdges(session, graph, result);
         validateOutputPortUniqueness(session, result);
+        validatePortIndexInRange(session, result);
     }
 
     /**
@@ -44,6 +46,7 @@ public class EdgeValidator implements WorkflowValidator {
         validateEdges(session, graph, result);
         validateIncomingEdges(session, graph, result);
         validateOutputPortUniqueness(session, result);
+        validatePortIndexInRange(session, result);
     }
 
     private void validateEdges(WorkflowBuilderSession session, ValidationGraphAnalyzer graph, ValidationResult result) {
@@ -166,6 +169,167 @@ public class EdgeValidator implements WorkflowValidator {
                         + "Insert a Fork node to run several nodes from here in parallel.");
             }
         }
+    }
+
+    /**
+     * Rule: an INDEXED port must reference a DECLARED output. An edge from
+     * branch_N / choice_N / category_N / case_N / elseif_N where N is at or
+     * beyond the node's declared output count references a port the runtime
+     * never builds: the undeclared index collapses onto a declared one when the
+     * plan is wired for execution - two successors silently share one branch
+     * and one branch never fires. The connect action now refuses to create such
+     * edges, but whole-plan imports (set_plan / get_plan round-trips, cloned or
+     * hand-authored plans) bypass it, so re-check here - same split as
+     * validateOutputPortUniqueness.
+     *
+     * <p>Deliberate decision: plans authored BEFORE this rule that carry such
+     * edges now error at validate/finish instead of loading silently - those
+     * edges were already broken at runtime (dropped or collapsed onto another
+     * branch), so surfacing them is strictly better. For fork the repair is
+     * one disconnect+connect (connect auto-extends the declaration).
+     */
+    private void validatePortIndexInRange(WorkflowBuilderSession session, ValidationResult result) {
+        for (Map<String, Object> edge : session.getEdges()) {
+            String from = (String) edge.get("from");
+            if (from == null) continue;
+            String[] split = EdgeRefParser.splitPort(from);
+            if (split[1] == null) continue;
+            String error = indexedPortRangeError(session, split[0], split[1]);
+            if (error != null) {
+                result.addError("PORT_INDEX_OUT_OF_RANGE", split[0], error);
+            }
+        }
+    }
+
+    /**
+     * Shared range check for an indexed output port. Returns an agent-facing
+     * error message when {@code port} references an output the node does not
+     * declare, or null when the reference is fine / not an indexed port /
+     * the node cannot be found (other rules cover those). Static so the
+     * connect action can enforce the same rule inline for explicit ports.
+     */
+    @SuppressWarnings("unchecked")
+    public static String indexedPortRangeError(WorkflowBuilderSession session, String baseId, String port) {
+        int idx = indexedPortIndex(port);
+        if (idx < 0) return null; // not an indexed port family (if/else/body/pass/...)
+
+        // Switch is positional, not a count: the runtime (Core.getSwitchPorts /
+        // SwitchNodeWirer) names port case_N iff position N of switchCases holds
+        // a NON-default case. A count-based check would both reject
+        // builder-produced graphs (default in the middle, cases appended after a
+        // trailing default) and accept case_N pointing AT the default position.
+        if (port.startsWith("case_")) {
+            Map<String, Object> node = findNodeById(session, baseId);
+            if (node == null || !"switch".equals(node.get("type"))) return null;
+            List<Map<String, Object>> cases = (List<Map<String, Object>>) node.get("switchCases");
+            int size = cases == null ? 0 : cases.size();
+            if (idx < size && !"default".equals(cases.get(idx).get("type"))) {
+                return null; // declared non-default case at that position
+            }
+            String reason = (idx < size)
+                    ? "position " + idx + " holds the DEFAULT case - its port is 'default', not '" + port + "'"
+                    : (size == 0 ? "no cases are declared"
+                                 : "only " + size + " cases are declared (positions 0.." + (size - 1) + ")");
+            return "Edge from '" + baseId + ":" + port + "' references an undeclared switch port: "
+                    + reason + ". At runtime this edge is silently dropped. Add the case to the node "
+                    + "(action='modify') or re-wire this edge to a declared port.";
+        }
+
+        Integer declared = declaredIndexedPortCount(session, baseId, port);
+        if (declared == null) return null; // node not found or family not applicable
+
+        if (idx >= declared) {
+            String family = port.substring(0, port.lastIndexOf('_') + 1);
+            String validRange = declared == 0
+                    ? "none declared"
+                    : family + "0.." + family + (declared - 1);
+            return "Edge from '" + baseId + ":" + port + "' references an undeclared output: '" + baseId
+                    + "' declares only " + declared + " outputs for this port family ("
+                    + validRange + "). At runtime an undeclared index collapses onto a declared "
+                    + "branch, silently merging two routes. Add the missing output to the node "
+                    + "(action='modify') or re-wire this edge to a declared port.";
+        }
+        return null;
+    }
+
+    /** Returns the numeric index of an indexed port (branch_2 → 2), or -1 for non-indexed ports. */
+    private static int indexedPortIndex(String port) {
+        int us = port.lastIndexOf('_');
+        if (us < 0 || us == port.length() - 1) return -1;
+        String prefix = port.substring(0, us + 1);
+        if (!prefix.equals("branch_") && !prefix.equals("choice_")
+                && !prefix.equals("category_") && !prefix.equals("case_")
+                && !prefix.equals("elseif_")) {
+            return -1;
+        }
+        try {
+            return Integer.parseInt(port.substring(us + 1));
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    /**
+     * Declared output count for the port family used by {@code port} on the node
+     * {@code baseId}, or null when the node cannot be found or the family does
+     * not apply to its type (those cases are covered by other edge rules).
+     */
+    @SuppressWarnings("unchecked")
+    private static Integer declaredIndexedPortCount(WorkflowBuilderSession session, String baseId, String port) {
+        Map<String, Object> node = findNodeById(session, baseId);
+        if (node == null) return null;
+        String type = (String) node.get("type");
+
+        if (port.startsWith("branch_") && "fork".equals(type)) {
+            List<Map<String, Object>> outputs = (List<Map<String, Object>>) node.get("forkOutputs");
+            return outputs == null ? 0 : outputs.size();
+        }
+        if (port.startsWith("choice_") && "option".equals(type)) {
+            List<Map<String, Object>> choices = (List<Map<String, Object>>) node.get("optionChoices");
+            return choices == null ? 0 : choices.size();
+        }
+        if (port.startsWith("category_") && Boolean.TRUE.equals(node.get("isClassify"))) {
+            List<Map<String, Object>> categories = (List<Map<String, Object>>) node.get("classifyOutputs");
+            return categories == null ? 0 : categories.size();
+        }
+
+        // Count-based: exact for every canonical [if, elseif*, else] list (all
+        // the builder produces - expansion inserts before the trailing else).
+        // A hand-authored list with elseifs AFTER the else diverges from the
+        // runtime's positional numbering; such lists are malformed upstream.
+        if (port.startsWith("elseif_") && "decision".equals(type)) {
+            List<Map<String, Object>> conditions = (List<Map<String, Object>>) node.get("decisionConditions");
+            if (conditions == null) return 0;
+            int elseifs = 0;
+            for (Map<String, Object> c : conditions) {
+                String condType = (String) c.get("type");
+                if (!"if".equals(condType) && !"else".equals(condType)) elseifs++;
+            }
+            return elseifs;
+        }
+        return null;
+    }
+
+    /**
+     * Find a node by its resolved id in cores and mcps, with the agent-label
+     * fallback classify/guardrail steps need (their mcp entry may carry a raw
+     * id while edges reference agent:&lt;normalized-label&gt; - the same fallback
+     * the connection manager uses). Deliberately scans the raw session lists
+     * like the rest of this validator instead of going through the session's
+     * node finder: validation must judge exactly the data it was handed.
+     */
+    private static Map<String, Object> findNodeById(WorkflowBuilderSession session, String baseId) {
+        for (Map<String, Object> core : session.getCores()) {
+            if (baseId.equals(core.get("id"))) return core;
+        }
+        for (Map<String, Object> mcp : session.getMcps()) {
+            if (baseId.equals(mcp.get("id"))) return mcp;
+            String label = (String) mcp.get("label");
+            if (label != null && baseId.equals("agent:" + WorkflowBuilderSession.normalizeLabel(label))) {
+                return mcp;
+            }
+        }
+        return null;
     }
 
     private String getEdgeTarget(Map<String, Object> edge) {

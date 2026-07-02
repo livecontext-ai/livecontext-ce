@@ -97,7 +97,7 @@ services:
     restart: "no"
 
   bridge:
-    image: ghcr.io/livecontext-ai/livecontext-ce-bridge:v0.1.5
+    image: ghcr.io/livecontext-ai/livecontext-ce-bridge:v0.1.6
     container_name: livecontext-bridge
     restart: unless-stopped
     depends_on:
@@ -125,7 +125,7 @@ services:
           memory: 512M
 
   livecontext:
-    image: ghcr.io/livecontext-ai/livecontext-ce:v0.1.5
+    image: ghcr.io/livecontext-ai/livecontext-ce:v0.1.6
     container_name: livecontext-app
     restart: unless-stopped
     depends_on:
@@ -188,6 +188,12 @@ services:
       AUDIT_LOG_PATH: /app/logs/audit
     volumes:
       - livecontext_keys:/app/data/keys
+      # Behind a TLS-intercepting proxy (corporate MITM / some antivirus)?
+      # Drop the intercepting root-CA chain (PEM) into a host folder and mount
+      # it - the entrypoint imports it into the JVM truststore at startup:
+      #   - ./extra-ca:/app/extra-ca:ro
+      # For the bridge container, additionally set on its environment:
+      #   NODE_EXTRA_CA_CERTS: /app/extra-ca/<your-ca>.pem
       - livecontext_logs:/app/logs
       - ./catalog-seeds:/app/catalog-seeds:ro
     healthcheck:
@@ -252,7 +258,7 @@ services:
           memory: 2048M
 
   frontend:
-    image: ghcr.io/livecontext-ai/livecontext-ce-frontend:v0.1.5
+    image: ghcr.io/livecontext-ai/livecontext-ce-frontend:v0.1.6
     container_name: livecontext-frontend
     restart: unless-stopped
     depends_on:

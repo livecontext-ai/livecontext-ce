@@ -194,6 +194,36 @@ public class ForkMergeNodeCreator extends CreatorBase {
     // ==================== Add Merge ====================
 
     /**
+     * Auto-extend a fork's declared outputs so declared branches always match
+     * wired edges (the invariant ForkNode.execute() relies on: it emits exactly
+     * forkOutputs.size() branches). Fork branches are anonymous parallel lanes,
+     * so inventing "Branch N" is semantically free - same auto-expansion pattern
+     * as {@link DecisionNodeCreator#expandDecisionConditions}. Always replaces
+     * the list on the node: plans imported via set_plan may carry immutable
+     * lists, and add() on those would throw.
+     *
+     * @param coreNode the fork core node map (must contain "id")
+     * @param outputs  the current forkOutputs list (may be null or immutable)
+     * @param nextIdx  the branch index the new edge needs (== existing edge count)
+     * @return the port name for the new branch (e.g. "branch_3")
+     */
+    public static String expandForkOutputs(Map<String, Object> coreNode,
+                                           List<Map<String, Object>> outputs,
+                                           int nextIdx) {
+        String nodeId = (String) coreNode.get("id");
+        List<Map<String, Object>> extended = outputs != null ? new ArrayList<>(outputs) : new ArrayList<>();
+        while (extended.size() <= nextIdx) {
+            int i = extended.size();
+            extended.add(Map.of(
+                "id", nodeId + "-output-" + i,
+                "label", "Branch " + (i + 1)
+            ));
+        }
+        coreNode.put("forkOutputs", extended);
+        return "branch_" + nextIdx;
+    }
+
+    /**
      * Execute add_merge action.
      * Merge waits for ALL predecessors to complete before continuing (AND mode).
      * NEW FORMAT: All parameters are flat, no nested object.

@@ -526,7 +526,7 @@ export function InterfaceTable({ className = '', interfaceTypeFilter }: Interfac
           <h1 className="text-lg font-semibold text-theme-primary">{t('emptyState.interface.title')}</h1>
           <p className="text-sm text-theme-secondary mt-0.5">{t('emptyState.interface.subtitle')}</p>
         </div>
-        {!loading && interfaceTypeFilter !== 'web_search' && (totalCount > 0 || debouncedSearch.trim().length > 0) && (
+        {canMutate && !loading && interfaceTypeFilter !== 'web_search' && (totalCount > 0 || debouncedSearch.trim().length > 0) && (
           <Button
             variant="default"
             size="sm"
@@ -580,11 +580,13 @@ export function InterfaceTable({ className = '', interfaceTypeFilter }: Interfac
       {/* Contextual actions for selection - floating bottom-center bar (mirrors the task board). */}
       {selectedInterfaces.size > 0 && (
         <SelectionActionBar count={selectedInterfaces.size} onClear={clearInterfaceSelection}>
-          <BulkBarButton onClick={cloneSelectedInterfaces}>
-            <Copy className="h-3.5 w-3.5" />
-            {t('common.clone')} ({selectedInterfaces.size})
-          </BulkBarButton>
-          {selectedInterfaces.size === 1 && (() => {
+          {canMutate && (
+            <BulkBarButton onClick={cloneSelectedInterfaces}>
+              <Copy className="h-3.5 w-3.5" />
+              {t('common.clone')} ({selectedInterfaces.size})
+            </BulkBarButton>
+          )}
+          {canMutate && selectedInterfaces.size === 1 && (() => {
             const selectedId = Array.from(selectedInterfaces)[0];
             const isPublished = publishedInterfaceIds.has(selectedId);
             const isPendingReview = pendingReviewInterfaceIds.has(selectedId);
@@ -654,7 +656,7 @@ export function InterfaceTable({ className = '', interfaceTypeFilter }: Interfac
                 ? t('emptyState.interface.webSearchDescription')
                 : t('emptyState.interface.createFirstInterface'))
             : t('emptyState.interface.noMatchingInterfaces')}
-          actions={totalCount === 0 && debouncedSearch.trim().length === 0 && interfaceTypeFilter !== 'web_search' ? (
+          actions={canMutate && totalCount === 0 && debouncedSearch.trim().length === 0 && interfaceTypeFilter !== 'web_search' ? (
             <Button
               variant="default"
               onClick={() => setShowCreateModal(true)}

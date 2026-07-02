@@ -3,25 +3,30 @@ package com.apimarketplace.agent.domain;
 import java.util.Locale;
 
 /**
- * Categorical reasoning-effort intent for CLI-backed (bridge) providers.
+ * Categorical reasoning-effort intent for the providers that honor it: the
+ * CLI-backed bridges (claude-code, codex) and the direct Anthropic API.
  *
  * <p><strong>GENERATED FILE - do not edit by hand.</strong> Source of truth:
  * {@code shared/contracts/reasoning-effort.json}. Re-run
  * {@code node shared/contracts/scripts/generate-reasoning-effort.js} after editing the JSON.
  *
- * <p>Mapped to each CLI's concrete flag at the bridge adapter leaf (e.g. Codex
- * {@code -c model_reasoning_effort="<level>"}); the canonical {@link #wire()}
- * value is the lowercase string the CLIs expect. Unknown/unsupported levels are
- * dropped at the adapter so the CLI falls back to its own default. Precedence
- * (per-conversation override > per-agent > per-model default) is handled by the
- * hand-written {@code ReasoningEffortResolver}.
+ * <p>Mapped to each consumer's concrete knob at the leaf: Codex
+ * {@code -c model_reasoning_effort=<level>}, Claude Code the
+ * {@code CLAUDE_CODE_EFFORT_LEVEL} env, and the direct Anthropic API
+ * {@code output_config.effort} ({@code ClaudeProvider}, clamped per model).
+ * The canonical {@link #wire()} value is the lowercase level string.
+ * Unknown/unsupported levels are dropped or clamped at the leaf so the
+ * consumer falls back to its own default. Precedence (per-conversation
+ * override > per-agent > per-model default) is handled by the hand-written
+ * {@code ReasoningEffortResolver}.
  */
 public enum ReasoningEffort {
     MINIMAL,
     LOW,
     MEDIUM,
     HIGH,
-    XHIGH;
+    XHIGH,
+    MAX;
 
     /**
      * Tolerant parse: trims, upper-cases, and matches an enum constant. Returns
@@ -56,5 +61,20 @@ public enum ReasoningEffort {
     /** Canonical lowercase wire value the CLIs expect: {@code "minimal"}, {@code "high"}, … */
     public String wire() {
         return name().toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * Comma-separated canonical wire values, for validation error messages.
+     * Derived from the enum so the message can never drift from the contract.
+     */
+    public static String validValuesCsv() {
+        StringBuilder sb = new StringBuilder();
+        for (ReasoningEffort level : values()) {
+            if (sb.length() > 0) {
+                sb.append(", ");
+            }
+            sb.append(level.wire());
+        }
+        return sb.toString();
     }
 }

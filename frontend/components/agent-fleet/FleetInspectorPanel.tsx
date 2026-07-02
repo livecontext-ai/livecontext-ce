@@ -34,6 +34,7 @@ import { cn } from '@/lib/utils';
 import { useAgentActivity } from './hooks/useAgentActivityStream';
 import { getProviderIconSlug, getProviderDisplayName } from '@/lib/ai-providers/providerIcons';
 import { useOrgScopedReset } from '@/lib/hooks/useOrgScopedReset';
+import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 import { AgentFamilyAccessSection } from './AgentFamilyAccessSection';
 
 // ─── Fleet resource icon fallbacks (same map as FlowNode.tsx) ───
@@ -173,6 +174,9 @@ function ResourceItem({
 }) {
   const t = useTranslations('fleetInspector');
   const sidePanel = useSidePanelSafe();
+  // Audit 2026-07-02 - VIEWER role in an org workspace is read-only: hide the
+  // three-dot Remove menu (disconnecting a resource mutates the agent config).
+  const canMutate = useCanMutateInCurrentOrg();
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -219,7 +223,7 @@ function ResourceItem({
           <Pencil className="h-3.5 w-3.5 text-slate-400" />
         </button>
       )}
-      {!isAllAccessChip && (
+      {canMutate && !isAllAccessChip && (
       <div className="relative">
         <button
           onClick={(e) => { e.stopPropagation(); setMenuOpen(!menuOpen); }}
@@ -1162,6 +1166,9 @@ function AggregatedItemRow({
   t: ReturnType<typeof useTranslations>;
 }) {
   const sidePanel = useSidePanelSafe();
+  // Same read-only VIEWER gate as ResourceItem: removing a drilled-down resource
+  // mutates the agent config.
+  const canMutate = useCanMutateInCurrentOrg();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const itStatus = item.statusCounts ? deriveStatusFromCounts(item.statusCounts) : 'pending';
@@ -1202,7 +1209,7 @@ function AggregatedItemRow({
           <Pencil className="h-3 w-3" />
         </button>
       )}
-      {agentId && resourceId && !isAllAccessChip && (
+      {canMutate && agentId && resourceId && !isAllAccessChip && (
         <button
           onClick={(e) => { e.stopPropagation(); setConfirmOpen(true); }}
           className="opacity-0 group-hover/aggitem:opacity-100 p-0.5 rounded text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-opacity"

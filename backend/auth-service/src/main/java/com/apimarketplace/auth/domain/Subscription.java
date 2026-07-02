@@ -84,9 +84,16 @@ public class Subscription {
      * by {@code clearDelinquentIfPositive} on any positive balance transition
      * (refill, refund, release).
      *
-     * <p>Invariant maintained by code (updated V250 for 2-bucket model):
-     * {@code delinquent = TRUE ⇒ (remainingCredits + paygRemainingCredits) ≤ 0}.
-     * The DB-level CHECK is added by V255.
+     * <p>Invariant maintained by code (V250 2-bucket, extended V379 for Free
+     * workflow-credit scoping):
+     * {@code delinquent = TRUE ⇒ (remainingCredits + paygRemainingCredits) ≤ 0
+     * OR (FREE plan AND paygRemainingCredits < 0)}. The PAYG leg covers the
+     * FREE-plan chat/agent overshoot only: the debt lands on the PAYG bucket
+     * while the monthly workflow-only grant keeps the total positive, and the
+     * sub bucket can never repay it. Paid plans keep the pure total-based
+     * lifecycle (set AND clear). The DB-level CHECK is added by V255, relaxed
+     * by V379 (the CHECK cannot express the plan, so it admits the payg-negative
+     * state for any row; service code only ever creates it on FREE).
      *
      * <p>Gate: {@code tryReserveMarkup} refuses fresh chat reserves and workflow
      * run-init reserves while delinquent. In-flight workflow per-step reserves

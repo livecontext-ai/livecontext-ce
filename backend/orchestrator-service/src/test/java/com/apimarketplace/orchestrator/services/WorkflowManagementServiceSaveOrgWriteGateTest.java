@@ -162,6 +162,35 @@ class WorkflowManagementServiceSaveOrgWriteGateTest {
     }
 
     @Test
+    @DisplayName("Regression: a VIEWER cannot CREATE a new org workflow (role gate fires with no resource id)")
+    void viewerCannotCreateNewOrgWorkflow() {
+        // Pre-fix, the save gate only consulted the per-resource canWrite for an
+        // EXISTING row, so a VIEWER could create workflows in the org workspace.
+        // The role-level gate now rejects before any repository interaction.
+        WorkflowPlan plan = mock(WorkflowPlan.class);
+        when(plan.getTenantId()).thenReturn("viewer-1");
+
+        assertThatThrownBy(() -> service.saveWorkflow(plan, Map.of(), UUID.randomUUID(), "org-1", "VIEWER"))
+                .isInstanceOf(OrgAccessDeniedException.class);
+
+        verify(workflowRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("Regression: a VIEWER save on an EXISTING org workflow is blocked by the role gate before persistence")
+    void viewerCannotSaveExistingOrgWorkflow() {
+        WorkflowPlan plan = mock(WorkflowPlan.class);
+        when(plan.getTenantId()).thenReturn("viewer-1");
+
+        assertThatThrownBy(() -> service.saveWorkflow(plan, Map.of(), UUID.randomUUID(), "org-1", "viewer"))
+                .isInstanceOf(OrgAccessDeniedException.class);
+
+        // Fires before the findById lookup: no repository interaction at all.
+        verify(workflowRepository, never()).findById(any());
+        verify(workflowRepository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("resetApplicationPlan: a member restricted on the application is blocked (403) before the plan is reset")
     void deniesRestrictedMemberOnResetPlan() {
         // reset-plan is the ONLY plan-write route for an acquired APPLICATION (restoreVersion refuses

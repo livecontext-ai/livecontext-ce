@@ -7,7 +7,7 @@
     <parent>
         <groupId>com.apimarketplace</groupId>
         <artifactId>apimarketplace-parent</artifactId>
-        <version>0.1.5</version>
+        <version>0.1.6</version>
     </parent>
 
     <artifactId>interface-service</artifactId>
@@ -121,6 +121,13 @@
         <dependency>
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- ArchUnit for OrgScopePredicateInvariantTest (org-scope mirror). -->
+        <dependency>
+            <groupId>com.tngtech.archunit</groupId>
+            <artifactId>archunit-junit5</artifactId>
+            <version>1.3.0</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

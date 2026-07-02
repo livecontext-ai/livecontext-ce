@@ -170,7 +170,24 @@ public record CompletionRequest(
      * the field entirely; adding it here keeps the plumbing in one
      * place rather than branching per provider.
      */
-    Instant lastTurnAt
+    Instant lastTurnAt,
+
+    /**
+     * Resolved categorical reasoning-effort level in canonical wire form
+     * ({@code "minimal"|"low"|"medium"|"high"|"xhigh"|"max"}, see
+     * {@link ReasoningEffort}). Resolved upstream by
+     * {@code ReasoningEffortResolver} (per-conversation override > per-agent >
+     * per-model default) and carried verbatim from
+     * {@code AgentLoopContext.reasoningEffort()}.
+     *
+     * <p>Honored by {@code ClaudeProvider} on models that support the Anthropic
+     * {@code output_config.effort} parameter (Fable/Mythos, Opus 4.5+,
+     * Sonnet 4.6+), clamped to the nearest level the model accepts. Bridge
+     * providers receive the level on their own request DTO instead; other
+     * direct providers ignore this field. {@code null} → parameter omitted →
+     * provider default ({@code high} on the Anthropic API).
+     */
+    String reasoningEffort
 ) {
     /**
      * Create a simple request with just a prompt

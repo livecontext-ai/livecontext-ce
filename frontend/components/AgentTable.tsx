@@ -377,7 +377,7 @@ export function AgentTable({ className = '' }: AgentTableProps) {
           </div>
           {loading ? (
             <div className="h-8 w-28 bg-theme-tertiary rounded animate-pulse"></div>
-          ) : (
+          ) : canMutate ? (
             <Button
               variant="default"
               size="sm"
@@ -386,7 +386,7 @@ export function AgentTable({ className = '' }: AgentTableProps) {
               <Plus className="h-4 w-4 mr-1.5" />
               {t('emptyState.agent.createButton')}
             </Button>
-          )}
+          ) : null}
         </div>
       )}
 
@@ -431,11 +431,13 @@ export function AgentTable({ className = '' }: AgentTableProps) {
       {/* Contextual actions - floating bottom-center bar (mirrors the task board). */}
       {selectedAgents.size > 0 && (
         <SelectionActionBar count={selectedAgents.size} onClear={clearAgentSelection}>
-          <BulkBarButton onClick={cloneSelectedAgents}>
-            <Copy className="h-3.5 w-3.5" />
-            {t('common.clone')} ({selectedAgents.size})
-          </BulkBarButton>
-          {selectedAgents.size === 1 && (() => {
+          {canMutate && (
+            <BulkBarButton onClick={cloneSelectedAgents}>
+              <Copy className="h-3.5 w-3.5" />
+              {t('common.clone')} ({selectedAgents.size})
+            </BulkBarButton>
+          )}
+          {canMutate && selectedAgents.size === 1 && (() => {
             const selectedId = Array.from(selectedAgents)[0];
             const isPublished = publishedAgentIds.has(selectedId);
             const isPendingReview = pendingReviewAgentIds.has(selectedId);
@@ -501,7 +503,7 @@ export function AgentTable({ className = '' }: AgentTableProps) {
             subtitle={totalCount === 0 && debouncedSearch.trim().length === 0
               ? t('emptyState.agent.createFirstAgent')
               : t('emptyState.agent.noMatchingAgents')}
-            actions={totalCount === 0 && debouncedSearch.trim().length === 0 ? (
+            actions={canMutate && totalCount === 0 && debouncedSearch.trim().length === 0 ? (
               <Button variant="default" onClick={() => setShowCreateModal(true)}>
                 <Plus className="w-4 h-4 mr-1.5" />
                 {t('emptyState.agent.createButton')}

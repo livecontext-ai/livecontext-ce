@@ -134,4 +134,38 @@ describe('SkillBundlesPanel', () => {
     fireEvent.click(screen.getByText('Sync now'));
     await waitFor(() => expect(syncSkillBundlesNow).toHaveBeenCalledTimes(1));
   });
+
+  it('CE mode: NOT_LINKED detail renders as a friendly BLUE hint, never the raw backend string in red', async () => {
+    // Regression: a fresh unlinked install used to show the raw scheduler detail
+    // ("this CE install has no active cloud link") inside the red error box -
+    // a normal setup state must not look like a failure.
+    mockIsCe = true;
+    getSkillBundleSyncStatus.mockResolvedValue({
+      ...ceStatus,
+      lastFetchStatus: 'NOT_LINKED',
+      lastFetchError: 'this CE install has no active cloud link',
+    });
+    renderPanel();
+
+    await waitFor(() => expect(screen.getByText('Sync status')).toBeInTheDocument());
+    const hint = await screen.findByText(/normal state for a fresh install/);
+    expect(hint).toBeInTheDocument();
+    expect(hint.className).toContain('text-blue-800');
+    expect(screen.queryByText('this CE install has no active cloud link')).not.toBeInTheDocument();
+  });
+
+  it('CE mode: a real fetch failure keeps the raw detail in the RED error box', async () => {
+    mockIsCe = true;
+    getSkillBundleSyncStatus.mockResolvedValue({
+      ...ceStatus,
+      lastFetchStatus: 'NETWORK_ERROR',
+      lastFetchError: 'I/O error on GET: PKIX path building failed',
+      consecutiveFailures: 9,
+    });
+    renderPanel();
+
+    await waitFor(() => expect(screen.getByText('Sync status')).toBeInTheDocument());
+    const detail = await screen.findByText('I/O error on GET: PKIX path building failed');
+    expect(detail.className).toContain('text-red-800');
+  });
 });
