@@ -212,28 +212,47 @@ public class BrowserSessionLifecycleService {
             // the chat channels. The frontend WorkflowRunManager.handleEvent
             // routes the "agentBrowseStep" event to a per-node patch that
             // populates lastBrowserCdpToken/CdpWsUrl/RunId/SessionId on the
-            // BrowserAgentNode mid-execution - exactly what the eye button
-            // needs to bootstrap BrowserLiveCdpPanel before the tool call
-            // returns. Field names use snake_case to match the wire format
-            // statusUpdater.updateNodeFromStep already parses, so no
-            // additional translation layer is needed.
+            // matching builder node mid-execution - exactly what the eye
+            // button needs to bootstrap BrowserLiveCdpPanel before the tool
+            // call returns. Field names use snake_case to match the wire
+            // format statusUpdater.updateNodeFromStep already parses.
+            //
+            // Two addressings, which COINCIDE for the dedicated
+            // agent:browser_agent node but DIFFER for a generic agent node
+            // calling web_search(agent_browse) mid-loop:
+            //   - the DISPLAY address: the hosting workflow run + builder
+            //     node (hash fields workflowRunId/hostNodeId, forwarded from
+            //     __workflowRunId__/__workflowNodeId__). This is the channel
+            //     and the nodeId the builder graph matches on.
+            //   - the CONTROL address: (runId, nodeId) as the runner knows
+            //     them (streamId/toolCallId) - the keys every REST endpoint
+            //     (takeover-resume, cdp-token-refresh, final-screenshot) and
+            //     the control queue are bound to. Published as run_id +
+            //     control_node_id so the panel targets the right keys.
+            String displayRunId = ctx.get("workflowRunId") instanceof String wr && !wr.isBlank()
+                    ? wr : runId;
+            String displayNodeId = ctx.get("hostNodeId") instanceof String hn && !hn.isBlank()
+                    ? hn : nodeId;
             Map<String, Object> wfPayload = new LinkedHashMap<>();
-            wfPayload.put("nodeId", nodeId);
+            wfPayload.put("nodeId", displayNodeId);
             wfPayload.put("runId", runId);
+            wfPayload.put("run_id", runId);
+            wfPayload.put("control_node_id", nodeId);
             wfPayload.put("session_id", sessionId);
             wfPayload.put("cdp_token", cdpToken);
             wfPayload.put("cdp_ws_url", publicWsUrl);
             wfPayload.put("current_url", currentUrl == null ? "" : currentUrl);
             wfPayload.put("step_index", stepIndex);
             try {
-                workflowRedisPublisher.publishEvent(runId, "agentBrowseStep", wfPayload);
+                workflowRedisPublisher.publishEvent(displayRunId, "agentBrowseStep", wfPayload);
             } catch (Exception e) {
                 log.warn("[BrowserLifecycle] workflow publish failed (runId={}, nodeId={}): {}",
-                        runId, nodeId, e.getMessage());
+                        displayRunId, displayNodeId, e.getMessage());
                 return false;
             }
             log.info("[BrowserLifecycle] cdp_ready workflow-bootstrap published: "
-                    + "runId={}, nodeId={}, sessionId={}", runId, nodeId, sessionId);
+                    + "channelRunId={}, displayNodeId={}, controlRunId={}, controlNodeId={}, sessionId={}",
+                    displayRunId, displayNodeId, runId, nodeId, sessionId);
             return true;
         }
 

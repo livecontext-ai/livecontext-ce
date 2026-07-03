@@ -167,6 +167,29 @@ public class BrowserAgentTakeoverController {
     }
 
     /**
+     * The session id the RUNNER recorded on the {@code agent:browse:meta}
+     * hash at cdp_ready. Server-written (never client-forgeable), so it can
+     * anchor the token-refresh sid check when no workflow takeover signal
+     * exists: chat runs, and the post-completion detached hold. Null when
+     * the hash is gone (TTL) or the field was never written - callers fail
+     * closed on null.
+     */
+    private String metaSessionId(String runId, String nodeId) {
+        if (redisTemplate == null) {
+            return null;
+        }
+        try {
+            String key = "agent:browse:meta:" + runId + ":" + nodeId;
+            Object sid = redisTemplate.opsForHash().get(key, "sessionId");
+            return sid instanceof String s && !s.isBlank() ? s : null;
+        } catch (Exception e) {
+            logger.warn("[BrowserTakeover] meta sessionId lookup failed (runId={}, nodeId={}): {}",
+                    runId, nodeId, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
      * Resolve the BROWSER_USER_TAKEOVER signal for (runId, nodeId).
      *
      * <p>Body is optional; if a {@code memory_injection} field is present we
@@ -299,28 +322,45 @@ public class BrowserAgentTakeoverController {
             return ResponseEntity.status(503).body(Map.of("error", "cdp issuer unconfigured"));
         }
 
-        // Verify an active takeover signal still backs this session - if
-        // the workflow has already advanced past this node, refreshing
-        // the token is pointless and the frontend should stop trying.
+        // Verify the requested session actually belongs to (runId, nodeId).
+        // Two sources, in order:
+        //   1. An active BROWSER_USER_TAKEOVER signal (workflow mid-task
+        //      takeover) - its config carries the sessionId.
+        //   2. The `agent:browse:meta:{runId}:{nodeId}` hash - the runner
+        //      records the sessionId there at cdp_ready. This covers CHAT
+        //      runs (which never raise workflow signals) and the
+        //      post-completion detached hold (signal already resolved),
+        //      both of which previously 404'd here and killed the live
+        //      view at the 5-min JWT expiry.
+        // Either way a mismatch fails closed: without the sid check a
+        // caller owning run A could mint a token bound to ANOTHER user's
+        // session id (cdp.py only verifies sid-vs-URL and liveness).
         List<SignalWaitEntity> active = signalService.getActiveSignals(runId);
         SignalWaitEntity target = active.stream()
                 .filter(s -> nodeId.equals(s.getNodeId()))
                 .filter(s -> s.getSignalType() == SignalType.BROWSER_USER_TAKEOVER)
                 .max(Comparator.comparingInt(SignalWaitEntity::getEpoch))
                 .orElse(null);
-        if (target == null) {
-            logger.info("[BrowserTakeover] refresh: no active takeover signal "
-                    + "(runId={}, nodeId={}) - workflow likely already advanced", runId, nodeId);
-            return ResponseEntity.notFound().build();
+        String storedSid;
+        if (target != null) {
+            // Fail closed on a malformed signal: SignalConfig.browserTakeover
+            // always records a sessionId, so its absence means we cannot
+            // prove the binding - refuse rather than passing the requested
+            // session_id through.
+            storedSid = extractSessionId(target);
+            if (storedSid == null) {
+                logger.warn("[BrowserTakeover] refresh: signal config has no sessionId "
+                        + "(runId={}, nodeId={}) - refusing", runId, nodeId);
+                return ResponseEntity.badRequest().body(Map.of("error", "session_id unprovable"));
+            }
+        } else {
+            storedSid = metaSessionId(runId, nodeId);
+            if (storedSid == null) {
+                logger.info("[BrowserTakeover] refresh: no active takeover signal and no "
+                        + "session record (runId={}, nodeId={}) - session likely ended", runId, nodeId);
+                return ResponseEntity.notFound().build();
+            }
         }
-        // Fail closed: signals MUST carry a sessionId in their config -
-        // SignalConfig.browserTakeover always sets it. A null storedSid
-        // means the signal was malformed at registration time, which we
-        // refuse to refresh against rather than allowing any requested
-        // session_id through. A mismatch is the actual security check
-        // (a user with X-User-ID for run A trying to mint a token bound
-        // to a session from run B).
-        String storedSid = extractSessionId(target);
         if (!requestedSid.equals(storedSid)) {
             logger.warn("[BrowserTakeover] refresh: session_id mismatch "
                     + "(requested={}, stored={})", requestedSid, storedSid);

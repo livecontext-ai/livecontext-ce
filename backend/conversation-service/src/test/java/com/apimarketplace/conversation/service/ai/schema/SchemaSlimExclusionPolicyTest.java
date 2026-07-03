@@ -165,6 +165,19 @@ class SchemaSlimExclusionPolicyTest {
         }
 
         @Test
+        @DisplayName("the unified tool named exactly 'credential' matches → excluded even without a manual entry")
+        void bareCredentialToolNameMatches() {
+            // The rename from request_credential (regex-blind, manual-only) to
+            // `credential` means the positive-list \bcredential\b now catches the
+            // tool NAME itself: string boundaries count as \b. The manual yml entry
+            // remains for documentation, but the regex alone already forces FULL.
+            assertThat(policy.isExcluded("credential", "list")).isTrue();
+            assertThat(policy.isExcluded("credential", "variables")).isTrue();
+            assertThat(policy.isExcluded("credential", null)).isTrue();
+            assertThat(policy.isToolAlwaysFull("credential")).isTrue();
+        }
+
+        @Test
         @DisplayName("dash-separated tool name with 'credential' matches → excluded")
         void credentialToolMatches() {
             // Dash is not a word character, so \bcredential\b matches at the boundary.

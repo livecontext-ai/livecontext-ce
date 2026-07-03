@@ -24,6 +24,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -41,6 +42,9 @@ public class ConversationToolExecutionService implements ToolExecutionService {
 
     private static final String TOOL_SET_TITLE = "set_conversation_title";
     private static final String TOOL_GET_TOOL_RESULT = "get_tool_result";
+    /** Unified credentials + workflow-variables tool (actions: require|list|variables|set_variable). */
+    private static final String TOOL_CREDENTIAL = "credential";
+    /** Legacy alias (pre-rename sessions): executes as credential(action='require'). */
     private static final String TOOL_REQUEST_CREDENTIAL = "request_credential";
 
     private final ConversationHistoryService conversationHistoryService;
@@ -76,13 +80,16 @@ public class ConversationToolExecutionService implements ToolExecutionService {
 
     /**
      * Create a RestTemplate with timeouts suitable for tool execution.
-     * Read timeout must exceed the max per-tool timeout (currently 120s for web_search)
-     * to prevent thread leaks when CompletableFuture.get() times out before the HTTP call.
+     * Read timeout must exceed the max per-tool timeout, i.e. the largest
+     * ToolDefinition.timeoutMs a routed tool can declare: web_search agent_browse
+     * (640s), workflow wait_run (300s), wait sleep (max+30s). Aligned with
+     * agent-service's RemoteToolExecutionService (12 min) so a blocking tool is
+     * bounded by its own timeout, never by this transport.
      */
     private static RestTemplate createToolExecutionRestTemplate() {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(Duration.ofSeconds(5));
-        factory.setReadTimeout(Duration.ofMinutes(3)); // Must exceed max tool timeout
+        factory.setReadTimeout(Duration.ofMinutes(12)); // Must exceed max tool timeout
         return new RestTemplate(factory);
     }
 
@@ -104,15 +111,8 @@ public class ConversationToolExecutionService implements ToolExecutionService {
                 return executeGetToolResult(toolCall, tenantId, credentials, startTime);
             }
 
-            if (TOOL_REQUEST_CREDENTIAL.equals(toolName)) {
-                // Use streamId as anti-loop scope: it's unique per LLM agent run /
-                // per user message turn. A new user message → new streamId → fresh
-                // counter, so the agent can legitimately retry across turns.
-                // Falls back to conversationId then tenantId if streamId missing.
-                String streamId = credentials != null ? (String) credentials.get("__streamId__") : null;
-                String conversationId = credentials != null ? (String) credentials.get("conversationId") : null;
-                String loopScope = streamId != null ? streamId : conversationId;
-                return executeRequestCredential(toolCall, tenantId, loopScope, startTime);
+            if (TOOL_CREDENTIAL.equals(toolName) || TOOL_REQUEST_CREDENTIAL.equals(toolName)) {
+                return executeCredentialTool(toolCall, toolName, tenantId, credentials, startTime);
             }
 
             // Delegate to orchestrator for core tools, MCP gateway for MCP tools
@@ -501,7 +501,7 @@ public class ConversationToolExecutionService implements ToolExecutionService {
                     .error("You already requested a forced reconnect for " + String.join(", ", blocked) +
                            " in this conversation and it did not resolve the issue. The 401/403 you observed is " +
                            "probably NOT a credential problem (e.g. wrong scope, quota, account, or endpoint). " +
-                           "Do not call request_credential again for these services - try a different tool, " +
+                           "Do not call credential(action='require') again for these services - try a different tool, " +
                            "narrow the scope, or report the failure to the user.")
                     .durationMs(duration)
                     .metadata(meta)
@@ -556,13 +556,13 @@ public class ConversationToolExecutionService implements ToolExecutionService {
                     .toolCall(toolCall)
                     .success(false)
                     .error("Credentials already exist for: " + String.join(", ", names) + ". " +
-                           "No reconnect card was shown to the user - do NOT call request_credential " +
+                           "No reconnect card was shown to the user - do NOT call the require action " +
                            "again unless you are sure the token itself was rejected (the tool failed " +
                            "with 401/403 saying \"expired\", \"invalid_grant\", or \"revoked\"). A 401/403 " +
                            "is often a scope, account, quota, or endpoint mismatch - in that case try a " +
                            "different tool or narrow the scope instead. If you ARE sure the credential " +
                            "must be reconnected, retry with force=true (boolean): " +
-                           "request_credential(services=[\"" + names.get(0) + "\"], reason=\"token expired\", force=true).")
+                           "credential(action=\"require\", services=[\"" + names.get(0) + "\"], reason=\"token expired\", force=true).")
                     .durationMs(duration)
                     .metadata(meta)
                     .build();
@@ -642,6 +642,281 @@ public class ConversationToolExecutionService implements ToolExecutionService {
                 .durationMs(System.currentTimeMillis() - startTime)
                 .build();
         }
+    }
+
+    // ── Unified credential tool (action dispatch) ───────────────────────────────────
+
+    /**
+     * Dispatches the unified {@code credential} tool by action. The legacy
+     * {@code request_credential} name (sessions started before the rename)
+     * executes as {@code credential(action='require')}.
+     */
+    private ToolResult executeCredentialTool(ToolCall toolCall, String toolName, String tenantId,
+                                             Map<String, Object> credentials, long startTime) {
+        Map<String, Object> args = toolCall.arguments();
+        String action = TOOL_REQUEST_CREDENTIAL.equals(toolName)
+                ? "require"
+                : args != null && args.get("action") != null
+                    ? String.valueOf(args.get("action")).trim().toLowerCase()
+                    : "";
+        // Org-aware scope - credentials.__orgId__/__orgRole__ populated by AgentContextBuilder.
+        String organizationId = credentials != null ? (String) credentials.get("__orgId__") : null;
+        String organizationRole = credentials != null ? (String) credentials.get("__orgRole__") : null;
+
+        switch (action) {
+            case "require": {
+                // Use streamId as anti-loop scope: it's unique per LLM agent run /
+                // per user message turn. A new user message → new streamId → fresh
+                // counter, so the agent can legitimately retry across turns.
+                // Falls back to conversationId then tenantId if streamId missing.
+                String streamId = credentials != null ? (String) credentials.get("__streamId__") : null;
+                String conversationId = credentials != null ? (String) credentials.get("conversationId") : null;
+                String loopScope = streamId != null ? streamId : conversationId;
+                return executeRequestCredential(toolCall, tenantId, loopScope, startTime);
+            }
+            case "list":
+                return executeCredentialList(toolCall, tenantId, organizationId, organizationRole, startTime);
+            case "variables":
+                return executeVariablesList(toolCall, tenantId, organizationId, organizationRole, startTime);
+            case "set_variable":
+                return executeSetVariable(toolCall, tenantId, organizationId, organizationRole, startTime);
+            default:
+                return ToolResult.builder()
+                    .toolCall(toolCall)
+                    .success(false)
+                    .error("'action' must be one of: list, variables, set_variable, require. "
+                        + "Example: credential(action=\"list\")")
+                    .durationMs(System.currentTimeMillis() - startTime)
+                    .build();
+        }
+    }
+
+    /**
+     * credential(action='list') - connected services WITHOUT secret material.
+     * Only explicit allowlisted fields are surfaced; credential_data is used
+     * solely to derive a human-readable account identifier.
+     */
+    @SuppressWarnings("unchecked")
+    private ToolResult executeCredentialList(ToolCall toolCall, String tenantId,
+                                             String organizationId, String organizationRole, long startTime) {
+        try {
+            String url = authServiceUrl + "/api/internal/credentials/all?userId=" + tenantId;
+            ResponseEntity<List> response = restTemplate.exchange(
+                url, HttpMethod.GET, new HttpEntity<>(internalHeaders(tenantId, organizationId, organizationRole)), List.class);
+            List<Map<String, Object>> rows = response.getBody() != null ? response.getBody() : List.of();
+
+            List<Map<String, Object>> connected = new ArrayList<>();
+            for (Map<String, Object> row : rows) {
+                Map<String, Object> entry = new LinkedHashMap<>();
+                entry.put("name", row.get("name"));
+                entry.put("integration", row.get("integration"));
+                Object status = row.get("status");
+                entry.put("status", status != null ? String.valueOf(status).toLowerCase() : "unknown");
+                entry.put("isDefault", Boolean.TRUE.equals(row.get("is_default")));
+                String account = extractAccountIdentifier(row.get("credential_data"));
+                if (account != null) {
+                    entry.put("account", account);
+                }
+                connected.add(entry);
+            }
+            long defaultCount = connected.stream()
+                .filter(c -> Boolean.TRUE.equals(c.get("isDefault"))).count();
+
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("connected", connected);
+            result.put("count", connected.size());
+            result.put("defaultCount", defaultCount);
+            result.put("hint", connected.isEmpty()
+                ? "No services connected yet. Use credential(action=\"require\") when a tool needs one."
+                : "Only isDefault=true credentials are used when executing tools. "
+                    + "status=needs_reauth means only the user can Reconnect it.");
+
+            return ToolResult.builder()
+                .toolCall(toolCall)
+                .success(true)
+                .content(objectMapper.writeValueAsString(result))
+                .durationMs(System.currentTimeMillis() - startTime)
+                .build();
+        } catch (Exception e) {
+            log.error("credential(list) failed for tenant {}: {}", tenantId, e.getMessage());
+            return ToolResult.builder()
+                .toolCall(toolCall)
+                .success(false)
+                .error("Could not list connected services: " + e.getMessage())
+                .durationMs(System.currentTimeMillis() - startTime)
+                .build();
+        }
+    }
+
+    /** credential(action='variables') - workflow variables of the active scope. */
+    @SuppressWarnings("unchecked")
+    private ToolResult executeVariablesList(ToolCall toolCall, String tenantId,
+                                            String organizationId, String organizationRole, long startTime) {
+        try {
+            String url = authServiceUrl + "/api/internal/variables/list?tenantId=" + tenantId;
+            ResponseEntity<Map> response = restTemplate.exchange(
+                url, HttpMethod.GET, new HttpEntity<>(internalHeaders(tenantId, organizationId, organizationRole)), Map.class);
+            Map<String, Object> body = response.getBody() != null ? response.getBody() : Map.of();
+
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("variables", body.getOrDefault("variables", List.of()));
+            result.put("count", body.getOrDefault("count", 0));
+            result.put("hint", "Reference a variable in any workflow node parameter or condition "
+                + "as {{$vars.name}} (alias {{vars:name}}). Use credential(action=\"set_variable\") "
+                + "to create or update one.");
+
+            return ToolResult.builder()
+                .toolCall(toolCall)
+                .success(true)
+                .content(objectMapper.writeValueAsString(result))
+                .durationMs(System.currentTimeMillis() - startTime)
+                .build();
+        } catch (Exception e) {
+            log.error("credential(variables) failed for tenant {}: {}", tenantId, e.getMessage());
+            return ToolResult.builder()
+                .toolCall(toolCall)
+                .success(false)
+                .error("Could not list workflow variables: " + e.getMessage())
+                .durationMs(System.currentTimeMillis() - startTime)
+                .build();
+        }
+    }
+
+    /**
+     * credential(action='set_variable') - create-or-update by name. A plan-cap
+     * hit (409 PLAN_RESOURCE_LIMIT_EXCEEDED, only possible on CREATE) is
+     * relayed verbatim so the LLM sees the do-not-retry guidance.
+     */
+    private ToolResult executeSetVariable(ToolCall toolCall, String tenantId,
+                                          String organizationId, String organizationRole, long startTime) {
+        Map<String, Object> args = toolCall.arguments();
+        Object name = args != null ? args.get("name") : null;
+        Object value = args != null ? args.get("value") : null;
+        if (name == null || String.valueOf(name).isBlank() || value == null) {
+            return ToolResult.builder()
+                .toolCall(toolCall)
+                .success(false)
+                .error("set_variable requires 'name' and 'value'. Example: "
+                    + "credential(action=\"set_variable\", name=\"api_base_url\", value=\"https://api.example.com\")")
+                .durationMs(System.currentTimeMillis() - startTime)
+                .build();
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("name", String.valueOf(name).trim());
+        payload.put("value", String.valueOf(value));
+        // type/description/secret omitted = PRESERVED by the backend on update
+        // (create defaults: STRING / no description / not secret) - never inject
+        // defaults here or updating a NUMBER variable would retype it.
+        if (args.get("type") != null) {
+            payload.put("type", String.valueOf(args.get("type")));
+        }
+        if (args.get("description") != null) {
+            payload.put("description", String.valueOf(args.get("description")));
+        }
+        if (args.get("secret") != null) {
+            payload.put("secret", parseBooleanArg(args.get("secret")));
+        }
+        try {
+            String url = authServiceUrl + "/api/internal/variables/set?tenantId=" + tenantId;
+            ResponseEntity<Map> response = restTemplate.exchange(
+                url, HttpMethod.POST, new HttpEntity<>(payload, internalHeaders(tenantId, organizationId, organizationRole)), Map.class);
+            Map<String, Object> saved = response.getBody() != null ? response.getBody() : Map.of();
+
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("saved", saved);
+            result.put("reference", "{{$vars." + payload.get("name") + "}}");
+            result.put("hint", "The variable is available in every workflow of this scope. "
+                + "Runs already in progress keep the value they started with.");
+
+            return ToolResult.builder()
+                .toolCall(toolCall)
+                .success(true)
+                .content(objectMapper.writeValueAsString(result))
+                .durationMs(System.currentTimeMillis() - startTime)
+                .build();
+        } catch (org.springframework.web.client.HttpClientErrorException e) {
+            // 400 invalid_variable / 409 PLAN_RESOURCE_LIMIT_EXCEEDED: relay the
+            // backend message (it carries the exact validation rule or the
+            // LIMIT REACHED do-not-retry guidance).
+            String message = extractInternalErrorMessage(e);
+            return ToolResult.builder()
+                .toolCall(toolCall)
+                .success(false)
+                .error(message)
+                .durationMs(System.currentTimeMillis() - startTime)
+                .build();
+        } catch (Exception e) {
+            log.error("credential(set_variable) failed for tenant {}: {}", tenantId, e.getMessage());
+            return ToolResult.builder()
+                .toolCall(toolCall)
+                .success(false)
+                .error("Could not save the variable: " + e.getMessage())
+                .durationMs(System.currentTimeMillis() - startTime)
+                .build();
+        }
+    }
+
+    /**
+     * X-User-ID MUST accompany X-Organization-ID: the CE monolith's
+     * MonolithOrganizationContextFilter strips ALL org-context headers from a
+     * request without a user identity (anti-spoof), so an org-only request
+     * silently degrades to personal scope. Same convention as
+     * executeViaCallbackUrl and CredentialClient.
+     */
+    private org.springframework.http.HttpHeaders internalHeaders(String tenantId, String organizationId,
+                                                                  String organizationRole) {
+        org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+        headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
+        if (tenantId != null && !tenantId.isBlank()) {
+            headers.set("X-User-ID", tenantId);
+        }
+        if (organizationId != null && !organizationId.isBlank()) {
+            headers.set("X-Organization-ID", organizationId);
+        }
+        // Role travels with the org so the internal endpoint can enforce the
+        // platform-wide VIEWER read-only rule on writes (same contract as
+        // delegateToService's X-Organization-Role forwarding).
+        if (organizationRole != null && !organizationRole.isBlank()) {
+            headers.set("X-Organization-Role", organizationRole);
+        }
+        return headers;
+    }
+
+    /** Pulls the most useful message out of an internal 4xx JSON body. */
+    private String extractInternalErrorMessage(org.springframework.web.client.HttpClientErrorException e) {
+        try {
+            Map<String, Object> body = objectMapper.readValue(
+                e.getResponseBodyAsString(), Map.class);
+            Object message = body.get("message");
+            if (message != null) {
+                return String.valueOf(message);
+            }
+            Object error = body.get("error");
+            if (error != null) {
+                return String.valueOf(error);
+            }
+        } catch (Exception ignored) {
+            // fall through to the raw exception message
+        }
+        return e.getMessage();
+    }
+
+    /**
+     * Derive a human-readable account identifier (email, username, workspace)
+     * from credential_data WITHOUT exposing any other field - the map can
+     * contain token material and must never be emitted to the LLM.
+     */
+    private String extractAccountIdentifier(Object credentialData) {
+        if (!(credentialData instanceof Map<?, ?> data)) {
+            return null;
+        }
+        for (String key : List.of("email", "user_email", "username", "workspace", "team_name")) {
+            Object accountValue = data.get(key);
+            if (accountValue instanceof String s && !s.isBlank()) {
+                return s;
+            }
+        }
+        return null;
     }
 
     /**
@@ -973,6 +1248,7 @@ public class ConversationToolExecutionService implements ToolExecutionService {
         // Conversation-specific tools are always available
         if (TOOL_SET_TITLE.equals(toolDefinition.name()) ||
             TOOL_GET_TOOL_RESULT.equals(toolDefinition.name()) ||
+            TOOL_CREDENTIAL.equals(toolDefinition.name()) ||
             TOOL_REQUEST_CREDENTIAL.equals(toolDefinition.name())) {
             return true;
         }

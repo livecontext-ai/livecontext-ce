@@ -31,6 +31,8 @@ import { nodeRegistry } from '../../registry/nodeRegistry';
 import { ResizableNodeWrapper } from './ResizableNodeWrapper';
 import { useRunOutputData } from '../../hooks/useRunOutputData';
 import { normalizeLabel } from '../../utils/labelNormalizer';
+import { useBrowserLiveView } from './shared/useBrowserLiveView';
+import { useTranslations } from 'next-intl';
 import { useAgentActivity } from '@/components/agent-fleet/hooks/useAgentActivityStream';
 
 import { useRun } from '@/contexts/WorkflowRunContext';
@@ -79,6 +81,15 @@ export function FlowNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
     kind: data.kind,
     crudOperation: (data as any)?.dataSourceData?.crudOperation,
   });
+
+  // Browser-agent live view for GENERIC agent nodes: when this node's agent
+  // calls web_search(agent_browse) mid-loop, the backend fans the cdp_ready
+  // bootstrap out addressed to THIS node (host-node routing), populating
+  // data.lastBrowser*. Surfaces the same eye-button live view the dedicated
+  // agent:browser_agent node has - chat/workflow parity.
+  const { hasLiveSession: hasBrowserLiveSession, openLiveView: openBrowserLiveView } =
+    useBrowserLiveView(id, data);
+  const tBrowserAgent = useTranslations('workflowBuilder.nodes.browserAgent');
 
   // Spawn item pagination - local to this node, resets when viewing epoch changes
   const [currentPage, setCurrentPage] = React.useState(0);
@@ -611,6 +622,18 @@ export function FlowNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
         // buttons are built by useNodeContextualButtons (shared with the
         // run-info step popover). Files is canvas-only (includeFiles: true).
         const bottomButtons = [...sharedContextualButtons];
+
+        // Browser-agent live view (generic agent node hosting an
+        // agent_browse tool call) - same affordance as the dedicated
+        // browser_agent node's eye button.
+        if (hasBrowserLiveSession) {
+          bottomButtons.push({
+            key: 'browser-live-view',
+            icon: <Eye className="h-3 w-3" />,
+            title: tBrowserAgent('viewLiveTrace'),
+            onClick: openBrowserLiveView,
+          });
+        }
 
         // Play button config
         const isTriggerForPlayButton = isManualTrigger || isChatTrigger || isFormTrigger || isWebhookTrigger || isScheduleTrigger || isWorkflowsTriggerNode || isTablesTrigger || isErrorTrigger;

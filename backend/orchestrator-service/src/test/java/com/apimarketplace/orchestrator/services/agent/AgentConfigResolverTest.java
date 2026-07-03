@@ -129,6 +129,52 @@ class AgentConfigResolverTest {
     }
 
     @Test
+    @DisplayName("resolve() threads inactivityTimeout=0 (disabled) VERBATIM - 0 must never be dropped as falsy")
+    void resolveThreadsZeroInactivityVerbatim() {
+        UUID entityId = UUID.randomUUID();
+        Agent planAgent = new Agent(
+            "a1", "agent", "Disabled Watchdog", entityId.toString(), null,
+            null, null, null, null, null, null, null, null,
+            null, null, null, null, null, null, null, null);
+
+        AgentDto dto = new AgentDto();
+        dto.setId(entityId);
+        dto.setName("Disabled Watchdog");
+        dto.setInactivityTimeout(0);
+        when(agentClient.resolveAgentConfig(entityId, "tenant-1", null)).thenReturn(dto);
+
+        AgentConfigResolver.ResolveResult result = resolver.resolve(planAgent, "tenant-1");
+
+        // 0 is the "watchdog disabled" sentinel: if the resolver coerced it to null the
+        // downstream loop would silently fall back to the 5-min default.
+        assertThat(result.overrides().inactivityTimeout()).isZero();
+    }
+
+    @Test
+    @DisplayName("resolve() threads the contract boundary windows 10 and 7200 unchanged (no clamping)")
+    void resolveThreadsBoundaryWindowsUnchanged() {
+        for (int boundary : new int[] {10, 7200}) {
+            UUID entityId = UUID.randomUUID();
+            Agent planAgent = new Agent(
+                "a1", "agent", "Boundary", entityId.toString(), null,
+                null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null);
+
+            AgentDto dto = new AgentDto();
+            dto.setId(entityId);
+            dto.setName("Boundary");
+            dto.setInactivityTimeout(boundary);
+            when(agentClient.resolveAgentConfig(entityId, "tenant-1", null)).thenReturn(dto);
+
+            AgentConfigResolver.ResolveResult result = resolver.resolve(planAgent, "tenant-1");
+
+            assertThat(result.overrides().inactivityTimeout())
+                .as("boundary window %s must thread unchanged", boundary)
+                .isEqualTo(boundary);
+        }
+    }
+
+    @Test
     @DisplayName("resolve() forwards organization scope for entity-backed workflow agents")
     void resolveForwardsOrganizationScope() {
         UUID entityId = UUID.randomUUID();

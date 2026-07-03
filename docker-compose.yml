@@ -97,7 +97,7 @@ services:
     restart: "no"
 
   bridge:
-    image: ghcr.io/livecontext-ai/livecontext-ce-bridge:v0.1.6
+    image: ghcr.io/livecontext-ai/livecontext-ce-bridge:v0.1.7
     container_name: livecontext-bridge
     restart: unless-stopped
     depends_on:
@@ -125,7 +125,7 @@ services:
           memory: 512M
 
   livecontext:
-    image: ghcr.io/livecontext-ai/livecontext-ce:v0.1.6
+    image: ghcr.io/livecontext-ai/livecontext-ce:v0.1.7
     container_name: livecontext-app
     restart: unless-stopped
     depends_on:
@@ -171,6 +171,12 @@ services:
       WEBSEARCH_ENABLED: ${WEBSEARCH_ENABLED:-false}
       WEBSEARCH_SERVICE_URL: "http://websearch:8085"
       WEBSEARCH_CALLBACK_BASE_URL: "http://livecontext:8080"
+      # Shared with the websearch service below: the app MINTS the live-view
+      # CDP tokens (CdpTokenIssuer) with the same secret cdp.py verifies.
+      # Without it here the issuer is unconfigured and CE gets only the
+      # final-page screenshot fallback, never the live screencast/takeover.
+      WEBSEARCH_CDP_JWT_SECRET: ${WEBSEARCH_CDP_JWT_SECRET:-}
+      WEBSEARCH_GATEWAY_SECRET: ${WEBSEARCH_GATEWAY_SECRET:-}
       # LLM API keys (at least one required for agent execution)
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -258,7 +264,7 @@ services:
           memory: 2048M
 
   frontend:
-    image: ghcr.io/livecontext-ai/livecontext-ce-frontend:v0.1.6
+    image: ghcr.io/livecontext-ai/livecontext-ce-frontend:v0.1.7
     container_name: livecontext-frontend
     restart: unless-stopped
     depends_on:

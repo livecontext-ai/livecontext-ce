@@ -25,7 +25,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p>Activated only when {@code scaling.agent.queue.enabled=true}. Creates three
  * independent thread pools sized according to {@link AgentScalingConfig}:
  * <ul>
- *   <li><b>agent</b> pool - for long-running agent loop executions (1-65 min)</li>
+ *   <li><b>agent</b> pool - for long-running agent loop executions (up to the 7200s executionTimeout contract)</li>
  *   <li><b>classify</b> pool - for fast single-shot classifications (1-5s)</li>
  *   <li><b>guardrail</b> pool - for fast single-shot guardrail validations (1-5s)</li>
  * </ul>

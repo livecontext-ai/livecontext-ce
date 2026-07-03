@@ -54,7 +54,7 @@ public final class AgentModuleResolver {
 
         if (toolsConfig == null) {
             // No config → all opt-out modules enabled. image_generation stays opt-in.
-            enabled.addAll(Set.of("table", "interface", "agent", "skill", "workflow", "application", "web_search", "files"));
+            enabled.addAll(Set.of("table", "interface", "agent", "skill", "workflow", "application", "web_search", "files", "wait"));
             return enabled;
         }
 
@@ -62,7 +62,7 @@ public final class AgentModuleResolver {
         if ("none".equals(mode)) {
             // mode=none → only MCP/catalog tools blocked; internal tools stay enabled.
             // image_generation still requires explicit opt-in (it's not "internal").
-            enabled.addAll(Set.of("table", "interface", "agent", "skill", "workflow", "application", "web_search", "files"));
+            enabled.addAll(Set.of("table", "interface", "agent", "skill", "workflow", "application", "web_search", "files", "wait"));
             enabled.remove("catalog");
             if (isImageGenerationEnabled(toolsConfig)) enabled.add("image_generation");
             return enabled;
@@ -81,6 +81,9 @@ public final class AgentModuleResolver {
         // per-resource read/write axis (fileAccessMode, in FilesToolsProvider) plus the
         // allowedFileIds allow-list - so "always available" means registered, not unrestricted.
         enabled.add("files");
+        // Wait tool is always registered: pausing is a harmless primitive with no
+        // resource to scope (bounded by wait.max-seconds server-side).
+        enabled.add("wait");
         if (isResourceAccessible(toolsConfig, "workflows"))    enabled.add("workflow");
         if (isResourceAccessible(toolsConfig, "applications")) enabled.add("application");
         // Web search: opt-out boolean toggle (absent or true = enabled, false = disabled)

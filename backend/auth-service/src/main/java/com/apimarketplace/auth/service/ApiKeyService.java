@@ -8,6 +8,7 @@ import com.apimarketplace.common.security.CredentialEncryptionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.security.SecureRandom;
@@ -32,14 +33,17 @@ public class ApiKeyService {
     private final UserRepository userRepository;
     private final CredentialEncryptionService encryptionService;
     private final UserResolutionService userResolutionService;
+    private final GatewayCacheClient gatewayCacheClient;
     private final SecureRandom secureRandom;
 
     public ApiKeyService(UserRepository userRepository,
                          CredentialEncryptionService encryptionService,
-                         UserResolutionService userResolutionService) {
+                         UserResolutionService userResolutionService,
+                         GatewayCacheClient gatewayCacheClient) {
         this.userRepository = userRepository;
         this.encryptionService = encryptionService;
         this.userResolutionService = userResolutionService;
+        this.gatewayCacheClient = gatewayCacheClient;
         this.secureRandom = new SecureRandom();
     }
 
@@ -95,6 +99,13 @@ public class ApiKeyService {
         user.setApiKeyCreatedAt(LocalDateTime.now());
         userRepository.save(user);
 
+        // Bust the gateway's user-resolution cache so the OLD key stops authenticating
+        // NOW, not after the 5-min TTL: entries cached under "apikey:<old plaintext>"
+        // are swept by providerId in QuotaCacheService.invalidateUserCache. After-commit
+        // so a rollback fires no eviction and no replica re-caches pre-commit state
+        // (same pattern as OrganizationMemberService.bustGatewayCacheFor).
+        bustGatewayCacheAfterCommit(user.getProviderId());
+
         log.info("API key regenerated for userId: {}", userId);
 
         // Build response with plaintext (shown once)
@@ -106,13 +117,38 @@ public class ApiKeyService {
         return response;
     }
 
+    private void bustGatewayCacheAfterCommit(String providerId) {
+        if (providerId == null || providerId.isBlank()) {
+            return;
+        }
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                    new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            gatewayCacheClient.invalidateUserCache(providerId);
+                        }
+                    });
+        } else {
+            gatewayCacheClient.invalidateUserCache(providerId);
+        }
+    }
+
     /**
      * Resolves a user by plaintext API key.
      * Hashes the key, looks up by hash, then delegates to UserResolutionService.
      *
+     * <p>NOT_SUPPORTED (was readOnly=true): {@code UserResolutionService.resolveUser}
+     * is deliberately non-transactional and performs writes in their own transactions
+     * (ensureFreeSubscription INSERT, atomic last-login update, ...). Wrapped in an
+     * enclosing read-only transaction, the first such write marked it rollback-only
+     * and the commit blew up with UnexpectedRollbackException - a 500 on every
+     * API-key resolution for a fresh or 10-min-idle user, in BOTH editions
+     * (gateway /resolve-by-api-key and the CE MonolithSecurityFilter resolver).</p>
+     *
      * @return UserResolutionResponse or null if key is invalid/user disabled
      */
-    @Transactional(readOnly = true)
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public UserResolutionResponse resolveByPlaintextKey(String plaintextKey) {
         if (plaintextKey == null || plaintextKey.isBlank()) {
             return null;

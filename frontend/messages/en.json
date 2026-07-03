@@ -3055,6 +3055,7 @@
       "consecutiveFailures": "Consecutive failures",
       "never": "never",
       "notLinkedHint": "This install isn't linked to the cloud yet, which is the normal state for a fresh install. Connect it from the Connection tab to start receiving updates.",
+      "deleteBundle": "Delete bundle",
       "statusCode": {
         "OK": "OK",
         "NOT_LINKED": "not linked",
@@ -3205,6 +3206,14 @@
       "fetchError": "Failed to load model configuration",
       "saveError": "Failed to save changes",
       "noModels": "No models configured",
+      "bundleShipInherit": "CE: auto",
+      "bundleShipOn": "CE: on",
+      "bundleShipOff": "CE: off",
+      "bundleShipTooltip": "What the CE bundle ships for this model, independent of the enabled toggle: auto follows it, on ships the model enabled to self-hosted installs even when disabled here, off ships it disabled.",
+      "visionOnly": "Vision only",
+      "visionOnlyTooltip": "Show only models that support vision (multimodal). Browser agents need to see the page, so this is on by default. Turn it off to show every model.",
+      "notConfigured": "Not configured",
+      "notConfiguredTooltip": "Listed so you can rank and price it, but not usable yet: no API key for this provider (or the cloud relay cannot run it). Add a key to use it.",
       "custom": "custom",
       "modified": "Modified from default",
       "recommended": "Recommended",
@@ -3351,8 +3360,8 @@
     "integrationsConfigured": "{count} integration(s) configured"
   },
   "credentials": {
-    "title": "Credentials",
-    "subtitle": "Connect to external services",
+    "title": "Credentials & Variables",
+    "subtitle": "Connect external services and manage reusable workflow variables",
     "unauthorized": "Unauthorized",
     "mustBeLoggedIn": "You must be logged in to manage credentials",
     "scope": {
@@ -3404,7 +3413,83 @@
     "availableLabel": "Available",
     "tabs": {
       "myCredentials": "My Credentials",
-      "availableIntegrations": "Available Integrations"
+      "availableIntegrations": "Available Integrations",
+      "credentials": "Credentials",
+      "variables": "Variables"
+    },
+    "variables": {
+      "title": "Workflow variables",
+      "subtitle": "Reusable values available in every workflow via $vars.name",
+      "add": "Add variable",
+      "edit": "Edit",
+      "delete": "Delete",
+      "copyReference": "Copy reference",
+      "searchPlaceholder": "Search variables...",
+      "table": {
+        "columnReference": "Reference",
+        "columnValue": "Value",
+        "columnType": "Type",
+        "columnUpdated": "Updated",
+        "noMatch": "No variables match your search."
+      },
+      "quota": {
+        "used": "{used} / {limit} variables",
+        "unlimited": "{used} variables",
+        "limitReached": "Plan limit reached. Upgrade to add more variables."
+      },
+      "empty": {
+        "title": "No variables yet",
+        "description": "Create reusable values (URLs, IDs, settings) and reference them in any workflow with $vars.name."
+      },
+      "scope": {
+        "workspace": "Workspace",
+        "personal": "Personal"
+      },
+      "types": {
+        "STRING": "Text",
+        "NUMBER": "Number",
+        "BOOLEAN": "Boolean",
+        "JSON": "JSON"
+      },
+      "fields": {
+        "name": "Name",
+        "type": "Type",
+        "value": "Value",
+        "description": "Description (optional)",
+        "descriptionPlaceholder": "What this variable is for",
+        "secret": "Hide value (secret)",
+        "secretHelp": "The value is stored encrypted and never displayed again, neither here nor to agents. Workflows still use it when running (its resolved value can appear in run outputs). To change it, enter a new value.",
+        "secretReenter": "Enter a new value to replace the hidden one"
+      },
+      "dialog": {
+        "createTitle": "New variable",
+        "editTitle": "Edit variable",
+        "description": "The value is stored encrypted and resolved when a workflow runs.",
+        "cancel": "Cancel",
+        "create": "Create",
+        "save": "Save"
+      },
+      "deleteDialog": {
+        "title": "Delete variable",
+        "description": "Delete \"{name}\"? Workflows that reference it will resolve it as empty.",
+        "confirm": "Delete"
+      },
+      "validation": {
+        "name": "Letters, digits and underscores only; must not start with a digit (max 64).",
+        "number": "Enter a valid number.",
+        "boolean": "Enter true or false.",
+        "json": "Enter valid JSON."
+      },
+      "toasts": {
+        "loadFailed": "Could not load the variables",
+        "created": "Variable created",
+        "updated": "Variable updated",
+        "deleted": "Variable deleted",
+        "saveFailed": "Could not save the variable",
+        "deleteFailed": "Could not delete the variable",
+        "nameConflict": "A variable with this name already exists in this scope.",
+        "referenceCopied": "Reference copied"
+      }
     },
     "myCredentials": {
       "searchPlaceholder": "Search credentials...",
@@ -4022,6 +4107,44 @@
     "toolCardBinaryFile": "Binary file",
     "toolCardTestResult": "Test Result"
   },
+  "mcpServer": {
+    "title": "MCP Server",
+    "subtitle": "Connect MCP clients like Claude Code or Cursor to your LiveContext tools",
+    "copy": "Copy",
+    "errors": {
+      "fetchFailed": "Failed to load MCP server information"
+    },
+    "endpoint": {
+      "title": "Endpoint",
+      "description": "Standard MCP endpoint (Streamable HTTP). Any MCP client can connect to it over HTTP.",
+      "toolCount": "{count} tools available"
+    },
+    "apiKey": {
+      "title": "API key",
+      "description": "Requests to the MCP endpoint authenticate with your personal API key, sent in the X-API-Key header. Keep it secret.",
+      "generate": "Generate key",
+      "regenerate": "Regenerate key",
+      "regenerateWarning": "Regenerating invalidates your current key immediately. Every client configured with it will stop working until you update it.",
+      "regenerateConfirm": "Regenerate now",
+      "regenerateCancel": "Cancel",
+      "shownOnce": "This key is shown only once. Copy it now and store it somewhere safe.",
+      "createdAt": "Created {date}",
+      "noKey": "No API key yet. Generate one to connect an MCP client."
+    },
+    "toasts": {
+      "keyGenerated": "API key generated",
+      "keyGenerationFailed": "Could not generate the API key",
+      "keyGenerationFailedMessage": "Please try again."
+    },
+    "snippet": {
+      "title": "Client configuration",
+      "description": "Copy one of these into your MCP client. The JSON block goes into an mcpServers configuration file; the command adds the server to Claude Code.",
+      "claudeCode": "Claude Code (command)",
+      "jsonConfig": "JSON configuration (Cursor, Claude Desktop, ...)",
+      "keyPlaceholder": "YOUR_API_KEY",
+      "placeholderHint": "Replace YOUR_API_KEY with your API key (generate one above)."
+    }
+  },
   "mcp": {
     "tabs": {
       "overview": "Overview",
@@ -4582,6 +4705,11 @@
         "workspaces3": "3 workspaces",
         "workspaces10": "10 workspaces",
         "workspacesUnlimited": "Unlimited workspaces",
+        "variables3": "3 workflow variables",
+        "variables25": "25 workflow variables",
+        "variables100": "100 workflow variables",
+        "variables500": "500 workflow variables",
+        "variablesUnlimited": "Unlimited workflow variables",
         "concurrent1": "1 concurrent execution",
         "concurrent5": "5 concurrent executions",
         "concurrent20": "20 concurrent executions",
@@ -5062,6 +5190,10 @@
     "capExceededGeneric": "Member quota exceeded ({dimension}): {consumed} of {cap}. Ask your organization admin to raise this cap."
   },
   "settings": {
+    "nav": {
+      "scrollLeft": "Scroll left",
+      "scrollRight": "Scroll right"
+    },
     "unauthorized": "Unauthorized Access",
     "mustBeLoggedIn": "You must be logged in to access settings.",
     "signIn": "Sign In",
@@ -6705,7 +6837,8 @@
           "reconnecting": "· reconnecting",
           "reconnectingTooltip": "WebSocket dropped - refreshing token and reconnecting",
           "disconnected": "· disconnected",
-          "disconnectedTooltip": "Live view disconnected - workflow may have advanced past this node"
+          "disconnectedTooltip": "Live view disconnected - workflow may have advanced past this node",
+          "taskFinishedLive": "The agent has finished. The page stays live: you can take control or close this panel."
         },
         "takeover": {
           "title": "Take control?",
@@ -6723,7 +6856,8 @@
           "skipped": "Skipped",
           "ready": "Ready",
           "pending": "Pending"
-        }
+        },
+        "tabLabel": "Browser Agent"
       }
     },
     "forms": {
@@ -8951,6 +9085,8 @@
       "status": "Status",
       "priority": "Priority",
       "unknownAgent": "Unknown",
+      "agent": "Agent",
+      "system": "System",
       "noConversation": "No messages",
       "noToolCalls": "No tool calls",
       "arguments": "Arguments",

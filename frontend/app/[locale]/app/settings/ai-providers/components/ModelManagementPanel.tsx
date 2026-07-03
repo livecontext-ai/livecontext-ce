@@ -27,6 +27,7 @@ import {
   Plus,
   AlertTriangle,
   Gauge,
+  Eye,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -36,6 +37,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { IS_CE } from "@/lib/edition/edition";
 import { cn } from "@/lib/utils";
 import LoadingSpinner from '@/components/LoadingSpinner';
 import {
@@ -68,6 +70,17 @@ const EFFORT_SELECT_OPTIONS = [
   { value: EFFORT_INHERIT, label: "-" },
   ...REASONING_EFFORT_LEVELS.map((lvl) => ({ value: lvl, label: lvl })),
 ];
+
+// Single source of truth for the table's grid template - the header row and
+// every model row MUST use the same one (each row is its own grid container,
+// so a child-count/template mismatch wraps the last cell onto an implicit
+// second line and the whole table misaligns). Cloud gets one extra FIXED
+// column for the CE-ship chip; fixed (not auto) so the varying chip labels
+// (auto/on/off) cannot shift the following columns from row to row. The chip
+// is absent on CE builds, which keep the original 10-column layout.
+const ROW_GRID_COLS = IS_CE
+  ? "grid-cols-[40px_28px_auto_1fr_auto_auto_24px_100px_140px_52px]"
+  : "grid-cols-[40px_28px_88px_auto_1fr_auto_auto_24px_100px_140px_52px]";
 
 function ProviderBadge({ provider }: { provider: string }) {
   const iconSrc = getProviderIconSrc(provider);
@@ -427,6 +440,7 @@ function SortableModelRow({
   model,
   index,
   onToggleEnabled,
+  onCycleBundleEnabled,
   onToggleRecommended,
   onTierChange,
   onReasoningEffortChange,
@@ -440,6 +454,7 @@ function SortableModelRow({
   model: ModelConfigEntry;
   index: number;
   onToggleEnabled: (model: ModelConfigEntry) => void;
+  onCycleBundleEnabled: (model: ModelConfigEntry) => void;
   onToggleRecommended: (model: ModelConfigEntry) => void;
   onTierChange: (model: ModelConfigEntry, tier: string) => void;
   onReasoningEffortChange: (model: ModelConfigEntry, effort: string) => void;
@@ -475,7 +490,7 @@ function SortableModelRow({
       style={style}
       className={cn(
         "grid items-center gap-2 px-3 py-2 rounded-lg border border-theme bg-theme-primary transition-colors",
-        "grid-cols-[40px_28px_auto_1fr_auto_auto_24px_100px_140px_52px]",
+        ROW_GRID_COLS,
         isDragging && "opacity-50 shadow-lg z-50",
         model.enabled === false && "opacity-40"
       )}
@@ -514,6 +529,33 @@ function SortableModelRow({
         )} />
       </button>
 
+      {/* Cloud-admin bundle override (V381): what the CE bundle ships for this
+          model, independent of the cloud's enabled toggle. 3 states: inherit
+          (follows enabled), always-on, always-off. Cloud only - a CE has no
+          bundle to author. */}
+      {!IS_CE && (
+        <button
+          type="button"
+          onClick={() => onCycleBundleEnabled(model)}
+          data-testid={`model-bundle-enabled-${model.provider}-${model.id}`}
+          title={t("modelConfig.bundleShipTooltip")}
+          className={cn(
+            "w-full px-1.5 py-0.5 rounded-full text-xs font-medium border transition-colors whitespace-nowrap text-center",
+            model.bundleEnabled == null
+              ? "border-theme text-theme-secondary bg-theme-tertiary"
+              : model.bundleEnabled
+                ? "border-emerald-300 text-emerald-700 bg-emerald-50 dark:border-emerald-700 dark:text-emerald-400 dark:bg-emerald-900/20"
+                : "border-red-300 text-red-700 bg-red-50 dark:border-red-700 dark:text-red-400 dark:bg-red-900/20"
+          )}
+        >
+          {model.bundleEnabled == null
+            ? t("modelConfig.bundleShipInherit")
+            : model.bundleEnabled
+              ? t("modelConfig.bundleShipOn")
+              : t("modelConfig.bundleShipOff")}
+        </button>
+      )}
+
       {/* Provider badge - icon + name (icons distinguish CLI from API) */}
       <ProviderBadge provider={model.provider} />
 
@@ -525,6 +567,17 @@ function SortableModelRow({
         {model.isCustom && (
           <span className="text-sm bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400 px-1.5 py-0.5 rounded-full whitespace-nowrap flex-shrink-0">
             {t("modelConfig.custom")}
+          </span>
+        )}
+        {/* Full catalog is listed for ranking even without a key. Mark rows the
+            picker/runtime can't yet serve so it isn't confusing. Bridge rows use
+            their own availability signal, so they're excluded here. */}
+        {model.available === false && model.providerKind !== 'bridge' && (
+          <span
+            title={t("modelConfig.notConfiguredTooltip")}
+            className="text-xs bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 px-1.5 py-0.5 rounded-full whitespace-nowrap flex-shrink-0"
+          >
+            {t("modelConfig.notConfigured")}
           </span>
         )}
       </div>
@@ -641,6 +694,10 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [providerFilter, setProviderFilter] = useState<string>("all");
+  // Browser agents read screenshots, so the Browser Agent tab defaults to
+  // showing only vision-capable models. The toggle reveals the rest (e.g. a
+  // model whose vision flag isn't populated yet). Only affects that tab.
+  const [visionOnly, setVisionOnly] = useState(true);
   /**
    * Active category tab. {@code 'chat'} mirrors the legacy global view -
    * writes go to the parent {@code model_config_overrides.ranking} column
@@ -700,8 +757,14 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
     if (category === 'browser_agent' || category === 'image_generation') {
       filtered = filtered.filter(m => m.providerKind !== 'bridge');
     }
+    // Browser Agent tab: default to vision-capable models only (a browser agent
+    // must SEE the page). supportsVision is the backend-normalized flag (set from
+    // the model's modalities by the catalog sync / bundle).
+    if (category === 'browser_agent' && visionOnly) {
+      filtered = filtered.filter(m => m.supportsVision === true);
+    }
     return filtered;
-  }, [models, providerFilter, category]);
+  }, [models, providerFilter, category, visionOnly]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -792,6 +855,33 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
         recommended: !model.recommended,
       });
     });
+  };
+
+  // Cloud-admin bundle override (V381): cycle inherit -> ship-on -> ship-off.
+  // Decouples "what the CE bundle ships" from the cloud's own enabled flag, so
+  // a model greyed on cloud can still reach CE users (and vice versa).
+  const handleCycleBundleEnabled = (model: ModelConfigEntry) => {
+    const current = model.bundleEnabled;
+    const next = current == null ? true : current === true ? false : null;
+    setModels((prev) =>
+      prev.map((m) =>
+        m.provider === model.provider && m.id === model.id
+          ? { ...m, bundleEnabled: next, hasOverride: true }
+          : m,
+      ),
+    );
+    modelConfigService
+      .saveOverride({ provider: model.provider, modelId: model.id, bundleEnabled: next })
+      .catch((e) => {
+        setModels((prev) =>
+          prev.map((m) =>
+            m.provider === model.provider && m.id === model.id
+              ? { ...m, bundleEnabled: current }
+              : m,
+          ),
+        );
+        setError(e instanceof Error ? e.message : String(e));
+      });
   };
 
   const handleToggleEnabled = (model: ModelConfigEntry) => {
@@ -1000,6 +1090,24 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
         </p>
         <div className="flex items-center gap-2">
           {saving && <LoadingSpinner size="xs" />}
+          {category === 'browser_agent' && (
+            <button
+              type="button"
+              onClick={() => setVisionOnly(v => !v)}
+              aria-pressed={visionOnly}
+              data-testid="browser-agent-vision-only"
+              title={t("modelConfig.visionOnlyTooltip")}
+              className={cn(
+                "flex items-center gap-1.5 h-8 px-3 rounded-full text-sm font-medium border transition-colors",
+                visionOnly
+                  ? "border-indigo-300 text-indigo-700 bg-indigo-50 dark:border-indigo-700 dark:text-indigo-300 dark:bg-indigo-900/20"
+                  : "border-theme text-theme-secondary bg-theme-tertiary"
+              )}
+            >
+              <Eye className="w-3.5 h-3.5" />
+              {t("modelConfig.visionOnly")}
+            </button>
+          )}
           <Select value={providerFilter} onValueChange={setProviderFilter}>
             {/* min-h-0 cancels SelectTrigger's default min-h-[44px] and
                 rounded-full matches the action buttons, so the filter and the
@@ -1047,9 +1155,14 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
       )}
 
       {/* Column headers */}
-      <div className="grid items-center gap-2 px-3 py-1 text-sm text-theme-secondary font-medium grid-cols-[40px_28px_auto_1fr_auto_auto_24px_100px_140px_52px]">
+      <div className={cn(
+        "grid items-center gap-2 px-3 py-1 text-sm text-theme-secondary font-medium",
+        ROW_GRID_COLS
+      )}>
         <div>#</div>
         <div />
+        {/* CE-ship chip column (cloud only) - the chip labels itself, no header text */}
+        {!IS_CE && <div />}
         <div>{t("modelConfig.columns.provider")}</div>
         <div>{t("modelConfig.columns.model")}</div>
         <div>{t("modelConfig.columns.tier")}</div>
@@ -1082,6 +1195,7 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
                 model={model}
                 index={models.indexOf(model)}
                 onToggleEnabled={handleToggleEnabled}
+                onCycleBundleEnabled={handleCycleBundleEnabled}
                 onToggleRecommended={handleToggleRecommended}
                 onTierChange={handleTierChange}
                 onReasoningEffortChange={handleReasoningEffortChange}

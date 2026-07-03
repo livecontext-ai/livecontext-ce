@@ -114,39 +114,34 @@ public class ApplicationToolsProvider implements ToolsProvider {
             stringParam("field", "(for: get_node_output) Name (dot-path, e.g. 'output.image') of a large TEXT output field to read in full, paging past the 128 KB preview. Follow the NEXT pointer on a truncated field.", false),
             intParam("max_bytes", "(for: get_node_output field-expand) Text window size, default & cap 128 KB.", false, null),
             intParam("limit", "Max results to return. search: default 10, max 25. my: default 25, max 50.", false, 10),
-            intParam("offset", "Pagination offset (for: search, my, runs); also the byte offset to expand a field from (for: get_node_output with field=)", false, 0)
+            intParam("offset", "Pagination offset (for: search, my, runs); also the byte offset to expand a field from (for: get_node_output with field=)", false, 0),
+            arrayParam("topics", "Optional help filter (for: help): any of 'actions', 'parameters', 'response_fields', 'examples', 'tips', 'troubleshooting', 'response_glossary', 'related_tools'. Omit for the full reference.", false)
         );
 
         return AgentToolDefinition.builder()
             .name("application")
             .description("""
                 Create private apps from workflows, browse/acquire/execute marketplace apps, inspect runs.
-                ⚠️ NOT external APIs (those use catalog(action='search')) - NOT user's own workflows (those use workflow(action='list')).
-
+                NOT external APIs (those use catalog(action='search')) - NOT the user's own workflows (those use workflow(action='list')).
                 USE APPLICATION WHEN THE USER SAYS: "application", "app", "marketplace", "store", "publish", "create app", "run app"
 
                 ACTIONS:
-                - create: Publish workflow as PRIVATE application (workflow_id required or auto-detected). Requires the workflow to have an interface AND at least one successful automatic run to showcase (COMPLETED, PARTIAL_SUCCESS, or - for reusable triggers like webhook/manual/chat/schedule - WAITING_TRIGGER); run it first via workflow(action='execute') if none, else you get a hint. Optional run_id + epoch pin the showcase; omit both to auto-pick the latest run + latest epoch.
-                - search: Browse / search marketplace. Each result carries `owned_by_me`.
-                - my: Your published apps (slim: `default_trigger_id` + `trigger_types`). Call get for full schema.
-                - get: Full details - `data_inputs_schema` + `fireable_triggers[]` (application_id required)
-                - acquire: Clone an app as your own workflow (application_id required)
-                - uninstall: Remove an app you acquired - deletes the local clone + its runs from your workspace; the marketplace listing is untouched and you can acquire it again (application_id required)
+                - create: Publish a workflow as a PRIVATE app (workflow_id required or auto-detected). Requires the workflow to have an interface AND at least one successful automatic run to showcase (COMPLETED, PARTIAL_SUCCESS, or - for reusable triggers like webhook/manual/chat/schedule - WAITING_TRIGGER); run it first via workflow(action='execute') if none. Optional run_id + epoch pin the showcase; omit both to auto-pick the latest.
+                - search: Browse / search the marketplace. my: apps in your workspace. Both return SLIM items (default_trigger_id, trigger_types, owned_by_me - NO data_inputs_schema).
+                - get: Full details for one app - data_inputs_schema + fireable_triggers[] (application_id required)
+                - acquire: Clone someone else's app as your own workflow (application_id required)
+                - uninstall: Remove an app you acquired - deletes the local clone + its runs; the marketplace listing stays and you can acquire it again (application_id required)
                 - execute: Run an app (application_id required, optional data_inputs/trigger_id)
-                - runs: List execution history for an app (application_id required)
-                - get_run: Inspect a run - macro overview or epoch detail (run_id required, epoch optional)
+                - runs: List execution history (application_id required)
+                - get_run: Inspect a run - macro overview, or epoch detail with epoch=N (run_id required)
                 - get_node_output: Full output/error for one node (run_id + epoch + node_id required). A TEXT field >128 KB returns a truncated preview + NEXT pointer; follow it (field=<dot-path> + offset) to page the full value.
-                - visualize: Show app preview card in chat (application_id required)
-                - help: Full documentation
+                - visualize: Show an app preview card in chat (application_id required)
+                - help: Full reference; filter with topics=['actions','parameters','examples',...]
 
-                RUN INSPECTION FLOW:
-                  execute → get_run (macro) → get_run (epoch=N) → get_node_output (zoom)
-
-                EXAMPLES:
-                  application(action='execute', application_id='<uuid>') → run app
-                  application(action='get_run', run_id='<runId>') → macro overview
-                  application(action='get_run', run_id='<runId>', epoch=0) → epoch detail
-                  application(action='get_node_output', run_id='<runId>', epoch=0, node_id='mcp:step1') → node output
+                RULES:
+                - owned_by_me=true -> execute directly (acquire is REJECTED). owned_by_me=false -> acquire first, then execute with the SAME application_id (the acquired app shows owned_by_me=true from then on).
+                - Before execute with data_inputs: call get and use its data_inputs_schema field names VERBATIM - never guess them.
+                - Run inspection flow: execute -> get_run (macro) -> get_run (epoch=N) -> get_node_output (zoom).
                 """)
             .category(ToolCategory.APPLICATION)
             .parameters(params)

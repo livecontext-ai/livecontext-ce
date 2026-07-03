@@ -14,7 +14,7 @@ import com.apimarketplace.agent.service.AgentObservabilityService;
 import com.apimarketplace.agent.service.AgentService;
 import com.apimarketplace.agent.service.execution.AgentToolsConfigCredentials;
 import com.apimarketplace.agent.service.execution.CoreToolsCache;
-import com.apimarketplace.agent.service.execution.RemoteToolExecutionService;
+import com.apimarketplace.agent.tool.ToolExecutionService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
@@ -42,7 +42,15 @@ import java.util.stream.Collectors;
 public class CliAgentService {
 
     private final CoreToolsCache coreToolsCache;
-    private final RemoteToolExecutionService remoteToolExecutionService;
+    // Injected by INTERFACE on purpose: in the CE monolith the @Primary bean is
+    // MonolithToolExecutionService, which intercepts conversation tools
+    // (credential, get_tool_result, set_conversation_title) IN-PROCESS. The
+    // previous concrete RemoteToolExecutionService injection bypassed that
+    // adapter, so every CE bridge-session conversation tool routed to the
+    // JWT-protected /api/internal/conversation/tools/execute callback WITHOUT a
+    // JWT and died with 401. In cloud agent-service the only implementation is
+    // RemoteToolExecutionService - behavior unchanged there.
+    private final ToolExecutionService remoteToolExecutionService;
     private final AgentObservabilityService observabilityService;
     private final AgentService agentService;
     private final ObjectMapper objectMapper;

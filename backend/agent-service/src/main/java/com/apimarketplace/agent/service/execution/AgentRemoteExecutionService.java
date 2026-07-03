@@ -12,6 +12,7 @@ import com.apimarketplace.agent.prompt.DefaultSystemPrompts;
 import com.apimarketplace.agent.service.ModelExecutionLinkService;
 import com.apimarketplace.agent.service.budget.GuardChainFactory;
 import com.apimarketplace.agent.streaming.StreamingCallback;
+import com.apimarketplace.agent.streaming.TeeStreamingCallback;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -55,6 +56,17 @@ public class AgentRemoteExecutionService {
     private final GuardrailService guardrailService;
     private final BridgeLoopDispatcher bridgeDispatcher;
     private final com.apimarketplace.agent.service.ModelCatalogService modelCatalogService;
+
+    /**
+     * Liveness heartbeats for BRIDGE conversation runs. The in-process loop gets its
+     * {@code stream:hb:{streamId}} key from {@link ConversationRedisStreamingCallback};
+     * a bridge run has no local callback (the bridge publishes to Redis itself), yet its
+     * conversation {@code Stream} DB row exists with a frozen {@code updated_at} - so
+     * without a heartbeat the conversation-service absolute-timeout reaper interrupts a
+     * HEALTHY bridge run at the TTL (~10 min) even while it is actively streaming.
+     * {@link #executeAgentViaBridge} registers the stream for the duration of the dispatch.
+     */
+    private final ActiveStreamRegistry activeStreamRegistry;
 
     /**
      * Model execution links (CLOUD only): resolves whether a billed
@@ -187,7 +199,19 @@ public class AgentRemoteExecutionService {
                     request.subAgentAvatarUrl(), request.subAgentId(),
                     request.workflowRunId());
                 originalCallback = conversationCallback;
-                callback = wrapWithActivityPublishing(conversationCallback, agentEntityId, executionId, taskId);
+                // Workflow agent NODE with a user-facing conversation: tee the workflow-envelope
+                // callback alongside, so the run view keeps its tool events on
+                // ws:workflow:run:{runId} (with the nodeId/itemIndex/iteration routing keys)
+                // while the conversation panel streams live. The two formats used to be
+                // mutually exclusive, forcing the async queue path to sacrifice the live
+                // conversation transcript to keep the run view fed.
+                if (request.nodeId() != null && request.workflowRunId() != null) {
+                    StreamingCallback workflowCallback = redisStreamingCallback.forExecution(
+                        request.workflowRunId(), request.nodeId(),
+                        request.itemIndex(), request.loopIteration());
+                    originalCallback = new TeeStreamingCallback(conversationCallback, workflowCallback);
+                }
+                callback = wrapWithActivityPublishing(originalCallback, agentEntityId, executionId, taskId);
             } else if (request.streamChannelId() != null) {
                 // Workflow format (default): envelope events on ws:workflow:run:{runId}
                 originalCallback = redisStreamingCallback.forExecution(
@@ -315,6 +339,43 @@ public class AgentRemoteExecutionService {
         agentActivityPublisher.publishExecutionStarted(
             agentEntityId, executionId, request.model(), source, taskId);
 
+        // Shield the conversation stream from the absolute-timeout reaper while this
+        // worker is alive: a bridge run never saves the Stream row mid-run (chunks go
+        // straight to Redis) and, without this registration, never has a stream:hb key,
+        // so conversation-service would interrupt it at the TTL even mid-stream. The
+        // drain handle only logs: the worker cannot rescue a bridge run's partial
+        // content itself - on shutdown the heartbeat lapses (120s TTL) and the reaper
+        // rescues the partials exactly as it did before this registration existed.
+        // Same gating as the in-process path's ConversationCallback (conversation
+        // format only: a workflow-format streamChannelId is a run channel, not a
+        // conversation Stream row).
+        final String heartbeatStreamId =
+            "conversation".equals(request.streamingFormat()) && request.streamChannelId() != null
+                ? request.streamChannelId()
+                : null;
+        if (heartbeatStreamId != null) {
+            activeStreamRegistry.register(heartbeatStreamId, () ->
+                log.warn("Bridge stream {} still in flight at shutdown drain expiry; " +
+                    "conversation-service will rescue it once the heartbeat TTL lapses", heartbeatStreamId));
+        }
+        try {
+            return dispatchToBridge(request, dispatchRequest, executionRoute, startTime,
+                agentEntityId, executionId, taskId, userRoles);
+        } finally {
+            if (heartbeatStreamId != null) {
+                activeStreamRegistry.unregister(heartbeatStreamId);
+            }
+        }
+    }
+
+    private AgentExecutionResponseDto dispatchToBridge(AgentExecutionRequestDto request,
+                                                       AgentExecutionRequestDto dispatchRequest,
+                                                       ModelExecutionLinkService.ExecutionRoute executionRoute,
+                                                       long startTime,
+                                                       String agentEntityId,
+                                                       String executionId,
+                                                       String taskId,
+                                                       String userRoles) {
         AgentExecutionResponseDto response;
         try {
             log.info("Dispatching agent to bridge: billedProvider={}, billedModel={}, execProvider={}, execModel={}, linked={}, tenantId={}, streamChannel={}, conversation={}",

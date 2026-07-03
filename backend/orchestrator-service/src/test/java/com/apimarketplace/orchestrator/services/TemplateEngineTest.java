@@ -1601,4 +1601,104 @@ class TemplateEngineTest {
                 "Map in mixed template must serialize as JSON, not Java toString {a=1}");
         }
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Workflow variables: {{$vars.name}} / {{vars:name}} normalization
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("Workflow variables ($vars / vars:)")
+    class WorkflowVariablesTests {
+
+        @Test
+        @DisplayName("Should resolve pure {{$vars.api_url}} via the normalized vars.api_url namespace path")
+        void shouldResolvePureDollarVarsExpression() {
+            // Arrange: the normalizer must rewrite $vars.api_url -> vars.api_url
+            // BEFORE the token scan, so NamespaceResolver sees the dotted form.
+            when(namespaceResolver.resolveVariable(eq("vars.api_url"), any()))
+                .thenReturn("https://api.example.com");
+            when(spelEvaluator.createEvaluationContext(anyMap()))
+                .thenReturn(new StandardEvaluationContext());
+            when(spelEvaluator.evaluate(eq("#vars_api_url"), any(StandardEvaluationContext.class)))
+                .thenReturn("https://api.example.com");
+
+            // Act
+            Object result = templateEngine.evaluateTemplate("{{$vars.api_url}}", executionContext);
+
+            // Assert
+            assertEquals("https://api.example.com", result);
+            verify(namespaceResolver).resolveVariable(eq("vars.api_url"), any());
+        }
+
+        @Test
+        @DisplayName("Should resolve mixed template 'prefix {{$vars.x}} suffix' to a string")
+        void shouldResolveMixedTemplateWithDollarVars() {
+            when(namespaceResolver.resolveVariable(eq("vars.x"), any()))
+                .thenReturn("VALUE");
+            when(spelEvaluator.createEvaluationContext(anyMap()))
+                .thenReturn(new StandardEvaluationContext());
+            when(spelEvaluator.evaluate(eq("#vars_x"), any(StandardEvaluationContext.class)))
+                .thenReturn("VALUE");
+
+            Object result = templateEngine.evaluateTemplate("prefix {{$vars.x}} suffix", executionContext);
+
+            assertEquals("prefix VALUE suffix", result);
+        }
+
+        @Test
+        @DisplayName("Should evaluate condition {{$vars.n > 3}} against the numeric variable value")
+        void shouldEvaluateConditionWithDollarVars() {
+            when(namespaceResolver.resolveVariable(eq("vars.n"), any())).thenReturn(5);
+            when(spelEvaluator.createEvaluationContext(anyMap()))
+                .thenReturn(new StandardEvaluationContext());
+            when(spelEvaluator.evaluate(eq("#vars_n > 3"), any(StandardEvaluationContext.class)))
+                .thenReturn(true);
+            when(spelEvaluator.toBoolean(true)).thenReturn(true);
+
+            assertTrue(templateEngine.evaluateCondition("{{$vars.n > 3}}", executionContext));
+            verify(namespaceResolver, atLeastOnce()).resolveVariable(eq("vars.n"), any());
+        }
+
+        @Test
+        @DisplayName("Should resolve alias {{vars:x}} through the same vars.x namespace path")
+        void shouldResolveAliasFormThroughSamePath() {
+            when(namespaceResolver.resolveVariable(eq("vars.x"), any()))
+                .thenReturn("VALUE");
+            when(spelEvaluator.createEvaluationContext(anyMap()))
+                .thenReturn(new StandardEvaluationContext());
+            when(spelEvaluator.evaluate(eq("#vars_x"), any(StandardEvaluationContext.class)))
+                .thenReturn("VALUE");
+
+            Object result = templateEngine.evaluateTemplate("{{vars:x}}", executionContext);
+
+            assertEquals("VALUE", result);
+            verify(namespaceResolver).resolveVariable(eq("vars.x"), any());
+        }
+
+        @Test
+        @DisplayName("Should normalize $vars.x in resolveTemplatesSimple before the map lookup")
+        void shouldNormalizeDollarVarsInResolveTemplatesSimple() {
+            Map<String, Object> variables = Map.of("vars", Map.of("x", "V"));
+            when(pathNavigator.getVariableValueFromMap(eq("vars.x"), anyMap()))
+                .thenReturn("V");
+
+            String result = templateEngine.resolveTemplatesSimple("value={{$vars.x}}", variables);
+
+            assertEquals("value=V", result);
+            verify(pathNavigator).getVariableValueFromMap(eq("vars.x"), anyMap());
+        }
+
+        @Test
+        @DisplayName("Should normalize the vars:x alias in resolveTemplatesSimple before the map lookup")
+        void shouldNormalizeAliasInResolveTemplatesSimple() {
+            Map<String, Object> variables = Map.of("vars", Map.of("x", "V"));
+            when(pathNavigator.getVariableValueFromMap(eq("vars.x"), anyMap()))
+                .thenReturn("V");
+
+            String result = templateEngine.resolveTemplatesSimple("value={{vars:x}}", variables);
+
+            assertEquals("value=V", result);
+            verify(pathNavigator).getVariableValueFromMap(eq("vars.x"), anyMap());
+        }
+    }
 }

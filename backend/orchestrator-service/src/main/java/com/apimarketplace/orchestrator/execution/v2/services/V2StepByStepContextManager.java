@@ -65,6 +65,12 @@ public class V2StepByStepContextManager implements RunScopedCache {
     private final DAGIndependenceValidator dagIndependenceValidator;
     private final WorkflowMetrics metrics;
 
+    // Per-run {{$vars.*}} bundle (fetched once per run from auth-service).
+    // Optional: not wired in plain unit-test construction - resolution then
+    // degrades to "no variables defined".
+    @Autowired(required = false)
+    private com.apimarketplace.orchestrator.services.context.WorkflowVariableBundleCache workflowVariableBundleCache;
+
     @Autowired
     public V2StepByStepContextManager(
             ExecutionCacheManager executionCacheManager,
@@ -270,6 +276,7 @@ public class V2StepByStepContextManager implements RunScopedCache {
         if (resolvedTriggerId != null) {
             state = state.withGlobalData("dagTriggerId", resolvedTriggerId);
         }
+        state = attachWorkflowVariables(state, tree);
 
         // Create context with fresh data and explicit DAG coordinates.
         // PR15 - thread the workspace identity from the tree (which carries it
@@ -392,6 +399,7 @@ public class V2StepByStepContextManager implements RunScopedCache {
         if (resolvedTriggerId != null) {
             state = state.withGlobalData("dagTriggerId", resolvedTriggerId);
         }
+        state = attachWorkflowVariables(state, tree);
 
         // PR15 - thread workspace identity from the tree (epoch-aware overload).
         ExecutionContext context = new ExecutionContext(
@@ -408,6 +416,20 @@ public class V2StepByStepContextManager implements RunScopedCache {
             stepOutputs, triggerData, state, cachedGlobalData, startNs);
 
         return context;
+    }
+
+    /**
+     * Attach the per-run {{$vars.*}} bundle under globalData "vars" so every
+     * SBS context rebuild exposes it to EvalContextBuilder / V2TemplateAdapter.
+     * No-op (state unchanged) when the cache is not wired (plain unit tests).
+     */
+    private ExecutionState attachWorkflowVariables(ExecutionState state, ExecutionTree tree) {
+        if (workflowVariableBundleCache == null) {
+            return state;
+        }
+        return state.withGlobalData(
+            com.apimarketplace.orchestrator.services.template.VarsSyntaxNormalizer.VARS_NAMESPACE,
+            workflowVariableBundleCache.getBundle(tree.runId(), tree.tenantId(), tree.organizationId()));
     }
 
     /**

@@ -192,10 +192,12 @@ class OrchestrationRecoveryServiceTest {
     class ZombieThresholdTests {
 
         @Test
-        @DisplayName("Default threshold should be 62 minutes when no config is injected")
-        void defaultThresholdShouldBe62Minutes() {
+        @DisplayName("Default threshold is 127 minutes (125 max-execution + 2 grace) - must exceed the 7200s agent contract so healthy long runs are never zombie-failed")
+        void defaultThresholdCoversAgentContract() {
             assertThat(service.getZombieThreshold())
-                    .isEqualTo(Duration.ofMinutes(62));
+                    .isEqualTo(Duration.ofMinutes(127));
+            assertThat(service.getZombieThreshold())
+                    .isGreaterThan(Duration.ofSeconds(7200));
         }
 
         @Test
@@ -212,7 +214,7 @@ class OrchestrationRecoveryServiceTest {
         }
 
         @Test
-        @DisplayName("Should use default when maxExecutionMinutes is 0")
+        @DisplayName("Should use default (127 min) when maxExecutionMinutes is 0")
         void shouldUseDefaultWhenMaxExecutionMinutesIsZero() {
             WorkflowExecutionConfig config = new WorkflowExecutionConfig();
             config.setMaxExecutionMinutes(0);
@@ -221,7 +223,7 @@ class OrchestrationRecoveryServiceTest {
             service.initZombieThreshold();
 
             assertThat(service.getZombieThreshold())
-                    .isEqualTo(Duration.ofMinutes(62));
+                    .isEqualTo(Duration.ofMinutes(127));
         }
     }
 

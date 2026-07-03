@@ -44,6 +44,10 @@ public class CeConversationStubController {
     // requires to resolve a stream) is only written via registerExternalStream - which used to be a no-op
     // here, so the snapshot replay found nothing. Writing it makes the WS snapshot/recovery work.
     private final com.apimarketplace.conversation.streaming.StreamStateService streamStateService;
+    // Owner resolution for external streams (in-JVM equivalent of cloud
+    // InternalAccessController's lookup): attributes the stream to the
+    // conversation owner so /streams/active sees externally-driven runs.
+    private final com.apimarketplace.conversation.repository.ConversationRepository conversationRepository;
 
     @Autowired(required = false)
     private ModelCatalogService modelCatalogService;
@@ -99,11 +103,29 @@ public class CeConversationStubController {
     }
 
     /**
-     * Active streams - always empty in CE because servlet chat has no long-running stream registry.
+     * Active streams for the caller - CE serves this from the same
+     * RedisStreamStateService user index the cloud path reads. Externally-driven
+     * runs (workflow agent nodes, task assignees) are attributed to the
+     * conversation owner at registration, so the main chat page's reconnect
+     * probe can auto-attach mid-flight. Used to always return [] ("no reactive
+     * streaming infrastructure"), which left CE's main chat blind to in-flight
+     * external streams.
      */
     @GetMapping("/api/v3/streams/active")
-    public ResponseEntity<List<String>> getActiveStreams() {
-        return ResponseEntity.ok(List.of());
+    public ResponseEntity<List<String>> getActiveStreams(
+            @RequestHeader(value = "X-User-ID", required = false) String authenticatedUserId) {
+        if (authenticatedUserId == null || authenticatedUserId.isBlank()) {
+            return ResponseEntity.ok(List.of());
+        }
+        try {
+            List<String> ids = streamStateService.getStreamingConversationIds(authenticatedUserId)
+                    .collectList()
+                    .block(java.time.Duration.ofSeconds(3));
+            return ResponseEntity.ok(ids == null ? List.of() : ids);
+        } catch (Exception e) {
+            log.warn("[CE] Active-streams lookup failed (best-effort, returning empty): {}", e.getMessage());
+            return ResponseEntity.ok(List.of());
+        }
     }
 
     @PostMapping("/api/internal/streams/register")
@@ -115,12 +137,22 @@ public class CeConversationStubController {
         }
 
         // Write the stream metadata hash + conversation index (mirrors cloud InternalAccessController).
-        // Without this the hash is missing, RedisStreamStateService.getByConversationId returns empty, and
-        // the WS snapshot replay finds nothing even though content/tool keys exist.
+        // Without this the hash is missing → RedisStreamStateService.getByConversationId returns empty →
+        // the WS snapshot replay finds nothing even though content/tool keys exist. Owner attribution
+        // feeds the stream:user index so /streams/active (above) sees this run.
         try {
+            String ownerUserId = null;
+            try {
+                ownerUserId = conversationRepository.findById(conversationId)
+                        .map(com.apimarketplace.conversation.entity.Conversation::getUserId)
+                        .orElse(null);
+            } catch (Exception e) {
+                log.warn("[CE] Failed to resolve owner of conversation {}: {}", conversationId, e.getMessage());
+            }
             streamStateService.registerExternalStream(
                     streamId, conversationId,
-                    body.getOrDefault("model", null), body.getOrDefault("provider", null)).block();
+                    body.getOrDefault("model", null), body.getOrDefault("provider", null),
+                    ownerUserId).block();
         } catch (Exception e) {
             log.warn("[CE] Stream register failed (best-effort): streamId={}, conv={}: {}", streamId, conversationId, e.getMessage());
         }

@@ -67,6 +67,186 @@ class ShowcaseSnapshotReaderTest {
         assertThat(reader.readRunState(new WorkflowPublicationEntity())).isEmpty();
     }
 
+    @Nested
+    @DisplayName("readRunState edge self-heal - regression: marketplace 'All epochs' showed no edge statusCounts because legacy captures froze runState.edges=[] (JSONB epoch view empty on finished runs)")
+    class ReadRunStateEdgeSelfHeal {
+
+        @Test
+        @DisplayName("Empty runState.edges is synthesized from the snapshot's epochStates edge counts")
+        void synthesizesEdgesFromEpochStates() {
+            Map<String, Object> runState = new LinkedHashMap<>();
+            runState.put("runId", "showcase_1");
+            runState.put("edges", List.of());
+            Map<String, Object> snap = new LinkedHashMap<>();
+            snap.put("runState", runState);
+            snap.put("epochStates", Map.of("1", Map.of(
+                    "epoch", 2,
+                    "edges", Map.of(
+                            "trigger:ask->core:dispatch", Map.of("COMPLETED", 1),
+                            "core:dispatch->agent:fable_5", Map.of("completed", 2, "SKIPPED", 1)))));
+
+            Optional<Map<String, Object>> result = reader.readRunState(pubWithSnapshot(snap));
+
+            assertThat(result).isPresent();
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> edges = (List<Map<String, Object>>) result.get().get("edges");
+            assertThat(edges).hasSize(2);
+            Map<String, Object> triggerEdge = edges.stream()
+                    .filter(e -> "trigger:ask".equals(e.get("from"))).findFirst().orElseThrow();
+            assertThat(triggerEdge)
+                    .containsEntry("to", "core:dispatch")
+                    .containsEntry("status", "COMPLETED")
+                    .containsEntry("completedCount", 1)
+                    .containsEntry("skippedCount", 0)
+                    .containsEntry("totalCount", 1);
+            Map<String, Object> mixedEdge = edges.stream()
+                    .filter(e -> "core:dispatch".equals(e.get("from"))).findFirst().orElseThrow();
+            assertThat(mixedEdge)
+                    .as("lowercase status keys are normalized to uppercase before summing")
+                    .containsEntry("completedCount", 2)
+                    .containsEntry("skippedCount", 1)
+                    .containsEntry("totalCount", 3);
+            @SuppressWarnings("unchecked")
+            Map<String, Integer> statusCounts = (Map<String, Integer>) mixedEdge.get("statusCounts");
+            assertThat(statusCounts).containsEntry("COMPLETED", 2).containsEntry("SKIPPED", 1);
+        }
+
+        @Test
+        @DisplayName("Counts for the same edge are summed across epochs (all-epochs semantics)")
+        void sumsCountsAcrossEpochs() {
+            Map<String, Object> runState = new LinkedHashMap<>();
+            runState.put("edges", List.of());
+            Map<String, Object> snap = new LinkedHashMap<>();
+            snap.put("runState", runState);
+            snap.put("epochStates", Map.of(
+                    "1", Map.of("edges", Map.of("trigger:a->mcp:b", Map.of("COMPLETED", 1))),
+                    "2", Map.of("edges", Map.of("trigger:a->mcp:b", Map.of("COMPLETED", 1)))));
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> edges = (List<Map<String, Object>>)
+                    reader.readRunState(pubWithSnapshot(snap)).orElseThrow().get("edges");
+            assertThat(edges).hasSize(1);
+            assertThat(edges.get(0)).containsEntry("completedCount", 2).containsEntry("totalCount", 2);
+        }
+
+        @Test
+        @DisplayName("Non-empty runState.edges passes through untouched (no synthesis)")
+        void nonEmptyEdgesPassThrough() {
+            List<Map<String, Object>> captured = List.of(Map.of(
+                    "from", "trigger:a", "to", "mcp:b", "status", "COMPLETED",
+                    "completedCount", 9, "skippedCount", 0, "totalCount", 9));
+            Map<String, Object> runState = new LinkedHashMap<>();
+            runState.put("edges", captured);
+            Map<String, Object> snap = new LinkedHashMap<>();
+            snap.put("runState", runState);
+            snap.put("epochStates", Map.of("1", Map.of(
+                    "edges", Map.of("trigger:a->mcp:b", Map.of("COMPLETED", 1)))));
+
+            Map<String, Object> result = reader.readRunState(pubWithSnapshot(snap)).orElseThrow();
+            assertThat(result.get("edges")).isSameAs(captured);
+        }
+
+        @Test
+        @DisplayName("Empty edges with no epochStates data stays empty (nothing to heal from)")
+        void noEpochStatesLeavesEdgesEmpty() {
+            Map<String, Object> runState = new LinkedHashMap<>();
+            runState.put("edges", List.of());
+            Map<String, Object> snap = new LinkedHashMap<>();
+            snap.put("runState", runState);
+
+            Map<String, Object> result = reader.readRunState(pubWithSnapshot(snap)).orElseThrow();
+            assertThat((List<?>) result.get("edges")).isEmpty();
+        }
+
+        @Test
+        @DisplayName("Missing edges key (not just empty list) also triggers synthesis")
+        void missingEdgesKeyTriggersSynthesis() {
+            Map<String, Object> runState = new LinkedHashMap<>();
+            runState.put("runId", "showcase_1"); // no "edges" key at all
+            Map<String, Object> snap = new LinkedHashMap<>();
+            snap.put("runState", runState);
+            snap.put("epochStates", Map.of("1", Map.of(
+                    "edges", Map.of("trigger:a->mcp:b", Map.of("COMPLETED", 1)))));
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> edges = (List<Map<String, Object>>)
+                    reader.readRunState(pubWithSnapshot(snap)).orElseThrow().get("edges");
+            assertThat(edges).hasSize(1);
+        }
+
+        @Test
+        @DisplayName("FAILED-only and RUNNING edges keep their status, and statusCounts preserves what EdgeState cannot carry")
+        void failedAndRunningStatusLegs() {
+            Map<String, Object> runState = new LinkedHashMap<>();
+            runState.put("edges", List.of());
+            Map<String, Object> snap = new LinkedHashMap<>();
+            snap.put("runState", runState);
+            snap.put("epochStates", Map.of("1", Map.of("edges", Map.of(
+                    "core:a->mcp:failed_leg", Map.of("FAILED", 2),
+                    "core:a->mcp:running_leg", Map.of("RUNNING", 1, "COMPLETED", 3)))));
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> edges = (List<Map<String, Object>>)
+                    reader.readRunState(pubWithSnapshot(snap)).orElseThrow().get("edges");
+            Map<String, Object> failedEdge = edges.stream()
+                    .filter(e -> "mcp:failed_leg".equals(e.get("to"))).findFirst().orElseThrow();
+            assertThat(failedEdge).containsEntry("status", "FAILED").containsEntry("completedCount", 0);
+            @SuppressWarnings("unchecked")
+            Map<String, Integer> failedCounts = (Map<String, Integer>) failedEdge.get("statusCounts");
+            assertThat(failedCounts).containsEntry("FAILED", 2);
+            Map<String, Object> runningEdge = edges.stream()
+                    .filter(e -> "mcp:running_leg".equals(e.get("to"))).findFirst().orElseThrow();
+            assertThat(runningEdge)
+                    .as("RUNNING outranks COMPLETED in status precedence")
+                    .containsEntry("status", "RUNNING")
+                    .containsEntry("completedCount", 3);
+        }
+
+        @Test
+        @DisplayName("Malformed edge keys, non-map entries, and non-numeric counts are skipped, not fatal")
+        void malformedEntriesAreSkipped() {
+            Map<String, Object> runState = new LinkedHashMap<>();
+            runState.put("edges", List.of());
+            Map<String, Object> edgesMap = new LinkedHashMap<>();
+            edgesMap.put("no_arrow_key", Map.of("COMPLETED", 1));       // no "->"
+            edgesMap.put("dangling->", Map.of("COMPLETED", 1));          // empty "to"
+            edgesMap.put("core:a->mcp:b", "not-a-map");                  // counts not a map
+            edgesMap.put("core:a->mcp:c", Map.of("COMPLETED", "oops"));  // count not a Number
+            edgesMap.put("core:a->mcp:good", Map.of("COMPLETED", 1));    // the only valid row
+            Map<String, Object> epochStates = new LinkedHashMap<>();
+            epochStates.put("1", Map.of("edges", edgesMap));
+            epochStates.put("2", "not-a-map"); // whole epoch entry malformed
+            Map<String, Object> snap = new LinkedHashMap<>();
+            snap.put("runState", runState);
+            snap.put("epochStates", epochStates);
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> edges = (List<Map<String, Object>>)
+                    reader.readRunState(pubWithSnapshot(snap)).orElseThrow().get("edges");
+            assertThat(edges).hasSize(1);
+            assertThat(edges.get(0)).containsEntry("to", "mcp:good");
+        }
+
+        @Test
+        @DisplayName("Self-heal never mutates the snapshot's backing JSONB map")
+        void doesNotMutateBackingSnapshot() {
+            List<Object> originalEmptyEdges = List.of();
+            Map<String, Object> runState = new LinkedHashMap<>();
+            runState.put("edges", originalEmptyEdges);
+            Map<String, Object> snap = new LinkedHashMap<>();
+            snap.put("runState", runState);
+            snap.put("epochStates", Map.of("1", Map.of(
+                    "edges", Map.of("trigger:a->mcp:b", Map.of("COMPLETED", 1)))));
+            WorkflowPublicationEntity pub = pubWithSnapshot(snap);
+
+            Map<String, Object> healed = reader.readRunState(pub).orElseThrow();
+            assertThat((List<?>) healed.get("edges")).hasSize(1);
+            assertThat(runState.get("edges"))
+                    .as("the entity's JSONB sub-map must keep its original (empty) edges list")
+                    .isSameAs(originalEmptyEdges);
+        }
+    }
+
     @Test
     @DisplayName("readAggregatedSteps returns the global list when epoch is null")
     void readAggregatedStepsAll() {

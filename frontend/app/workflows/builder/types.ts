@@ -300,6 +300,12 @@ export interface BuilderNodeData {
   lastBrowserCdpWsUrl?: string;
   lastBrowserRunId?: string;
   lastBrowserCurrentUrl?: string;
+  // Control node id for the panel's REST calls (takeover-resume /
+  // cdp-token-refresh / final-screenshot). Differs from the builder node id
+  // when a GENERIC agent node hosts the browser session (it is the tool-call
+  // id the runner is keyed by); equals the builder node id for the dedicated
+  // agent:browser_agent node. Published on the wire as control_node_id.
+  lastBrowserNodeId?: string;
   promptRequired?: boolean;
   model?: string;
   modelRequired?: boolean;

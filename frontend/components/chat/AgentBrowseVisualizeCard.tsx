@@ -96,7 +96,7 @@ export function AgentBrowseVisualizeCard({ interfaceId, title }: AgentBrowseVisu
       label: taskLabel,
       icon: <Globe className="w-4 h-4" />,
       content: <AgentBrowsePanelContent interfaceId={interfaceId} />,
-      preferredWidth: 0.4,
+      preferredWidth: 0.5,
     });
   };
 

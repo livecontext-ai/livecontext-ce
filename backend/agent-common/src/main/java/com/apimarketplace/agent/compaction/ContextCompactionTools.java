@@ -72,6 +72,8 @@ public final class ContextCompactionTools {
      * API's own guard on accidental widening.
      */
     public static final Set<String> NEVER_MASK_TOOLS = Set.of(
+            "credential",
+            // Legacy routing alias of `credential` (pre-rename sessions).
             "request_credential",
             "catalog",
             "workflow",

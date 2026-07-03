@@ -138,6 +138,11 @@ public class ReferenceValidator implements WorkflowValidator {
             String[] parts = inner.split("\\.", 2);
             String nodeRef = parts[0];
             if (nodeRef.contains(":")) {
+                // vars:name (alias of $vars.name) references a workflow
+                // variable, not a node - never flag it as an unknown node.
+                if (nodeRef.startsWith("vars:")) {
+                    return null;
+                }
                 return nodeRef;
             }
         }
@@ -168,7 +173,7 @@ public class ReferenceValidator implements WorkflowValidator {
             if (!services.isEmpty()) {
                 result.addWarning("CREDENTIALS_REQUIRED", null,
                     "Workflow requires credentials for: " + String.join(", ", services) +
-                    ". Use request_credential() to connect them before execution.");
+                    ". Use credential(action='require') to connect them before execution.");
             }
         }
     }

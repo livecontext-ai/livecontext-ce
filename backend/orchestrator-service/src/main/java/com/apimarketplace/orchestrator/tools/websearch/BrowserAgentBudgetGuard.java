@@ -62,14 +62,24 @@ public class BrowserAgentBudgetGuard {
     private final StringRedisTemplate redisTemplate;
     private final int concurrentLimit;
     private final int dailyStepsLimit;
+    private final boolean queueWaitEnabled;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public BrowserAgentBudgetGuard(
             @Qualifier("webSearchRedisTemplate") StringRedisTemplate redisTemplate,
             @Value("${websearch.browser-agent.per-user-concurrent-limit:1}") int concurrentLimit,
-            @Value("${websearch.browser-agent.per-user-daily-steps-limit:200}") int dailyStepsLimit) {
+            @Value("${websearch.browser-agent.per-user-daily-steps-limit:200}") int dailyStepsLimit,
+            @Value("${websearch.browser-agent.queue-wait-enabled:true}") boolean queueWaitEnabled) {
         this.redisTemplate = redisTemplate;
         this.concurrentLimit = concurrentLimit;
         this.dailyStepsLimit = dailyStepsLimit;
+        this.queueWaitEnabled = queueWaitEnabled;
+    }
+
+    /** Back-compat constructor (tests predating the queue-wait flag). */
+    public BrowserAgentBudgetGuard(
+            StringRedisTemplate redisTemplate, int concurrentLimit, int dailyStepsLimit) {
+        this(redisTemplate, concurrentLimit, dailyStepsLimit, true);
     }
 
     /**
@@ -88,7 +98,16 @@ public class BrowserAgentBudgetGuard {
         }
 
         // 1. Concurrent session limit (LLEN).
-        if (concurrentLimit > 0) {
+        //
+        // Skipped when queue-wait is enabled (the default): the runner now
+        // QUEUES an over-limit session FIFO (budget_gate.acquire_concurrent_
+        // slot_queued) instead of rejecting it, so a workflow split/fork of
+        // N browser branches runs them one after another. Pre-rejecting
+        // here would defeat that queue - the runner is the single authority.
+        // Set websearch.browser-agent.queue-wait-enabled=false to restore
+        // the fail-fast pre-check (must match BROWSER_AGENT_QUEUE_WAIT_MAX_
+        // SECONDS=0 on the websearch side).
+        if (concurrentLimit > 0 && !queueWaitEnabled) {
             String concurrentKey = String.format(CONCURRENT_KEY_FMT, userId);
             Long len = safeLLen(concurrentKey);
             if (len != null && len >= concurrentLimit) {

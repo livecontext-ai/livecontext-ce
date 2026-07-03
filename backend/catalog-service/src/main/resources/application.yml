@@ -227,3 +227,10 @@ cache:
     tool-schemas: 60      # Tool schema cache (1 hour)
     server-health: 5      # Server health status
     rate-limit-window: 1  # Rate limiting sliding window
+
+# Global-catalog admin gate (ToolCategoryController, ToolResponseController).
+# Shared secret checked against the X-Internal-Admin-Token header on writes to
+# global catalog rows. Blank (default) = those endpoints are locked down.
+# The catalog-import Job presents the same token (importer.catalog.admin-token).
+catalog:
+  admin-token: ${CATALOG_ADMIN_TOKEN:}

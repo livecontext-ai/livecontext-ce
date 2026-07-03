@@ -546,10 +546,12 @@ public class BrowserAgentModule extends WebJobModule {
     @SuppressWarnings("unchecked")
     protected Map<String, Object> awaitJobResult(String jobId, ToolExecutionContext context) throws Exception {
         String resultKey = RESULT_KEY_PREFIX + jobId;
-        // Use the subclass-overridable timeout (browserAgentBlpopTimeout, ~110 s)
-        // instead of the generic blpopTimeout (150 s) so the orchestrator times
-        // out BEFORE the agent client (120 s). See getBlpopTimeoutSeconds()
-        // javadoc for the full ordering rationale.
+        // Use the subclass-overridable timeout (browserAgentBlpopTimeout,
+        // default 600 s = the runner's MAX_TIMEOUT_S) instead of the generic
+        // blpopTimeout. The runner keeps `queue wait + run` inside that same
+        // budget by deducting elapsed queue time from the run timeout, so a
+        // FIFO-queued split branch can never push its result past this BLPOP.
+        // See getBlpopTimeoutSeconds() javadoc for the ordering rationale.
         String resultJson = redisTemplate.opsForList().leftPop(
             resultKey, Duration.ofSeconds(getBlpopTimeoutSeconds()));
         if (resultJson == null) return null;
@@ -1001,19 +1003,38 @@ public class BrowserAgentModule extends WebJobModule {
         String runId = stringFromCreds(context, "__streamId__");
         String nodeId = stringFromCreds(context, "__toolCallId__");
         String conversationId = stringFromCreds(context, "conversationId");
+        // Set when the CALLER is a workflow node: either the dedicated
+        // agent:browser_agent node (whose streamId already IS the workflow
+        // run id) or a generic agent node whose remote loop forwarded the
+        // hosting (workflowRunId, workflowNodeId) pair through the tool
+        // credentials.
+        String workflowRunId = stringFromCreds(context, "__workflowRunId__");
+        String workflowNodeId = stringFromCreds(context, "__workflowNodeId__");
         if (runId == null || runId.isBlank() || nodeId == null || nodeId.isBlank()) {
             return;
         }
         try {
             String key = "agent:browse:meta:" + runId + ":" + nodeId;
             Map<String, String> fields = new LinkedHashMap<>();
-            if (conversationId != null && !conversationId.isBlank()) {
-                fields.put("conversationId", conversationId);
-            } else {
+            boolean workflowHosted = workflowRunId != null && !workflowRunId.isBlank();
+            if (workflowHosted || conversationId == null || conversationId.isBlank()) {
                 // Workflow path - flag it so the lifecycle subscriber picks
-                // the workflow fanout branch (publish on ws:workflow:run:{runId})
-                // instead of the chat branch.
+                // the workflow fanout branch. A generic agent node has BOTH a
+                // conversation (its agent-entity conversation, which nobody is
+                // watching during a run) and a hosting workflow run - the run
+                // page is where the user is, so workflow wins. The subscriber
+                // publishes on ws:workflow:run:{workflowRunId} and addresses
+                // the HOST node so the builder graph can match the event; the
+                // (runId, nodeId) hash key stays the runner's control address.
                 fields.put("runType", "workflow");
+                if (workflowHosted) {
+                    fields.put("workflowRunId", workflowRunId);
+                }
+                if (workflowNodeId != null && !workflowNodeId.isBlank()) {
+                    fields.put("hostNodeId", workflowNodeId);
+                }
+            } else {
+                fields.put("conversationId", conversationId);
             }
             if (userId != null && !userId.isBlank()) {
                 fields.put("userId", userId);

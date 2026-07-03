@@ -56,7 +56,7 @@ public class SkillHelpModule implements ToolModule {
         skillActions.put("list", "List all skills with pagination (limit, offset)");
         skillActions.put("update", "Update skill fields by skill_id. Also moves skill if folder_id is provided (use 'root' to move to root).");
         skillActions.put("delete", "Delete a skill by skill_id");
-        skillActions.put("assign", "Add skills to an agent (ADDITIVE - does NOT remove existing). Pass ALL skill_ids at once.");
+        skillActions.put("assign", "Add skills to an agent (additive - existing skills are kept). Full contract on the skill_ids parameter below.");
         skillActions.put("publish",
             "Add the skill to the marketplace. Params: skill_id (required), title (required), " +
             "interface_id (REQUIRED - UUID of the landing interface shown to acquirers), " +
@@ -84,13 +84,9 @@ public class SkillHelpModule implements ToolModule {
 
         result.put("skill_tips", List.of(
             "Skills are REUSABLE - create once, assign to multiple agents",
-            "Keep 'description' short and clear - it goes into the agent's system prompt",
-            "Put detailed steps in 'instructions' - only loaded when the skill is activated",
-            "Use markdown in 'instructions' for better formatting (## headers, numbered lists, etc.)",
-            "Max 10 skills per agent",
+            "Keep 'description' short (it goes into the agent's system prompt); put the detailed steps in 'instructions' (markdown, loaded only when the skill is activated)",
             "Use skill(action='list') to find existing skills before creating duplicates",
-            "ASSIGN is ADDITIVE: it adds skills without removing existing ones. Already assigned skills are skipped.",
-            "Pass ALL skill IDs in ONE assign call. Do NOT call assign multiple times with one skill each.",
+            "ASSIGN: pass ALL skill IDs in ONE call - it is additive (existing skills kept, already-assigned skipped), max 10 per agent",
             "To find agent IDs: agent(action='list')",
             "You can also assign skills during agent creation: agent(action='create', ..., skill_ids=['uuid1', 'uuid2'])"
         ));

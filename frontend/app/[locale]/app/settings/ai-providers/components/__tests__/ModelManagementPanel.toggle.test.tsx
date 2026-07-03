@@ -88,7 +88,9 @@ describe('ModelManagementPanel - optimistic enable toggle (no visual reload)', (
   });
 
   it('persists via setCategoryEnabled (still no refetch) when toggling on a non-chat tab', async () => {
-    mocks.getEffectiveModels.mockResolvedValue([buildModel({ enabled: true })]);
+    // supportsVision: the Browser Agent tab defaults to vision-only, so the
+    // model must be vision-capable to be visible there.
+    mocks.getEffectiveModels.mockResolvedValue([buildModel({ enabled: true, supportsVision: true })]);
     mocks.setCategoryEnabled.mockResolvedValue({ success: true });
 
     render(<ModelManagementPanel t={t} />);

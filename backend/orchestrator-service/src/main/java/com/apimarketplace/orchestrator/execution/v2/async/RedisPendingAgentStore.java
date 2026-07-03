@@ -72,8 +72,14 @@ public class RedisPendingAgentStore {
      */
     static final String RUN_INDEX_PREFIX = "agent:pending-run-index:";
 
-    /** Default TTL: longer than the worker result-key TTL (1h) to give recovery a buffer. */
-    static final Duration DEFAULT_TTL = Duration.ofHours(2);
+    /**
+     * Default TTL: must outlive BOTH the worker result-key TTL (1h) AND the longest
+     * legitimate run (7200s executionTimeout/inactivityTimeout contract, 130-min recovery
+     * hard timeout) - the pending record is also what shields a RUNNING run from the
+     * zombie scan, so a max-length run must never outlive its own record. 3h = 130 min
+     * hard timeout + queue wait + recovery buffer.
+     */
+    static final Duration DEFAULT_TTL = Duration.ofHours(3);
 
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;

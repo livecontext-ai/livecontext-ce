@@ -492,8 +492,9 @@ public final class WorkflowBuilderPrompts {
                 Output: {{core:<label>.output.task}} (single ops), {{core:<label>.output.tasks}} (list), {{core:<label>.output.success}}
 
                 ⚠ EXECUTION MODEL:
-                • create_task with agentId AUTO-TRIGGERS the agent ASYNCHRONOUSLY. The DAG does NOT wait - returns immediately with task.status=PENDING.
+                • create_task with agentId AUTO-TRIGGERS the agent ASYNCHRONOUSLY. The DAG does NOT wait - returns immediately with task.status=pending.
                 • The agent result is in the task record, NOT in the DAG. You CANNOT use it in downstream nodes via templates.
+                • An agent-worked task always lands in status=in_review before completed (approved by the reviewerAgentId agent if set, otherwise by the task creator), so a downstream status check sees in_review, not completed, until approval.
                 • NEVER chain task_create(agentId=X) → agent_node(X) - this runs agent X TWICE (async from task + sync from agent node).
 
                 THREE PATTERNS (pick one):

@@ -55,6 +55,21 @@ public class AgentTaskRecurrenceController {
         }
     }
 
+    /**
+     * Org-role write gate: a VIEWER member is read-only, so recurrence
+     * templates cannot be created, edited, or deleted. Mirrors the task
+     * board gate in {@link AgentTaskController}.
+     */
+    private boolean isViewerRole(HttpServletRequest request) {
+        String orgRole = tenantResolver.resolveOrgRole(request);
+        return orgRole != null && "VIEWER".equalsIgnoreCase(orgRole.trim());
+    }
+
+    private static ResponseEntity<?> viewerForbidden() {
+        return ResponseEntity.status(403).body(Map.of(
+                "error", "your workspace role is read-only (VIEWER): recurrence mutations are not allowed"));
+    }
+
     @GetMapping("/recurrences")
     public ResponseEntity<?> list(
             @RequestParam(value = "scope", required = false, defaultValue = "all_in_tenant") String scope,
@@ -84,6 +99,9 @@ public class AgentTaskRecurrenceController {
     public ResponseEntity<?> create(@RequestBody CreateRecurrenceRequest request,
                                      HttpServletRequest httpRequest) {
         String tenantId = tenantResolver.resolve(httpRequest);
+        if (isViewerRole(httpRequest)) {
+            return viewerForbidden();
+        }
         try {
             AgentTaskRecurrenceEntity r = recurrenceService.create(tenantId, null, tenantId, request);
             return ResponseEntity.ok(RecurrenceResponse.from(r));
@@ -97,6 +115,9 @@ public class AgentTaskRecurrenceController {
                                      @RequestBody UpdateRecurrenceRequest request,
                                      HttpServletRequest httpRequest) {
         String tenantId = tenantResolver.resolve(httpRequest);
+        if (isViewerRole(httpRequest)) {
+            return viewerForbidden();
+        }
         try {
             AgentTaskRecurrenceEntity r = recurrenceService.update(tenantId, recurrenceId, null, tenantId, request);
             return ResponseEntity.ok(RecurrenceResponse.from(r));
@@ -111,6 +132,9 @@ public class AgentTaskRecurrenceController {
     public ResponseEntity<?> delete(@PathVariable UUID recurrenceId,
                                      HttpServletRequest httpRequest) {
         String tenantId = tenantResolver.resolve(httpRequest);
+        if (isViewerRole(httpRequest)) {
+            return viewerForbidden();
+        }
         try {
             recurrenceService.delete(tenantId, recurrenceId, null, tenantId);
             return ResponseEntity.ok(Map.of("deleted", true));

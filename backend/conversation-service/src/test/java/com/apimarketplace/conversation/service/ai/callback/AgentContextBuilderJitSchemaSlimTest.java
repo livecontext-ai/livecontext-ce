@@ -127,10 +127,10 @@ class AgentContextBuilderJitSchemaSlimTest {
         when(agentConfigProvider.getAvailableModels()).thenReturn(List.of(
                 new AvailableModel("anthropic", "claude-opus-4-7", "top", 1)
         ));
-        when(schemaSlimExclusionPolicy.isToolAlwaysFull("request_credential")).thenReturn(true);
+        when(schemaSlimExclusionPolicy.isToolAlwaysFull("credential")).thenReturn(true);
         when(schemaSlimExclusionPolicy.isToolAlwaysFull("workflow")).thenReturn(false);
 
-        ToolDefinition credential = tool("request_credential");
+        ToolDefinition credential = tool("credential");
         ToolDefinition workflow = tool("workflow");
         List<ToolDefinition> out = newBuilder().applyJitSchemaSlim(
                 List.of(credential, workflow), "anthropic", "claude-opus-4-7", null);

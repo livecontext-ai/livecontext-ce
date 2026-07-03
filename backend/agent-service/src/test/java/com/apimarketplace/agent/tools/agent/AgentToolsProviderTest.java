@@ -142,6 +142,48 @@ class AgentToolsProviderTest {
         }
 
         @Test
+        @DisplayName("file_access_mode is in the schema with enum read/write - AgentCrudModule consumes it, so the LLM must be able to discover it")
+        void fileAccessModeIsAdvertised() {
+            // Regression guard: create/update forward file_access_mode to toolsConfig.fileAccessMode
+            // (AgentCrudModule) and AgentHelpModule documents it, but the param was missing from the
+            // tool schema - an agent could never discover it. It must stay advertised.
+            ToolParameter fileAccessMode = findParam("file_access_mode");
+            assertThat(fileAccessMode.enumValues()).containsExactlyInAnyOrder("read", "write");
+        }
+
+        @Test
+        @DisplayName("RESOURCE GRANTS cross-references resolve: params point at a block that exists in the tool description")
+        void resourceGrantsCrossRefResolves() {
+            // The grant/list/access-mode params share one semantics block ('RESOURCE GRANTS') in the
+            // tool description instead of repeating it per param. If the block is renamed or dropped,
+            // every 'see RESOURCE GRANTS' pointer becomes a dangling reference the LLM cannot follow.
+            AgentToolDefinition tool = provider.getTools().get(0);
+            boolean anyParamPointsAtBlock = tool.parameters().stream()
+                    .anyMatch(p -> p.description() != null && p.description().contains("RESOURCE GRANTS"));
+            assertThat(anyParamPointsAtBlock).isTrue();
+            assertThat(tool.description()).contains("RESOURCE GRANTS");
+            // The block must carry the full shared semantics the per-param texts no longer repeat.
+            assertThat(tool.description())
+                    .contains("'none'=no access")
+                    .contains("'custom'=only the listed IDs")
+                    .contains("Omit to derive from the list");
+        }
+
+        @Test
+        @DisplayName("ROLE RULE cross-reference resolves: the description points at a rule that exists on the action param")
+        void roleRuleCrossRefResolves() {
+            // The assignee-vs-reviewer rule used to be stated 3x in the same payload; it now
+            // lives ONLY on the action param and the description points at it. If the pointer
+            // or the rule disappears, a reviewer agent may call task_complete on a review task.
+            AgentToolDefinition tool = provider.getTools().get(0);
+            assertThat(tool.description()).contains("ROLE RULE");
+            ToolParameter action = findParam("action");
+            assertThat(action.description())
+                    .contains("ROLE RULE")
+                    .contains("NEVER task_complete");
+        }
+
+        @Test
         @DisplayName("max_tokens advertises the platform default (16000), matching the runtime default")
         void maxTokensSchemaDefaultMatchesRuntime() {
             // Regression guard: the advertised schema default must track

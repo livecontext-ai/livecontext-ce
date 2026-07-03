@@ -330,6 +330,131 @@ class BrowserAgentTakeoverControllerTest {
     }
 
     @Test
+    @DisplayName("refresh: CHAT run - no signal, but meta-hash sessionId matches -> token minted (live view survives JWT expiry)")
+    void refreshMintsViaMetaHashForChatRun() {
+        // Chat runs never raise workflow signals; before the meta-hash
+        // fallback every chat refresh 404'd and the live view died at the
+        // 5-min JWT expiry. The runner records the sessionId on the meta
+        // hash at cdp_ready; a match proves the (runId,nodeId)->session
+        // binding just like the signal config does for workflows.
+        StringRedisTemplate redis = org.mockito.Mockito.mock(StringRedisTemplate.class);
+        @SuppressWarnings("unchecked")
+        HashOperations<String, Object, Object> hashOps = org.mockito.Mockito.mock(HashOperations.class);
+        when(redis.opsForHash()).thenReturn(hashOps);
+        when(hashOps.get("agent:browse:meta:run_chat:node_chat", "userId")).thenReturn("user_owner");
+        when(hashOps.get("agent:browse:meta:run_chat:node_chat", "sessionId")).thenReturn("ses_live");
+
+        WorkflowRunRepository runRepo = org.mockito.Mockito.mock(WorkflowRunRepository.class);
+        when(runRepo.findByRunIdPublic("run_chat")).thenReturn(Optional.empty());
+        when(signalService.getActiveSignals("run_chat")).thenReturn(List.of());
+
+        CdpTokenIssuer issuer = org.mockito.Mockito.mock(CdpTokenIssuer.class);
+        when(issuer.isConfigured()).thenReturn(true);
+        when(issuer.issue("ses_live", "user_owner", "run_chat", "node_chat")).thenReturn("eyJchat.token");
+        WebSearchConfig cfg = org.mockito.Mockito.mock(WebSearchConfig.class);
+        when(cfg.getPublicWsBase()).thenReturn("https://livecontext.ai");
+
+        BrowserAgentTakeoverController c = new BrowserAgentTakeoverController(
+                signalService, null, cfg, issuer, runRepo, redis);
+
+        ResponseEntity<Map<String, Object>> response = c.refreshToken(
+                "run_chat", "node_chat", Map.of("session_id", "ses_live"), "user_owner", null);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody())
+                .containsEntry("cdp_token", "eyJchat.token")
+                .containsEntry("cdp_ws_url", "wss://livecontext.ai/cdp/ses_live")
+                .containsEntry("session_id", "ses_live");
+    }
+
+    @Test
+    @DisplayName("refresh: no signal + meta-hash sessionId MISMATCH -> 400, no token (can't bind another user's session)")
+    void refresh400WhenMetaHashSessionIdMismatch() {
+        StringRedisTemplate redis = org.mockito.Mockito.mock(StringRedisTemplate.class);
+        @SuppressWarnings("unchecked")
+        HashOperations<String, Object, Object> hashOps = org.mockito.Mockito.mock(HashOperations.class);
+        when(redis.opsForHash()).thenReturn(hashOps);
+        when(hashOps.get("agent:browse:meta:run_chat:node_chat", "userId")).thenReturn("user_owner");
+        when(hashOps.get("agent:browse:meta:run_chat:node_chat", "sessionId")).thenReturn("ses_mine");
+
+        WorkflowRunRepository runRepo = org.mockito.Mockito.mock(WorkflowRunRepository.class);
+        when(runRepo.findByRunIdPublic("run_chat")).thenReturn(Optional.empty());
+        when(signalService.getActiveSignals("run_chat")).thenReturn(List.of());
+
+        CdpTokenIssuer issuer = org.mockito.Mockito.mock(CdpTokenIssuer.class);
+        when(issuer.isConfigured()).thenReturn(true);
+
+        BrowserAgentTakeoverController c = new BrowserAgentTakeoverController(
+                signalService, null, null, issuer, runRepo, redis);
+
+        ResponseEntity<Map<String, Object>> response = c.refreshToken(
+                "run_chat", "node_chat", Map.of("session_id", "ses_other_users"), "user_owner", null);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        verify(issuer, org.mockito.Mockito.never()).issue(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("refresh: no signal AND no meta-hash sessionId -> 404 (session ended), redis-wired path")
+    void refresh404WhenNoSignalAndNoMetaHash() {
+        StringRedisTemplate redis = org.mockito.Mockito.mock(StringRedisTemplate.class);
+        @SuppressWarnings("unchecked")
+        HashOperations<String, Object, Object> hashOps = org.mockito.Mockito.mock(HashOperations.class);
+        when(redis.opsForHash()).thenReturn(hashOps);
+        when(hashOps.get("agent:browse:meta:run_gone:node_gone", "userId")).thenReturn("user_owner");
+        when(hashOps.get("agent:browse:meta:run_gone:node_gone", "sessionId")).thenReturn(null);
+
+        WorkflowRunRepository runRepo = org.mockito.Mockito.mock(WorkflowRunRepository.class);
+        when(runRepo.findByRunIdPublic("run_gone")).thenReturn(Optional.empty());
+        when(signalService.getActiveSignals("run_gone")).thenReturn(List.of());
+
+        CdpTokenIssuer issuer = org.mockito.Mockito.mock(CdpTokenIssuer.class);
+        when(issuer.isConfigured()).thenReturn(true);
+
+        BrowserAgentTakeoverController c = new BrowserAgentTakeoverController(
+                signalService, null, null, issuer, runRepo, redis);
+
+        ResponseEntity<Map<String, Object>> response = c.refreshToken(
+                "run_gone", "node_gone", Map.of("session_id", "ses_whatever"), "user_owner", null);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        verify(issuer, org.mockito.Mockito.never()).issue(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("refresh: WORKFLOW run post-completion hold (signal resolved) - meta hash keeps the refresh alive")
+    void refreshMintsViaMetaHashDuringPostCompletionHold() {
+        // During the detached post-completion hold the BROWSER_USER_TAKEOVER
+        // signal is already resolved (or never existed), yet the browser is
+        // still open and interactive - the meta hash keeps token refresh
+        // working for the whole hold window.
+        StringRedisTemplate redis = org.mockito.Mockito.mock(StringRedisTemplate.class);
+        @SuppressWarnings("unchecked")
+        HashOperations<String, Object, Object> hashOps = org.mockito.Mockito.mock(HashOperations.class);
+        when(redis.opsForHash()).thenReturn(hashOps);
+        when(hashOps.get("agent:browse:meta:run_wf:node_wf", "sessionId")).thenReturn("ses_hold");
+
+        WorkflowRunRepository runRepo = org.mockito.Mockito.mock(WorkflowRunRepository.class);
+        when(runRepo.findByRunIdPublic("run_wf")).thenReturn(Optional.of(runOwnedBy("user_owner", null)));
+        when(signalService.getActiveSignals("run_wf")).thenReturn(List.of()); // signal already resolved
+
+        CdpTokenIssuer issuer = org.mockito.Mockito.mock(CdpTokenIssuer.class);
+        when(issuer.isConfigured()).thenReturn(true);
+        when(issuer.issue("ses_hold", "user_owner", "run_wf", "node_wf")).thenReturn("eyJhold.token");
+        WebSearchConfig cfg = org.mockito.Mockito.mock(WebSearchConfig.class);
+        when(cfg.getPublicWsBase()).thenReturn("https://livecontext.ai");
+
+        BrowserAgentTakeoverController c = new BrowserAgentTakeoverController(
+                signalService, null, cfg, issuer, runRepo, redis);
+
+        ResponseEntity<Map<String, Object>> response = c.refreshToken(
+                "run_wf", "node_wf", Map.of("session_id", "ses_hold"), "user_owner", null);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody()).containsEntry("cdp_token", "eyJhold.token");
+    }
+
+    @Test
     @DisplayName("refresh: 503 when issuer is unconfigured (secret blank)")
     void refresh503WhenIssuerUnconfigured() {
         CdpTokenIssuer issuer = org.mockito.Mockito.mock(CdpTokenIssuer.class);

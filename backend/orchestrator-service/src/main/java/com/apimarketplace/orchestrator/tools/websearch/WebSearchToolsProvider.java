@@ -280,12 +280,10 @@ public class WebSearchToolsProvider implements ToolsProvider {
             // agent_browse
             stringParam("task", "Goal for the browser agent (agent_browse). Be specific.", false),
             stringParam("start_url", "Optional starting URL (agent_browse)", false),
-            objectParam("llm", "OPTIONAL {provider, model} (agent_browse). "
-                + "Omit the whole block - or omit provider/model individually - to use the platform "
-                + "default model (#1 in the catalog). To pick a specific (provider, model) pair, call "
-                + "web_search(action='help_models') first to see what's enabled. Unknown pairs are "
-                + "silently substituted with the default and the swap is reported as 'model_substituted' "
-                + "in the response.", false),
+            objectParam("llm", "OPTIONAL {provider, model} (agent_browse). Omit (the whole block or "
+                + "either field) to use the platform default model. Pick pairs from "
+                + "web_search(action='help_models'); unknown pairs are silently substituted with the "
+                + "default and reported as 'model_substituted' in the response.", false),
             intParam("max_steps", "Override the runner's default of 50 steps (agent_browse). "
                 + "Hard cap = 50 enforced runner-side: values above 50 are silently clamped. "
                 + "If a session ends with stop_reason=MAX_STEPS in less than ~30s the cause is almost "
@@ -314,8 +312,7 @@ public class WebSearchToolsProvider implements ToolsProvider {
             + "- search: query the web (~1s). Returns URL/title/snippet.\n"
             + "- fetch: page → markdown (~5s). Up to " + maxFetches + " URLs in parallel.\n"
             + "- agent_browse: LLM-driven browser session - only when fetch can't reach (login, "
-            + "JS UI, multi-page nav). ~100x slower, burns LLM tokens. llm block is OPTIONAL "
-            + "(falls back to platform default model #1).\n"
+            + "JS UI, multi-page nav). ~100x slower, burns LLM tokens.\n"
             + "- browse_status/intervene/abort/screenshot: control a running session.\n"
             + "- help: action reference (no model catalog).\n"
             + "- help_models: live model catalog (top 30 by priority) - call only if you want to "
@@ -391,11 +388,9 @@ public class WebSearchToolsProvider implements ToolsProvider {
         Map<String, Object> availableModels = new LinkedHashMap<>();
         availableModels.put("see_also", "web_search(action='help_models')");
         availableModels.put("note",
-            "agent_browse's llm block is OPTIONAL - omit it to use the platform default model. "
-            + "Call web_search(action='help_models') for the live catalog (top " + HELP_MODELS_MAX_ROWS
-            + " by priority, only providers with a configured API key). Unknown pairs are silently "
-            + "substituted with the default and the swap is reported as 'model_substituted' in the "
-            + "agent_browse result.");
+            "Live catalog (top " + HELP_MODELS_MAX_ROWS + " by priority, only providers with a "
+            + "configured API key) → web_search(action='help_models'). Override contract → the "
+            + "model_catalog concept (topics=['concepts']).");
         out.put("available_models", availableModels);
         if (requested.contains("concepts")) out.put("concepts", buildConceptsHelp());
         if (requested.contains("examples")) out.put("examples", buildExamplesHelp());
@@ -612,7 +607,7 @@ public class WebSearchToolsProvider implements ToolsProvider {
         ));
         actions.put("help_models", Map.of(
             "summary", "Live LLM catalog (top " + HELP_MODELS_MAX_ROWS + " by priority, only providers with a configured API key). "
-                + "Call only if you want to override the platform default for agent_browse - the llm block is OPTIONAL.",
+                + "Call only if you want to override the platform default for agent_browse.",
             "params", Map.of("(none)", "no parameters"),
             "returns", "{providers, pairs, total_enabled, returned, default:{provider,model}, note}"
         ));

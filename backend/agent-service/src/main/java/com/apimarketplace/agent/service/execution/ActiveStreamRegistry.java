@@ -30,6 +30,13 @@ import java.util.concurrent.ConcurrentHashMap;
  *       orphaned-but-never-alive, or worse, never be reconciled).</li>
  * </ul>
  *
+ * <p>Two registrants: the in-process loop's
+ * {@link ConversationRedisStreamingCallback.ConversationCallback} (register at creation,
+ * unregister on terminal), and {@link AgentRemoteExecutionService} for BRIDGE conversation
+ * runs (register around the bridge dispatch - the bridge publishes its own events to Redis,
+ * so no local callback exists to do it, yet without the heartbeat the conversation-service
+ * absolute-timeout reaper would interrupt a healthy bridge run at the TTL).
+ *
  * <p>All Redis writes are best-effort: a Redis hiccup must never break a running execution,
  * so failures are swallowed and surfaced through a throttled warning only.
  */

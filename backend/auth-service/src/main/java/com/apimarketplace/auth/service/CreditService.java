@@ -31,6 +31,16 @@ public class CreditService {
     private final CreditLedgerRepository ledgerRepository;
     private final ModelPricingService pricingService;
     private final boolean unlimited;
+
+    /**
+     * True when this deployment runs with unlimited credits (CE default:
+     * credit.unlimited=true). Gates that exist only to protect BILLING
+     * (pre-flight cost checks, free-inference loopholes) are meaningless in
+     * this mode and must not block execution.
+     */
+    public boolean isUnlimited() {
+        return unlimited;
+    }
     private final boolean markupEnabled;
     private final boolean markupShadow;
     private final BigDecimal webSearchCreditsPerSearch;

@@ -207,6 +207,7 @@ public class NodeLibraryService {
         syntax.put("agent", "{{agent:label.output.response}} - Access agent response");
         syntax.put("core", "{{core:label.output.field}} - Access control flow output");
         syntax.put("table", "{{table:label.output.field}} - Access table operation output");
+        syntax.put("vars", "{{$vars.name}} - Reusable workspace variable (user-defined config, no .output. segment, works in any param or condition). Alias: {{vars:name}}.");
         syntax.put("interface_templates", "{{variable|default}} - Interface templates use GENERIC names with pipe defaults. Mapping to workflow data via variable_mapping. Add action_mapping to make interactive apps (forms → triggers → workflow → display results).");
         return syntax;
     }

@@ -45,6 +45,10 @@ public class MonolithSecurityFilter implements Filter {
     private static final String AUTHORIZATION_HEADER = "Authorization";
     private static final String BEARER_PREFIX = "Bearer ";
     private static final String SHARE_TOKEN_PREFIX = "ShareToken ";
+    /** Client-supplied API-key header, mirroring the cloud gateway's AuthenticationFilter. */
+    private static final String API_KEY_HEADER = "X-API-Key";
+    /** Plaintext key prefix minted by auth-service's ApiKeyService ({@code lc_live_<64 hex>}). */
+    private static final String API_KEY_PREFIX = "lc_live_";
     private static final String ACTIVE_ORG_ID_HEADER = "X-Active-Organization-ID";
     private static final String ORGANIZATION_ID_HEADER = "X-Organization-ID";
     private static final String ORGANIZATION_ROLE_HEADER = "X-Organization-Role";
@@ -77,6 +81,7 @@ public class MonolithSecurityFilter implements Filter {
     private final Supplier<Key> verificationKeySupplier;
     private final List<String> publicPaths;
     private final Function<String, ShareTokenContext> shareTokenResolver;
+    private final Function<String, JwtClaims> apiKeyResolver;
     private final LongSupplier nowMillis;
 
     /**
@@ -90,7 +95,21 @@ public class MonolithSecurityFilter implements Filter {
     public MonolithSecurityFilter(Supplier<Key> verificationKeySupplier,
                                   List<String> publicPaths,
                                   Function<String, ShareTokenContext> shareTokenResolver) {
-        this(verificationKeySupplier, publicPaths, shareTokenResolver, System::currentTimeMillis);
+        this(verificationKeySupplier, publicPaths, shareTokenResolver, null, System::currentTimeMillis);
+    }
+
+    /**
+     * @param apiKeyResolver resolves a plaintext {@code lc_live_} API key (from the X-API-Key
+     *                       header or an {@code Authorization: Bearer lc_live_...} value) to the
+     *                       owning user's claims, or {@code null} when the key is invalid.
+     *                       Mirrors the cloud gateway's API-key authentication path.
+     */
+    public MonolithSecurityFilter(Supplier<Key> verificationKeySupplier,
+                                  List<String> publicPaths,
+                                  Function<String, ShareTokenContext> shareTokenResolver,
+                                  Function<String, JwtClaims> apiKeyResolver) {
+        this(verificationKeySupplier, publicPaths, shareTokenResolver, apiKeyResolver,
+                System::currentTimeMillis);
     }
 
     /**
@@ -103,9 +122,18 @@ public class MonolithSecurityFilter implements Filter {
                            List<String> publicPaths,
                            Function<String, ShareTokenContext> shareTokenResolver,
                            LongSupplier nowMillis) {
+        this(verificationKeySupplier, publicPaths, shareTokenResolver, null, nowMillis);
+    }
+
+    MonolithSecurityFilter(Supplier<Key> verificationKeySupplier,
+                           List<String> publicPaths,
+                           Function<String, ShareTokenContext> shareTokenResolver,
+                           Function<String, JwtClaims> apiKeyResolver,
+                           LongSupplier nowMillis) {
         this.verificationKeySupplier = verificationKeySupplier;
         this.publicPaths = publicPaths != null ? publicPaths : List.of();
         this.shareTokenResolver = shareTokenResolver;
+        this.apiKeyResolver = apiKeyResolver;
         this.nowMillis = nowMillis;
     }
 
@@ -184,6 +212,29 @@ public class MonolithSecurityFilter implements Filter {
             }
 
             doFilterWithBoundRequest(new ShareAuthHeadersRequestWrapper(trustedRequest, shareToken, shareContext),
+                    response, chain);
+            return;
+        }
+
+        // API-key authentication (X-API-Key header or "Bearer lc_live_..."), mirroring the
+        // cloud gateway. Checked before the JWT branch: an lc_live_ key is not a JWT and
+        // would otherwise 401 as "invalid token" on protected paths.
+        String apiKey = extractApiKey(trustedRequest, authHeader);
+        if (apiKey != null) {
+            JwtClaims apiKeyClaims = apiKeyResolver != null ? apiKeyResolver.apply(apiKey) : null;
+            if (apiKeyClaims == null) {
+                if (publicPath) {
+                    // Public routes never 401: an unresolvable key falls back to anonymous,
+                    // matching the JWT handling below.
+                    doFilterWithBoundRequest(trustedRequest, response, chain);
+                    return;
+                }
+                httpResponse.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                httpResponse.setContentType("application/json");
+                httpResponse.getWriter().write("{\"error\":\"Unauthorized\",\"message\":\"Invalid or unknown API key.\"}");
+                return;
+            }
+            doFilterWithBoundRequest(new AuthHeadersRequestWrapper(trustedRequest, apiKeyClaims, claimedActiveOrgId),
                     response, chain);
             return;
         }
@@ -281,6 +332,29 @@ public class MonolithSecurityFilter implements Filter {
                 throw servletException;
             }
         }
+    }
+
+    /**
+     * Plaintext API key, mirroring the cloud gateway's extraction order exactly:
+     * a non-API-key Bearer value (a JWT) wins over any X-API-Key header sent
+     * alongside it (JWT-first); otherwise the X-API-Key header wins over an
+     * {@code Authorization: Bearer lc_live_...} value (MCP clients often only
+     * support the Authorization header). {@code null} when no key is present.
+     */
+    private String extractApiKey(HttpServletRequest request, String authHeader) {
+        String bearerApiKey = null;
+        if (authHeader != null && authHeader.startsWith(BEARER_PREFIX)) {
+            String token = authHeader.substring(BEARER_PREFIX.length()).trim();
+            if (!token.startsWith(API_KEY_PREFIX)) {
+                return null; // JWT-first
+            }
+            bearerApiKey = token;
+        }
+        String headerKey = request.getHeader(API_KEY_HEADER);
+        if (headerKey != null && !headerKey.isBlank()) {
+            return headerKey.trim();
+        }
+        return bearerApiKey;
     }
 
     private String extractShareToken(String authHeader) {
@@ -588,9 +662,11 @@ public class MonolithSecurityFilter implements Filter {
     }
 
     /**
-     * Extracted JWT claims for header injection.
+     * Extracted identity claims for header injection. Built from a validated JWT,
+     * or synthesized by the {@code apiKeyResolver} for API-key authentication
+     * (public so host applications can construct it when wiring that resolver).
      */
-    record JwtClaims(
+    public record JwtClaims(
             String userId,
             String providerId,
             String email,
@@ -599,7 +675,7 @@ public class MonolithSecurityFilter implements Filter {
             String defaultOrganizationRole,
             List<OrgMembershipClaim> memberships) {
 
-        JwtClaims {
+        public JwtClaims {
             memberships = memberships != null ? List.copyOf(memberships) : List.of();
         }
 
@@ -665,7 +741,7 @@ public class MonolithSecurityFilter implements Filter {
         }
     }
 
-    record OrgMembershipClaim(String orgId, String role, boolean personal, boolean paused) {}
+    public record OrgMembershipClaim(String orgId, String role, boolean personal, boolean paused) {}
 
     record OrgContext(String organizationId, String organizationRole) {}
 

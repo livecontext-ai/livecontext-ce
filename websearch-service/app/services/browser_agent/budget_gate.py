@@ -26,8 +26,10 @@ gate (Chromium time), not a *price* gate. Don't add a bridge bypass.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as _dt
 import logging
+import time
 from typing import Optional
 
 import redis.asyncio as aioredis
@@ -39,9 +41,18 @@ logger = logging.getLogger(__name__)
 
 CONCURRENT_KEY_FMT = "agent:browser:user:{user_id}:concurrent"
 STEPS_KEY_FMT = "agent:browser:user:{user_id}:steps:{ymd}"
+# FIFO wait queue for the per-user concurrent slot (workflow split/fork
+# fires N agent_browse branches at once - they must QUEUE, not fail).
+WAITQ_KEY_FMT = "agent:browser:user:{user_id}:waitq"
+# Per-waiter heartbeat: refreshed each poll while waiting; a head whose
+# heartbeat expired crashed mid-wait and is skipped by the next waiter.
+WAITQ_HB_KEY_FMT = "agent:browser:waitq:hb:{ticket}"
 
 CONCURRENT_TTL_S = 3600     # 1h orphan cleanup if runner crashes mid-flight.
 STEPS_TTL_S = 86400         # 24h - counter naturally rolls over per UTC day.
+WAITQ_TTL_S = 3600          # queue key orphan cleanup.
+WAITQ_HB_TTL_S = 15         # heartbeat expiry - dead-waiter detection window.
+WAITQ_POLL_S = 1.0          # slot re-check cadence while queued.
 
 
 class BudgetExhaustedError(Exception):
@@ -53,6 +64,8 @@ class BudgetExhaustedError(Exception):
 
     REASON_CONCURRENT = "concurrent_session_limit"
     REASON_DAILY_STEPS = "daily_steps_limit"
+    REASON_QUEUE_TIMEOUT = "concurrent_queue_timeout"
+    REASON_HOST_CAPACITY = "host_capacity_timeout"
 
     def __init__(self, reason: str, message: str):
         super().__init__(message)
@@ -67,6 +80,14 @@ def _today_utc() -> str:
 
 def concurrent_key(user_id: str) -> str:
     return CONCURRENT_KEY_FMT.format(user_id=user_id)
+
+
+def waitq_key(user_id: str) -> str:
+    return WAITQ_KEY_FMT.format(user_id=user_id)
+
+
+def waitq_hb_key(ticket: str) -> str:
+    return WAITQ_HB_KEY_FMT.format(ticket=ticket)
 
 
 def steps_key(user_id: str, ymd: Optional[str] = None) -> str:
@@ -120,6 +141,123 @@ async def acquire_concurrent_slot(
             BudgetExhaustedError.REASON_CONCURRENT,
             "user already has an active browser-agent session",
         )
+
+
+async def acquire_concurrent_slot_queued(
+    redis: aioredis.Redis,
+    user_id: str,
+    session_id: str,
+    max_wait_s: float,
+) -> None:
+    """Acquire the per-user concurrent slot, WAITING in FIFO order when full.
+
+    This is what lets a workflow split/fork fire N browser branches for the
+    same user without N-1 of them failing instantly with BUDGET_EXHAUSTED:
+    the extra branches queue on ``agent:browser:user:{uid}:waitq`` and run
+    one after another as slots free up (Redis-backed, so the order holds
+    across orchestrator pods and websearch restarts).
+
+    Mechanics:
+      - Fast path: immediate :func:`acquire_concurrent_slot` (no queue key
+        touched when a slot is free).
+      - Queued path: RPUSH our session_id as a FIFO ticket; only the HEAD
+        ticket attempts the acquire, everyone else sleeps ``WAITQ_POLL_S``.
+        Each waiter refreshes a short-TTL heartbeat key; a head whose
+        heartbeat expired (crashed runner) is removed by the next waiter so
+        the queue can never wedge behind a ghost.
+      - Bounded: gives up after ``max_wait_s`` with
+        ``REASON_QUEUE_TIMEOUT`` (surfaced as stop_reason=BUDGET_EXHAUSTED,
+        same contract as the immediate rejection).
+
+    On success the caller must eventually call
+    :func:`release_concurrent_slot`, exactly like the immediate variant.
+    """
+    if not user_id:
+        return
+    limit = browser_agent_budget.per_user_concurrent_limit
+    if limit <= 0:
+        return  # disabled
+    # Fast path ONLY when nobody is already queued - otherwise a newcomer
+    # arriving in the window after a release would jump the line and starve
+    # the head (the docstring promises FIFO; keep it honest).
+    queued_ahead = 0
+    try:
+        queued_ahead = int(await redis.llen(waitq_key(user_id)) or 0)
+    except Exception:
+        logger.debug("waitq llen failed - assuming empty", exc_info=True)
+    if queued_ahead == 0:
+        try:
+            await acquire_concurrent_slot(redis, user_id, session_id)
+            return
+        except BudgetExhaustedError:
+            if max_wait_s <= 0:
+                raise
+    elif max_wait_s <= 0:
+        # Queue occupied and no wait budget: same contract as an immediate
+        # over-limit rejection.
+        raise BudgetExhaustedError(
+            BudgetExhaustedError.REASON_CONCURRENT,
+            "user already has an active browser-agent session",
+        )
+
+    qkey = waitq_key(user_id)
+    hbkey = waitq_hb_key(session_id)
+    await redis.rpush(qkey, session_id)
+    await redis.expire(qkey, WAITQ_TTL_S)
+    deadline = time.monotonic() + max_wait_s
+    logger.info(
+        "browser_agent budget gate: queueing for concurrent slot "
+        "user_id=%s session=%s max_wait_s=%.0f", user_id, session_id, max_wait_s,
+    )
+    try:
+        while True:
+            await redis.set(hbkey, "1", ex=WAITQ_HB_TTL_S)
+            head = await redis.lindex(qkey, 0)
+            if isinstance(head, bytes):
+                head = head.decode("utf-8", errors="ignore")
+            if head is None or head == session_id:
+                # We're first in line (or the queue key was lost to TTL -
+                # behave as head rather than wedging). Try the slot.
+                try:
+                    await acquire_concurrent_slot(redis, user_id, session_id)
+                    logger.info(
+                        "browser_agent budget gate: queued slot ACQUIRED "
+                        "user_id=%s session=%s", user_id, session_id,
+                    )
+                    return
+                except BudgetExhaustedError:
+                    pass  # slot still full - keep waiting at head
+            else:
+                # Not head: skip a dead head (crashed waiter whose heartbeat
+                # expired) so the queue can't wedge behind a ghost ticket.
+                head_hb = await redis.get(waitq_hb_key(head))
+                if head_hb is None:
+                    removed = await redis.lrem(qkey, 1, head)
+                    if removed:
+                        logger.warning(
+                            "browser_agent budget gate: removed dead waitq head "
+                            "user_id=%s dead_ticket=%s", user_id, head,
+                        )
+                    continue  # re-evaluate the new head immediately
+            if time.monotonic() >= deadline:
+                logger.info(
+                    "browser_agent budget gate: queue wait timed out "
+                    "user_id=%s session=%s after %.0fs", user_id, session_id, max_wait_s,
+                )
+                raise BudgetExhaustedError(
+                    BudgetExhaustedError.REASON_QUEUE_TIMEOUT,
+                    "timed out waiting for a free browser-agent slot "
+                    f"(waited {int(max_wait_s)}s; another session is still running)",
+                )
+            await asyncio.sleep(WAITQ_POLL_S)
+    finally:
+        # Leave the queue on EVERY exit (acquired, timeout, crash) and drop
+        # the heartbeat so successors never wait on our ghost.
+        try:
+            await redis.lrem(qkey, 1, session_id)
+            await redis.delete(hbkey)
+        except Exception:  # pragma: no cover - best effort
+            logger.debug("waitq cleanup failed", exc_info=True)
 
 
 async def release_concurrent_slot(

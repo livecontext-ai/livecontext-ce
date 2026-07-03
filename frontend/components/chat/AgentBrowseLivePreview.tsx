@@ -58,7 +58,7 @@ export function AgentBrowseLivePreview({ toolId, session, isLive = true }: Agent
       label: session.currentUrl || t('cardDefaultTitle'),
       icon: <Globe className="w-4 h-4" />,
       content: <AgentBrowsePanelContent liveCoords={session} />,
-      preferredWidth: 0.4,
+      preferredWidth: 0.5,
     });
   };
 

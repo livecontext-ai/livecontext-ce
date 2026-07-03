@@ -22,16 +22,22 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * New models introduced by a refresh/sync/bundle land INACTIVE by default - a
- * refresh can add many models at once and auto-enabling them would silently
- * expose un-reviewed models to the picker and chat. The admin opts each one in
- * from /settings/ai-providers. Only fresh INSERTS are forced off; existing rows
+ * New models introduced by a FEED SYNC land INACTIVE by default - a refresh can
+ * add many models at once and auto-enabling them would silently expose
+ * un-reviewed models to the picker and chat. The admin opts each one in from
+ * /settings/ai-providers. Only fresh INSERTS are forced off; existing rows
  * keep their current enabled state untouched.
  *
- * <p>EXCEPTION: the model-catalog SEED path ({@link MergeOptions#forSeed()},
- * {@code honorEnabledOnInsert=true}) KEEPS the payload's enabled on insert
- * (default true) - the seed is the curated, code-shipped baseline, so a fresh CE
- * should have those models usable out of the box. Covered by the seed* tests.
+ * <p>The review-gate is SYNC-ONLY since V381. Both trusted, cloud-curated
+ * paths honor the payload's enabled on insert ({@code honorEnabledOnInsert=true}):
+ * <ul>
+ *   <li>SEED ({@link MergeOptions#forSeed()}): the curated code-shipped
+ *       baseline, usable out of the box on a fresh CE.</li>
+ *   <li>BUNDLE ({@link MergeOptions#forBundle(long)}): the payload's effective
+ *       enabled is an explicit per-model cloud-admin decision
+ *       ({@code bundle_enabled}) about what CE installs receive - force-off on
+ *       insert would silently veto it for every model the CE had not seen.</li>
+ * </ul>
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("CatalogMergeService - new models default to inactive")
@@ -72,8 +78,8 @@ class CatalogMergeServiceNewModelInactiveDefaultTest {
     }
 
     @Test
-    @DisplayName("New model from a signed bundle is also saved disabled by default")
-    void newBundleModelForcedInactive() {
+    @DisplayName("V381: new model from a signed bundle keeps the payload's enabled - the cloud decision ships")
+    void newBundleModelInsertHonorsPayloadEnabled() {
         when(modelRepo.findMaxRanking()).thenReturn(0);
         when(modelRepo.findByProviderAndModelId("anthropic", "claude-opus-5")).thenReturn(Optional.empty());
         when(modelRepo.save(any())).thenAnswer(inv -> {
@@ -90,7 +96,33 @@ class CatalogMergeServiceNewModelInactiveDefaultTest {
         ArgumentCaptor<ModelConfigOverrideEntity> captor =
                 ArgumentCaptor.forClass(ModelConfigOverrideEntity.class);
         verify(modelRepo).save(captor.capture());
-        assertThat(captor.getValue().getEnabled()).isFalse();
+        assertThat(captor.getValue().getEnabled())
+                .as("V381: the bundle's effective enabled is a cloud-admin decision - it ships")
+                .isTrue();
+    }
+
+    @Test
+    @DisplayName("V381: bundle INSERT ships enabled=false when the cloud withheld the model (bundle_enabled=false upstream)")
+    void newBundleModelInsertHonorsPayloadDisabled() {
+        when(modelRepo.findMaxRanking()).thenReturn(0);
+        when(modelRepo.findByProviderAndModelId("anthropic", "claude-opus-5")).thenReturn(Optional.empty());
+        when(modelRepo.save(any())).thenAnswer(inv -> {
+            ModelConfigOverrideEntity e = inv.getArgument(0);
+            e.setId(3L);
+            return e;
+        });
+
+        Map<String, Object> row = payload("anthropic", "claude-opus-5");
+        row.put("enabled", false); // cloud explicitly withholds it from CE use
+
+        merge.merge(List.of(row), MergeOptions.forBundle(1L));
+
+        ArgumentCaptor<ModelConfigOverrideEntity> captor =
+                ArgumentCaptor.forClass(ModelConfigOverrideEntity.class);
+        verify(modelRepo).save(captor.capture());
+        assertThat(captor.getValue().getEnabled())
+                .as("honorEnabledOnInsert keeps the payload's explicit false too")
+                .isFalse();
     }
 
     @Test

@@ -12,7 +12,9 @@ public enum ResourceType {
     INTERFACE,
     APPLICATION,
     /** Marketplace publications the org has PUBLISHED (distinct from APPLICATION = acquired). */
-    PUBLICATION;
+    PUBLICATION,
+    /** Workflow variables ({{$vars.name}}) per scope - enforced in auth-service itself. */
+    WORKFLOW_VARIABLE;
 
     public String key() {
         return name();

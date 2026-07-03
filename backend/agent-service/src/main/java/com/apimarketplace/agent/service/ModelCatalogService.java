@@ -774,29 +774,40 @@ public class ModelCatalogService {
     }
 
     /**
-     * Tenant-aware admin model list. The {@code tenantId} (the admin's
-     * {@code X-User-ID}) drives the SAME mode-aware provider filter as the
-     * end-user picker ({@link #getModelsForCategory(String, String)}), so the
-     * admin Models panel and the picker always agree on which providers are
-     * visible - "no provider, no model":
+     * Tenant-aware admin model list. The admin config panel lists the FULL
+     * catalog - EVERY provider, cloud-prod and CE alike, whether or not its key
+     * is configured - so an admin can rank, sort, price and enable (and set the
+     * bundle-ship flag on) every model BEFORE any key exists. That ranking is
+     * what the signed bundle ships, so hiding keyless providers here would make
+     * them impossible to order; and a model shown for ranking is not confusing
+     * as long as its usability is marked, which each row's {@code available}
+     * flag does:
      * <ul>
-     *   <li><b>Cloud-prod / CE BYOK</b> ({@code isCloudSelected==false}): only
-     *       providers with a usable key (env key or DB/BYOK key) are listed -
-     *       an unconfigured provider's models stay hidden until its key is
-     *       added. Bridges are re-added below regardless (admins must always be
-     *       able to see and configure them).</li>
-     *   <li><b>CE cloud-connect</b> ({@code isCloudSelected==true}): every
-     *       cloud-relay-supported API provider is listed without a local key
-     *       (the bound cloud account is the source of record for API models);
-     *       local CLI/bridge providers still follow their own availability.</li>
+     *   <li>{@code available=true}: the picker/runtime would offer it under the
+     *       tenant's LLM source (env/DB key present, or a cloud-relay-supported
+     *       API provider in cloud-connect).</li>
+     *   <li>{@code available=false}: listed for configuration/ranking only -
+     *       no key yet (or a non-relay provider in cloud-connect). Bridge rows
+     *       carry {@code bridgeAvailable} instead (CLI-install state).</li>
      * </ul>
+     *
+     * <p>This intentionally DIVERGES from the end-user picker
+     * ({@link #getModelsForCategory(String, String)}), which still hard-drops
+     * unconfigured providers ("no provider, no model") so a chat/agent selector
+     * never offers an unrunnable model. Admin-gated
+     * ({@link com.apimarketplace.agent.controller.ModelConfigController}) and
+     * never feeds the picker, so keyless models cannot leak into a selector.
      */
     public List<Map<String, Object>> getEffectiveModelList(String category, String tenantId) {
-        // Same mode-aware filter the picker uses: cloud-prod / CE BYOK drop
-        // providers without a key; CE cloud-connect keeps relay-supported API
-        // providers (cloud account is the source). Admin and picker therefore
-        // stay in sync on visibility.
-        Map<String, Object> base = getAvailableProvidersBase(tenantId, false);
+        // Admin config view: include EVERY provider regardless of key/cloud mode
+        // (includeUnconfigured=true). Each row is annotated with `available`
+        // below so the panel can mark unusable-yet-rankable models. The picker
+        // path keeps includeUnconfigured=false and is untouched.
+        Map<String, Object> base = getAvailableProvidersBase(tenantId, true);
+        // Runtime availability per provider (would the picker offer it?), stamped
+        // per row as `available` so the UI can badge "not configured" without
+        // hiding the model.
+        boolean cloudSelected = isCloudSelected(tenantId);
         // Admins should see bridge providers regardless of CLI-install state so
         // they can configure, price, and set access policies. A default-enabled
         // bridge stub reports configured=true, so it already SURVIVES the key
@@ -884,6 +895,10 @@ public class ModelCatalogService {
             // the row from tenants.
             String cliId = BridgeAvailabilityFilter.BRIDGE_PROVIDER_TO_CLI_ID.get(providerName);
             Boolean bridgeAvailable = cliId != null ? bridgeInstalled.get(cliId) : null;
+            // Would the picker offer this provider? Stamped per row as `available`
+            // so the admin panel can badge "not configured" without hiding it.
+            boolean providerAvailable = isProviderRuntimeAvailable(
+                    providerName, Boolean.TRUE.equals(providerInfo.get("configured")), cloudSelected);
 
             for (Map<String, Object> model : models) {
                 Map<String, Object> entry = new LinkedHashMap<>(model);
@@ -896,6 +911,11 @@ public class ModelCatalogService {
                 entry.put("hasOverride", override != null);
                 entry.put("isCustom", override != null && override.isCustom());
                 entry.put("enabled", override == null || !Boolean.FALSE.equals(override.getEnabled()));
+                entry.put("available", providerAvailable);
+                // Cloud-admin bundle override (V381): 3-state (null = inherit).
+                // Rendered by the admin Models panel on cloud only; harmless
+                // extra field for CE readers.
+                entry.put("bundleEnabled", override != null ? override.getBundleEnabled() : null);
                 entry.put("providerKind",
                         override != null && override.getProviderKind() != null
                                 ? override.getProviderKind()
@@ -906,13 +926,10 @@ public class ModelCatalogService {
                 result.add(entry);
             }
 
-            // Add standalone / custom rows for this provider. Only rows whose
-            // provider is already in the YAML-derived base (i.e. the API key
-            // is configured for native providers, or the CLI bridge is
-            // connected for bridge providers) are surfaced. Rows under a
-            // provider that isn't currently available are silently held back
-            // - they stay in DB and will reappear as soon as the provider
-            // becomes usable (key added, bridge connected).
+            // Standalone / custom rows for this provider (is_custom rows +
+            // sync/bundle rows not declared in YAML). Now that the admin base
+            // includes every provider, these surface under keyless providers too
+            // (annotated available=false) so they can be ranked/priced.
             List<ModelConfigOverrideEntity> customs = customByProvider.get(providerName);
             if (customs != null) {
                 for (ModelConfigOverrideEntity custom : customs) {
@@ -924,6 +941,8 @@ public class ModelCatalogService {
                     // still need to be visible in the picker.
                     entry.put("isCustom", custom.isCustom());
                     entry.put("enabled", !Boolean.FALSE.equals(custom.getEnabled()));
+                    entry.put("available", providerAvailable);
+                    entry.put("bundleEnabled", custom.getBundleEnabled());
                     entry.put("providerKind",
                             custom.getProviderKind() != null ? custom.getProviderKind() : "byok");
                     if (cliId != null) {
@@ -934,19 +953,11 @@ public class ModelCatalogService {
             }
         }
 
-        // V156 - when a category tab is active, surface is_custom=true LOCAL
-        // providers (admin-added servers - no API key needed) that have no YAML
-        // shell. This mirrors the picker's standalone-custom injection
-        // (getModelsForCategory), so admin and picker agree on visibility.
-        //
-        // Factory/sync rows (is_custom=false, e.g. V157 image-gen seeds) for a
-        // provider the mode-aware base filter DROPPED (no key in cloud-prod /
-        // CE BYOK) are intentionally NOT re-surfaced here: "no provider, no
-        // model" must hold on every tab. When that provider IS available - it
-        // has a key, or the install is cloud-connected and the provider is
-        // relay-supported - the base filter keeps its shell and the main loop
-        // above injects those rows, so they still appear. Only the keyless case
-        // is hidden, exactly as the picker hides it.
+        // V156 - defensive injection of is_custom=true LOCAL providers (admin-added
+        // servers, no API key needed) that have no YAML shell, on a category tab.
+        // Now that the admin base includes EVERY provider (includeUnconfigured),
+        // every provider is already emitted above, so this loop is a no-op in
+        // practice; it stays as a backstop for any provider the base might omit.
         if (category != null) {
             Set<String> alreadyEmittedProviders = new HashSet<>();
             for (Map<String, Object> p : providers) {
@@ -968,6 +979,10 @@ public class ModelCatalogService {
                     e.put("hasOverride", true);
                     e.put("isCustom", custom.isCustom());
                     e.put("enabled", !Boolean.FALSE.equals(custom.getEnabled()));
+                    // Local admin-added custom providers are self-managed (no
+                    // platform key needed) - treat as available.
+                    e.put("available", true);
+                    e.put("bundleEnabled", custom.getBundleEnabled());
                     e.put("providerKind",
                             custom.getProviderKind() != null ? custom.getProviderKind() : "byok");
                     if (cliId != null) {
@@ -1004,6 +1019,14 @@ public class ModelCatalogService {
         }
 
         if (input.getEnabled() != null) { entity.setEnabled(input.getEnabled()); entity.addUserModifiedField("enabled"); }
+        // Cloud-admin bundle override (V381). Not tracked in userModifiedFields:
+        // it never travels in a payload, so no merge can clobber it. Same
+        // explicit-set contract as the rate-limit fields: the controller flips
+        // the transient flag when the key is present in the request body, and
+        // an explicit null means "reset to inherit".
+        if (input.isBundleEnabledExplicitlySet()) {
+            entity.setBundleEnabled(input.getBundleEnabled());
+        }
         if (input.getDisplayName() != null) { entity.setDisplayName(input.getDisplayName()); entity.addUserModifiedField("displayName"); }
         if (input.getTier() != null) { entity.setTier(input.getTier()); entity.addUserModifiedField("tier"); }
         // Per-model default reasoning effort: an explicit empty/blank string clears it
@@ -1561,17 +1584,36 @@ public class ModelCatalogService {
         List<Map<String, Object>> allProviders = (List<Map<String, Object>>) base.get("providers");
         boolean cloudSelected = isCloudSelected(tenantId);
         if (allProviders != null) {
-            allProviders.removeIf(p -> {
-                String name = (String) p.get("name");
-                if (cloudSelected && !isBridgeProviderName(name)) {
-                    return !CloudRelaySupport.isSupportedProvider(name);
-                }
-                boolean configured = Boolean.TRUE.equals(p.get("configured"));
-                boolean hasDbKey = credentialRepository.hasDbKey(name);
-                return !configured && !hasDbKey;
-            });
+            allProviders.removeIf(p -> !isProviderRuntimeAvailable(
+                    (String) p.get("name"), Boolean.TRUE.equals(p.get("configured")), cloudSelected));
         }
         return base;
+    }
+
+    /**
+     * Whether the picker/runtime would offer this provider under the tenant's
+     * LLM source - the exact keep-predicate the picker filter uses:
+     * <ul>
+     *   <li>CLOUD source: relay-supported API providers are available (the bound
+     *       cloud account executes them); local CLI/bridge providers follow their
+     *       own key/availability rule below.</li>
+     *   <li>otherwise (BYOK / cloud-prod): an env key ({@code configured}) OR a
+     *       DB/BYOK key is required.</li>
+     * </ul>
+     *
+     * <p>Reused by {@link #getAvailableProvidersBase} (to DROP unavailable
+     * providers from the picker) and by {@link #getEffectiveModelList} (to
+     * ANNOTATE each admin row's {@code available} flag WITHOUT dropping - the
+     * admin config panel lists the full catalog so every model can be ranked and
+     * priced before its key exists). {@code hasDbKey} is evaluated eagerly in the
+     * non-cloud branch, matching the historical picker contract.
+     */
+    private boolean isProviderRuntimeAvailable(String name, boolean configured, boolean cloudSelected) {
+        if (cloudSelected && !isBridgeProviderName(name)) {
+            return CloudRelaySupport.isSupportedProvider(name);
+        }
+        boolean hasDbKey = credentialRepository.hasDbKey(name);
+        return configured || hasDbKey;
     }
 
     private boolean isCloudSelected(String tenantId) {

@@ -128,7 +128,12 @@ public final class CatalogBundlePayload {
         putIfNotNull(row, "tier", m.getTier());
         putIfNotNull(row, "ranking", m.getRanking());
         putIfNotNull(row, "recommended", m.getRecommended());
-        putIfNotNull(row, "enabled", m.getEnabled());
+        // Effective enabled: the cloud admin's bundle_enabled override wins over
+        // the cloud's own greying (bundle_enabled TRUE ships the model active to
+        // CE installs even when the cloud disables it locally, FALSE the
+        // reverse; NULL inherits). Resolved HERE so the signed bytes carry the
+        // decision and nothing downstream needs to know the column exists.
+        putIfNotNull(row, "enabled", m.getBundleEnabled() != null ? m.getBundleEnabled() : m.getEnabled());
         putIfNotNull(row, "priceInput", bigDecString(m.getPriceInput()));
         putIfNotNull(row, "priceOutput", bigDecString(m.getPriceOutput()));
         putIfNotNull(row, "rateLimitTpm", m.getRateLimitTpm());

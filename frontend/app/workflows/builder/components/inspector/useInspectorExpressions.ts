@@ -38,6 +38,12 @@ export function useInspectorExpressions({
     while ((match = regex.exec(expression)) !== null) {
       const varName = match[1].trim();
       const baseVarName = varName.split('.')[0];
+      // {{$vars.name}} / {{vars:name}} reference workflow variables (org-level
+      // values), not node outputs - they have no source node by design and
+      // must not surface an "unknown variable" warning or auto-wiring.
+      if (baseVarName === '$vars' || baseVarName.startsWith('vars:')) {
+        continue;
+      }
       if (baseVarName && !variables.includes(baseVarName)) {
         variables.push(baseVarName);
       }
@@ -202,7 +208,11 @@ export function useInspectorExpressions({
     // Mirrors backend TemplateEngine.EXPRESSION_PATTERN.
     const variableRegex = /\{\{((?:'(?:[^'\\]|\\.)*'|[^}|])+?)(?:\|[^}]*)?\}\}/g;
     const matches = Array.from(expression.matchAll(variableRegex));
-    const variables = matches.map(m => m[1].trim().split('.')[0]);
+    const variables = matches
+      .map(m => m[1].trim().split('.')[0])
+      // Workflow variables ($vars / vars:) are not node outputs - never
+      // auto-wire a connection for them.
+      .filter(v => v !== '$vars' && !v.startsWith('vars:'));
     const variablesInExpression = new Set(variables);
     
     setConnections(prev => {

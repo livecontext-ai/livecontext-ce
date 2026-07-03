@@ -94,6 +94,44 @@ class WebSearchToolsProviderHelpModelsTest {
     }
 
     @Test
+    @DisplayName("available_models.note -> model_catalog cross-ref resolves at BOTH ends after the 2026-07 dedup")
+    @SuppressWarnings("unchecked")
+    void availableModelsNoteCrossRefResolvesBothEnds() {
+        // The note is shipped on EVERY help call and now defers the override contract to
+        // concepts.model_catalog. Guard both ends: the pointer names the topic to fetch,
+        // and the concept keeps the model_substituted contract (its only surviving copy
+        // in the help payload besides actions.agent_browse.params.llm).
+        Map<String, Object> data = (Map<String, Object>) provider
+                .execute("web_search", Map.of("action", "help"), ctx()).data();
+
+        Map<String, Object> availableModels = (Map<String, Object>) data.get("available_models");
+        org.assertj.core.api.Assertions.assertThat((String) availableModels.get("note"))
+                .contains("model_catalog")
+                .contains("topics=['concepts']");
+
+        Map<String, Object> concepts = (Map<String, Object>) data.get("concepts");
+        org.assertj.core.api.Assertions.assertThat(concepts.get("model_catalog").toString())
+                .as("authority the note defers to")
+                .contains("OPTIONAL")
+                .contains("model_substituted")
+                .contains("help_models");
+    }
+
+    @Test
+    @DisplayName("llm param keeps the full override contract after the 2026-07 dedup (single remaining copy in the schema)")
+    void llmParamKeepsOverrideContract() {
+        // The "llm is optional / pick pairs from help_models / unknown pairs substituted"
+        // rule used to be stated in BOTH the tool description and the llm param; it now
+        // lives only on the param. Guard the surviving copy.
+        var llmParam = provider.getTools().get(0).parameters().stream()
+                .filter(p -> "llm".equals(p.name())).findFirst().orElseThrow();
+        org.assertj.core.api.Assertions.assertThat(llmParam.description())
+                .contains("OPTIONAL")
+                .contains("help_models")
+                .contains("model_substituted");
+    }
+
+    @Test
     @DisplayName("REGRESSION (Audit B M2 / openrouter bug): a provider absent from agentClient.getModelsInfo never appears in help_models")
     @SuppressWarnings("unchecked")
     void regressionOpenrouterAbsentWhenUnconfigured() {

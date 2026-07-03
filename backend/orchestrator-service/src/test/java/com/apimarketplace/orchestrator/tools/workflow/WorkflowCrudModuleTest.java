@@ -46,6 +46,7 @@ class WorkflowCrudModuleTest {
     @Mock PublicationClient publicationClient;
     @Mock com.apimarketplace.credential.client.CredentialClient credentialClient;
     @Mock com.apimarketplace.orchestrator.repository.WorkflowRepository workflowRepository;
+    @Mock com.apimarketplace.orchestrator.tools.utility.AgentCancellationProbe cancellationProbe;
 
     private WorkflowCrudModule module;
     private static final String TENANT_ID = "tenant-test";
@@ -54,7 +55,8 @@ class WorkflowCrudModuleTest {
     void setUp() {
         module = new WorkflowCrudModule(workflowService, workflowRunRepository,
                 agentWorkflowFireService, planVersionService, pinService, publicationClient,
-                credentialClient, workflowRepository, new ApplicationShowcaseResolver(workflowRunRepository));
+                credentialClient, workflowRepository, new ApplicationShowcaseResolver(workflowRunRepository),
+                cancellationProbe);
     }
 
     private WorkflowRunSummaryProjection mockProjection(String runId, RunStatus status, int planVersion) {

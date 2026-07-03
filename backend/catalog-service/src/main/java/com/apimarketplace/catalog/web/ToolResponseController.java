@@ -56,10 +56,15 @@ public class ToolResponseController {
     private boolean isAdminCaller(String headerToken) {
         if (catalogAdminToken == null || catalogAdminToken.isBlank()) return false;
         if (headerToken == null || headerToken.isBlank()) return false;
+        // Trim both sides: a trailing newline in the provisioned secret value must
+        // not silently 403 every legitimate caller (the importer trims what it sends).
+        String expected = catalogAdminToken.trim();
+        String presented = headerToken.trim();
+        if (expected.isEmpty() || presented.isEmpty()) return false;
         // length-independent constant-time compare
         return java.security.MessageDigest.isEqual(
-                catalogAdminToken.getBytes(java.nio.charset.StandardCharsets.UTF_8),
-                headerToken.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                expected.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                presented.getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 
     private final ToolResponseService toolResponseService;

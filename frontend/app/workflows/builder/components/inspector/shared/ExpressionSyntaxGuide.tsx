@@ -23,6 +23,7 @@ export function ExpressionSyntaxGuide() {
             <li>Find current row: <code className="bg-slate-100 dark:bg-slate-800 px-1 rounded">{`{{table:find.output.current_item.field}}`}</code> (in body nodes)</li>
             <li>Find row index: <code className="bg-slate-100 dark:bg-slate-800 px-1 rounded">{`{{table:find.output.current_index}}`}</code></li>
             <li>Loop iteration: <code className="bg-slate-100 dark:bg-slate-800 px-1 rounded">{`{{core:loop.output.iteration}}`}</code> (1-based)</li>
+            <li>Workflow variable: <code className="bg-slate-100 dark:bg-slate-800 px-1 rounded">{`{{$vars.name}}`}</code> (Settings &gt; Credentials &gt; Variables)</li>
           </ul>
         </div>
 

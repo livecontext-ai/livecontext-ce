@@ -194,4 +194,54 @@ class CatalogBundlePayloadTest {
         assertThat(json).contains("\"issuer\":\"acme-cloud\"");
         assertThat(json).contains("\"snapshotAt\":\"2026-04-21T10:00:00Z\"");
     }
+
+    @Test
+    @DisplayName("V381: bundle_enabled overrides the row's enabled in the canonical payload")
+    void bundleEnabledOverridesEnabledInPayload() {
+        ModelConfigOverrideEntity greyedButShipped = new ModelConfigOverrideEntity();
+        greyedButShipped.setProvider("anthropic");
+        greyedButShipped.setModelId("claude-fable-5");
+        greyedButShipped.setDisplayName("Fable");
+        greyedButShipped.setEnabled(false);       // greyed on cloud
+        greyedButShipped.setBundleEnabled(true);  // but shipped ENABLED to CE
+
+        ModelConfigOverrideEntity usedButHidden = new ModelConfigOverrideEntity();
+        usedButHidden.setProvider("openai");
+        usedButHidden.setModelId("gpt-5");
+        usedButHidden.setDisplayName("GPT-5");
+        usedButHidden.setEnabled(true);            // used on cloud
+        usedButHidden.setBundleEnabled(false);     // but withheld from CE
+
+        ModelConfigOverrideEntity inherits = new ModelConfigOverrideEntity();
+        inherits.setProvider("deepseek");
+        inherits.setModelId("deepseek-chat");
+        inherits.setDisplayName("DeepSeek");
+        inherits.setEnabled(true);                 // bundleEnabled null = inherit
+
+        byte[] bytes = CatalogBundlePayload.canonicalBytes(
+                1L, 2, "test", java.time.Instant.parse("2026-07-03T00:00:00Z"),
+                java.util.List.of(greyedButShipped, usedButHidden, inherits),
+                java.util.List.of());
+
+        try {
+            com.fasterxml.jackson.databind.JsonNode root =
+                    new com.fasterxml.jackson.databind.ObjectMapper().readTree(bytes);
+            java.util.Map<String, Boolean> enabledByModel = new java.util.HashMap<>();
+            for (com.fasterxml.jackson.databind.JsonNode model : root.get("models")) {
+                enabledByModel.put(model.get("modelId").asText(),
+                        model.has("enabled") ? model.get("enabled").asBoolean() : null);
+            }
+            assertThat(enabledByModel.get("claude-fable-5"))
+                    .as("greyed on cloud + bundle_enabled=true ships ENABLED to CE")
+                    .isTrue();
+            assertThat(enabledByModel.get("gpt-5"))
+                    .as("used on cloud + bundle_enabled=false ships DISABLED to CE")
+                    .isFalse();
+            assertThat(enabledByModel.get("deepseek-chat"))
+                    .as("bundle_enabled null inherits the row's enabled")
+                    .isTrue();
+        } catch (java.io.IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
 }

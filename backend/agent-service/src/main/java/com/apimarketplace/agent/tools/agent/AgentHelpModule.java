@@ -233,10 +233,9 @@ public class AgentHelpModule implements ToolModule {
             "REVIEW STEP (ALWAYS PRESENT): after the assignee calls task_complete/task_reject the task " +
             "transitions to 'in_review'. Who reviews depends on reviewer_agent_id: SET → that agent auto-runs " +
             "on its own activation trigger and approves/rejects. NULL → the HUMAN USER (tenant owner) is the " +
-            "implicit reviewer; the task sits in 'in_review' on the human's task board UI awaiting manual " +
-            "approve/reject by the user. 'in_review' without a reviewer agent is NOT an error - it is the " +
-            "expected resting state, and you (the LLM) have no action to take: the user resolves it from their " +
-            "UI, not through this tool. " +
+            "implicit reviewer; the task sits in 'in_review' awaiting the user's manual approve/reject. " +
+            "'in_review' without a reviewer agent is NOT an error - it is the expected resting state, and " +
+            "you (the LLM) have no action to take: the user resolves it outside this tool. " +
             "REVIEWER LOOP CAP: max_review_attempts ([1, 20], default 3) bounds reviewer rejections - once " +
             "hit, the task is AUTO-FAILED (not auto-approved) with the last reviewer feedback as " +
             "error_message, so unvalidated work is never silently promoted. " +
@@ -274,8 +273,8 @@ public class AgentHelpModule implements ToolModule {
             "Always transitions to 'in_review'. If reviewer_agent_id is set → the reviewer agent will read the " +
             "task from its review_inbox on its own next activation trigger (async - not immediate). " +
             "If reviewer_agent_id is NULL → the HUMAN USER (tenant owner, the one who created the task from chat) " +
-            "is the implicit reviewer; the task sits in 'in_review' on the task board awaiting manual approval - " +
-            "this is CORRECT and EXPECTED behavior, not a stuck task. " +
+            "is the implicit reviewer; the task stays in 'in_review' until the user manually approves it - " +
+            "this is CORRECT and EXPECTED behavior, not a stuck task, and you have no further action. " +
             "DO NOT call this on a task you are the REVIEWER of - use task_approve / task_reject_review. " +
             "If a reviewer accidentally calls task_complete on an in_review task, the call is auto-rerouted to task_approve " +
             "(the system protects against verb-confusion between assignee and reviewer roles).");
@@ -335,7 +334,7 @@ public class AgentHelpModule implements ToolModule {
             "Requires task_id, optional reason. Transitions to 'in_review' with error_message so the reviewer " +
             "decides whether to accept the failure or send back. " +
             "The reviewer is either the configured reviewer_agent_id OR - if none was set - the HUMAN USER " +
-            "(tenant owner) who decides from the task board. " +
+            "(tenant owner) who decides outside this tool. " +
             "REVIEWERS use task_reject_review - not this - to bounce work back to the assignee.");
         actions.put("task_update",
             "Modify a task YOU created - title, instructions, priority, due_by, or reassign via a new agent_id. " +
@@ -476,7 +475,7 @@ public class AgentHelpModule implements ToolModule {
         // --- Activation triggers ---
         Map<String, String> triggers = new LinkedHashMap<>();
         triggers.put("user_chat",
-            "A human opens a conversation with the agent via the chat UI. Each message the human sends fires ONE " +
+            "A human opens a conversation with the agent. Each message the human sends fires ONE " +
             "agent loop. The user message is the prompt. Inbox is NOT auto-surfaced - if you want the agent to " +
             "check its inbox here, instruct it explicitly in the system_prompt or the user message.");
         triggers.put("webhook",
@@ -510,7 +509,7 @@ public class AgentHelpModule implements ToolModule {
             "agent(action='outbox', task_id=…) for the terminal result. " +
             "(3) start_mode='pending' - passive: create the row only, do NOT dispatch. The task waits in " +
             "'pending' until something else picks it up (the assignee's own schedule_cron/webhook firing, " +
-            "or a UI claim). Use when posting work for an assignee that activates on its own. " +
+            "or the user starting it manually). Use when posting work for an assignee that activates on its own. " +
             "BACKLOG MODE: assign without agent_id - the task goes to the tenant BACKLOG (status='pending', " +
             "assigned_to='backlog') and any agent with a schedule AND backlog_enabled=true can pick it up via " +
             "claim (backlog participation is opt-in per agent - by default no agent is offered the backlog, so " +
@@ -521,8 +520,8 @@ public class AgentHelpModule implements ToolModule {
             "forever - fall back to start_mode='execute' or to backlog. " +
             "REVIEW STEP: every task passes through 'in_review' after task_complete/task_reject - NEVER " +
             "skipped. Reviewer identity depends on reviewer_agent_id: (a) SET → that agent reviews later, on " +
-            "its own activation trigger; (b) NULL → the HUMAN USER (tenant owner) reviews manually from the " +
-            "task board UI. " +
+            "its own activation trigger; (b) NULL → the HUMAN USER (tenant owner) reviews manually, " +
+            "outside this tool. " +
             "So if you assign without reviewer_agent_id, the task will eventually reach 'in_review' and stay " +
             "there until the user approves - that is the correct final resting state for the LLM; it does NOT " +
             "mean the task is stuck, and you have no action to take.");
@@ -809,7 +808,7 @@ public class AgentHelpModule implements ToolModule {
         params.put("instructions", "string, required for assign/recurrence_create - Full task instructions (max 50KB)");
         params.put("start_mode",
             "string, default='execute' (for assign) - Execution timing. " +
-            "'pending' = create the row in pending status, do NOT trigger the worker (UI-style: " +
+            "'pending' = create the row in pending status, do NOT trigger the worker (passive: " +
             "task waits for an explicit pickup via inbox/claim or the assignee's own activation). " +
             "'in_progress' = create + dispatch the worker async, return immediately without waiting. " +
             "'execute' = create + dispatch + sync-wait until terminal state, return result/error_message inline. " +
@@ -819,7 +818,7 @@ public class AgentHelpModule implements ToolModule {
             "Fall back to 'execute' or to backlog when no wake-up path exists.");
         params.put("reviewer_agent_id",
             "string UUID|null (for assign, task_update) - Agent that reviews after task_complete. " +
-            "If null, the human user (tenant owner) reviews from the task board UI.");
+            "If null, the human user (tenant owner) reviews it outside this tool.");
         params.put("max_review_attempts",
             "integer [1, 20], default=3 (for assign, task_update) - Reviewer reject cap. " +
             "Once hit, the task is AUTO-FAILED with the last reviewer feedback as error_message.");
@@ -911,12 +910,15 @@ public class AgentHelpModule implements ToolModule {
 
         examples.put("worker_agent", Map.of(
             "description", "CANONICAL WORKER RECIPE - create a worker with schedule_cron so it periodically " +
-                "drains its inbox. assign is async: you post work with agent(action='assign', …) and the " +
-                "worker picks it up at the next schedule tick. Poll outbox(task_id=…) to read the result.",
+                "drains its inbox. For fire-and-forget delegation pass start_mode='in_progress': assign then " +
+                "returns immediately with a task_id (status='pending' until the worker picks it up at the next " +
+                "schedule tick). WITHOUT start_mode, assign defaults to 'execute' and BLOCKS until the task is " +
+                "terminal. Poll outbox(task_id=…) to read the result.",
             "call", "agent(action='create', params={name: 'Research Worker', system_prompt: 'You are a research assistant. Investigate topics and report findings.', tools_mode: 'all', schedule_cron: '*/5 * * * *', schedule_prompt: 'Check your inbox and process pending tasks via task_complete.'})",
-            "usage", "agent(action='assign', agent_id='<worker-uuid>', title='Research X', instructions='...') " +
-                "returns immediately with a task_id. Later: agent(action='outbox', task_id='<id>') to read the " +
-                "result once the worker has completed and any reviewer has approved."
+            "usage", "agent(action='assign', agent_id='<worker-uuid>', title='Research X', instructions='...', " +
+                "start_mode='in_progress') returns immediately with {task_id, status:'pending'}. Later: " +
+                "agent(action='outbox', task_id='<id>') to read the result once the worker has completed and " +
+                "any reviewer has approved."
         ));
 
         examples.put("full_featured", Map.of(
@@ -1020,17 +1022,19 @@ public class AgentHelpModule implements ToolModule {
         // ==================== Task Delegation Examples ====================
 
         examples.put("task_lifecycle", Map.of(
-            "description", "Task lifecycle: assign is ASYNC - it returns immediately with a task_id. The " +
+            "description", "Task lifecycle. Default start_mode='execute': assign BLOCKS until the task is " +
+                    "terminal and returns result/error_message inline. For the async flow below, pass " +
+                    "start_mode='in_progress' - assign then returns immediately with a task_id and the " +
                     "assignee runs later on its own activation trigger. Every task passes through 'in_review' " +
                     "before reaching 'completed' - the reviewer is either a configured reviewer_agent_id or, " +
                     "when none is set, the human user (tenant owner). Poll outbox to read results.",
             "steps", List.of(
-                "1. CALLER: agent(action='assign', agent_id='<worker>', title='Research Q4', instructions='Summarize Q4 results') - returns {task_id, status:'in_progress'} immediately",
+                "1. CALLER: agent(action='assign', agent_id='<worker>', title='Research Q4', instructions='Summarize Q4 results', start_mode='in_progress') - returns {task_id, status:'pending'} immediately (the worker promotes it to in_progress when it picks the task up)",
                 "2. Later, on the worker's schedule_cron fire (or webhook hit, or parent_execute), the worker reads its inbox and runs the task",
                 "3. WORKER: agent(action='task_complete', task_id='<id>', result='Q4 revenue was $4.2M...')",
                 "4. Task → in_review (ALWAYS). If reviewer_agent_id set → reviewer agent runs on its own activation " +
                     "trigger and approves/rejects. If NOT set → the human user (tenant owner) is the implicit " +
-                    "reviewer and resolves the task manually from their task board UI - you (the LLM) have no action to take here",
+                    "reviewer and resolves the task outside this tool - you (the LLM) have no action to take here",
                 "5. CALLER polls agent(action='outbox', task_id='<id>') to read the terminal state: " +
                     "status='completed' if a reviewer agent approved, status='in_review' if awaiting human user " +
                     "approval (this is CORRECT and terminal for the LLM - the user resolves it)"

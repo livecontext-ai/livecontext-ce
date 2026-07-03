@@ -148,12 +148,17 @@ public class IntegrationTestConfig {
         }
 
         @Override
-        public Mono<StreamMetadata> registerExternalStream(String streamId, String conversationId, String model, String provider) {
-            StreamMetadata metadata = StreamMetadata.create(streamId, "internal", conversationId, model, provider);
+        public Mono<StreamMetadata> registerExternalStream(String streamId, String conversationId, String model, String provider,
+                                                           String ownerUserId) {
+            String userId = (ownerUserId != null && !ownerUserId.isBlank()) ? ownerUserId : "internal";
+            StreamMetadata metadata = StreamMetadata.create(streamId, userId, conversationId, model, provider);
             metadataStore.put(streamId, metadata);
             contentStore.put(streamId, new ArrayList<>());
             toolEventsStore.put(streamId, new ArrayList<>());
             if (conversationId != null) conversationIndex.put(conversationId, streamId);
+            if (!"internal".equals(userId)) {
+                userIndex.computeIfAbsent(userId, k -> new ArrayList<>()).add(streamId);
+            }
             return Mono.just(metadata);
         }
 

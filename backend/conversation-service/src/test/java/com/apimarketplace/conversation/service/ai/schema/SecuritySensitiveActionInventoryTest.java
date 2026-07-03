@@ -61,6 +61,16 @@ class SecuritySensitiveActionInventoryTest {
     static Stream<Arguments> knownSensitivePairs() {
         return Stream.of(
                 // Whole-tool - any call must go FULL.
+                // The unified credentials + workflow-variables tool. Unlike the
+                // legacy alias, the bare name "credential" IS caught by the
+                // positive-list \bcredential\b pattern (whole-string boundaries),
+                // so it must ALSO live in the manual list (manual ⊇ regex).
+                Arguments.of("credential", null),
+                Arguments.of("credential", "list"),
+                Arguments.of("credential", "set_variable"),
+                Arguments.of("credential", "require"),
+                // Legacy routing alias (pre-rename sessions) - regex-blind
+                // (underscore kills the \b), manual-list only.
                 Arguments.of("request_credential", null),
                 Arguments.of("request_credential", "read"),
 
@@ -87,6 +97,7 @@ class SecuritySensitiveActionInventoryTest {
         JitExclusionProperties props = new JitExclusionProperties();
 
         Set<String> tools = new HashSet<>();
+        tools.add("credential");
         tools.add("request_credential");
         props.setAlwaysFullTools(tools);
 
@@ -130,6 +141,7 @@ class SecuritySensitiveActionInventoryTest {
         // of sensitivity has regressed.
         JitExclusionProperties props = new JitExclusionProperties();
         Set<String> tools = new HashSet<>();
+        tools.add("credential");
         tools.add("request_credential");
         props.setAlwaysFullTools(tools);
         props.setAlwaysFullToolActions(new HashSet<>(List.of(
@@ -167,6 +179,8 @@ class SecuritySensitiveActionInventoryTest {
      */
     static Stream<Arguments> regexCaughtPairs() {
         return Stream.of(
+                // The unified tool's bare name hits \bcredential\b directly.
+                Arguments.of("credential", null),
                 Arguments.of("agent", "publish"),
                 Arguments.of("skill", "publish"),
                 Arguments.of("interface", "publish"),
@@ -209,6 +223,7 @@ class SecuritySensitiveActionInventoryTest {
         Pattern p = Pattern.compile(pattern);
 
         Set<String> manualTools = new HashSet<>();
+        manualTools.add("credential");
         manualTools.add("request_credential");
         Set<String> manualPairs = new HashSet<>(List.of(
                 "agent:publish",

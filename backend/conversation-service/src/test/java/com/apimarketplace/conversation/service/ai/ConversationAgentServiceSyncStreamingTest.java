@@ -57,6 +57,7 @@ class ConversationAgentServiceSyncStreamingTest {
     private CreditConsumptionClient creditClient;
     private StreamStateService stateService;
     private EventBus eventBus;
+    private BridgeStreamHeartbeat heartbeat;
     private ConversationAgentService service;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -71,7 +72,7 @@ class ConversationAgentServiceSyncStreamingTest {
 
         when(creditClient.fetchBalance(anyString())).thenReturn(new java.math.BigDecimal("100"));
         // Reactive stream-state writes are best-effort .block()ed - return completed Monos.
-        when(stateService.registerExternalStream(anyString(), anyString(), any(), any()))
+        when(stateService.registerExternalStream(anyString(), anyString(), any(), any(), any()))
                 .thenReturn(Mono.empty());
         when(stateService.complete(anyString())).thenReturn(Mono.just(true));
         when(stateService.error(anyString(), any())).thenReturn(Mono.just(true));
@@ -96,6 +97,48 @@ class ConversationAgentServiceSyncStreamingTest {
         setField(service, "bridgeEnabled", Boolean.TRUE);
         setField(service, "bridgeClient", bridgeClient);
         setField(service, "bridgeAccessEnforcer", mock(BridgeAccessEnforcer.class));
+        heartbeat = mock(BridgeStreamHeartbeat.class);
+        setField(service, "bridgeStreamHeartbeat", heartbeat);
+    }
+
+    @Test
+    @DisplayName("eligible bridge run holds the stream:hb heartbeat across the dispatch (StreamTTL reap regression) and releases it at finalize")
+    void bridgeScheduleHoldsHeartbeatAcrossDispatch() throws Exception {
+        stubBridgeContext("claude-code", "claude-opus-4-8");
+        when(bridgeClient.executeViaBridge(any())).thenReturn(successResponse("hello world"));
+
+        service.executeSync(scheduleRequest("conv-hb"), "conv-hb");
+
+        // Register BEFORE the blocking bridge call (the row registered by
+        // registerExternalStream is reapable by the absolute-timeout pass the moment it
+        // exists), release at the finalize funnel AFTER the run.
+        InOrder order = inOrder(heartbeat, bridgeClient);
+        order.verify(heartbeat).register(anyString());
+        order.verify(bridgeClient).executeViaBridge(any());
+        order.verify(heartbeat).unregister(anyString());
+    }
+
+    @Test
+    @DisplayName("bridge failure path still releases the heartbeat (finalize funnel covers every terminal)")
+    void bridgeFailureReleasesHeartbeat() throws Exception {
+        stubBridgeContext("claude-code", "claude-opus-4-8");
+        when(bridgeClient.executeViaBridge(any())).thenReturn(failureResponse("model exploded"));
+
+        service.executeSync(scheduleRequest("conv-hb-fail"), "conv-hb-fail");
+
+        verify(heartbeat).register(anyString());
+        verify(heartbeat).unregister(anyString());
+    }
+
+    @Test
+    @DisplayName("WIDGET source registers no stream row - so no heartbeat either (nothing reapable to shield)")
+    void widgetBridgeDoesNotHeartbeat() throws Exception {
+        stubBridgeContext("claude-code", "claude-opus-4-8");
+        when(bridgeClient.executeViaBridge(any())).thenReturn(successResponse("widget reply"));
+
+        service.executeSync(widgetRequest("conv-widget-hb"), "conv-widget-hb");
+
+        verify(heartbeat, never()).register(anyString());
     }
 
     @Test
@@ -110,7 +153,7 @@ class ConversationAgentServiceSyncStreamingTest {
 
         // Register MUST happen before dispatch so a reconnect mid-run resolves the stream.
         InOrder order = inOrder(stateService, bridgeClient);
-        order.verify(stateService).registerExternalStream(anyString(), eq("conv-sched"), eq("claude-opus-4-8"), eq("claude-code"));
+        order.verify(stateService).registerExternalStream(anyString(), eq("conv-sched"), eq("claude-opus-4-8"), eq("claude-code"), any());
         order.verify(bridgeClient).executeViaBridge(any());
         // Completion state advanced so a post-run reconnect sees a terminal event, not a stuck stream.
         verify(stateService).complete(anyString());
@@ -148,7 +191,7 @@ class ConversationAgentServiceSyncStreamingTest {
 
         service.executeSync(widgetRequest("conv-widget"), "conv-widget");
 
-        verify(stateService, never()).registerExternalStream(anyString(), anyString(), any(), any());
+        verify(stateService, never()).registerExternalStream(anyString(), anyString(), any(), any(), any());
         verify(stateService, never()).complete(anyString());
         assertThat(capturedConversationEvents("conv-widget")).isEmpty();
 
@@ -167,7 +210,7 @@ class ConversationAgentServiceSyncStreamingTest {
 
         // executeSync must not register/emit/finalize on the remote path (that would double the
         // callback's work and risk duplicate stream_started/done).
-        verify(stateService, never()).registerExternalStream(anyString(), anyString(), any(), any());
+        verify(stateService, never()).registerExternalStream(anyString(), anyString(), any(), any(), any());
         verify(stateService, never()).complete(anyString());
         assertThat(capturedConversationEvents("conv-remote")).isEmpty();
         verify(agentClient).executeAgent(any());
@@ -207,7 +250,7 @@ class ConversationAgentServiceSyncStreamingTest {
         Map<String, Object> result = service.executeSync(scheduleRequest("conv-null"), "conv-null");
 
         assertThat(result).containsEntry("success", false);
-        verify(stateService).registerExternalStream(anyString(), eq("conv-null"), any(), any());
+        verify(stateService).registerExternalStream(anyString(), eq("conv-null"), any(), any(), any());
         verify(stateService).error(anyString(), any());
         verify(stateService, never()).complete(anyString());
         assertThat(capturedConversationEvents("conv-null").stream()
@@ -226,7 +269,7 @@ class ConversationAgentServiceSyncStreamingTest {
         Map<String, Object> result = service.executeSync(scheduleRequest("conv-throw"), "conv-throw");
 
         assertThat(result).containsEntry("success", false);
-        verify(stateService).registerExternalStream(anyString(), eq("conv-throw"), any(), any());
+        verify(stateService).registerExternalStream(anyString(), eq("conv-throw"), any(), any(), any());
         verify(stateService).error(anyString(), any());
         verify(stateService, never()).complete(anyString());
         assertThat(capturedConversationEvents("conv-throw").stream()
@@ -245,7 +288,7 @@ class ConversationAgentServiceSyncStreamingTest {
 
         service.executeSync(request, conv);
 
-        verify(stateService).registerExternalStream(anyString(), eq(conv), any(), any());
+        verify(stateService).registerExternalStream(anyString(), eq(conv), any(), any(), any());
         verify(stateService).complete(anyString());
         assertThat(capturedConversationEvents(conv).stream()
                 .anyMatch(e -> e.containsKey("model") && e.containsKey("conversationId") && !e.containsKey("fullContent")))

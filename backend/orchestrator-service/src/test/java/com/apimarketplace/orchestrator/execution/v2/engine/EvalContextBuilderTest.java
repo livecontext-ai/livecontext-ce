@@ -472,4 +472,52 @@ class EvalContextBuilderTest {
             assertEquals(3, aggregateResult.get("currentIteration"));
         }
     }
+
+    // =========================================================================
+    // Workflow variables bundle ("vars" global data) tests
+    // =========================================================================
+
+    @Nested
+    @DisplayName("Workflow variables bundle (vars)")
+    class WorkflowVariablesBundleTests {
+
+        private final Map<String, Object> bundle =
+            Map.of("api_url", "https://api.example.com", "n", 5);
+
+        @Test
+        @DisplayName("Standard context should expose the vars global data under the 'vars' key")
+        void standardContextShouldExposeVarsBundle() {
+            ExecutionContext ctx = baseContext.withGlobalData("vars", bundle);
+
+            Map<String, Object> result = EvalContextBuilder.buildStandardEvalContext(ctx);
+
+            assertEquals(bundle, result.get("vars"));
+        }
+
+        @Test
+        @DisplayName("Aggregate context should expose the vars global data under the 'vars' key")
+        void aggregateContextShouldExposeVarsBundle() {
+            ExecutionContext ctx = baseContext.withGlobalData("vars", bundle);
+
+            Map<String, Object> result = EvalContextBuilder.buildAggregateEvalContext(ctx);
+
+            assertEquals(bundle, result.get("vars"));
+        }
+
+        @Test
+        @DisplayName("Standard context should have no 'vars' key when no bundle was attached")
+        void standardContextShouldOmitVarsWhenAbsent() {
+            Map<String, Object> result = EvalContextBuilder.buildStandardEvalContext(baseContext);
+
+            assertFalse(result.containsKey("vars"));
+        }
+
+        @Test
+        @DisplayName("Aggregate context should have no 'vars' key when no bundle was attached")
+        void aggregateContextShouldOmitVarsWhenAbsent() {
+            Map<String, Object> result = EvalContextBuilder.buildAggregateEvalContext(baseContext);
+
+            assertFalse(result.containsKey("vars"));
+        }
+    }
 }

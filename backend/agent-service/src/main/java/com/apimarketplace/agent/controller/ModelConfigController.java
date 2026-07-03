@@ -42,9 +42,9 @@ public class ModelConfigController {
             return ResponseEntity.badRequest().body(Map.of(
                     "error", "Invalid category key '" + category + "'"));
         }
-        // tenantId drives the cloud-connect vs BYOK/cloud-prod filter so the
-        // admin Models panel shows the same providers the picker would (see
-        // ModelCatalogService.getEffectiveModelList). null tenant = key filter.
+        // The admin panel lists the FULL catalog (every provider, keyed or not);
+        // tenantId only drives the per-row `available` flag (would the picker
+        // offer it?), not visibility. See ModelCatalogService.getEffectiveModelList.
         return ResponseEntity.ok(service.getEffectiveModelList(category, tenantId));
     }
 
@@ -64,6 +64,14 @@ public class ModelConfigController {
             entity.setModelId(requireNonBlankString(body, "modelId"));
 
             if (body.containsKey("enabled")) entity.setEnabled(optionalBoolean(body, "enabled"));
+            if (body.containsKey("bundleEnabled")) {
+                // Cloud-admin-only fine control over what the CE bundle ships
+                // (V381): true/false override the row's enabled in the payload,
+                // explicit null resets to inherit. Admin-gated like every field
+                // here; harmless on CE (nothing builds bundles there).
+                entity.setBundleEnabledExplicitlySet(true);
+                entity.setBundleEnabled(optionalBoolean(body, "bundleEnabled"));
+            }
             if (body.containsKey("displayName")) entity.setDisplayName(optionalString(body, "displayName"));
             if (body.containsKey("tier")) entity.setTier(optionalString(body, "tier"));
             if (body.containsKey("ranking")) entity.setRanking(optionalInteger(body, "ranking", 0, 100_000));

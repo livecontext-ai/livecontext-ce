@@ -159,6 +159,10 @@ conversation:
     # credential name).
     exclusions:
       always-full-tools:
+        # Unified credentials + workflow-variables tool (also auto-caught by
+        # the \bcredential\b positive-list pattern; listed for documentation).
+        - credential
+        # Legacy routing alias of `credential` (pre-rename sessions).
         - request_credential
       always-full-tool-actions:
         - agent:publish

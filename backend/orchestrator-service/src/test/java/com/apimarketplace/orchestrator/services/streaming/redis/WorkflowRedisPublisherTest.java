@@ -337,7 +337,7 @@ class WorkflowRedisPublisherTest {
         void shouldSetCancelKey() {
             publisher.setAgentCancelSignal("run-123");
 
-            verify(keyValueStore).set("workflow:cancel:run-123", "cancelled", Duration.ofHours(2));
+            verify(keyValueStore).set("workflow:cancel:run-123", "cancelled", Duration.ofHours(3));
         }
 
         @Test
@@ -384,7 +384,7 @@ class WorkflowRedisPublisherTest {
         @DisplayName("registerSubWorkflowParent writes workflow:parent:{child} → parent with TTL")
         void registersParentLink() {
             publisher.registerSubWorkflowParent("child-1", "parent-1");
-            verify(keyValueStore).set("workflow:parent:child-1", "parent-1", Duration.ofHours(2));
+            verify(keyValueStore).set("workflow:parent:child-1", "parent-1", Duration.ofHours(3));
         }
 
         @Test

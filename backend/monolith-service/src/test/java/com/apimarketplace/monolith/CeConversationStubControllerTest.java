@@ -4,7 +4,6 @@ import com.apimarketplace.agent.domain.ToolCall;
 import com.apimarketplace.agent.domain.ToolDefinition;
 import com.apimarketplace.agent.domain.ToolResult;
 import com.apimarketplace.agent.factory.LLMProviderFactory;
-import com.apimarketplace.agent.service.ModelCatalogService;
 import com.apimarketplace.agent.tool.ToolExecutionService;
 import com.apimarketplace.conversation.dto.ConversationDto;
 import com.apimarketplace.conversation.service.ConversationQueryService;
@@ -12,7 +11,6 @@ import com.apimarketplace.conversation.streaming.StreamStateService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
-import org.springframework.test.util.ReflectionTestUtils;
 import reactor.core.publisher.Mono;
 
 import java.util.Map;
@@ -33,25 +31,11 @@ class CeConversationStubControllerTest {
     private final ToolExecutionService toolExecutionService = mock(ToolExecutionService.class);
     private final ConversationQueryService conversationQueryService = mock(ConversationQueryService.class);
     private final StreamStateService streamStateService = mock(StreamStateService.class);
+    private final com.apimarketplace.conversation.repository.ConversationRepository conversationRepository =
+        mock(com.apimarketplace.conversation.repository.ConversationRepository.class);
     private final CeConversationStubController controller =
-        new CeConversationStubController(llmProviderFactory, toolExecutionService, conversationQueryService, streamStateService);
-
-    @Test
-    @DisplayName("anonymous model catalog uses the public service path, authenticated picker stays strict")
-    void anonymousModelCatalogUsesPublicServicePath() {
-        ModelCatalogService modelCatalogService = mock(ModelCatalogService.class);
-        Map<String, Object> publicCatalog = Map.of("providers", java.util.List.of(Map.of("name", "openai")));
-        Map<String, Object> strictCatalog = Map.of("providers", java.util.List.of());
-        when(modelCatalogService.getPublicModelsForCategory(null)).thenReturn(publicCatalog);
-        when(modelCatalogService.getModelsForCategory(null, "tenant-42")).thenReturn(strictCatalog);
-        ReflectionTestUtils.setField(controller, "modelCatalogService", modelCatalogService);
-
-        assertThat(controller.getAvailableModels(null).getBody()).isSameAs(publicCatalog);
-        assertThat(controller.getAvailableModels("tenant-42").getBody()).isSameAs(strictCatalog);
-
-        verify(modelCatalogService).getPublicModelsForCategory(null);
-        verify(modelCatalogService).getModelsForCategory(null, "tenant-42");
-    }
+        new CeConversationStubController(llmProviderFactory, toolExecutionService, conversationQueryService,
+            streamStateService, conversationRepository);
 
     @Test
     @DisplayName("cloud-shaped conversation callback forwards authenticated organization credentials")
@@ -123,7 +107,7 @@ class CeConversationStubControllerTest {
     }
 
     @Test
-    @DisplayName("cloud-shaped conversation callback forwards get_tool_result and request_credential locally")
+    @DisplayName("cloud-shaped conversation callback forwards get_tool_result, credential and the legacy request_credential alias locally")
     void cloudShapedConversationCallbackForwardsAllConversationLocalTools() {
         when(toolExecutionService.executeTool(org.mockito.Mockito.any(), org.mockito.Mockito.any(), eq("tenant-42"), org.mockito.Mockito.any()))
             .thenReturn(ToolResult.builder()
@@ -142,12 +126,24 @@ class CeConversationStubControllerTest {
             "streamId", "stream-1"
         ));
         controller.executeConversationTool("tenant-42", null, Map.of(
+            "tool", "credential",
+            "toolCallId", "call-credential",
+            "tenantId", "tenant-42",
+            "parameters", Map.of(
+                "action", "require",
+                "services", java.util.List.of("gmail"),
+                "reason", "CE callback contract"
+            ),
+            "conversationId", "conv-1",
+            "streamId", "stream-1"
+        ));
+        controller.executeConversationTool("tenant-42", null, Map.of(
             "tool", "request_credential",
             "toolCallId", "call-request-credential",
             "tenantId", "tenant-42",
             "parameters", Map.of(
                 "services", java.util.List.of("gmail"),
-                "reason", "CE callback contract"
+                "reason", "CE callback contract (legacy alias)"
             ),
             "conversationId", "conv-1",
             "streamId", "stream-1"
@@ -157,7 +153,7 @@ class CeConversationStubControllerTest {
         ArgumentCaptor<ToolDefinition> definitionCaptor = ArgumentCaptor.forClass(ToolDefinition.class);
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> credentialsCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(toolExecutionService, times(2)).executeTool(
+        verify(toolExecutionService, times(3)).executeTool(
             callCaptor.capture(),
             definitionCaptor.capture(),
             eq("tenant-42"),
@@ -165,10 +161,10 @@ class CeConversationStubControllerTest {
 
         assertThat(callCaptor.getAllValues())
             .extracting(ToolCall::toolName)
-            .containsExactly("get_tool_result", "request_credential");
+            .containsExactly("get_tool_result", "credential", "request_credential");
         assertThat(definitionCaptor.getAllValues())
             .extracting(ToolDefinition::name)
-            .containsExactly("get_tool_result", "request_credential");
+            .containsExactly("get_tool_result", "credential", "request_credential");
         assertThat(credentialsCaptor.getAllValues()).allSatisfy(credentials ->
             assertThat(credentials)
                 .containsEntry("conversationId", "conv-1")
@@ -228,7 +224,7 @@ class CeConversationStubControllerTest {
         Map<String, Object> status = controller.getStreamStatusByConversation("conv-1").getBody();
         Map<String, Object> streamStatus = controller.getStreamStatus("stream-1").getBody();
 
-        assertThat(controller.getActiveStreams().getBody()).isEmpty();
+        assertThat(controller.getActiveStreams(null).getBody()).isEmpty();
         assertThat(state)
             .containsEntry("conversationId", "conv-1")
             .containsEntry("content", "")
@@ -249,7 +245,8 @@ class CeConversationStubControllerTest {
     @DisplayName("CE stream lifecycle endpoints acknowledge ConversationClient internal callbacks")
     void ceStreamLifecycleEndpointsAcknowledgeConversationClientInternalCallbacks() {
         when(streamStateService.registerExternalStream(
-                org.mockito.Mockito.any(), org.mockito.Mockito.any(), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
+                org.mockito.Mockito.any(), org.mockito.Mockito.any(), org.mockito.Mockito.any(),
+                org.mockito.Mockito.any(), org.mockito.Mockito.any()))
             .thenReturn(Mono.empty());
         when(streamStateService.error(org.mockito.Mockito.any(), org.mockito.Mockito.any())).thenReturn(Mono.just(true));
 
@@ -263,6 +260,46 @@ class CeConversationStubControllerTest {
 
         assertThat(registerResponse.getStatusCode().is2xxSuccessful()).isTrue();
         assertThat(finalizeResponse.getStatusCode().is2xxSuccessful()).isTrue();
+    }
+
+    @Test
+    @DisplayName("CE stream registration attributes the stream to the conversation OWNER (feeds /streams/active)")
+    void ceStreamRegistrationAttributesOwner() {
+        when(streamStateService.registerExternalStream(
+                org.mockito.Mockito.any(), org.mockito.Mockito.any(), org.mockito.Mockito.any(),
+                org.mockito.Mockito.any(), org.mockito.Mockito.any()))
+            .thenReturn(Mono.empty());
+        com.apimarketplace.conversation.entity.Conversation conv =
+            new com.apimarketplace.conversation.entity.Conversation();
+        conv.setId("conv-1");
+        conv.setUserId("42");
+        when(conversationRepository.findById("conv-1")).thenReturn(Optional.of(conv));
+
+        controller.registerInternalStream(Map.of(
+            "streamId", "stream-1",
+            "conversationId", "conv-1"
+        ));
+
+        verify(streamStateService).registerExternalStream(
+            eq("stream-1"), eq("conv-1"), org.mockito.Mockito.isNull(), org.mockito.Mockito.isNull(), eq("42"));
+    }
+
+    @Test
+    @DisplayName("CE /streams/active returns the caller's active streaming conversations (was hardcoded empty)")
+    void ceActiveStreamsServedFromUserIndex() {
+        when(streamStateService.getStreamingConversationIds("42"))
+            .thenReturn(reactor.core.publisher.Flux.just("conv-1", "conv-2"));
+
+        assertThat(controller.getActiveStreams("42").getBody()).containsExactly("conv-1", "conv-2");
+    }
+
+    @Test
+    @DisplayName("CE /streams/active fails soft to empty when the lookup errors")
+    void ceActiveStreamsFailsSoftToEmpty() {
+        when(streamStateService.getStreamingConversationIds("42"))
+            .thenReturn(reactor.core.publisher.Flux.error(new IllegalStateException("redis down")));
+
+        assertThat(controller.getActiveStreams("42").getBody()).isEmpty();
     }
 
     @Test

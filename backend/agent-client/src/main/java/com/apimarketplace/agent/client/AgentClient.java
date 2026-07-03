@@ -60,15 +60,23 @@ public class AgentClient {
     }
 
     /**
+     * Read timeout of the blocking execution endpoints = the total wall-clock budget
+     * this client grants a sync agent run. Must cover the executionTimeout/
+     * inactivityTimeout contract maximum (7200s) plus the downstream bridge cap
+     * (125 min): under the previous 65-min value a valid 2h budget could never
+     * elapse on the sync HTTP path. If the caller still times out before the agent
+     * finishes, the cancel key is set via Redis and agent-service detects it within
+     * one iteration.
+     */
+    static final Duration EXECUTION_READ_TIMEOUT = Duration.ofMinutes(130);
+
+    /**
      * Create a RestTemplate with long timeouts for LLM execution endpoints.
-     * Read timeout set to 35 minutes to accommodate long agent loops (up to 50 iterations).
-     * If the caller times out before the agent finishes, the cancel key is set via Redis
-     * and the agent-service detects it within one iteration.
      */
     private static RestTemplate createExecutionRestTemplate() {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(Duration.ofSeconds(10));
-        factory.setReadTimeout(Duration.ofMinutes(65));
+        factory.setReadTimeout(EXECUTION_READ_TIMEOUT);
         return new RestTemplate(factory);
     }
 

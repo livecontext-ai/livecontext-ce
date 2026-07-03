@@ -2,6 +2,7 @@ package com.apimarketplace.agent.repository;
 
 import com.apimarketplace.agent.domain.AgentTaskRecurrenceEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -37,4 +38,27 @@ public interface AgentTaskRecurrenceRepository extends JpaRepository<AgentTaskRe
          ORDER BY r.nextFireAt ASC
     """)
     List<AgentTaskRecurrenceEntity> findDue(@Param("now") Instant now);
+
+    /**
+     * CAS fire-slot claim: advances the fire tracker only if {@code next_fire_at}
+     * is still the value the caller read from {@code findDue}. ShedLock alone is
+     * not sufficient against double-fire: with {@code lockAtMostFor} expiry (a
+     * tick that runs longer than 55s) or clock skew, a second instance can
+     * re-fetch the same due row. Two concurrent claims race on this single
+     * conditional UPDATE; exactly one matches, the loser gets 0 rows and must
+     * not spawn a task.
+     */
+    @Modifying(clearAutomatically = true)
+    @Query("""
+        UPDATE AgentTaskRecurrenceEntity r
+           SET r.nextFireAt = :next,
+               r.lastFiredAt = :firedAt,
+               r.fireCount = r.fireCount + 1
+         WHERE r.id = :id
+           AND r.nextFireAt = :expected
+    """)
+    int claimFireSlot(@Param("id") UUID id,
+                      @Param("expected") Instant expected,
+                      @Param("next") Instant next,
+                      @Param("firedAt") Instant firedAt);
 }

@@ -154,6 +154,45 @@ class BrowserSessionLifecycleServiceTest {
     }
 
     @Test
+    @DisplayName("Workflow path: HOST-node routing - generic agent node's browse publishes on the "
+            + "hosting run channel, addressed to the host node, keeping the control address")
+    @SuppressWarnings("unchecked")
+    void publishesToHostNodeWhenWorkflowHostRecorded() {
+        // A GENERIC agent node calling web_search(agent_browse): the runner's
+        // control address is (streamId, toolCallId) = (run-1, node-1), but the
+        // user watches the hosting workflow run wf-run-9 / builder node agent_1.
+        when(redisTemplate.opsForHash()).thenReturn((HashOperations) hashOps);
+        when(redisTemplate.opsForValue()).thenReturn(valueOps);
+        when(hashOps.entries("agent:browse:meta:run-1:node-1"))
+                .thenReturn(Map.of(
+                        "runType", "workflow",
+                        "userId", "user-7",
+                        "workflowRunId", "wf-run-9",
+                        "hostNodeId", "agent_1"));
+        when(valueOps.get("live_view:session:node-1")).thenReturn(null);
+        when(cdpTokenIssuer.isConfigured()).thenReturn(true);
+        when(cdpTokenIssuer.issue("ses_xyz", "user-7", "run-1", "node-1"))
+                .thenReturn("eyJfresh.token");
+        when(webSearchConfig.getPublicWsBase()).thenReturn("https://websearch-host.test");
+
+        boolean published = service.onCdpReady(
+                "run-1", "node-1", "ses_xyz", "ws://x", "https://example.com", 0);
+
+        assertThat(published).isTrue();
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        // Channel = the HOSTING workflow run (what the run page subscribes to).
+        verify(workflowRedisPublisher).publishEvent(eq("wf-run-9"), eq("agentBrowseStep"), payloadCaptor.capture());
+        Map<String, Object> payload = payloadCaptor.getValue();
+        // Display address: the builder graph matches on the host node.
+        assertThat(payload.get("nodeId")).isEqualTo("agent_1");
+        // Control address preserved: REST endpoints stay keyed by the
+        // runner's (runId, toolCallId) pair.
+        assertThat(payload.get("run_id")).isEqualTo("run-1");
+        assertThat(payload.get("control_node_id")).isEqualTo("node-1");
+        assertThat(payload.get("session_id")).isEqualTo("ses_xyz");
+    }
+
+    @Test
     @DisplayName("Skips silently when issuer unconfigured (CE deployment without secret)")
     void skipsWhenIssuerUnconfigured() {
         when(cdpTokenIssuer.isConfigured()).thenReturn(false);

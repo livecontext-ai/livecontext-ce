@@ -209,6 +209,12 @@ public class V2TemplateAdapter {
             v1Context.setGlobalVariable("loop_results", results)
         );
 
+        // Transfer the per-run workflow-variable bundle so NamespaceResolver's
+        // "vars" branch resolves {{$vars.name}} / {{vars:name}} on every node.
+        v2Context.getGlobalData("vars").ifPresent(vars ->
+            v1Context.setGlobalVariable("vars", vars)
+        );
+
         // Transfer split item data from globalData
         // SplitAwareNodeExecutor stores: item, index, {splitId}.current_item, {splitId}.current_index
         v2Context.getGlobalData("item").ifPresent(item -> {

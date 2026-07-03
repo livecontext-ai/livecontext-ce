@@ -7,6 +7,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.apimarketplace.auth.security.JwtKeyPairManager;
+import com.apimarketplace.auth.service.ApiKeyService;
 import com.apimarketplace.common.web.GatewayFilterProperties;
 import com.apimarketplace.common.web.MonolithSecurityFilter;
 import com.apimarketplace.publication.domain.SharedLinkEntity;
@@ -133,9 +134,12 @@ class MonolithSecurityConfigTest {
         when(properties.getPublicPaths()).thenReturn(List.of("/api/custom-public/"));
         JwtKeyPairManager keyPairManager = mock(JwtKeyPairManager.class);
         SharedLinkService sharedLinkService = mock(SharedLinkService.class);
+        // API-key auth path is not exercised by these tests (no X-API-Key /
+        // lc_live_ bearer), so an unstubbed mock satisfies the constructor.
+        ApiKeyService apiKeyService = mock(ApiKeyService.class);
 
         MonolithSecurityFilter filter = new MonolithSecurityConfig()
-                .monolithSecurityFilter(properties, keyPairManager, sharedLinkService);
+                .monolithSecurityFilter(properties, keyPairManager, sharedLinkService, apiKeyService);
 
         // A garbage bearer on a CONFIGURED public path must be ignored and the request forwarded
         // anonymously (200). On a path that was NOT in properties.getPublicPaths() the same garbage
@@ -166,6 +170,9 @@ class MonolithSecurityConfigTest {
         when(properties.getPublicPaths()).thenReturn(List.of());
         JwtKeyPairManager keyPairManager = mock(JwtKeyPairManager.class);
         SharedLinkService sharedLinkService = mock(SharedLinkService.class);
+        // API-key auth path is not exercised by these tests (no X-API-Key /
+        // lc_live_ bearer), so an unstubbed mock satisfies the constructor.
+        ApiKeyService apiKeyService = mock(ApiKeyService.class);
 
         UUID resourceId = UUID.fromString("00000000-0000-0000-0000-000000000456");
         SharedLinkEntity link = new SharedLinkEntity();
@@ -177,7 +184,7 @@ class MonolithSecurityConfigTest {
         when(sharedLinkService.getByToken("sl_scope")).thenReturn(Optional.of(link));
 
         MonolithSecurityFilter filter = new MonolithSecurityConfig()
-                .monolithSecurityFilter(properties, keyPairManager, sharedLinkService);
+                .monolithSecurityFilter(properties, keyPairManager, sharedLinkService, apiKeyService);
 
         MockHttpServletRequest request =
                 externalRequest("/api/publications/00000000-0000-0000-0000-000000000123");

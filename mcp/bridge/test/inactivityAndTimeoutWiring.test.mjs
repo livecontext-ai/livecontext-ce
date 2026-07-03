@@ -113,3 +113,22 @@ test('agent-cli-server.mjs disables undici headers/body timeout for the (synchro
   assert.match(cliSource, /setGlobalDispatcher\(new Agent\(\{ headersTimeout: 0, bodyTimeout: 0 \}\)\)/,
     'a long sub-agent tool call must not be aborted by undici\'s 300s default - headers/body timeout disabled');
 });
+
+// ── the watchdog mechanics live in lib/inactivityWatchdog.mjs (behaviorally tested) ──
+
+test('server.mjs builds its idle timer from the shared lib watchdog (behaviorally tested module)', () => {
+  assert.match(serverSource, /import \{ createInactivityWatchdog \} from '\.\/lib\/inactivityWatchdog\.mjs'/,
+    'server.mjs must import the extracted watchdog - the mechanics are behaviorally pinned there');
+  assert.match(serverSource, /createInactivityWatchdog\(inactivityMs,/,
+    'the idle watchdog must be constructed with the resolved inactivityMs window');
+});
+
+// ── MAX_TIMEOUT_MS default must cover the 7200s timeout contract ─────────────
+
+test('the bridge hard cap default covers the 7200s executionTimeout/inactivityTimeout contract', () => {
+  const match = serverSource.match(/BRIDGE_MAX_TIMEOUT_MS \|\| String\((\d+)\s*\*\s*60\s*\*\s*1000\)/);
+  assert.ok(match, 'MAX_TIMEOUT_MS default expression not found');
+  const minutes = parseInt(match[1], 10);
+  assert.ok(minutes * 60 > 7200,
+    `MAX_TIMEOUT_MS default (${minutes} min) must exceed the 7200s contract max - under the old 65-min cap a valid 2h budget could never elapse on the bridge`);
+});

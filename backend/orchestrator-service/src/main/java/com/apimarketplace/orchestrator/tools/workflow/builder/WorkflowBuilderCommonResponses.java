@@ -59,6 +59,7 @@ public final class WorkflowBuilderCommonResponses {
         variableSyntax.put("agent", "{{agent:label.output.response}}");
         variableSyntax.put("core", "{{core:label.output.field}}");
         variableSyntax.put("table", "{{table:label.output.field}}");
+        variableSyntax.put("vars", "{{$vars.name}} - Reusable workspace variable (user-defined config, no .output. segment). Alias: {{vars:name}}.");
         variableSyntax.put("interface_templates", "{{variable|default}} - Interface templates use GENERIC names with pipe defaults. Map to workflow data via variable_mapping on the node.");
         variableSyntax.put("interface_outputs", "{{interface:label.output.action_name.field_name}} - Access form data submitted via interface actions");
         return variableSyntax;

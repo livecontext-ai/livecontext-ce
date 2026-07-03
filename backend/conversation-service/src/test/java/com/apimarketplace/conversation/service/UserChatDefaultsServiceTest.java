@@ -120,6 +120,23 @@ class UserChatDefaultsServiceTest {
     }
 
     @Test
+    @DisplayName("save keeps inactivityTimeout=0 (disabled sentinel) - the whitelist must not coerce or drop falsy values")
+    void saveKeepsZeroInactivityTimeoutVerbatim() {
+        when(repository.findByUserIdAndOrganizationId("u1", "orgA")).thenReturn(Optional.empty());
+        when(repository.save(any(UserChatDefaults.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Map<String, Object> incoming = new LinkedHashMap<>();
+        incoming.put("inactivityTimeout", 0);
+
+        Map<String, Object> saved = service.save("u1", "orgA", incoming);
+
+        // 0 = "watchdog disabled" and must round-trip verbatim: a user whose workspace
+        // default disables the watchdog would otherwise get the 5-min default back on
+        // every new conversation.
+        assertThat(saved).containsEntry("inactivityTimeout", 0);
+    }
+
+    @Test
     @DisplayName("save keeps compactionModelProvider/compactionModelName (whitelisted) and still drops unknown keys")
     void saveKeepsCompactionModelKeys() {
         when(repository.findByUserIdAndOrganizationId("u1", "orgA")).thenReturn(Optional.empty());

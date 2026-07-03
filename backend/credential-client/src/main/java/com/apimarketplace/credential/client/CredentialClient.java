@@ -887,6 +887,69 @@ public class CredentialClient {
         }
     }
 
+    // ========== Workflow Variables ==========
+
+    /**
+     * Decrypted, typed workflow-variable bundle for a run owner's scope - feeds
+     * {@code {{$vars.*}}} template resolution. The orchestrator fetches this ONCE
+     * per workflow run. The organization id is passed EXPLICITLY: runs execute
+     * asynchronously with no inbound request context, so the usual
+     * OrgContextHeaderForwarder propagation has nothing to forward.
+     *
+     * <p>Best-effort: an auth-service failure returns an empty map, degrading the
+     * run to "no variables defined" (unresolved {@code $vars.x} references) rather
+     * than failing it outright.
+     */
+    public Map<String, Object> getWorkflowVariablesBundle(String tenantId, String organizationId) {
+        if (tenantId == null || tenantId.isBlank()) {
+            return Map.of();
+        }
+        try {
+            String url = UriComponentsBuilder.fromHttpUrl(baseUrl)
+                    .path("/api/internal/variables/bundle")
+                    .queryParam("tenantId", tenantId)
+                    .toUriString();
+            ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
+                    url, HttpMethod.GET,
+                    new HttpEntity<>(buildHeadersWithExplicitOrg(tenantId, organizationId)),
+                    new ParameterizedTypeReference<>() {});
+            Map<String, Object> body = response.getBody();
+            if (body == null) {
+                return Map.of();
+            }
+            Object variables = body.get("variables");
+            if (variables instanceof Map<?, ?> map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> typed = (Map<String, Object>) map;
+                return typed;
+            }
+            return Map.of();
+        } catch (Exception e) {
+            log.warn("Failed to fetch workflow variables bundle for tenant={} org={}: {}",
+                    tenantId, organizationId, e.getMessage());
+            return Map.of();
+        }
+    }
+
+    /**
+     * Like {@link #buildHeaders} but with the workspace set explicitly instead of
+     * forwarded from the (absent) inbound request - required on async run paths.
+     * The gateway signature must be computed AFTER the org header is set (the org
+     * id is part of the signed payload).
+     */
+    private HttpHeaders buildHeadersWithExplicitOrg(String tenantId, String organizationId) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        if (tenantId != null) {
+            headers.set("X-User-ID", tenantId);
+        }
+        if (organizationId != null && !organizationId.isBlank()) {
+            headers.set("X-Organization-ID", organizationId);
+        }
+        applyGatewaySignature(headers, tenantId);
+        return headers;
+    }
+
     private HttpHeaders buildHeaders(String tenantId) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);

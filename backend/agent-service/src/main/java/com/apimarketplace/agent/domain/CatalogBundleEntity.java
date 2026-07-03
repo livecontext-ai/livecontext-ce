@@ -12,12 +12,13 @@ import java.time.Instant;
  * offline. Exactly one row may have {@code isActive = true} at any time
  * (enforced by partial unique index {@code idx_catalog_bundles_one_active}).
  *
- * <p>The canonical signed payload is NOT stored in this row - it's re-derived
- * from the live {@code model_config_overrides} table at read time to keep
- * this table light. The {@code checksum} pins the original payload: any edit
- * to the live table after a bundle is built makes the fresh re-serialisation
- * diverge from the stored checksum, at which point the serve path refuses
- * to hand out a stale bundle and the operator must rebuild.
+ * <p>The canonical signed payload IS stored on the row ({@code payload},
+ * V381): serving reads the exact bytes that were signed, so a bundle stays
+ * servable forever - historical versions included - regardless of later edits
+ * to the live {@code model_config_overrides} table. Rows built before V381
+ * have a NULL payload (legacy); the serve path returns a clean "republishing"
+ * error for them and the auto-rebuild scheduler replaces them on its next
+ * tick. The {@code checksum} still pins the payload as a tamper check.
  *
  * <p>Use {@code CatalogBundleService.buildBundle()} to create a new bundle
  * (inserts with {@code isActive=false}); {@code activateBundle(id)} flips the
@@ -69,6 +70,13 @@ public class CatalogBundleEntity {
     @Column(name = "is_active", nullable = false)
     private boolean active = false;
 
+    /**
+     * Canonical signed payload (UTF-8 JSON), persisted at build time (V381).
+     * NULL only on legacy rows built before payload persistence.
+     */
+    @Column(name = "payload", columnDefinition = "text")
+    private String payload;
+
     @PrePersist
     protected void onCreate() {
         if (importedAt == null) importedAt = Instant.now();
@@ -113,4 +121,7 @@ public class CatalogBundleEntity {
 
     public boolean isActive() { return active; }
     public void setActive(boolean active) { this.active = active; }
+
+    public String getPayload() { return payload; }
+    public void setPayload(String payload) { this.payload = payload; }
 }

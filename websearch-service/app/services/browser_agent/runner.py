@@ -38,12 +38,12 @@ from typing import Any, Optional
 
 import redis.asyncio as aioredis
 
-from app.config import settings
+from app.config import browser_agent_budget, settings
 from app.services.crawl_filter import is_url_safe_for_navigation
 
 from .budget_gate import (
     BudgetExhaustedError,
-    acquire_concurrent_slot,
+    acquire_concurrent_slot_queued,
     increment_daily_steps,
     release_concurrent_slot,
 )
@@ -53,17 +53,124 @@ from .redis_io import (
     lpop_control,
     make_step_event,
     push_result,
+    requeue_control,
     store_final_screenshot,
     xadd_step,
 )
 from .screenshot_redactor import redact_screenshot
 from .session_state import (
     BrowserAgentSession,
+    get_session_state,
     register_session,
     unregister_session,
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ── Host-wide session cap ─────────────────────────────────────────────────
+# Each browser session pins a Chromium process; unbounded parallelism (e.g.
+# a workflow split fanning N branches from N users) OOMs the box. Excess
+# sessions wait FIFO on this in-process semaphore (asyncio wakes waiters in
+# order), bounded by the same queue-wait budget as the per-user gate. The
+# cap is per websearch PROCESS, which is the right scope: there is exactly
+# one websearch host per deployment (systemd box in cloud, one container in
+# CE), while the per-user gate stays Redis-backed and therefore global.
+_global_session_semaphore: Optional[asyncio.Semaphore] = None
+
+
+def _get_global_session_semaphore() -> Optional[asyncio.Semaphore]:
+    """Lazily create the host-wide semaphore from settings (None = uncapped).
+
+    Created once per process; a settings change requires a restart, which
+    matches how the rest of the WEBSEARCH_/BROWSER_AGENT_ env config behaves.
+    """
+    global _global_session_semaphore
+    cap = browser_agent_budget.max_global_sessions
+    if cap <= 0:
+        return None
+    if _global_session_semaphore is None:
+        _global_session_semaphore = asyncio.Semaphore(cap)
+    return _global_session_semaphore
+
+
+# ── Post-completion hold registry ─────────────────────────────────────────
+# Strong references to detached hold tasks (asyncio only keeps weak ones -
+# a GC'd task would leak Chromium) + bookkeeping for the hold caps:
+#   - at most ONE hold per user: the user's next session evicts their
+#     previous hold (its Chromium closes, freeing the page they abandoned),
+#   - at most `max_global_sessions` holds host-wide: the OLDEST hold is
+#     evicted first. Holds release the agent capacity gates at completion
+#     (a watched page must not block anyone's next agent run), so these
+#     caps are what keeps held Chromiums from accumulating unbounded.
+_hold_tasks: set = set()
+_holds_by_user: dict[str, "BrowserAgentSession"] = {}
+_holds_in_order: list = []  # BrowserAgentSession, oldest first
+
+
+def _evict_hold(session) -> None:
+    """Ask a hold to release NOW (its loop observes hold_release_event)."""
+    ev = getattr(session, "hold_release_event", None)
+    if ev is not None and not ev.is_set():
+        logger.info("browser_agent hold EVICTED: session=%s", session.session_id)
+        ev.set()
+
+
+def _register_hold(session, user_id: str) -> None:
+    if user_id:
+        prev = _holds_by_user.get(user_id)
+        if prev is not None and prev is not session:
+            _evict_hold(prev)
+        _holds_by_user[user_id] = session
+    session.hold_user_id = user_id
+    _holds_in_order.append(session)
+    cap = browser_agent_budget.max_global_sessions
+    if cap > 0:
+        # Evict oldest-first until the number of NOT-yet-evicted holds fits
+        # the cap. Evicted holds stay in the list until their own teardown
+        # (don't pop here - a slow teardown would under-report the count),
+        # so skip the ones already signalled instead of re-signalling the
+        # same head while holds 2..N stay alive past the cap.
+        alive = [h for h in _holds_in_order
+                 if h.hold_release_event is None or not h.hold_release_event.is_set()]
+        while len(alive) > cap:
+            _evict_hold(alive.pop(0))
+
+
+def _unregister_hold(session) -> None:
+    try:
+        _holds_in_order.remove(session)
+    except ValueError:
+        pass
+    uid = getattr(session, "hold_user_id", "")
+    if uid and _holds_by_user.get(uid) is session:
+        _holds_by_user.pop(uid, None)
+
+
+async def _cmd_is_for_session(session, cmd, redis) -> bool:
+    """Whether a popped control command belongs to THIS session.
+
+    Commands are tagged with a session_id by their producers (cdp.py PAUSE,
+    the /agent/sessions/{sid}/resume+abort endpoints). Two sessions can
+    share the same (run_id, node_id) control key - a loop iteration, a
+    re-trigger of the same run, or the previous session's post-completion
+    hold - so a consumer must REQUEUE (at the tail) any command tagged for
+    a sibling instead of swallowing it. Untagged commands (legacy
+    producers, tests) are treated as ours.
+    """
+    sid = cmd.get("session_id")
+    if not sid or sid == session.session_id:
+        return True
+    if get_session_state(sid) is None:
+        # The tagged owner is gone (crashed / already torn down): requeueing
+        # would cycle the command between live consumers forever, refreshing
+        # the key TTL on every pass. Drop it - the session it addressed can
+        # never consume it.
+        logger.info("dropping control cmd=%r for defunct session %s",
+                    cmd.get("cmd"), sid)
+        return False
+    await requeue_control(redis, session.run_id, session.node_id, cmd)
+    return False
 
 
 # ── Guardrails JS - loaded once at import ─────────────────────────────────
@@ -154,23 +261,16 @@ CMD_RESUME = "RESUME"
 CMD_ABORT = "ABORT"
 CMD_INTERVENE = "INTERVENE"
 
-# ── User-takeover hold tuning ─────────────────────────────────────────────
-# When the user takes control of the live browser and the agent's task then
-# completes, the runner keeps Chromium open so the user can keep driving
-# (fill a form, navigate). The hold is PRESENCE-based, never a fixed
-# countdown that cuts active work:
-#   - Inactivity (the primary control): the cdp.py bridge refreshes
-#     `session.last_activity` on every user input (click/key/scroll/move);
-#     no input for this long releases the hold.
-#   - The session wallclock (`session.wallclock_deadline`) is the hard
-#     backstop, so a forgotten/abandoned session can never squat Chromium
-#     past the agent's own budget. We stop a margin before it so the hold
-#     exits cleanly with the agent's real result instead of being cancelled
-#     by the outer wallclock `wait_for` and mislabelled TIMEOUT.
-#   - An explicit RESUME / ABORT / END control entry releases immediately
-#     (the frontend posts takeover-resume on Resume / panel close).
+# ── Post-completion hold tuning ───────────────────────────────────────────
+# When the agent's task completes while a live-view viewer is connected (or
+# the user took control mid-task), a DETACHED task keeps Chromium open so
+# the user can keep driving the final page (fill a form, navigate). The
+# agent's result returns immediately; the hold only governs the page's
+# lifetime. It is PRESENCE-based, never a fixed countdown that cuts active
+# work - see `_hold_until_released` for the release conditions (viewer
+# disconnect + grace, inactivity, explicit RESUME/ABORT, hard cap; the
+# grace and hard cap are settings: browser_agent_hold_*).
 TAKEOVER_IDLE_TIMEOUT_S = 300        # 5 min of zero user input -> release
-TAKEOVER_HOLD_MARGIN_S = 8           # stop this far before the wallclock cap
 TAKEOVER_HOLD_POLL_S = 5             # control-queue poll cadence during hold
 
 
@@ -244,19 +344,44 @@ async def run_browser_agent_session(
         logger.debug("publish job→session mapping failed", exc_info=True)
 
     started = time.time()
-    # The takeover hold (post-completion) must never run past the agent's
-    # own wallclock cap - record the absolute deadline so the hold can stop a
-    # margin before it (and return the real result instead of being cancelled
-    # by the outer `wait_for` and mislabelled TIMEOUT).
-    session.wallclock_deadline = started + timeout_s
-    # Per-user concurrent-session gate (Redis-backed). Java-side guard
-    # (`BrowserAgentBudgetGuard`) ALSO checks this counter before submit
-    # - both paths must agree on the key format. See `budget_gate.py`.
+    # Per-user concurrent-session gate (Redis-backed, FIFO-queued): a
+    # workflow split/fork firing N branches for the same user queues the
+    # extras instead of failing them. Java's `BrowserAgentBudgetGuard`
+    # deliberately does NOT pre-reject on the concurrent counter anymore -
+    # this queued acquire is the single authority. A host-wide semaphore
+    # (all users) then bounds simultaneously RUNNING Chromiums; both waits
+    # share the same bounded budget so the job either starts or returns a
+    # clean BUDGET_EXHAUSTED within queue_wait_max_seconds.
+    # Clamp the queue wait so `queue + run-floor + teardown` always fits the
+    # submit-side budget (timeout_s <= MAX_TIMEOUT_S = the Java BLPOP window):
+    # without this, a near-budget queue wait + the 30s run floor would land
+    # the result just past the BLPOP (operator trap: setting
+    # BROWSER_AGENT_QUEUE_WAIT_MAX_SECONDS ~= the BLPOP recreates the
+    # lost-result overrun the deduction exists to prevent).
+    queue_wait_s = min(
+        max(0, browser_agent_budget.queue_wait_max_seconds),
+        max(0, timeout_s - 60),
+    )
     concurrent_acquired = False
+    global_sem: Optional[asyncio.Semaphore] = None
     try:
         try:
-            await acquire_concurrent_slot(redis, user_id, session_id)
+            queue_wait_started = time.monotonic()
+            queue_deadline = queue_wait_started + queue_wait_s
+            await acquire_concurrent_slot_queued(redis, user_id, session_id, queue_wait_s)
             concurrent_acquired = True
+            sem = _get_global_session_semaphore()
+            if sem is not None:
+                remaining = max(1.0, queue_deadline - time.monotonic()) if queue_wait_s > 0 else 1.0
+                try:
+                    await asyncio.wait_for(sem.acquire(), timeout=remaining)
+                    global_sem = sem
+                except asyncio.TimeoutError:
+                    raise BudgetExhaustedError(
+                        BudgetExhaustedError.REASON_HOST_CAPACITY,
+                        "timed out waiting for browser capacity on this host "
+                        f"(waited {int(queue_wait_s)}s)",
+                    )
         except BudgetExhaustedError as be:
             logger.info(
                 "browser_agent rejected by per-user budget: session=%s user=%s reason=%s",
@@ -268,16 +393,28 @@ async def run_browser_agent_session(
                 final_result=be.message,
             )
         else:
+            # Deadline invariant: queue wait + run time must fit inside the
+            # ORIGINAL timeout budget, because the orchestrator's result
+            # BLPOP (websearch.service.browser-agent-blpop-timeout, 600s
+            # default = MAX_TIMEOUT_S) started ticking at submit. Deduct
+            # the time spent queueing from the run budget so a queued
+            # branch can never push its result past the BLPOP and lose it
+            # while Chromium still runs. Floor of 30s keeps a heavily
+            # queued job able to do SOMETHING rather than 0-stepping.
+            queued_for = time.monotonic() - queue_wait_started
+            effective_timeout_s = max(30, int(timeout_s - queued_for))
+            session.wallclock_deadline = time.time() + effective_timeout_s
             try:
                 result = await asyncio.wait_for(
                     _run_loop(session, task, parameters, max_steps, redis, user_id),
-                    timeout=timeout_s,
+                    timeout=effective_timeout_s,
                 )
             except asyncio.TimeoutError:
-                logger.warning("browser_agent timeout: session=%s elapsed=%ds", session_id, timeout_s)
+                logger.warning("browser_agent timeout: session=%s elapsed=%ds (queued %.0fs)",
+                               session_id, effective_timeout_s, queued_for)
                 result = _build_result(
                     session, started, stop_reason="TIMEOUT",
-                    final_result=f"Session timed out after {timeout_s}s",
+                    final_result=f"Session timed out after {effective_timeout_s}s",
                 )
             except _AbortRequested:
                 logger.info("browser_agent aborted: session=%s", session_id)
@@ -310,27 +447,38 @@ async def run_browser_agent_session(
                     final_result=f"Runner error: {e}",
                 )
     finally:
+        # The per-user concurrent slot + the host capacity slot are released
+        # as soon as the AGENT is done - a post-completion hold is a
+        # lightweight leftover page, not an agent run, so it must not block
+        # the user's (or anyone's) next session.
+        if global_sem is not None:
+            global_sem.release()
         if concurrent_acquired:
             await release_concurrent_slot(redis, user_id, session_id)
-        await unregister_session(session_id)
-        # Drop the job→session mapping NOW (rather than relying on the
-        # 10-min TTL set at registration). Stale mappings cause a
-        # frontend reconnecting late to look up session_id, get a
-        # 4404 session-gone WS close, and a confusing "session
-        # disappeared" UX. Best-effort - runner correctness does not
-        # depend on this entry.
-        try:
-            await redis.delete(f"agent:browser:job:{job_id}")
-        except Exception:
-            logger.debug("delete job→session mapping failed", exc_info=True)
-        # Drop the chat-context hash that BrowserAgentModule wrote
-        # pre-submit. The lifecycle subscriber only reads it on the
-        # first `cdp_ready` event, so it's safe to delete now. Without
-        # this, the hash would linger until its 1h TTL on a busy host.
-        try:
-            await redis.delete(f"agent:browse:meta:{run_id}:{node_id}")
-        except Exception:
-            logger.debug("delete chat-context meta hash failed", exc_info=True)
+        # When a detached post-completion hold owns the browser, IT does
+        # the unregister + job-mapping cleanup at release time - the
+        # session must stay registered so the cdp.py bridge keeps
+        # accepting the viewer's (re)connections while the page is open.
+        if not session.hold_detached:
+            await unregister_session(session_id)
+            # Drop the job→session mapping NOW (rather than relying on the
+            # 10-min TTL set at registration). Stale mappings cause a
+            # frontend reconnecting late to look up session_id, get a
+            # 4404 session-gone WS close, and a confusing "session
+            # disappeared" UX. Best-effort - runner correctness does not
+            # depend on this entry.
+            try:
+                await redis.delete(f"agent:browser:job:{job_id}")
+            except Exception:
+                logger.debug("delete job→session mapping failed", exc_info=True)
+        # NOTE: the `agent:browse:meta:{runId}:{nodeId}` hash is deliberately
+        # NOT deleted here. It is the ownership record the orchestrator's
+        # BrowserAgentTakeoverController checks for CHAT runs (no
+        # workflow_runs row) - deleting it at teardown made every
+        # post-completion final-screenshot / token-refresh / resume call
+        # 404 for chat. Its 1h TTL (set by BrowserAgentModule at submit)
+        # outlives the final screenshot's own TTL, so the fallback image
+        # stays fetchable for exactly as long as it exists.
 
     # Push final event to live stream + final result to Java BLPOP key.
     try:
@@ -538,11 +686,29 @@ async def _drive_browser_use(
         # affichée à 50%" → wider native viewport gives that without
         # touching browser zoom (which would also change what the
         # agent perceives for click coordinates).
-        profile = BrowserProfile(
-            headless=True,
-            window_size={"width": 1920, "height": 1080},
-            viewport={"width": 1920, "height": 1080},
-        )
+        # keep_alive=True: browser-use 0.12's `agent.run()` dispatches an
+        # internal BrowserStopEvent at task completion which RESETS the
+        # session (drops the root CDP client) before our teardown code
+        # runs - that's what broke the final-page screenshot in prod
+        # ("Root CDP client not initialized") and killed Chromium under
+        # the post-completion hold. With keep_alive the runner owns the
+        # browser lifetime: `_close_browser_session` (kill/close) is
+        # called explicitly on EVERY exit path, immediately or at the end
+        # of the detached hold.
+        profile_kwargs = {
+            "headless": True,
+            "window_size": {"width": 1920, "height": 1080},
+            "viewport": {"width": 1920, "height": 1080},
+        }
+        try:
+            profile = BrowserProfile(keep_alive=True, **profile_kwargs)
+        except Exception:
+            # browser-use build without the keep_alive field: fall back to a
+            # sized profile. The final screenshot/hold then race the internal
+            # BrowserStopEvent reset (pre-fix behaviour) but the agent runs.
+            logger.warning("BrowserProfile(keep_alive=True) unsupported; "
+                           "falling back without it", exc_info=True)
+            profile = BrowserProfile(**profile_kwargs)
         agent = Agent(task=agent_task, llm=llm, browser_profile=profile,
                       calculate_cost=False)
     except (ImportError, TypeError):
@@ -646,6 +812,22 @@ async def _drive_browser_use(
                     except Exception:
                         logger.debug("cdp_ready PUBLISH failed (non-fatal)",
                                      exc_info=True)
+                    # Record the session id on the run-context hash the Java
+                    # side wrote at submit. The orchestrator's cdp-token-refresh
+                    # uses it to verify a requested session_id actually belongs
+                    # to (runId, nodeId) when there is no workflow takeover
+                    # signal to check against (chat runs; post-completion
+                    # holds) - without it a caller could mint a token bound to
+                    # ANOTHER user's session id. Best-effort like the rest of
+                    # the bootstrap.
+                    try:
+                        await redis.hset(
+                            f"agent:browse:meta:{session.run_id}:{session.node_id}",
+                            "sessionId", session.session_id,
+                        )
+                    except Exception:
+                        logger.debug("cdp_ready meta HSET failed (non-fatal)",
+                                     exc_info=True)
             except Exception:
                 logger.debug("CDP endpoint on_step_start retry failed", exc_info=True)
 
@@ -654,7 +836,10 @@ async def _drive_browser_use(
             logger.info("session paused: session=%s", session.session_id)
             cmd = await blpop_control(redis, session.run_id, session.node_id, timeout_s=30)
             if cmd is not None:
-                await _apply_control(session, cmd)
+                if await _cmd_is_for_session(session, cmd, redis):
+                    await _apply_control(session, cmd)
+                else:
+                    await asyncio.sleep(0.2)
             if session.aborted:
                 raise _StopAgent("CANCELLED", "Session aborted by user")
             # Takeover inactivity (mid-task): if the user took control then
@@ -792,20 +977,16 @@ async def _drive_browser_use(
             last_error=last_error,
         )
 
-        # User-takeover hold: if the user grabbed control of the live browser
-        # while the agent ran, keep Chromium open after the task completes so
-        # they can keep driving (the short-task case where the agent finished
-        # before they could meaningfully take over). The `finally` below
-        # (final screenshot + close) only fires once this returns, so the page
-        # stays live and interactive throughout. Bounded by inactivity + the
-        # wallclock - see `_hold_for_takeover`. Best-effort: a hold failure
-        # must never change the agent's already-computed result.
-        if session.takeover_active:
-            try:
-                await _hold_for_takeover(session, redis)
-            except Exception:
-                logger.debug("takeover hold ended abnormally (non-fatal): session=%s",
-                             session.session_id, exc_info=True)
+        # Post-completion DETACHED hold: when a live-view viewer is watching
+        # (or the user already took control mid-task), hand Chromium to a
+        # detached task that keeps the page open and interactive - the
+        # agent's result returns IMMEDIATELY (the chat reply / workflow no
+        # longer waits on the hold). The detached task owns the final
+        # screenshot + browser close + session unregister; it releases on
+        # viewer disconnect (+grace), input inactivity, an explicit
+        # RESUME/ABORT control, or the hard cap. Without a viewer the
+        # browser tears down right here as before.
+        _maybe_detach_hold(agent, session, redis, user_id)
 
         return {
             "stop_reason": stop_reason,
@@ -821,70 +1002,172 @@ async def _drive_browser_use(
         # the live CDP screencast never connected. Runs on every exit path
         # (success, _StopAgent, crash) so a frozen-mid-step run still leaves
         # a last frame. Best-effort: never blocks teardown.
-        await _capture_and_store_final_screenshot(agent, session, redis)
-        await _close_browser_session(agent)
+        # When the detached hold owns the browser, IT does both at release
+        # time instead - the capture then shows the page as the user left it.
+        if not session.hold_detached:
+            await _capture_and_store_final_screenshot(agent, session, redis)
+            await _close_browser_session(agent)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
 
-async def _hold_for_takeover(
+def _maybe_detach_hold(agent: Any, session: BrowserAgentSession,
+                       redis: aioredis.Redis, user_id: str) -> bool:
+    """Hand the completed task's browser to a detached post-completion hold
+    when someone is there to hold it FOR (see `_should_detach_hold`).
+
+    Registers the hold in the per-user + host-wide caps (the user's next
+    session evicts their previous page; the oldest hold is evicted past
+    `max_global_sessions`), keeps a STRONG reference to the task (asyncio
+    holds only weak ones - a GC'd hold task would leak Chromium and the
+    registry entry), and marks `session.hold_detached` so the runner's
+    cleanup leaves teardown to the hold task. Returns whether it detached.
+    """
+    if not _should_detach_hold(session):
+        return False
+    session.hold_detached = True
+    session.hold_release_event = asyncio.Event()
+    _register_hold(session, user_id)
+    hold_task = asyncio.get_running_loop().create_task(
+        _post_completion_hold(agent, session, redis),
+        name=f"browser-hold-{session.session_id}",
+    )
+    _hold_tasks.add(hold_task)
+    hold_task.add_done_callback(_hold_tasks.discard)
+    logger.info(
+        "browser_agent detached HOLD started: session=%s viewers=%d takeover=%s",
+        session.session_id, session.viewer_count, session.takeover_active,
+    )
+    return True
+
+
+def _should_detach_hold(session: BrowserAgentSession) -> bool:
+    """Whether the completed task's browser should be handed to a detached
+    post-completion hold instead of being torn down inline.
+
+    True when the feature is enabled, the session wasn't aborted, and there
+    is someone to hold FOR: a connected live-view viewer, or a user who
+    already took control mid-task (their WS may be between reconnects at
+    this exact instant - the takeover flag keeps their page alive)."""
+    return (settings.browser_agent_hold_enabled
+            and not session.aborted
+            and (session.takeover_active or session.viewer_count > 0))
+
+
+async def _post_completion_hold(
+    agent: Any,
     session: BrowserAgentSession,
     redis: aioredis.Redis,
 ) -> None:
-    """Keep Chromium alive after the agent's task completes so a user who took
-    control of the live browser can keep driving (fill a form, navigate).
+    """DETACHED owner of the browser after the agent's task completes.
 
-    Presence-based, never a fixed countdown that cuts active work:
-      - releases on INACTIVITY (no user input for ``TAKEOVER_IDLE_TIMEOUT_S`` -
-        the cdp.py bridge refreshes ``session.last_activity`` on every user
-        input, so active driving keeps it open indefinitely within the cap),
-      - releases immediately on an explicit RESUME / ABORT / END control entry
-        (the frontend posts takeover-resume on Resume / panel close),
-      - never runs past ``session.wallclock_deadline`` (the agent's hard
-        wallclock cap = the hold's backstop); it stops a margin before so the
-        caller returns the agent's real result instead of the outer
-        ``wait_for`` cancelling the hold into a spurious TIMEOUT.
+    Spawned by `_drive_browser_use` when a live-view viewer is connected (or
+    the user already took control mid-task). The agent's result has ALREADY
+    been returned to the caller - this task only governs how long the final
+    page stays open and interactive, then does the teardown the non-held
+    path does inline: final screenshot → browser close → session unregister
+    → job-mapping cleanup.
 
-    The page stays interactive throughout: the cdp.py WS proxy keeps forwarding
-    the user's CDP ``Input.dispatch*`` to the same Chromium this hold keeps
-    open. Returns when the hold ends; the caller's ``finally`` then captures the
-    final page + closes the browser.
+    Never raises: every phase is best-effort so a hold failure can't leak a
+    Chromium (the close+unregister run in the finally).
     """
-    # Seed the idle clock from now if no input has landed yet (user took
-    # control then immediately stepped away), so inactivity still bounds it.
+    try:
+        await _hold_until_released(session, redis)
+    except Exception:
+        logger.warning("browser_agent hold loop failed (non-fatal): session=%s",
+                       session.session_id, exc_info=True)
+    finally:
+        _unregister_hold(session)
+        # Capture AFTER the hold so the stored "last page" reflects what the
+        # user left on screen, not what the agent finished on.
+        await _capture_and_store_final_screenshot(agent, session, redis)
+        await _close_browser_session(agent)
+        await unregister_session(session.session_id)
+        try:
+            await redis.delete(f"agent:browser:job:{session.job_id}")
+        except Exception:
+            logger.debug("delete job→session mapping failed", exc_info=True)
+
+
+async def _hold_until_released(
+    session: BrowserAgentSession,
+    redis: aioredis.Redis,
+) -> None:
+    """Block until the post-completion hold should release.
+
+    Presence-based, never a fixed countdown that cuts active use:
+      - releases when the LAST live-view viewer disconnects and stays gone
+        for ``browser_agent_hold_viewer_gone_grace_seconds`` (panel closed;
+        the grace covers a remount / tab switch),
+      - releases on INACTIVITY (no user input for ``TAKEOVER_IDLE_TIMEOUT_S``
+        - the cdp.py bridge refreshes ``session.last_activity`` on every
+        input, so active driving keeps it open within the hard cap),
+      - releases immediately on an explicit RESUME / ABORT / END control
+        entry (the frontend posts takeover-resume on Resume / panel close),
+      - hard cap ``browser_agent_hold_max_seconds`` regardless of activity
+        (a stuck viewer socket can never squat Chromium).
+
+    The page stays interactive throughout: the cdp.py WS proxy keeps
+    forwarding the user's CDP ``Input.dispatch*`` to the same Chromium this
+    hold keeps open.
+    """
+    hold_started = time.time()
+    # Seed the idle clock so a viewer who never provides input is still
+    # bounded by inactivity, not only the hard cap.
     if session.last_activity <= 0:
-        session.last_activity = time.time()
+        session.last_activity = hold_started
+    viewer_grace = max(1, settings.browser_agent_hold_viewer_gone_grace_seconds)
+    hard_cap = max(5, settings.browser_agent_hold_max_seconds)
     logger.info(
-        "browser_agent takeover HOLD start: session=%s idle_timeout=%ds deadline_in=%.0fs",
-        session.session_id, TAKEOVER_IDLE_TIMEOUT_S,
-        (session.wallclock_deadline - time.time()) if session.wallclock_deadline else -1,
+        "browser_agent post-completion HOLD start: session=%s viewers=%d "
+        "idle_timeout=%ds viewer_grace=%ds hard_cap=%ds",
+        session.session_id, session.viewer_count,
+        TAKEOVER_IDLE_TIMEOUT_S, viewer_grace, hard_cap,
     )
     while True:
         now = time.time()
-        # Hard backstop: never cross the agent's wallclock cap.
-        if session.wallclock_deadline and now >= session.wallclock_deadline - TAKEOVER_HOLD_MARGIN_S:
-            logger.info("browser_agent takeover HOLD end (wallclock): session=%s",
+        # Cap eviction: the user's next session (or the host-wide hold cap)
+        # asked this hold to release.
+        if session.hold_release_event is not None and session.hold_release_event.is_set():
+            logger.info("browser_agent HOLD end (evicted): session=%s",
                         session.session_id)
             return
-        # Inactivity (primary control): no user input for the idle window.
+        # Hard backstop, independent of any activity signal.
+        if now - hold_started >= hard_cap:
+            logger.info("browser_agent HOLD end (hard cap %ds): session=%s",
+                        hard_cap, session.session_id)
+            return
+        # Viewer presence: nobody watching → short grace → release. When no
+        # viewer ever connected during the hold, anchor the grace on the
+        # hold start (last_viewer_disconnect may still be 0.0).
+        if session.viewer_count <= 0:
+            gone_since = max(session.last_viewer_disconnect, hold_started)
+            if now - gone_since >= viewer_grace:
+                logger.info("browser_agent HOLD end (viewer gone %.0fs): session=%s",
+                            now - gone_since, session.session_id)
+                return
+        # Inactivity: no user input for the idle window (viewer may still be
+        # passively watching - a completed task with no interaction doesn't
+        # justify keeping Chromium alive indefinitely).
         idle = now - session.last_activity
         if idle >= TAKEOVER_IDLE_TIMEOUT_S:
-            logger.info("browser_agent takeover HOLD end (idle %.0fs): session=%s",
+            logger.info("browser_agent HOLD end (idle %.0fs): session=%s",
                         idle, session.session_id)
             return
-        # Explicit end (RESUME / ABORT / END). Bound the BLPOP so the idle +
-        # wallclock checks keep ticking when it's quiet, and never sleep past
-        # the wallclock backstop.
-        if session.wallclock_deadline:
-            budget = int(session.wallclock_deadline - now - TAKEOVER_HOLD_MARGIN_S)
-            wait_s = max(1, min(TAKEOVER_HOLD_POLL_S, budget if budget > 0 else 1))
-        else:
-            wait_s = TAKEOVER_HOLD_POLL_S
+        # Explicit end (RESUME / ABORT / END). Bound the BLPOP so the
+        # presence/idle/cap checks keep ticking when it's quiet.
+        wait_s = max(1, min(TAKEOVER_HOLD_POLL_S, viewer_grace))
         cmd = await blpop_control(redis, session.run_id, session.node_id, timeout_s=wait_s)
         if cmd is not None:
+            # A command tagged for a SIBLING session sharing this control
+            # key (loop iteration / re-trigger while this hold is open) is
+            # requeued at the tail for its owner - never swallowed here.
+            if not await _cmd_is_for_session(session, cmd, redis):
+                await asyncio.sleep(0.2)
+                continue
             c = str(cmd.get("cmd") or "").upper()
             if c in (CMD_RESUME, CMD_ABORT, "END", "END_TAKEOVER"):
-                logger.info("browser_agent takeover HOLD end (cmd=%s): session=%s",
+                logger.info("browser_agent HOLD end (cmd=%s): session=%s",
                             c, session.session_id)
                 if c == CMD_ABORT:
                     session.aborted = True
@@ -982,11 +1265,29 @@ async def _drain_control(
     Multiple commands may have been LPUSHed between steps (e.g. INTERVENE
     + PAUSE). We process them in order.
     """
-    while True:
-        cmd = await lpop_control(redis, session.run_id, session.node_id)
-        if cmd is None:
-            return
-        await _apply_control(session, cmd)
+    foreign: list[dict[str, Any]] = []
+    try:
+        while True:
+            cmd = await lpop_control(redis, session.run_id, session.node_id)
+            if cmd is None:
+                return
+            sid = cmd.get("session_id")
+            if sid and sid != session.session_id:
+                if get_session_state(sid) is None:
+                    # Owner is gone - dropping beats cycling it forever
+                    # between live consumers (same rule as
+                    # _cmd_is_for_session).
+                    logger.info("dropping control cmd=%r for defunct session %s",
+                                cmd.get("cmd"), sid)
+                    continue
+                # Sibling session's command (shared (run,node) control key)
+                # - requeue AFTER the drain so this loop cannot re-pop it.
+                foreign.append(cmd)
+                continue
+            await _apply_control(session, cmd)
+    finally:
+        for cmd in foreign:
+            await requeue_control(redis, session.run_id, session.node_id, cmd)
 
 
 async def _apply_control(

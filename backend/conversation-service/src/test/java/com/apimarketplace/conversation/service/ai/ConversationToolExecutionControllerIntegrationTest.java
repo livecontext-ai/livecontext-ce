@@ -41,14 +41,19 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * stubbed seam {@code findExistingCredential} is package-private, so the spy must be set
  * up from this package rather than widening main-code visibility for tests.
  *
- * <p>Pins the post-fix contract for {@code request_credential} on an ALREADY-connected
+ * <p>Pins the post-fix contract for the require flow on an ALREADY-connected
  * service: without {@code force} → a hard error whose guidance is in {@code error} (NOT
  * {@code result}/content, since the Claude Code bridge forwards only content+error) and
  * NO approval card ({@code serviceApprovalRequested} absent); with {@code force=true} →
  * the reconnect card ({@code serviceApprovalRequested}+{@code needsAttention}).
+ *
+ * <p>The require flow is reachable under TWO tool names: the unified
+ * {@code credential} tool with {@code action='require'} and the legacy
+ * {@code request_credential} routing alias (pre-rename sessions, action ignored).
+ * Both are exercised here over the real HTTP wire.
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("ConversationToolExecutionController - request_credential wire contract")
+@DisplayName("ConversationToolExecutionController - credential require wire contract")
 class ConversationToolExecutionControllerIntegrationTest {
 
     @Mock
@@ -89,8 +94,12 @@ class ConversationToolExecutionControllerIntegrationTest {
     // stale entry left by a sibling test class in the same surefire JVM fork - without needing
     // to clear the package-private RECENT_FORCE_REQUESTS.
     private String body(String tenantId, Map<String, Object> parameters) throws Exception {
+        return body("request_credential", tenantId, parameters);
+    }
+
+    private String body(String tool, String tenantId, Map<String, Object> parameters) throws Exception {
         Map<String, Object> request = new LinkedHashMap<>();
-        request.put("tool", "request_credential");
+        request.put("tool", tool);
         request.put("toolCallId", "call-1");
         request.put("tenantId", tenantId);
         request.put("parameters", parameters);
@@ -142,5 +151,40 @@ class ConversationToolExecutionControllerIntegrationTest {
             .andExpect(jsonPath("$.success").value(true))
             .andExpect(jsonPath("$.metadata.serviceApprovalRequested").value(true))
             .andExpect(jsonPath("$.metadata.needsAttention").value(true));
+    }
+
+    @Test
+    @DisplayName("unified credential(action='require') reaches the same require flow over HTTP as the legacy alias")
+    void unifiedCredentialRequireReachesRequireFlowOverHttp() throws Exception {
+        doReturn(Map.of("id", "cred-1", "last_used", "2026-04-08T10:00:00Z"))
+            .when(service).findExistingCredential("gmail", "tenant-itc-unified");
+
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("action", "require");
+        params.put("services", List.of("gmail"));
+        params.put("reason", "Send email");
+
+        mockMvc.perform(post("/api/internal/conversation/tools/execute")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body("credential", "tenant-itc-unified", params)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.success").value(false))
+            .andExpect(jsonPath("$.error", containsString("already exist")))
+            .andExpect(jsonPath("$.metadata.silentError").value(true))
+            .andExpect(jsonPath("$.metadata.exists").value(true));
+    }
+
+    @Test
+    @DisplayName("unified credential with an unknown action returns the action-list error over HTTP")
+    void unifiedCredentialUnknownActionReturnsActionListError() throws Exception {
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("action", "rotate");
+
+        mockMvc.perform(post("/api/internal/conversation/tools/execute")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body("credential", "tenant-itc-unknown", params)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.success").value(false))
+            .andExpect(jsonPath("$.error", containsString("list, variables, set_variable, require")));
     }
 }

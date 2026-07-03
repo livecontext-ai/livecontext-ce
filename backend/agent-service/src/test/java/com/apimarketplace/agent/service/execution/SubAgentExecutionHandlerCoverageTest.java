@@ -283,6 +283,10 @@ class SubAgentExecutionHandlerCoverageTest {
 
         /** Drives a happy-path execute and returns the credentials map handed to the loop. */
         private Map<String, Object> captureCredentials(Integer entityInactivity) {
+            return captureCredentials(entityInactivity, credsWithConversation());
+        }
+
+        private Map<String, Object> captureCredentials(Integer entityInactivity, Map<String, Object> parentCreds) {
             AgentEntity entity = createAgent();
             entity.setInactivityTimeout(entityInactivity);
             when(agentService.getAgent(AGENT_ID, TENANT_ID)).thenReturn(Optional.of(entity));
@@ -297,7 +301,7 @@ class SubAgentExecutionHandlerCoverageTest {
             args.put("action", "execute");
             args.put("agent_id", AGENT_ID.toString());
             args.put("prompt", "go");
-            handler.execute(new ToolCall("tc-1", "agent", args, null), TENANT_ID, credsWithConversation());
+            handler.execute(new ToolCall("tc-1", "agent", args, null), TENANT_ID, parentCreds);
 
             ArgumentCaptor<AgentLoopContext> ctx = ArgumentCaptor.forClass(AgentLoopContext.class);
             verify(agentLoopService).execute(ctx.capture(), any(StreamingCallback.class));
@@ -324,6 +328,28 @@ class SubAgentExecutionHandlerCoverageTest {
             assertThat(captureCredentials(0))
                 .as("0 = disabled must reach the sub-agent credentials verbatim (downstream resolveInactivityWindowMs maps 0 -> watchdog disabled); coercing or dropping it would silently re-enable the 5-min watchdog")
                 .containsEntry("__inactivityTimeoutSeconds__", 0);
+        }
+
+        @Test
+        @DisplayName("PRECEDENCE: the sub-agent's OWN window wins over the parent run's credential")
+        void entityWindowWinsOverParentCredential() {
+            Map<String, Object> parentCreds = credsWithConversation();
+            parentCreds.put("__inactivityTimeoutSeconds__", 900); // parent runs with its own 15-min window
+
+            assertThat(captureCredentials(120, parentCreds))
+                .as("each agent's inactivity window is its own setting - the child entity's value, never the parent's")
+                .containsEntry("__inactivityTimeoutSeconds__", 120);
+        }
+
+        @Test
+        @DisplayName("PRECEDENCE: a parent credential does NOT leak to a sub-agent without its own setting (default applies, not inheritance)")
+        void parentCredentialDoesNotLeakToChild() {
+            Map<String, Object> parentCreds = credsWithConversation();
+            parentCreds.put("__inactivityTimeoutSeconds__", 900);
+
+            assertThat(captureCredentials(null, parentCreds))
+                .as("sub-agent credentials are rebuilt from scratch (buildSubAgentCredentials): with no entity setting the child gets the platform default, NOT the parent's window")
+                .doesNotContainKey("__inactivityTimeoutSeconds__");
         }
     }
 }

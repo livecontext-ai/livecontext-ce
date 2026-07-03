@@ -1,6 +1,8 @@
 'use client';
 
 import React from 'react';
+import { useTranslations } from 'next-intl';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { usePathname } from '@/i18n/navigation';
 import { settingsNavItems } from './settingsNavItems';
 import { cn } from '@/lib/utils';
@@ -19,7 +21,39 @@ import { useAppVersion } from '@/hooks/useAppVersion';
 export function SettingsNav() {
     const pathname = usePathname();
     const safeNavigate = useSafeNavigate();
+    const t = useTranslations('settings.nav');
     const [userRole, setUserRole] = React.useState<OrganizationRole | null>(null);
+
+    // Mobile scroll affordance: the nav is a horizontal strip with a hidden
+    // scrollbar, so without a cue users cannot tell more items exist off-screen.
+    const scrollRef = React.useRef<HTMLElement>(null);
+    const [scrollHint, setScrollHint] = React.useState({ left: false, right: false });
+
+    const updateScrollHint = React.useCallback(() => {
+        const el = scrollRef.current;
+        if (!el) return;
+        // 4px tolerance absorbs sub-pixel rounding on high-DPI screens.
+        const left = el.scrollLeft > 4;
+        const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 4;
+        setScrollHint(prev => (prev.left === left && prev.right === right) ? prev : { left, right });
+    }, []);
+
+    React.useEffect(() => {
+        updateScrollHint();
+        const el = scrollRef.current;
+        if (!el || typeof ResizeObserver === 'undefined') return;
+        const observer = new ResizeObserver(updateScrollHint);
+        observer.observe(el);
+        // The strip widens after the admin-role fetch reveals more items.
+        if (el.firstElementChild) observer.observe(el.firstElementChild);
+        return () => observer.disconnect();
+    }, [updateScrollHint]);
+
+    const nudge = React.useCallback((direction: 1 | -1) => {
+        const el = scrollRef.current;
+        if (!el) return;
+        el.scrollBy({ left: direction * Math.round(el.clientWidth * 0.6), behavior: 'smooth' });
+    }, []);
 
     React.useEffect(() => {
         organizationApi.getOrganizations().then(orgs => {
@@ -82,7 +116,8 @@ export function SettingsNav() {
     }, [pathname, visibleItems]);
 
     return (
-        <nav className="w-full md:w-48 flex-shrink-0 overflow-x-auto md:overflow-visible md:self-start md:sticky md:top-8 pb-1 md:pb-0" style={{ scrollbarWidth: 'none' }}>
+        <div className="relative w-full md:w-48 flex-shrink-0 md:self-start md:sticky md:top-8">
+            <nav ref={scrollRef} onScroll={updateScrollHint} className="w-full overflow-x-auto md:overflow-visible pb-1 md:pb-0" style={{ scrollbarWidth: 'none' }}>
             <div className="flex md:block min-w-max md:min-w-0 gap-1 md:gap-0 md:space-y-1 px-1 md:px-0">
                 {visibleItems.map((item) => {
                     const Icon = item.icon;
@@ -120,6 +155,31 @@ export function SettingsNav() {
                     );
                 })}
             </div>
-        </nav>
+            </nav>
+            {scrollHint.left && (
+                <div className="md:hidden pointer-events-none absolute inset-y-0 left-0 flex items-center bg-gradient-to-r from-[var(--bg-primary)] to-transparent pr-5 pb-1">
+                    <button
+                        type="button"
+                        onClick={() => nudge(-1)}
+                        aria-label={t('scrollLeft')}
+                        className="pointer-events-auto flex h-6 w-6 items-center justify-center rounded-full bg-theme-secondary text-theme-secondary shadow-sm"
+                    >
+                        <ChevronLeft className="h-4 w-4" />
+                    </button>
+                </div>
+            )}
+            {scrollHint.right && (
+                <div className="md:hidden pointer-events-none absolute inset-y-0 right-0 flex items-center bg-gradient-to-l from-[var(--bg-primary)] to-transparent pl-5 pb-1">
+                    <button
+                        type="button"
+                        onClick={() => nudge(1)}
+                        aria-label={t('scrollRight')}
+                        className="pointer-events-auto flex h-6 w-6 items-center justify-center rounded-full bg-theme-secondary text-theme-secondary shadow-sm"
+                    >
+                        <ChevronRight className="h-4 w-4" />
+                    </button>
+                </div>
+            )}
+        </div>
     );
 }

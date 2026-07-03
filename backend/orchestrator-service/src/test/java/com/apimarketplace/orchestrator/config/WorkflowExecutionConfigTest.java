@@ -94,9 +94,12 @@ class WorkflowExecutionConfigTest {
         }
 
         @Test
-        @DisplayName("Should have correct default max execution minutes")
+        @DisplayName("Default max execution minutes is 125 - must exceed the 7200s agent timeout contract (zombie threshold = this + 2 min grace)")
         void shouldHaveDefaultMaxExecutionMinutes() {
-            assertThat(config.getMaxExecutionMinutes()).isEqualTo(60);
+            assertThat(config.getMaxExecutionMinutes()).isEqualTo(125);
+            // A default at or below 120 min would let the zombie scan fail HEALTHY
+            // max-length agent runs (executionTimeout/inactivityTimeout valid to 7200s).
+            assertThat(config.getMaxExecutionMinutes() * 60).isGreaterThan(7200L);
         }
     }
 

@@ -27,7 +27,23 @@ public interface StreamStateService {
      * Registers a stream with a pre-assigned streamId (for external callers like orchestrator/agent-service).
      * Creates the metadata hash and conv index using the given streamId instead of generating a new one.
      */
-    Mono<StreamMetadata> registerExternalStream(String streamId, String conversationId, String model, String provider);
+    default Mono<StreamMetadata> registerExternalStream(String streamId, String conversationId, String model, String provider) {
+        return registerExternalStream(streamId, conversationId, model, provider, null);
+    }
+
+    /**
+     * Registers an external stream attributed to the conversation OWNER. When
+     * {@code ownerUserId} is a real user id, the stream is ALSO indexed under
+     * {@code stream:user:{ownerUserId}} so {@code getStreamingConversationIds}
+     * (the {@code /streams/active} reconnect probe) sees externally-driven runs
+     * (workflow agent nodes, task assignees, sub-workflows). Without the owner
+     * index the main chat page never auto-attaches to an in-flight external
+     * stream: only the side panel (which subscribes unconditionally) showed it
+     * live. Null/blank owner falls back to the legacy "internal" attribution
+     * (metadata only, no user index).
+     */
+    Mono<StreamMetadata> registerExternalStream(String streamId, String conversationId, String model, String provider,
+                                                String ownerUserId);
 
     /**
      * Gets the current metadata for a stream.

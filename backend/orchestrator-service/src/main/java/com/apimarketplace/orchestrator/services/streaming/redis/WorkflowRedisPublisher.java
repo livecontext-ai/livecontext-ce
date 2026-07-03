@@ -167,9 +167,10 @@ public class WorkflowRedisPublisher {
     // ==================== Agent Cancel Signal ====================
 
     private static final String CANCEL_KEY_PREFIX = "workflow:cancel:";
-    // 2-hour TTL: aligned with max agent execution time (65 min) plus buffer.
-    // Previous 10-minute TTL could expire before long-running agents checked shouldStop().
-    private static final Duration CANCEL_KEY_TTL = Duration.ofHours(2);
+    // 3-hour TTL: aligned with the max agent execution budget (7200s contract,
+    // 125-min bridge cap) plus buffer. Previous 10-minute TTL could expire before
+    // long-running agents checked shouldStop().
+    private static final Duration CANCEL_KEY_TTL = Duration.ofHours(3);
 
     /**
      * Set a cancel signal for a workflow run. Agent-service checks this key
@@ -234,8 +235,8 @@ public class WorkflowRedisPublisher {
     // ==================== Sub-workflow parent link (F2.2) ====================
 
     private static final String PARENT_KEY_PREFIX = "workflow:parent:";
-    /** Same TTL as cancel keys - sub-runs that outlive 2h are treated as detached anyway. */
-    private static final Duration PARENT_KEY_TTL = Duration.ofHours(2);
+    /** Same TTL as cancel keys - sub-runs that outlive 3h are treated as detached anyway. */
+    private static final Duration PARENT_KEY_TTL = Duration.ofHours(3);
     /** Defensive depth cap on the parent walk to short-circuit accidental cycles. */
     private static final int MAX_PARENT_WALK = 10;
 

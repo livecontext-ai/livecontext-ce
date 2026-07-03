@@ -41,6 +41,7 @@ import { sharedPricingCache } from './lib/pricing.js';
 import { AgentBudgetGuard, TenantBudgetGuard, chainBudgetGuards } from './lib/budgetGuards.js';
 import { internalSignedHeaders } from './lib/gatewayAuth.mjs';
 import { resolveInactivityMs } from './lib/inactivityResolver.mjs';
+import { createInactivityWatchdog } from './lib/inactivityWatchdog.mjs';
 import { detectAll, detectOne, invalidateCache, CLI_IDS } from './cli-detector.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -100,9 +101,15 @@ if (process.env.NODE_ENV === 'production' && !GATEWAY_SECRET_KEY) {
   console.warn('[BRIDGE] WARN GATEWAY_SECRET_KEY missing - tenant balance refresh will 401 and the budget guard cannot react to mid-run balance changes.');
 }
 // All numeric tunables are env-overridable so prod ops can adjust without
-// a code change. Defaults are tuned for the current bridge workload -
-// 65 min hard cap on a single agent run, etc.
-const MAX_TIMEOUT_MS = parseInt(process.env.BRIDGE_MAX_TIMEOUT_MS || String(65 * 60 * 1000), 10);
+// a code change. Defaults are tuned for the current bridge workload.
+// MAX_TIMEOUT_MS is the hard cap on a single agent run (req/res socket timeouts +
+// child spawn wall-clock). It must cover the per-agent executionTimeout /
+// inactivityTimeout contract maximum (7200s) plus dispatch overhead: under the
+// previous 65-min default a valid 2h budget could never elapse on the bridge -
+// the run was always cut at 65 min with TIMEOUT. The Java bridge clients' read
+// timeouts (130 min) sit above this cap so the bridge's typed timeout response
+// wins over a client-side socket abort.
+const MAX_TIMEOUT_MS = parseInt(process.env.BRIDGE_MAX_TIMEOUT_MS || String(125 * 60 * 1000), 10);
 const SIGKILL_GRACE_MS = parseInt(process.env.BRIDGE_SIGKILL_GRACE_MS || '3000', 10);
 const CANCEL_POLL_MS = parseInt(process.env.BRIDGE_CANCEL_POLL_MS || '2000', 10);
 const MAX_HISTORY_MESSAGES = parseInt(process.env.BRIDGE_MAX_HISTORY_MESSAGES || '20', 10);
@@ -150,7 +157,9 @@ try {
 const FALLBACK_TOOL_NAMES = [
   'catalog', 'table', 'interface', 'agent', 'skill',
   'workflow', 'application', 'web_search',
-  'set_conversation_title', 'get_tool_result', 'request_credential',
+  // 'request_credential' is the legacy routing alias of 'credential'
+  // (pre-rename sessions) - keep both prefixable.
+  'set_conversation_title', 'get_tool_result', 'credential', 'request_credential',
 ];
 
 function prefixToolNames(systemPrompt, serverName, toolNames) {
@@ -818,20 +827,17 @@ async function executeViaCli({ prompt, systemPrompt, model, maxTurns, spawnTimeo
     // Inactivity watchdog: kill the child if it emits no stdout (NDJSON) for the configured window.
     // A working CLI resets the timer on every line; a stalled one (hung provider/downstream call)
     // trips it -> INACTIVITY_TIMEOUT. Armed from spawn so a CLI that never emits anything is caught
-    // too. inactivityMs <= 0 disables it.
-    let idleTimer = null;
-    const clearIdleTimer = () => { if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; } };
-    const resetIdleTimer = () => {
-      if (!inactivityMs || inactivityMs <= 0) return;
-      clearIdleTimer();
-      idleTimer = setTimeout(() => {
-        inactivityTimedOut = true;
-        stopReason = AgentStopReason.INACTIVITY_TIMEOUT;
-        error = `CLI produced no output for ${inactivityMs}ms (inactivity)`;
-        console.error(`[BRIDGE] inactivity watchdog tripped (${inactivityMs}ms, pid=${child.pid}) - killing child`);
-        killChildOnce('inactivity');
-      }, inactivityMs);
-    };
+    // too. inactivityMs <= 0 disables it. Timer mechanics live in lib/inactivityWatchdog.mjs
+    // (behaviorally tested); only the kill + sentinel side effects stay here.
+    const idleWatchdog = createInactivityWatchdog(inactivityMs, () => {
+      inactivityTimedOut = true;
+      stopReason = AgentStopReason.INACTIVITY_TIMEOUT;
+      error = `CLI produced no output for ${inactivityMs}ms (inactivity)`;
+      console.error(`[BRIDGE] inactivity watchdog tripped (${inactivityMs}ms, pid=${child.pid}) - killing child`);
+      killChildOnce('inactivity');
+    });
+    const resetIdleTimer = idleWatchdog.reset;
+    const clearIdleTimer = idleWatchdog.clear;
     resetIdleTimer();
 
     // Run the budget guard whenever new usage is observed. Single in-flight promise

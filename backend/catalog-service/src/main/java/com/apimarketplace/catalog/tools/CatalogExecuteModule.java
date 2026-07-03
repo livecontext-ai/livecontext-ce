@@ -260,7 +260,7 @@ public class CatalogExecuteModule implements ToolModule {
 
             String jitHint = String.format(
                 "The %s connection has expired. " +
-                "Call request_credential(services=[\"%s\"], reason=\"Your %s session has expired. Please reconnect to continue.\")",
+                "Call credential(action=\"require\", services=[\"%s\"], reason=\"Your %s session has expired. Please reconnect to continue.\")",
                 serviceName,
                 iconSlug != null ? iconSlug : "unknown",
                 serviceName
@@ -354,7 +354,7 @@ public class CatalogExecuteModule implements ToolModule {
             softWarning.put("credential", credential);
             softWarning.put("message", "Credential required for " + serviceName);
             softWarning.put("action", String.format(
-                "request_credential(services=[\"%s\"], reason=\"...\")",
+                "credential(action=\"require\", services=[\"%s\"], reason=\"...\")",
                 serviceType
             ));
 

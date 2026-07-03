@@ -36,7 +36,10 @@ class MonolithToolExecutionServiceTest {
     @Test
     @DisplayName("routes every conversation-local tool to the local conversation service")
     void routesEveryConversationLocalToolLocally() {
-        for (String toolName : java.util.List.of("set_conversation_title", "get_tool_result", "request_credential")) {
+        // "credential" is the unified tool; "request_credential" stays routable as its
+        // legacy alias (pre-rename sessions) - both must execute locally, never remotely.
+        for (String toolName : java.util.List.of(
+                "set_conversation_title", "get_tool_result", "credential", "request_credential")) {
             ToolCall call = ToolCall.builder()
                 .id("call-" + toolName)
                 .toolName(toolName)
@@ -79,10 +82,10 @@ class MonolithToolExecutionServiceTest {
     void forwardsCredentialsUnchanged() {
         ToolCall call = ToolCall.builder()
             .id("call-credential")
-            .toolName("request_credential")
-            .arguments(Map.of("services", java.util.List.of("gmail")))
+            .toolName("credential")
+            .arguments(Map.of("action", "require", "services", java.util.List.of("gmail")))
             .build();
-        ToolDefinition definition = ToolDefinition.builder().name("request_credential").build();
+        ToolDefinition definition = ToolDefinition.builder().name("credential").build();
         when(conversationLocalTools.executeTool(eq(call), eq(definition), eq("tenant-1"), any()))
             .thenReturn(ToolResult.success(call, "local"));
 

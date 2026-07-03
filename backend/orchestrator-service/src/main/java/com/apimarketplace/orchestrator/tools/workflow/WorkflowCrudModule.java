@@ -8,7 +8,10 @@ import com.apimarketplace.common.web.TenantResolver;
 import com.apimarketplace.orchestrator.domain.WorkflowEntity;
 import com.apimarketplace.orchestrator.domain.WorkflowRunEntity;
 import com.apimarketplace.orchestrator.domain.workflow.InterfaceDef;
+import com.apimarketplace.orchestrator.domain.workflow.RunStatus;
 import com.apimarketplace.orchestrator.domain.workflow.WorkflowPlan;
+import com.apimarketplace.orchestrator.tools.utility.AgentCancellationProbe;
+import org.springframework.beans.factory.annotation.Value;
 import com.apimarketplace.orchestrator.tools.application.ApplicationShowcaseResolver;
 import com.apimarketplace.orchestrator.repository.OffsetLimitPageable;
 import com.apimarketplace.orchestrator.repository.WorkflowRunRepository;
@@ -38,7 +41,7 @@ import com.apimarketplace.agent.tools.ToolErrorCode;
 
 /**
  * CRUD module for workflow tools.
- * Handles actions: get, list, delete, runs, get_run, get_node_output (within the unified "workflow" tool).
+ * Handles actions: get, list, delete, runs, get_run, wait_run, get_node_output (within the unified "workflow" tool).
  *
  * <p>Run inspection navigation (zoom in/out):
  * <ol>
@@ -46,6 +49,7 @@ import com.apimarketplace.agent.tools.ToolErrorCode;
  *   <li>{@code get_run} (no epoch) → macro overview with epoch summaries</li>
  *   <li>{@code get_run} (epoch=N) → all nodes with status/label/type (no output data)</li>
  *   <li>{@code get_node_output} → full output/error for a single node</li>
+ *   <li>{@code wait_run} → block until the run leaves PENDING/RUNNING (or timeout), then return the macro overview</li>
  * </ol>
  */
 @Slf4j
@@ -62,9 +66,27 @@ public class WorkflowCrudModule implements ToolModule {
     private final CredentialClient credentialClient;
     private final com.apimarketplace.orchestrator.repository.WorkflowRepository workflowRepository;
     private final ApplicationShowcaseResolver showcaseResolver;
+    private final AgentCancellationProbe cancellationProbe;
+
+    /** wait_run bounds. The max (default 240s) must stay under the tightest hop that
+     *  tolerates a silent in-flight tool call: the bridge kills a CLI session after
+     *  5 min without stdout output and the agent loop's inactivity watchdog defaults
+     *  to the same 5 min - a CLI emits nothing while an MCP tool call is blocking, so
+     *  a single wait past ~290s dies as INACTIVITY_TIMEOUT. Longer waits are done by
+     *  re-calling wait_run (each tool result re-arms the watchdogs). The workflow
+     *  tool's own {@code timeoutMs} must exceed this max - see
+     *  {@code WorkflowBuilderToolDefinitionFactory}. */
+    @Value("${workflow.wait-run.default-timeout-seconds:120}")
+    int waitRunDefaultTimeoutSeconds;
+    @Value("${workflow.wait-run.max-timeout-seconds:240}")
+    int waitRunMaxTimeoutSeconds;
+    /** DB poll cadence while waiting. Package-visible for fast unit tests. */
+    long waitRunPollIntervalMs = 2_000L;
+    /** Cancellation poll granularity inside one DB-poll interval. */
+    long waitRunSliceMs = 250L;
 
     private static final Set<String> HANDLED_ACTIONS = Set.of(
-        "get", "list", "delete", "runs", "get_run", "get_node_output", "pin", "unpin",
+        "get", "list", "delete", "runs", "get_run", "wait_run", "get_node_output", "pin", "unpin",
         "publish", "unpublish"
     );
 
@@ -94,6 +116,7 @@ public class WorkflowCrudModule implements ToolModule {
             case "delete" -> executeDelete(parameters, tenantId, context);
             case "runs" -> executeRuns(parameters, tenantId, context);
             case "get_run" -> executeGetRun(parameters, tenantId, context);
+            case "wait_run" -> executeWaitRun(parameters, tenantId, context);
             case "get_node_output" -> executeGetNodeOutput(parameters, tenantId, context);
             case "pin" -> executePin(parameters, tenantId, context);
             case "unpin" -> executeUnpin(parameters, tenantId, context);
@@ -823,6 +846,111 @@ public class WorkflowCrudModule implements ToolModule {
             log.error("Failed to get run {}: {}", runId, e.getMessage(), e);
             return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, "Failed to get run: " + e.getMessage());
         }
+    }
+
+    // ==================== Wait Run ====================
+
+    /**
+     * Block until the run leaves the in-flight states (PENDING/RUNNING) or the
+     * timeout elapses, then return the same macro report as {@code get_run}
+     * wrapped in a wait envelope. One tool call replaces a get_run poll loop.
+     *
+     * <p>Returns as soon as the run needs attention, not only on terminal
+     * states: PAUSED / AWAITING_SIGNAL / WAITING_TRIGGER all end the wait,
+     * because they wait on an input the agent (or user) must provide - sleeping
+     * through them would deadlock the agent against its own pending action.
+     *
+     * <p>The DB poll re-reads the entity every {@link #waitRunPollIntervalMs};
+     * between polls, {@link #waitRunSliceMs} slices check the CALLER's cancel
+     * signal so a user STOP releases the thread promptly (the agent loop cannot
+     * interrupt a tool in flight).
+     */
+    private ToolExecutionResult executeWaitRun(Map<String, Object> parameters, String tenantId, ToolExecutionContext context) {
+        String runId = getStringParam(parameters, "run_id");
+        if (runId == null || runId.isBlank()) {
+            return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "run_id is required");
+        }
+        Object rawTimeout = parameters.get("timeout_seconds");
+        Integer timeoutParam = getIntParam(parameters, "timeout_seconds");
+        if (rawTimeout != null && timeoutParam == null) {
+            // Present but unparseable must be an explicit error, not a silent
+            // fall-through to the default (same strictness as the wait tool).
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
+                "timeout_seconds must be a whole number between 1 and " + waitRunMaxTimeoutSeconds
+                    + " (got '" + rawTimeout + "').");
+        }
+        int timeoutSeconds = timeoutParam != null ? timeoutParam : waitRunDefaultTimeoutSeconds;
+        if (timeoutSeconds < 1 || timeoutSeconds > waitRunMaxTimeoutSeconds) {
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
+                "timeout_seconds must be between 1 and " + waitRunMaxTimeoutSeconds + " (got " + timeoutSeconds + "). "
+                    + "If the run needs longer, call wait_run again when this call returns with timed_out=true.");
+        }
+
+        try {
+            Optional<WorkflowRunEntity> runOpt = workflowRunRepository.findByRunIdPublic(runId);
+            if (runOpt.isEmpty()) {
+                return ToolExecutionResult.failure(ToolErrorCode.RESOURCE_NOT_FOUND, "Run not found: " + runId);
+            }
+            WorkflowRunEntity run = runOpt.get();
+            String orgId = TenantResolver.currentRequestOrganizationId();
+            if (!ScopeGuard.isInStrictScope(tenantId, orgId, run.getTenantId(), run.getOrganizationId())) {
+                return ToolExecutionResult.failure(ToolErrorCode.RESOURCE_NOT_FOUND, "Run not found: " + runId);
+            }
+            WorkflowEntity workflow = run.getWorkflow();
+            var workflowDenied = denyIfWorkflowNotAllowed(context,
+                    workflow != null && workflow.getId() != null ? workflow.getId().toString() : null);
+            if (workflowDenied.isPresent()) return workflowDenied.get();
+
+            long waitStartMs = System.currentTimeMillis();
+            long deadlineMs = waitStartMs + timeoutSeconds * 1000L;
+            boolean cancelled = false;
+
+            while (isInFlight(run.getStatus()) && System.currentTimeMillis() < deadlineMs && !cancelled) {
+                long pollDeadlineMs = Math.min(System.currentTimeMillis() + waitRunPollIntervalMs, deadlineMs);
+                while (System.currentTimeMillis() < pollDeadlineMs) {
+                    Thread.sleep(Math.min(waitRunSliceMs, Math.max(1L, pollDeadlineMs - System.currentTimeMillis())));
+                    if (cancellationProbe.isCallerCancelled(context)) {
+                        cancelled = true;
+                        break;
+                    }
+                }
+                Optional<WorkflowRunEntity> refreshed = workflowRunRepository.findByRunIdPublic(runId);
+                if (refreshed.isEmpty()) {
+                    return ToolExecutionResult.failure(ToolErrorCode.RESOURCE_NOT_FOUND,
+                        "Run disappeared while waiting: " + runId);
+                }
+                run = refreshed.get();
+            }
+
+            boolean timedOut = !cancelled && isInFlight(run.getStatus());
+            long waitedSeconds = Math.round((System.currentTimeMillis() - waitStartMs) / 1000.0);
+
+            WorkflowPlan plan = resolvePlanForRun(run, run.getWorkflow(), tenantId);
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("status", run.getStatus() != null ? run.getStatus().toWireValue() : "unknown");
+            out.put("waited_seconds", waitedSeconds);
+            out.put("timed_out", timedOut);
+            if (cancelled) {
+                out.put("cancelled", true);
+                out.put("note", "The user stopped this agent while it was waiting. Wrap up now; do not start new work.");
+            } else if (timedOut) {
+                out.put("next_action", "The run is still in progress after " + waitedSeconds + "s. "
+                    + "Call wait_run again to keep waiting, or get_run for a snapshot without blocking.");
+            }
+            out.put("run", agentWorkflowFireService.buildRunMacroReport(run, plan, tenantId));
+            return ToolExecutionResult.success(out);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, "Wait interrupted before completion.");
+        } catch (Exception e) {
+            log.error("Failed to wait for run {}: {}", runId, e.getMessage(), e);
+            return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, "Failed to wait for run: " + e.getMessage());
+        }
+    }
+
+    /** In-flight = still worth blocking on. Everything else needs the agent's (or user's) attention. */
+    private static boolean isInFlight(RunStatus status) {
+        return status == RunStatus.PENDING || status == RunStatus.RUNNING;
     }
 
     // ==================== Get Node Output ====================

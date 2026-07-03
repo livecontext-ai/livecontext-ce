@@ -165,10 +165,10 @@ public class AgentToolsProvider implements ToolsProvider {
             stringParam("description", "Agent description (for: create, update)", false),
             stringParam("system_prompt", "System prompt for the agent - REQUIRED for create", false),
             stringParam("model_provider",
-                "OPTIONAL (for: create, update). Omit to use the platform default (model #1 in the catalog). To pick a specific provider, call agent(action='help_models') first to see configured (provider, model) pairs. Unknown values are silently substituted with the platform default and the swap is reported back as 'model_substituted' in the response.",
+                "OPTIONAL (for: create, update). Omit to use the platform default. To pick a specific provider, call agent(action='help_models') for the configured (provider, model) pairs. Unknown pairs are silently substituted with the default; the swap is reported as 'model_substituted' in the response.",
                 false),
             stringParam("model_name",
-                "OPTIONAL (for: create, update). Omit to use the platform default. To pick a specific model, call agent(action='help_models') first. Unknown (provider, model) pairs are silently substituted with the platform default and the swap is reported back as 'model_substituted' in the response.",
+                "OPTIONAL (for: create, update). Omit to use the platform default. Pick values from agent(action='help_models'). Unknown (provider, model) pairs are silently substituted with the default; the swap is reported as 'model_substituted' in the response.",
                 false),
             ToolParameter.builder()
                 .name("temperature")
@@ -189,27 +189,27 @@ public class AgentToolsProvider implements ToolsProvider {
             ToolParameter.builder()
                 .name("workflows")
                 .type("array")
-                .description("List of workflow IDs the agent can trigger. Default=[] (NO access). Pass [uuid,...] for specific grants, [] to revoke. For ALL workflows, set workflows_grant='all' (this list is then ignored). Omitting or passing null is treated as []. (for: create, update)")
+                .description("Workflow UUIDs the agent can trigger - see RESOURCE GRANTS in the tool description. (for: create, update)")
                 .build(),
             ToolParameter.builder()
                 .name("applications")
                 .type("array")
-                .description("List of marketplace application IDs (sourcePublicationId) the agent can access. Default=[] (NO access). Pass [uuid,...] for specific grants, [] to revoke. For ALL applications, set applications_grant='all' (this list is then ignored). Omitting or passing null is treated as []. (for: create, update)")
+                .description("Marketplace application IDs (sourcePublicationId) the agent can access - see RESOURCE GRANTS. (for: create, update)")
                 .build(),
             ToolParameter.builder()
                 .name("tables")
                 .type("array")
-                .description("List of table IDs (integers) the agent can access. Default=[] (NO access). Pass [id,...] for specific grants, [] to revoke. For ALL tables, set tables_grant='all' (this list is then ignored). Omitting or passing null is treated as []. (for: create, update)")
+                .description("Table IDs (integers) the agent can access - see RESOURCE GRANTS. (for: create, update)")
                 .build(),
             ToolParameter.builder()
                 .name("interfaces")
                 .type("array")
-                .description("List of interface UUIDs the agent can access. Default=[] (NO access). Pass [uuid,...] for specific grants, [] to revoke. For ALL interfaces, set interfaces_grant='all' (this list is then ignored). Omitting or passing null is treated as []. (for: create, update)")
+                .description("Interface UUIDs the agent can access - see RESOURCE GRANTS. (for: create, update)")
                 .build(),
             ToolParameter.builder()
                 .name("agents")
                 .type("array")
-                .description("List of sub-agent UUIDs the agent can call. Default=[] (NO access). Pass [uuid,...] for specific grants, [] to revoke. For ALL sub-agents, set agents_grant='all' (this list is then ignored). Omitting or passing null is treated as []. (for: create, update)")
+                .description("Sub-agent UUIDs the agent can call - see RESOURCE GRANTS. (for: create, update)")
                 .build(),
             boolParam("web_search", "Enable web search capability for the agent (default: true) (for: create, update)", false, true),
             stringParam("workflow_id", "Single workflow ID to link agent to (legacy, prefer 'workflows' array)", false),
@@ -241,21 +241,22 @@ public class AgentToolsProvider implements ToolsProvider {
             intParam("offset", "Pagination offset (for: list, task_get_execution)", false, 0),
             enumParam("share_mode", "'read' (default) or 'readwrite' - Access level for shared conversation link (for: share)", false, List.of("read", "readwrite")),
 
-            // Per-resource access modes (for: create, update)
-            enumParam("table_access_mode", "Tables access: 'write' (default, full CRUD) or 'read' (query only, no create/update/delete) (for: create, update)", false, List.of("read", "write")),
-            enumParam("workflow_access_mode", "Workflows access: 'write' (default) or 'read' (view only, no create/edit/execute) (for: create, update)", false, List.of("read", "write")),
-            enumParam("interface_access_mode", "Interfaces access: 'write' (default) or 'read' (view only) (for: create, update)", false, List.of("read", "write")),
-            enumParam("agent_access_mode", "Sub-agents access: 'write' (default) or 'read' (view only, no create/execute) (for: create, update)", false, List.of("read", "write")),
-            enumParam("application_access_mode", "Applications access: 'write' (default) or 'read' (view only) (for: create, update)", false, List.of("read", "write")),
-            enumParam("skill_access_mode", "Skills access: 'write' (default) or 'read' (view only) (for: create, update)", false, List.of("read", "write")),
+            // Per-resource access modes (for: create, update) - shared semantics in RESOURCE GRANTS (tool description)
+            enumParam("table_access_mode", "Tables access: 'write' (default) or 'read' (query only) - see RESOURCE GRANTS. (for: create, update)", false, List.of("read", "write")),
+            enumParam("workflow_access_mode", "Workflows access: 'write' (default) or 'read' - see RESOURCE GRANTS. (for: create, update)", false, List.of("read", "write")),
+            enumParam("interface_access_mode", "Interfaces access: 'write' (default) or 'read' - see RESOURCE GRANTS. (for: create, update)", false, List.of("read", "write")),
+            enumParam("agent_access_mode", "Sub-agents access: 'write' (default) or 'read' - see RESOURCE GRANTS. (for: create, update)", false, List.of("read", "write")),
+            enumParam("application_access_mode", "Applications access: 'write' (default) or 'read' - see RESOURCE GRANTS. (for: create, update)", false, List.of("read", "write")),
+            enumParam("skill_access_mode", "Skills access: 'write' (default) or 'read' (view only). Skills have no list/_grant params - use skill(action='assign') to grant skills. (for: create, update)", false, List.of("read", "write")),
+            enumParam("file_access_mode", "Files access: 'write' (default) or 'read' (list/get/view/visualize only, no create_folder/move_to_folder). Independent of resource grants. (for: create, update)", false, List.of("read", "write")),
             // Per-resource GRANT scope (none/all/custom). Authoritative when set: 'all' grants EVERY
             // resource of that family (the matching id list is ignored). Omit to derive from the list
             // (empty=none, non-empty=custom) - so existing callers keep working unchanged.
-            enumParam("workflows_grant", "Workflows GRANT scope: 'none'=no access, 'all'=EVERY workflow (the 'workflows' list is ignored), 'custom'=only the IDs in 'workflows'. Omit to derive from the list. (for: create, update)", false, List.of("none", "all", "custom")),
-            enumParam("applications_grant", "Applications GRANT scope: 'none'=no access, 'all'=EVERY application, 'custom'=only the IDs in 'applications'. Omit to derive from the list. (for: create, update)", false, List.of("none", "all", "custom")),
-            enumParam("tables_grant", "Tables GRANT scope: 'none'=no access, 'all'=EVERY table, 'custom'=only the IDs in 'tables'. Omit to derive from the list. (for: create, update)", false, List.of("none", "all", "custom")),
-            enumParam("interfaces_grant", "Interfaces GRANT scope: 'none'=no access, 'all'=EVERY interface, 'custom'=only the IDs in 'interfaces'. Omit to derive from the list. (for: create, update)", false, List.of("none", "all", "custom")),
-            enumParam("agents_grant", "Sub-agents GRANT scope: 'none'=no access, 'all'=EVERY sub-agent, 'custom'=only the IDs in 'agents'. Omit to derive from the list. (for: create, update)", false, List.of("none", "all", "custom")),
+            enumParam("workflows_grant", "GRANT scope for 'workflows': 'none' | 'all' | 'custom' - see RESOURCE GRANTS. (for: create, update)", false, List.of("none", "all", "custom")),
+            enumParam("applications_grant", "GRANT scope for 'applications': 'none' | 'all' | 'custom' - see RESOURCE GRANTS. (for: create, update)", false, List.of("none", "all", "custom")),
+            enumParam("tables_grant", "GRANT scope for 'tables': 'none' | 'all' | 'custom' - see RESOURCE GRANTS. (for: create, update)", false, List.of("none", "all", "custom")),
+            enumParam("interfaces_grant", "GRANT scope for 'interfaces': 'none' | 'all' | 'custom' - see RESOURCE GRANTS. (for: create, update)", false, List.of("none", "all", "custom")),
+            enumParam("agents_grant", "GRANT scope for 'agents': 'none' | 'all' | 'custom' - see RESOURCE GRANTS. (for: create, update)", false, List.of("none", "all", "custom")),
 
             // Webhook configuration (for: create, update)
             boolParam("webhook_enabled", "Enable webhook endpoint for the agent. Returns a URL + curl example (for: create, update)", false, false),
@@ -265,15 +266,15 @@ public class AgentToolsProvider implements ToolsProvider {
             stringParam("schedule_cron", "Cron expression for scheduled execution, e.g. '0 9 * * *' = daily 9AM. Pass empty string '' to REMOVE the schedule (for: create, update)", false),
             stringParam("schedule_timezone", "Timezone for schedule, e.g. 'Europe/Paris' (default: UTC) (for: create, update)", false),
             intParam("schedule_max_executions", "Max number of scheduled executions (null=unlimited) (for: create, update)", false, null),
-            stringParam("schedule_prompt", "Message sent to agent at each scheduled execution (for: create, update). NOTE: when task delegation has pending work for the agent at fire time, this static prompt is REPLACED by a dynamic task-inbox prompt - used only as a fallback when the agent has no tasks.", false),
+            stringParam("schedule_prompt", "Message sent to the agent at each scheduled run. If the agent has pending delegated tasks at fire time, a dynamic task-inbox prompt replaces it (this value is the no-task fallback). (for: create, update)", false),
             boolParam("schedule_memory", "Schedule uses conversation memory - agent sees previous executions (for: create, update)", false, false),
 
             // ==================== Task Delegation (assign, inbox, complete, recurrences, ...) ====================
             stringParam("title", "Short task title, max 500 chars (for: assign, recurrence_create, recurrence_update)", false),
             stringParam("instructions", "Detailed task instructions, max 50KB (for: assign, recurrence_create, recurrence_update)", false),
-            stringParam("reviewer_agent_id", "Agent UUID to review the task after completion. If set, task_complete moves to in_review and that agent reviews. If omitted, the human user (tenant owner) reviews from the task board UI. The reviewer uses review_inbox/task_approve/task_reject_review. (for: assign, task_update)", false),
-            intParam("max_review_attempts", "Cap on reviewer reject attempts before the task is auto-failed (status='failed' with the last reviewer feedback). Range [1, 20]. Default: 3 when omitted. Only meaningful when reviewer_agent_id is set. (for: assign, task_update)", false, null),
-            stringParam("start_mode", "Execution timing for assign. 'pending' (UI-style): create the row, do NOT trigger the worker - task waits for an explicit pickup (inbox/claim/own activation). 'in_progress': create + dispatch the worker async, return immediately without waiting. 'execute' (default): create + dispatch + block until terminal state, return result/error_message inline. Backlog (no agent_id) is always 'pending' regardless. (for: assign)", false),
+            stringParam("reviewer_agent_id", "Agent UUID that reviews the task: task_complete then moves it to in_review for that agent (who uses review_inbox/task_approve/task_reject_review). Omitted = the human user reviews it outside this tool. (for: assign, task_update)", false),
+            intParam("max_review_attempts", "Max reviewer rejects before the task auto-fails (status='failed' with the last reviewer feedback). Range [1, 20], default 3. Needs reviewer_agent_id. (for: assign, task_update)", false, null),
+            stringParam("start_mode", "Execution timing for assign. 'execute' (default): create + dispatch + wait for the terminal state, result inline. With reviewer_agent_id set, the wait covers the REVIEW cycle too - the call returns after the reviewer approves/rejects (or the task auto-fails), not at task_complete; on overall timeout you get the current non-terminal status back. 'in_progress': create + dispatch async, return immediately. 'pending': create only - the task waits for an explicit pickup (inbox/claim). Backlog tasks (no agent_id) are always 'pending'. (for: assign)", false),
             stringParam("task_id", "Task UUID (for: inbox(single), outbox(single), task_complete, task_reject, task_update, task_cancel, claim, task_get_context, task_get_execution)", false),
             stringParam("execution_id",
                 "Execution UUID (for task_get_execution). Must belong to the same task - verified server-side.",
@@ -295,8 +296,8 @@ public class AgentToolsProvider implements ToolsProvider {
                 "Constraint: in_progress and in_review require an assigned agent. " +
                 "(for: outbox, task_update)", false,
                 List.of("pending", "in_progress", "in_review", "completed", "failed", "cancelled")),
-            arrayParam("label_ids", "Existing board-label UUIDs to set on the task. Combined with `labels`; together they REPLACE the current set (label_ids:[] alone, or both absent/empty, clears). (for: assign, task_update)", false),
-            arrayParam("labels", "Label NAMES to set on the task, e.g. ['urgent','qa']. Each name is matched on the board case-insensitively and CREATED if absent, then attached - no need to look up a UUID first. Combined with `label_ids` (their union replaces the set; max 25 labels per task). Max 60 chars per name. (for: assign, task_update)", false),
+            arrayParam("label_ids", "Existing board-label UUIDs to set on the task. Their union with `labels` REPLACES the current set; empty (both) clears it. (for: assign, task_update)", false),
+            arrayParam("labels", "Label NAMES to set, e.g. ['urgent','qa']. Matched on the board case-insensitively, created if absent - no UUID lookup needed. Union with `label_ids` REPLACES the set (max 25 per task, 60 chars per name). (for: assign, task_update)", false),
             intParam("estimate_minutes", "Estimated effort in minutes. (for: assign, task_update)", false, null),
             intParam("time_spent_minutes", "Logged time spent in minutes. (for: assign, task_update)", false, null),
             arrayParam("blocked_by", "Task UUIDs that must finish before this one. Replaces the set; empty clears. Self-reference and cycles are rejected. (for: assign, task_update)", false),
@@ -353,13 +354,15 @@ public class AgentToolsProvider implements ToolsProvider {
             .name("agent")
             .description("""
                 Create, manage, and delegate work to AI agents.
-                CRUD: create (requires name + system_prompt), get, list, update, delete. tools_mode defaults to 'all'; model_provider/model_name are OPTIONAL - omit to use the platform default; call agent(action='help_models') only if you need to override.
+                CRUD: create (requires name + system_prompt), get, list, update, delete. tools_mode defaults to 'all'. model_provider/model_name are OPTIONAL - omit to use the platform default.
                 execute: run a sub-agent with a prompt synchronously. Requires agent_id + prompt. Memory on by default.
-                Webhook: webhook_enabled=true returns a POST URL + curl example.
-                Schedule: schedule_cron enables recurring execution. Dynamic task-inbox prompt overrides schedule_prompt when tasks are pending.
-                Memory: get_history fetches another agent's conversation history (sub-agent memory access). share returns a shareable conversation link.
-                Task delegation (async agent-to-agent work): assign creates a task for a target agent (or NULL agent_id = backlog anyone can claim). inbox/outbox list your pending/sent tasks. task_complete/task_reject/task_cancel close tasks. task_delete permanently removes a terminal task. claim picks a backlog item. Recurrences create cron-driven task templates (recurrence_create/list/update/delete).
-                Reviewer path (separate from assignee): review_inbox lists tasks awaiting YOUR review. task_approve accepts; task_reject_review sends back to the assignee with a reason. NEVER call task_complete on a task you are reviewing - that verb is for the assignee only.
+                RESOURCE GRANTS (create/update) - the five families workflows, applications, tables, interfaces, agents all use the same 3-param pattern:
+                - '<family>' list: IDs to grant. Default [] = NO access. Pass [] to revoke. Omitting or null = [].
+                - '<family>_grant': 'none'=no access, 'all'=EVERY resource of that family (the list is then ignored), 'custom'=only the listed IDs. Omit to derive from the list (empty=none, non-empty=custom).
+                - '<family>_access_mode': 'write' (default) or 'read' (view/query only, no create/edit/delete/execute).
+                Webhook: webhook_enabled=true returns a POST URL + curl example. Schedule: schedule_cron enables recurring execution.
+                Memory: get_history fetches another agent's conversation history. share returns a shareable conversation link.
+                Task delegation (async agent-to-agent work): assign creates a task for a target agent (or NULL agent_id = backlog anyone can claim). inbox/outbox list your pending/sent tasks. task_complete/task_reject/task_cancel close tasks. task_delete permanently removes a terminal task. claim picks a backlog item. Recurrences create cron-driven task templates (recurrence_create/list/update/delete). Review verbs: see the ROLE RULE on the 'action' parameter.
                 Call agent(action='help') for the full docs, examples, and lifecycle diagrams.
                 """)
             .category(ToolCategory.AGENT)

@@ -52,6 +52,9 @@ export interface BatchStepData {
   runId?: string;
   run_id?: string;
   node_id?: string;
+  // Control node id (tool-call id) when the browser session is hosted by a
+  // GENERIC agent node - the event's nodeId addresses the HOST builder node.
+  control_node_id?: string;
   session_id?: string;
   cdp_token?: string;
   cdp_ws_url?: string;
@@ -198,6 +201,12 @@ function updateNodeFromStep(
       : undefined;
   if (wireRunId) {
     browserFields.lastBrowserRunId = wireRunId;
+  }
+  // Control node id (tool-call id) for a browser session hosted by a
+  // GENERIC agent node - the event's own nodeId is the HOST builder node
+  // for display matching, while REST control stays keyed by this id.
+  if (typeof step.control_node_id === 'string' && step.control_node_id.length > 0) {
+    browserFields.lastBrowserNodeId = step.control_node_id;
   }
   if (typeof step.step_index === 'number') {
     browserFields.lastBrowserStepIndex = step.step_index;

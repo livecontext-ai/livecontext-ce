@@ -136,27 +136,27 @@ public class CatalogMergeService {
                 String rowSource = str(m.get("source"));
                 row.setSource(rowSource != null ? rowSource : opts.source());
                 applyFields(row, m, Collections.emptySet());
-                // New models land INACTIVE by default: this PARENT row is forced
-                // off regardless of the payload's `enabled`. A refresh/sync/bundle
-                // can introduce many models at once; auto-enabling them would
-                // silently expose un-reviewed models to the picker and chat. The
-                // admin opts each one in via /settings/ai-providers. Only fresh
-                // INSERTS are forced off - the update branch below leaves existing
-                // rows' enabled untouched. Scope of this flag:
-                //   • Feed sync (LiteLLM/OpenRouter) payloads carry NO per-category
-                //     data, so a synced new model is inactive everywhere - this is
-                //     the "refresh provider" path the admin drives.
-                //   • A signed bundle MAY carry explicit per-category `enabled`
-                //     (V156 sidecar, applied in step 4 via applyRowCategories);
-                //     that trusted cloud curation is still honored for
-                //     category-scoped reads, while this parent flag keeps the model
-                //     out of the global/chat list until reviewed.
-                //   • EXCEPTION - the model-catalog SEED path
-                //     (MergeOptions.forSeed → honorEnabledOnInsert) keeps the
-                //     payload's `enabled` (default true when the seed omits it).
-                //     The seed IS the curated, code-shipped baseline, so a fresh
-                //     CE should have those models usable out of the box rather
-                //     than every one review-gated off.
+                // Insert-time `enabled` policy, per caller intent
+                // (opts.honorEnabledOnInsert - see MergeOptions):
+                //   • Feed sync (LiteLLM/OpenRouter, forSync=false): new models
+                //     land INACTIVE regardless of the payload. Feeds are
+                //     untrusted and can introduce many models at once;
+                //     auto-enabling would silently expose un-reviewed models to
+                //     the picker and chat. The admin opts each one in via
+                //     /settings/ai-providers.
+                //   • Signed BUNDLE (forBundle=true, since V381): the payload's
+                //     `enabled` is honored. It is resolved cloud-side as
+                //     bundle_enabled ?? enabled - an explicit, signed per-model
+                //     cloud-admin decision about what CE installs get - so
+                //     force-disabling here would silently veto that decision
+                //     for every model the CE had not seen yet. Enabling grants
+                //     no capability by itself: a provider without keys/bridge
+                //     stays out of the picker.
+                //   • model-catalog SEED (forSeed=true): keeps the payload's
+                //     `enabled` (default true when omitted) - the seed IS the
+                //     curated, code-shipped baseline, usable out of the box.
+                // Only fresh INSERTS are affected - the update branch below
+                // leaves existing rows' enabled untouched.
                 if (opts.honorEnabledOnInsert()) {
                     if (row.getEnabled() == null) row.setEnabled(true);
                 } else {

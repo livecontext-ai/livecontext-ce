@@ -293,6 +293,7 @@ public class WorkflowBuilderProvider implements ToolsProvider {
             case "delete" -> delegateCrud("delete", params, tenantId, ctx);
             case "runs" -> delegateCrud("runs", params, tenantId, ctx);
             case "get_run" -> delegateCrud("get_run", params, tenantId, ctx);
+            case "wait_run" -> delegateCrud("wait_run", params, tenantId, ctx);
             case "get_node_output" -> delegateCrud("get_node_output", params, tenantId, ctx);
             case "resolve_approval" -> executeResolveApproval(params, tenantId, ctx);
             case "continue_interface" -> executeContinueInterface(params, tenantId, ctx);

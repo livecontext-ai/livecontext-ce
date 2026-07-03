@@ -568,6 +568,9 @@ public class RemoteToolExecutionService implements ToolExecutionService {
         copyCredential(request, credentials, "viewingWorkflowName", "__viewingWorkflowName__", "viewingWorkflowName");
         copyCredential(request, credentials, "streamId", "__streamId__", "streamId");
         copyCredential(request, credentials, "workflowRunId", "__workflowRunId__", "workflowRunId");
+        // Hosting workflow node - lets orchestrator tools (browser-agent live
+        // view) route run-page events to the right builder node.
+        copyCredential(request, credentials, "workflowNodeId", "__workflowNodeId__", "workflowNodeId");
 
         // Forward access modes (read/write per resource) - strip __ prefix/suffix
         copyCredential(request, credentials, "tableAccessMode", "__tableAccessMode__", "tableAccessMode");

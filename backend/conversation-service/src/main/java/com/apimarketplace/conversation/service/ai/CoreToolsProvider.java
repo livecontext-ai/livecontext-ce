@@ -59,7 +59,8 @@ public class CoreToolsProvider {
         "application",       // Unified facade: marketplace
         "web_search",        // Unified facade: search, fetch
         "image_generation",  // Unified facade: generate, help (gated by orchestrator's image-generation.enabled flag)
-        "files"              // Unified facade: browse & open workspace files (list, get, view, help)
+        "files",             // Unified facade: browse & open workspace files (list, get, view, help)
+        "wait"               // Unified facade: sleep, help (blocking pause primitive)
     );
 
     @Value("${websearch.enabled:true}")

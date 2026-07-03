@@ -95,6 +95,25 @@ class Settings(BaseSettings):
     # run still finds it; long enough for the frontend poll to land.
     browser_agent_final_screenshot_ttl_seconds: int = 600
 
+    # ── Post-completion detached hold ──────────────────────────────────
+    # When the agent's task completes while a live-view viewer is connected
+    # (or the user already took control), the runner returns the result
+    # immediately but keeps Chromium open in a DETACHED task so the user
+    # can take control of the final page (fill a form, keep browsing).
+    # Bounded by: viewer disconnect (+grace), input inactivity, and a hard
+    # cap - see runner._post_completion_hold. Disable to restore the old
+    # tear-down-at-completion behaviour.
+    browser_agent_hold_enabled: bool = True
+
+    # Grace (seconds) after the LAST viewer disconnects before the hold
+    # releases. Covers a panel remount / tab switch without burning a
+    # Chromium on a closed panel.
+    browser_agent_hold_viewer_gone_grace_seconds: int = 20
+
+    # Hard cap (seconds) on the detached hold, regardless of activity.
+    # Backstop so a stuck viewer connection can never squat Chromium.
+    browser_agent_hold_max_seconds: int = 1800
+
     # extra="ignore" - env may contain BROWSER_AGENT_* (separate sub-Settings)
     # and process-wide vars (GOOGLE_API_KEY, …). Don't forbid them here.
     model_config = {"env_prefix": "WEBSEARCH_", "env_file": ".env", "extra": "ignore"}
@@ -116,6 +135,19 @@ class Settings(BaseSettings):
 class _BrowserAgentBudgetSettings(BaseSettings):
     per_user_concurrent_limit: int = 1
     per_user_daily_steps_limit: int = 200
+
+    # How long an over-limit session WAITS (FIFO) for a free per-user slot
+    # before giving up with BUDGET_EXHAUSTED. This is what makes a workflow
+    # split/fork of N browser branches queue cleanly instead of N-1 failing
+    # instantly. Keep it under the orchestrator's result BLPOP timeout
+    # (600s) minus a realistic run duration. 0 = old fail-fast behaviour.
+    queue_wait_max_seconds: int = 240
+
+    # Host-wide cap on simultaneously RUNNING browser sessions (across all
+    # users) - each session pins a Chromium process; unbounded parallelism
+    # OOMs the box. Excess sessions wait on an in-process FIFO semaphore,
+    # bounded by the same queue_wait_max_seconds. 0 = uncapped.
+    max_global_sessions: int = 3
 
     # `extra="ignore"` is REQUIRED: pydantic-settings 2.13+ forbids extra
     # inputs by default, but this sub-Settings reads the same `.env` file

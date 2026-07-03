@@ -3236,19 +3236,27 @@ public class AgentTaskService {
             }
         }
 
-        // Clear execution lock and update status
-        if ("assignee".equals(role)) {
-            taskRepository.forceUnlockAssigneeExecution(taskId);
-        } else {
-            taskRepository.forceUnlockReviewerExecution(taskId);
-        }
+        // Clear execution lock and update status. The force-unlock is a CAS
+        // guarded on the expected status, so a natural completion landing
+        // between the status pre-check above and this UPDATE makes it a no-op.
+        int unlocked = "assignee".equals(role)
+                ? taskRepository.forceUnlockAssigneeExecution(taskId)
+                : taskRepository.forceUnlockReviewerExecution(taskId);
 
-        // Record audit event
-        String oldStatus = task.getStatus();
-        String newStatus = "assignee".equals(role) ? AgentTaskEntity.STATUS_PENDING : AgentTaskEntity.STATUS_IN_PROGRESS;
-        self.recordEvent(taskId, AgentTaskEventEntity.EVT_AGENT_STOPPED, null, tenantId,
-                Map.of("status", oldStatus, "role", role),
-                Map.of("status", newStatus, "role", role));
+        // Record audit event ONLY when the stop actually changed state - a
+        // 0-row CAS means the agent finished on its own first, and writing an
+        // "agent stopped" event for a stop that never happened corrupts the
+        // audit trail.
+        if (unlocked > 0) {
+            String oldStatus = task.getStatus();
+            String newStatus = "assignee".equals(role) ? AgentTaskEntity.STATUS_PENDING : AgentTaskEntity.STATUS_IN_PROGRESS;
+            self.recordEvent(taskId, AgentTaskEventEntity.EVT_AGENT_STOPPED, null, tenantId,
+                    Map.of("status", oldStatus, "role", role),
+                    Map.of("status", newStatus, "role", role));
+        } else {
+            logger.info("Stop agent: task {} {} execution completed concurrently - no state change, no audit event",
+                    taskId, role);
+        }
 
         // Publish board update after commit
         final String finalTenantId = tenantId;

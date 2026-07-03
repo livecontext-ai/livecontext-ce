@@ -9,6 +9,8 @@ interface GlobalVariable {
   label: string;
   type: string;
   path: string;
+  /** Render the label as a highlighted expression token (SpEL styling) - used for $vars chips. */
+  expressionToken?: boolean;
   properties?: Array<{ name: string; label: string; type: string; path: string }>;
 }
 
@@ -69,7 +71,13 @@ export const GlobalVariablesInspector = React.memo(function GlobalVariablesInspe
           >
             <div className="flex items-center gap-2 flex-1 min-w-0">
               {isDraggable && <GripVertical className="h-3 w-3 text-slate-500 dark:text-slate-400 cursor-grab active:cursor-grabbing" />}
-              <span className="truncate flex-1 min-w-0 text-xs" title={variable.label}>{variable.label}</span>
+              {variable.expressionToken ? (
+                <code className="token-expression font-mono truncate flex-1 min-w-0 text-xs" title={variable.path}>
+                  {variable.label}
+                </code>
+              ) : (
+                <span className="truncate flex-1 min-w-0 text-xs" title={variable.label}>{variable.label}</span>
+              )}
               {hasProperties && (
                 <ChevronRight
                   className={clsx(

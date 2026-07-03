@@ -46,10 +46,12 @@ import java.util.concurrent.TimeUnit;
  *
  * <h2>TTL</h2>
  *
- * <p>30 min (matches {@code scaling.agent.recovery.hard-timeout-ms} default). Long enough
- * to outlive a k8s rolling restart + Flyway boot; short enough that a permanently-stale
- * entry (clear failed AND the catch-path re-registration also failed AND recovery never
- * fired) doesn't accumulate in Redis indefinitely.
+ * <p>30 min. Long enough to outlive a k8s rolling restart + Flyway boot; short enough that
+ * a permanently-stale entry (clear failed AND the catch-path re-registration also failed
+ * AND recovery never fired) doesn't accumulate in Redis indefinitely. Deliberately NOT
+ * raised alongside the 130-min {@code scaling.agent.recovery.hard-timeout-ms}: an entry is
+ * staged AFTER the result has already arrived, so the run's duration is irrelevant here -
+ * only the restart-to-replay window matters.
  *
  * <h2>Activation</h2>
  *
@@ -65,7 +67,7 @@ public class RedisInFlightStore {
     /** Key prefix. Distinct from {@link RedisPendingAgentStore#KEY_PREFIX} ({@code "agent:pending:"}). */
     static final String KEY_PREFIX = "agent:in_flight:";
 
-    /** TTL aligned with {@code scaling.agent.recovery.hard-timeout-ms} (30 min default). */
+    /** Restart-to-replay window only (see class javadoc) - independent of the recovery hard timeout. */
     static final Duration DEFAULT_TTL = Duration.ofMinutes(30);
 
     private final StringRedisTemplate redisTemplate;

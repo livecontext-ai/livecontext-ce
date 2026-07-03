@@ -173,7 +173,15 @@ public final class ConceptsHelpProvider {
                 "{{interface:my_form.output.submit.email}}  // form field 'email' submitted via the 'submit' action",
                 "{{interface:my_form.output.submit.fired_at}}  // ISO timestamp when 'submit' was clicked",
                 "{{interface:my_form.output.is_entry_interface}}  // static field: true if this is the entry tab"
-            ))
+            )),
+            "vars", Map.of("syntax", "{{$vars.name}}", "examples", List.of(
+                "{{$vars.api_base_url}}  // reusable workspace variable (user-defined config value)",
+                "{{$vars.config.endpoint}}  // deeper navigation into a JSON-typed variable"
+            ), "notes", "Workflow variables are reusable values shared by all workflows of the workspace, " +
+                "not node outputs - no .output. segment and no ancestor rule. {{vars:name}} is an accepted alias. " +
+                "An undefined variable resolves to null/empty; the variable must exist BEFORE the run starts " +
+                "(values are loaded once per run). When the credential tool is available, " +
+                "credential(action='variables') lists them and credential(action='set_variable') creates one.")
         ));
 
         result.put("VISIBILITY_RULE", Map.of(
@@ -222,7 +230,8 @@ public final class ConceptsHelpProvider {
                 Map.entry("loop", "{{core:label.output.iteration}}"),
                 Map.entry("table_find_rows", "{{table:label.output.items}} // found rows array. {{table:label.output.item_count}} // row count. To iterate: connect a Split node."),
                 Map.entry("table", "{{table:label.output.field}} // CRUD outputs (row_count, rows, etc.)"),
-                Map.entry("interface", "{{interface:label.output.action_name.field_name}} // user-submitted data; action_name is the normalized trigger label, e.g. {{interface:my_form.output.submit.email}}")
+                Map.entry("interface", "{{interface:label.output.action_name.field_name}} // user-submitted data; action_name is the normalized trigger label, e.g. {{interface:my_form.output.submit.email}}"),
+                Map.entry("vars", "{{$vars.name}} // reusable workspace variable (user-defined config, not a node output; no .output. segment). Alias: {{vars:name}}. Works in any param or condition, e.g. {{$vars.api_base_url}}/users")
             )),
             Map.entry("expression_modes", Map.of(
                 "pure_expression", "{{int(mcp:fetch.output.count) + 1}} → returns typed value (int, list, etc.)",

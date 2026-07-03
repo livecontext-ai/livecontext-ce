@@ -49,6 +49,7 @@ class AgentRemoteExecutionServiceTest {
     @Mock private GuardrailService guardrailService;
     @Mock private BridgeLoopDispatcher bridgeDispatcher;
     @Mock private com.apimarketplace.agent.service.ModelCatalogService modelCatalogService;
+    @Mock private ActiveStreamRegistry activeStreamRegistry;
 
     private AgentRemoteExecutionService service;
 
@@ -65,7 +66,8 @@ class AgentRemoteExecutionServiceTest {
             classifyService,
             guardrailService,
             bridgeDispatcher,
-            modelCatalogService
+            modelCatalogService,
+            activeStreamRegistry
         );
         lenient().when(bridgeDispatcher.shouldDispatch(any())).thenReturn(false);
         // executeAgent normalises the provider against the catalog before dispatch;
@@ -468,6 +470,48 @@ class AgentRemoteExecutionServiceTest {
     }
 
     @Test
+    @DisplayName("Streaming routing: a workflow agent NODE with a conversation TEES both callback factories (live conversation panel + run-view envelopes)")
+    void conversationFormatOnWorkflowNodeTeesBothCallbacks() {
+        // Regression: the two formats used to be mutually exclusive, so the async queue
+        // path had to pin streamingFormat="workflow" and the conversation panel of a
+        // direct-API workflow agent stayed silent until delivery. With nodeId +
+        // workflowRunId present, the conversation branch now ALSO wires the workflow
+        // envelope callback through TeeStreamingCallback - both surfaces stream.
+        when(agentLoopService.execute(any(AgentLoopContext.class), any(StreamingCallback.class)))
+            .thenReturn(successfulLoopResult());
+        when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
+            .thenReturn(org.mockito.Mockito.mock(ConversationRedisStreamingCallback.ConversationCallback.class));
+        when(redisStreamingCallback.forExecution(any(), any(), any(), any()))
+            .thenReturn(org.mockito.Mockito.mock(StreamingCallback.class));
+
+        service.executeAgent(workflowNodeConversationRequest("run-1", "core:agent_node", 3));
+
+        verify(conversationRedisStreamingCallback).forExecution(
+            org.mockito.ArgumentMatchers.eq("run-1"),
+            org.mockito.ArgumentMatchers.eq("conversation-1"),
+            org.mockito.ArgumentMatchers.eq("deepseek-chat"),
+            org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.isNull(),
+            org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.isNull(),
+            org.mockito.ArgumentMatchers.eq("run-1"));
+        verify(redisStreamingCallback).forExecution(
+            org.mockito.ArgumentMatchers.eq("run-1"),
+            org.mockito.ArgumentMatchers.eq("core:agent_node"),
+            org.mockito.ArgumentMatchers.eq(3),
+            org.mockito.ArgumentMatchers.isNull());
+    }
+
+    @Test
+    @DisplayName("Streaming routing: conversation format WITHOUT a nodeId (chat, sub-agent, task) does NOT tee the workflow callback")
+    void conversationFormatWithoutNodeIdDoesNotTee() {
+        when(agentLoopService.execute(any(AgentLoopContext.class), any(StreamingCallback.class)))
+            .thenReturn(successfulLoopResult());
+
+        service.executeAgent(streamingRequest("conversation", "stream-channel-2"));
+
+        verify(redisStreamingCallback, never()).forExecution(any(), any(), any(), any());
+    }
+
+    @Test
     @DisplayName("Streaming routing: workflow format with a non-null streamChannelId opens the WORKFLOW envelope callback factory, never the conversation one")
     void workflowFormatWithStreamChannelOpensWorkflowCallbackFactory() {
         // streamingFormat != "conversation" with a non-null streamChannelId takes the second
@@ -614,6 +658,55 @@ class AgentRemoteExecutionServiceTest {
 
     private AgentExecutionRequestDto request(Map<String, Object> credentials, String executionId, String source) {
         return request(credentials, executionId, source, 320);
+    }
+
+    /**
+     * A workflow-NODE conversation request the way AgentNode builds it (inline or async):
+     * streamChannelId = workflowRunId = the run id, plus nodeId/itemIndex so the worker's
+     * tee can key the workflow-envelope callback.
+     */
+    private AgentExecutionRequestDto workflowNodeConversationRequest(String runId, String nodeId, Integer itemIndex) {
+        return new AgentExecutionRequestDto(
+            "Stream the answer.",
+            "You are a workflow agent.",
+            "deepseek",
+            "deepseek-chat",
+            0.0,
+            320,
+            List.of(),
+            false,
+            10,
+            4,
+            150,
+            null,
+            "tenant-1",
+            runId,            // runId
+            nodeId,           // nodeId
+            null,             // variables
+            Map.of(),         // credentials
+            null,             // maxCreditBudget
+            runId,            // streamChannelId
+            itemIndex,        // itemIndex
+            null,             // loopIteration
+            "conversation-1", // conversationId
+            "conversation",   // streamingFormat
+            null,             // parentConversationId
+            null,             // subAgentName
+            null,             // subAgentAvatarUrl
+            null,             // subAgentId
+            runId,            // workflowRunId
+            null,             // attachments
+            "agent-1",        // agentEntityId
+            100.0,            // tenantBalance
+            null,             // pricingRates
+            0.0,              // creditsConsumedSoFar
+            null,             // loopIdenticalStop
+            null,             // loopConsecutiveStop
+            UUID.randomUUID().toString(), // executionId
+            null,             // source
+            null,             // reasoningEffort
+            null              // enabledModules
+        );
     }
 
     private AgentExecutionRequestDto request(Map<String, Object> credentials, String executionId, String source, int maxTokens) {

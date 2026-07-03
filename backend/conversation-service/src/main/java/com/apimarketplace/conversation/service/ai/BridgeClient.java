@@ -22,12 +22,21 @@ public class BridgeClient {
     private final String bridgeUrl;
     private final RestTemplate restTemplate;
 
+    /**
+     * Read timeout of the blocking {@code /execute} POST = the total wall-clock budget
+     * this client grants a bridge run. Must sit ABOVE the bridge's own hard cap
+     * ({@code BRIDGE_MAX_TIMEOUT_MS}, default 125 min) so the bridge's typed timeout
+     * response wins over a client-side socket abort, and must therefore also cover the
+     * executionTimeout/inactivityTimeout contract maximum (7200s): under the previous
+     * 65-min value a valid 2h budget could never elapse on the bridge path.
+     */
+    static final Duration EXECUTION_READ_TIMEOUT = Duration.ofMinutes(130);
+
     public BridgeClient(String bridgeUrl) {
         this.bridgeUrl = bridgeUrl;
-        // 65-minute timeout: agent execution can be long-running
         this.restTemplate = new RestTemplateBuilder()
             .connectTimeout(Duration.ofSeconds(30))
-            .readTimeout(Duration.ofMinutes(65))
+            .readTimeout(EXECUTION_READ_TIMEOUT)
             .build();
     }
 

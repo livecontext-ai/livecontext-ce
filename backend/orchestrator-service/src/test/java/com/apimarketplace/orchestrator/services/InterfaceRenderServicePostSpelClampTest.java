@@ -77,7 +77,8 @@ class InterfaceRenderServicePostSpelClampTest {
         resolvedFromRunContext.put("total_count", 485);
 
         when(runContextService.evaluateExpressionsForItemNarrowed(
-                eq(RUN_ID), eq(TENANT), anyInt(), anyInt(), anyInt(), org.mockito.ArgumentMatchers.anyMap(), anyInt(), anyInt()))
+                eq(RUN_ID), eq(TENANT), anyInt(), anyInt(), anyInt(), org.mockito.ArgumentMatchers.anyMap(), anyInt(), anyInt(),
+                org.mockito.ArgumentMatchers.anyMap()))
             .thenReturn(resolvedFromRunContext);
 
         Map<String, String> mappings = Map.of(
@@ -126,7 +127,8 @@ class InterfaceRenderServicePostSpelClampTest {
         resolvedFromRunContext.put("other_rows", secondList);
 
         when(runContextService.evaluateExpressionsForItemNarrowed(
-                eq(RUN_ID), eq(TENANT), anyInt(), anyInt(), anyInt(), org.mockito.ArgumentMatchers.anyMap(), anyInt(), anyInt()))
+                eq(RUN_ID), eq(TENANT), anyInt(), anyInt(), anyInt(), org.mockito.ArgumentMatchers.anyMap(), anyInt(), anyInt(),
+                org.mockito.ArgumentMatchers.anyMap()))
             .thenReturn(resolvedFromRunContext);
 
         Map<String, String> mappings = Map.of(
@@ -156,7 +158,8 @@ class InterfaceRenderServicePostSpelClampTest {
         resolvedFromRunContext.put("rows", rows);
 
         when(runContextService.evaluateExpressionsForItemNarrowed(
-                eq(RUN_ID), eq(TENANT), anyInt(), anyInt(), anyInt(), org.mockito.ArgumentMatchers.anyMap(), anyInt(), anyInt()))
+                eq(RUN_ID), eq(TENANT), anyInt(), anyInt(), anyInt(), org.mockito.ArgumentMatchers.anyMap(), anyInt(), anyInt(),
+                org.mockito.ArgumentMatchers.anyMap()))
             .thenReturn(resolvedFromRunContext);
 
         Map<String, String> mappings = Map.of("rows", "{{table:a.output.items}}");

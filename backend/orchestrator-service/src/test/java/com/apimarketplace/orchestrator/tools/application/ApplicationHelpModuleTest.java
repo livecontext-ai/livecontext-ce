@@ -303,6 +303,105 @@ class ApplicationHelpModuleTest {
         }
 
         @Test
+        @DisplayName("tips -> actions cross-refs resolve at BOTH ends: pointers name the topic, and the actions authorities keep the deferred content")
+        @SuppressWarnings("unchecked")
+        void tipsActionsCrossRefsResolveBothEnds() {
+            // 2026-07 dedup: the CREATE and RUN INSPECTION tips defer their detail to the
+            // actions section. If the authority loses that content, the pointer dangles -
+            // guard both ends (same pattern as publishHelpCrossRefResolves in the workflow
+            // factory test).
+            ToolExecutionContext context = ToolExecutionContext.of("tenant-1");
+            Map<String, Object> data = (Map<String, Object>) helpModule
+                    .execute("help", Map.of(), "tenant-1", context).get().data();
+
+            List<String> tips = (List<String>) data.get("tips");
+            assertThat(tips).anySatisfy(t -> assertThat(t)
+                    .contains("actions.publishing.create")
+                    .contains("topics=['actions']"));
+            assertThat(tips).anySatisfy(t -> assertThat(t)
+                    .contains("actions.run_inspection"));
+
+            Map<String, Object> actions = (Map<String, Object>) data.get("actions");
+            Map<String, String> publishing = (Map<String, String>) actions.get("publishing");
+            assertThat(publishing.get("create"))
+                    .as("authority the CREATE tip defers to")
+                    .contains("WAITING_TRIGGER")
+                    .contains("run_id")
+                    .contains("epoch");
+            Map<String, String> runInspection = (Map<String, String>) actions.get("run_inspection");
+            assertThat(runInspection.get("get_node_output"))
+                    .as("authority the RUN INSPECTION tip defers to")
+                    .contains("128 KB")
+                    .contains("NEXT");
+        }
+
+        @Test
+        @DisplayName("topics filter returns only the requested sections plus description and available_topics")
+        @SuppressWarnings("unchecked")
+        void topicsFilterReturnsOnlyRequestedSections() {
+            // The full help payload is ~25KB; topics lets the agent fetch one section
+            // instead of paying for all of them on every help call.
+            ToolExecutionContext context = ToolExecutionContext.of("tenant-1");
+            Map<String, Object> data = (Map<String, Object>) helpModule
+                    .execute("help", Map.of("topics", List.of("actions")), "tenant-1", context).get().data();
+
+            assertThat(data).containsKeys("description", "actions", "available_topics");
+            assertThat(data).doesNotContainKeys("parameters", "response_fields", "examples",
+                    "tips", "troubleshooting", "response_glossary", "related_tools");
+        }
+
+        @Test
+        @DisplayName("topics filter accepts several sections and is case-insensitive")
+        @SuppressWarnings("unchecked")
+        void topicsFilterAcceptsSeveralSectionsCaseInsensitive() {
+            ToolExecutionContext context = ToolExecutionContext.of("tenant-1");
+            Map<String, Object> data = (Map<String, Object>) helpModule
+                    .execute("help", Map.of("topics", List.of("EXAMPLES", "troubleshooting")), "tenant-1", context)
+                    .get().data();
+
+            assertThat(data).containsKeys("description", "examples", "troubleshooting", "available_topics");
+            assertThat(data).doesNotContainKeys("actions", "parameters", "response_glossary");
+        }
+
+        @Test
+        @DisplayName("a bare string topics value is accepted like the catalog help sibling")
+        @SuppressWarnings("unchecked")
+        void topicsAcceptsBareString() {
+            ToolExecutionContext context = ToolExecutionContext.of("tenant-1");
+            Map<String, Object> data = (Map<String, Object>) helpModule
+                    .execute("help", Map.of("topics", "actions"), "tenant-1", context).get().data();
+
+            assertThat(data).containsKeys("description", "actions", "available_topics");
+            assertThat(data).doesNotContainKeys("parameters", "examples");
+        }
+
+        @Test
+        @DisplayName("an empty topics list behaves like no filter (full payload)")
+        @SuppressWarnings("unchecked")
+        void emptyTopicsListMeansNoFilter() {
+            ToolExecutionContext context = ToolExecutionContext.of("tenant-1");
+            Map<String, Object> data = (Map<String, Object>) helpModule
+                    .execute("help", Map.of("topics", List.of()), "tenant-1", context).get().data();
+
+            assertThat(data).containsKeys("description", "actions", "parameters", "examples",
+                    "tips", "troubleshooting", "response_glossary", "related_tools");
+            assertThat(data).doesNotContainKey("available_topics");
+        }
+
+        @Test
+        @DisplayName("all-unknown topics fall back to the FULL payload - a typo never returns an empty help")
+        @SuppressWarnings("unchecked")
+        void unknownTopicsFallBackToFullPayload() {
+            ToolExecutionContext context = ToolExecutionContext.of("tenant-1");
+            Map<String, Object> data = (Map<String, Object>) helpModule
+                    .execute("help", Map.of("topics", List.of("bogus_section")), "tenant-1", context).get().data();
+
+            assertThat(data).containsKeys("description", "actions", "parameters", "response_fields",
+                    "examples", "tips", "troubleshooting", "response_glossary", "related_tools");
+            assertThat(data).doesNotContainKey("available_topics");
+        }
+
+        @Test
         @DisplayName("Non-help action should return empty Optional")
         void nonHelpActionReturnsEmpty() {
             ToolExecutionContext context = ToolExecutionContext.of("tenant-1");

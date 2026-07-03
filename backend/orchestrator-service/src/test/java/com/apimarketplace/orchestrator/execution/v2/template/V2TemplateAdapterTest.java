@@ -447,4 +447,89 @@ class V2TemplateAdapterTest {
                 "Should name the failing list index (1, not bare []), was: " + thrown.getMessage());
         }
     }
+
+    @Nested
+    @DisplayName("workflow variables bundle transfer (globalData vars)")
+    class WorkflowVariablesBundleTransfer {
+
+        private final Map<String, Object> bundle =
+            Map.of("api_base_url", "https://api.example.com", "n", 5);
+
+        @Test
+        @DisplayName("should copy globalData vars into the V1 context's vars global variable")
+        void shouldCopyVarsBundleIntoV1Context() {
+            // Arrange
+            ExecutionContext context = createContextNoPlan(Map.of(), Map.of())
+                .withGlobalData("vars", bundle);
+            when(mockTemplateEngine.evaluateTemplate(anyString(), any(WorkflowExecutionContext.class)))
+                .thenReturn("ignored");
+
+            // Act
+            adapter.evaluateTemplate("{{$vars.api_base_url}}", context);
+
+            // Assert: the converted V1 context carries the bundle under "vars"
+            ArgumentCaptor<WorkflowExecutionContext> captor =
+                ArgumentCaptor.forClass(WorkflowExecutionContext.class);
+            verify(mockTemplateEngine).evaluateTemplate(eq("{{$vars.api_base_url}}"), captor.capture());
+            assertEquals(bundle, captor.getValue().getGlobalVariable("vars"));
+        }
+
+        @Test
+        @DisplayName("should leave the V1 vars global variable unset when globalData has no vars")
+        void shouldLeaveVarsUnsetWhenNoBundle() {
+            ExecutionContext context = createContextNoPlan(Map.of(), Map.of());
+            when(mockTemplateEngine.evaluateTemplate(anyString(), any(WorkflowExecutionContext.class)))
+                .thenReturn("ignored");
+
+            adapter.evaluateTemplate("{{$vars.api_base_url}}", context);
+
+            ArgumentCaptor<WorkflowExecutionContext> captor =
+                ArgumentCaptor.forClass(WorkflowExecutionContext.class);
+            verify(mockTemplateEngine).evaluateTemplate(anyString(), captor.capture());
+            assertNull(captor.getValue().getGlobalVariable("vars"));
+        }
+
+        @Test
+        @DisplayName("should resolve {{$vars.api_base_url}}/users through a REAL template stack")
+        void shouldResolveVarsTemplateThroughRealStack() {
+            // Arrange: real TemplateEngine + NamespaceResolver + SpelEvaluator + PathNavigator
+            V2TemplateAdapter realAdapter = new V2TemplateAdapter(buildRealTemplateEngine());
+            ExecutionContext context = createContextNoPlan(Map.of(), Map.of())
+                .withGlobalData("vars", bundle);
+
+            // Act
+            Object result = realAdapter.evaluateTemplate("{{$vars.api_base_url}}/users", context);
+
+            // Assert
+            assertEquals("https://api.example.com/users", result);
+        }
+
+        @Test
+        @DisplayName("should resolve a vars: alias inside resolveTemplates through a REAL template stack")
+        void shouldResolveVarsAliasInResolveTemplatesThroughRealStack() {
+            V2TemplateAdapter realAdapter = new V2TemplateAdapter(buildRealTemplateEngine());
+            ExecutionContext context = createContextNoPlan(Map.of(), Map.of())
+                .withGlobalData("vars", bundle);
+
+            Map<String, Object> result = realAdapter.resolveTemplates(
+                Map.of("url", "{{vars:api_base_url}}/users", "count", "{{$vars.n}}"),
+                context);
+
+            assertEquals("https://api.example.com/users", result.get("url"));
+            assertEquals(5, result.get("count"));
+        }
+
+        private TemplateEngine buildRealTemplateEngine() {
+            com.apimarketplace.orchestrator.services.template.SpelEvaluator spelEvaluator =
+                new com.apimarketplace.orchestrator.services.template.SpelEvaluator();
+            spelEvaluator.init();
+            com.apimarketplace.orchestrator.services.template.PathNavigator pathNavigator =
+                new com.apimarketplace.orchestrator.services.template.PathNavigator();
+            return new TemplateEngine(
+                new com.apimarketplace.orchestrator.services.TypeCastingService(),
+                new com.apimarketplace.orchestrator.services.template.NamespaceResolver(pathNavigator),
+                pathNavigator,
+                spelEvaluator);
+        }
+    }
 }

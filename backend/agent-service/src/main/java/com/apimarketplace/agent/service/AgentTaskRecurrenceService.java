@@ -12,9 +12,12 @@ import com.apimarketplace.common.scope.ScopeGuard;
 import com.apimarketplace.common.web.TenantResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.support.CronExpression;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Instant;
 import java.time.ZoneId;
@@ -46,12 +49,22 @@ public class AgentTaskRecurrenceService {
     private final AgentTaskRepository taskRepository;
     private final AgentRepository agentRepository;
 
+    // Field-injected (optional) so the scheduler-spawned tasks reach open task
+    // boards live. Null in slim unit tests → publish skipped, never fails a fire.
+    @Autowired(required = false)
+    private TaskBoardPublisher taskBoardPublisher;
+
     public AgentTaskRecurrenceService(AgentTaskRecurrenceRepository recurrenceRepository,
                                        AgentTaskRepository taskRepository,
                                        AgentRepository agentRepository) {
         this.recurrenceRepository = recurrenceRepository;
         this.taskRepository = taskRepository;
         this.agentRepository = agentRepository;
+    }
+
+    /** Test seam: inject the optional publisher without a Spring context. */
+    void setTaskBoardPublisher(TaskBoardPublisher taskBoardPublisher) {
+        this.taskBoardPublisher = taskBoardPublisher;
     }
 
     // ========================================================================
@@ -198,8 +211,14 @@ public class AgentTaskRecurrenceService {
     // ========================================================================
 
     /**
-     * Fires a recurrence once: creates a new task from the template and advances
-     * {@code next_fire_at} to the next cron instant strictly after {@code now}.
+     * Fires a recurrence once: claims the fire slot, then creates a new task from
+     * the template. The claim advances {@code next_fire_at} to the next cron
+     * instant strictly after {@code now} via a conditional UPDATE (CAS on the
+     * {@code next_fire_at} value read from {@code findDue}), BEFORE the task is
+     * spawned and in the same transaction. ShedLock alone does not prevent
+     * double-fire (a tick outliving {@code lockAtMostFor} lets a second instance
+     * re-fetch the same due rows); with the CAS, the losing claim matches 0 rows
+     * and spawns nothing, and a crash between claim and spawn rolls back both.
      * Fire-once-then-skip: if the recurrence was behind by 3 intervals, only ONE
      * task is created and the tracker jumps past all missed windows.
      */
@@ -220,6 +239,15 @@ public class AgentTaskRecurrenceService {
         }
 
         Instant now = Instant.now();
+        Instant expected = r.getNextFireAt();
+        Instant next = computeNextFire(cron, zone, now);
+        if (expected == null
+                || recurrenceRepository.claimFireSlot(r.getId(), expected, next, now) == 0) {
+            logger.info("Recurrence {} fire slot already claimed (concurrent tick or stale row) - skipping",
+                    r.getId());
+            return Optional.empty();
+        }
+
         AgentTaskEntity task = new AgentTaskEntity();
         task.setTenantId(r.getTenantId());
         // Audit 2026-05-17 round-4 - copy organization_id from recurrence to
@@ -239,15 +267,33 @@ public class AgentTaskRecurrenceService {
         task.setDepth(0);
         AgentTaskEntity saved = taskRepository.save(task);
 
-        // Advance tracker. computeNextFire uses "strictly after now", so even if the
-        // recurrence was behind by several intervals, it catches up to the future in one step.
-        r.setLastFiredAt(now);
-        r.setNextFireAt(computeNextFire(cron, zone, now));
-        r.setFireCount(r.getFireCount() + 1);
-        recurrenceRepository.save(r);
+        // Live board update: without this, a cron-spawned task is invisible on an
+        // open task board until the next slow poll (every other creation path
+        // publishes via AgentTaskService.assignTask).
+        publishTaskCreatedAfterCommit(saved);
 
-        logger.info("Recurrence {} fired -> task {} (nextFireAt={})", r.getId(), saved.getId(), r.getNextFireAt());
+        logger.info("Recurrence {} fired -> task {} (nextFireAt={})", r.getId(), saved.getId(), next);
         return Optional.of(saved);
+    }
+
+    /** After-commit task_created publish, mirroring AgentTaskService.publishAfterCommit. */
+    private void publishTaskCreatedAfterCommit(AgentTaskEntity saved) {
+        if (taskBoardPublisher == null) return;
+        Runnable action = () -> taskBoardPublisher.publishTaskCreated(saved.getTenantId(), saved);
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    try { action.run(); } catch (Exception e) {
+                        logger.debug("Task board publish failed (non-critical): {}", e.getMessage());
+                    }
+                }
+            });
+        } else {
+            try { action.run(); } catch (Exception e) {
+                logger.debug("Task board publish failed (non-critical): {}", e.getMessage());
+            }
+        }
     }
 
     // ========================================================================

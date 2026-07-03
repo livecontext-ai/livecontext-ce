@@ -41,6 +41,16 @@ const NEW_KEYS = [
   'taskBoard.filters.filters',
 ];
 
+// Keys added by the i18n-fallback cleanup (actor-name fallbacks 'Agent' / 'System').
+// Presence is asserted in every locale, but the "not an English copy" check is
+// deliberately skipped: the genuine French/German translations of these words
+// coincide with the English string ("Agent", "System"), so the copy check would
+// false-fail on correct translations.
+const NEW_KEYS_IDENTICAL_OK = [
+  'taskBoard.detail.agent',
+  'taskBoard.detail.system',
+];
+
 describe('taskBoard i18n parity', () => {
   const refKeys = flatten(taskBoardOf(en)).sort();
 
@@ -67,6 +77,15 @@ describe('taskBoard i18n parity', () => {
           // Not an English-string-copied placeholder.
           expect(v, `${locale} ${key} is an untranslated English copy`).not.toBe(value(en, key));
         }
+      }
+    });
+  }
+
+  for (const key of NEW_KEYS_IDENTICAL_OK) {
+    it(`every locale provides ${key} (identical-to-English allowed)`, () => {
+      for (const [locale, messages] of Object.entries(LOCALES)) {
+        const v = value(messages, key);
+        expect(typeof v === 'string' && v.length > 0, `${locale} missing ${key}`).toBe(true);
       }
     });
   }

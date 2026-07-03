@@ -833,34 +833,35 @@ public class AgentNode extends BaseNode {
         requestPayload.put("source", "WORKFLOW");
 
         // Streaming metadata - MUST mirror the inline path in executeAgentRemotely
-        // (AgentExecutionRequestDto construction around lines 2042-2051). Without these
+        // (AgentExecutionRequestDto construction around lines 2650-2705). Without these
         // fields, AgentRemoteExecutionService.executeAgent on the worker side sees
         // request.streamChannelId() == null, falls into the fallback `else if
         // (agentEntityId != null)` branch, and calls wrapWithActivityPublishing(null,
-        // ...). With a null delegate, onChunk/onThinking become no-ops - fleet
-        // execution_started/completed + tool_call events still publish via
-        // agentActivityPublisher (they're outside the callback), but the regular
-        // workflow streaming channel receives nothing and tool-call events lose their
-        // (runId, nodeId, itemIndex, iteration) routing keys used by the frontend SSE
-        // subscriber, so the live view in fleet and workflow goes silent during the
-        // agent's execution. The async queue only carries workflow-mode agents
-        // (conversation-mode agents are dispatched inline through executeAgentRemotely),
-        // so streamingFormat is always "workflow" here.
+        // ...) - the live view in fleet and workflow goes silent during the agent's
+        // execution.
+        //
+        // Format selection mirrors inline: an agent WITH a user-facing conversation
+        // streams in "conversation" format, so the direct-API worker instantiates
+        // ConversationRedisStreamingCallback (live transcript + snapshot buffers +
+        // stream:conv index on ws:conversation:{conversationId}) - previously this
+        // was pinned to "workflow", whose onChunk/onThinking are no-ops, so the
+        // conversation panel of an async direct-API agent stayed silent until the
+        // result was persisted at delivery. The workflow run view does NOT lose its
+        // tool envelopes: the worker tees the workflow-format callback alongside the
+        // conversation one for node executions (TeeStreamingCallback in
+        // AgentRemoteExecutionService), keyed by the nodeId/workflowRunId sent below.
+        // classify/guardrail (no conversation) keep the plain workflow format.
         requestPayload.put("streamChannelId", runId);
-        requestPayload.put("streamingFormat", "workflow");
+        requestPayload.put("streamingFormat",
+            conversationId != null && !conversationId.isBlank() ? "conversation" : "workflow");
         requestPayload.put("nodeId", nodeId);
         requestPayload.put("itemIndex", context.itemIndex());
         requestPayload.put("workflowRunId", runId);
-        // Conversation channel for the bridge/CLI path. The bridge (RedisPublisher) ignores
-        // streamingFormat and publishes tool_call/tool_result/content/done to
-        // ws:conversation:{conversationId} ONLY when conversationId is present. The inline
-        // path already sends it (executeAgentRemotely), but the async queue payload dropped
-        // it, so a bridge agent's conversation panel (the node's bottom button) sat in
-        // "thinking" with no live tool cards until the final DB reload. Forward the same
-        // conversationId we resolved above so async bridge runs stream live like inline runs.
-        // Null for classify/guardrail (no user-facing conversation) and when no conversation
-        // manager is wired. Inert on the direct-API worker, which keeps the workflow-format
-        // callback (streamingFormat stays "workflow") and never reads conversationId.
+        // Conversation channel. The bridge (RedisPublisher) ignores streamingFormat and
+        // publishes tool_call/tool_result/content/done to ws:conversation:{conversationId}
+        // whenever conversationId is present; the direct-API worker reads it through the
+        // conversation-format callback selected above. Null for classify/guardrail (no
+        // user-facing conversation) and when no conversation manager is wired.
         if (conversationId != null && !conversationId.isBlank()) {
             requestPayload.put("conversationId", conversationId);
         }
@@ -1908,6 +1909,13 @@ public class AgentNode extends BaseNode {
         }
         if (context != null && context.runId() != null) {
             credentials.put("__workflowRunId__", context.runId());
+        }
+        // The hosting workflow NODE, so tools that fan live events out to the
+        // run page (browser-agent live view) can address THIS node in the
+        // builder graph - the per-call __toolCallId__ is an LLM call id that
+        // matches no builder node.
+        if (nodeId != null && !nodeId.isBlank()) {
+            credentials.put("__workflowNodeId__", nodeId);
         }
     }
 

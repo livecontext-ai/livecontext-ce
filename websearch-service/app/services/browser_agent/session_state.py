@@ -82,10 +82,32 @@ class BrowserAgentSession:
     takeover_active: bool = False
     last_activity: float = 0.0
     takeover_started_at: float = 0.0
+    # ── Live-view viewer presence ────────────────────────────────────────
+    # Maintained by the cdp.py WS bridge: +1 on every accepted live-view
+    # socket, -1 when it closes. The post-completion detached hold keeps
+    # Chromium open while viewer_count > 0 and releases shortly after the
+    # last viewer leaves (see runner._post_completion_hold). Same-loop
+    # cooperative writes - no lock needed.
+    viewer_count: int = 0
+    # Wallclock of the LAST viewer disconnect (0.0 = never had one leave).
+    # Lets the hold apply a short grace after the panel closes instead of
+    # tearing Chromium down mid-remount.
+    last_viewer_disconnect: float = 0.0
+    # True once the runner handed teardown to a detached post-completion
+    # hold task. run_browser_agent_session's cleanup skips unregistering
+    # the session in that case - the hold task owns the teardown.
+    hold_detached: bool = False
+    # Set by the hold-cap eviction (one hold per user / host-wide hold cap):
+    # the hold loop observes it and releases immediately. Created by the
+    # runner when the hold detaches.
+    hold_release_event: Optional[asyncio.Event] = None
+    # The user the hold was registered under (for registry cleanup).
+    hold_user_id: str = ""
     # Absolute wallclock the runner's hard cap expires (started + timeout_s),
-    # set by `run_browser_agent_session`. The takeover hold never runs past it
-    # (the cap doubles as the hold's hard backstop, so a forgotten session can
-    # never squat Chromium beyond the agent's own wallclock budget).
+    # set by `run_browser_agent_session`. Diagnostics only since the hold
+    # went detached (the post-completion hold has its own hard cap,
+    # settings.browser_agent_hold_max_seconds - the agent result has
+    # already been returned by the time it runs).
     wallclock_deadline: float = 0.0
 
 

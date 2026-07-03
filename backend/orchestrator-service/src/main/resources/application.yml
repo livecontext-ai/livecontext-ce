@@ -245,7 +245,10 @@ workflow:
   builder:
     allow-create-without-validation: false  # When false, agent cannot create workflows with validation errors
   execution:
-    max-execution-minutes: 60
+    # Only live consumer: the zombie-run threshold (max-execution-minutes + 2 min grace). Must exceed
+    # the longest legitimate agent run (7200s executionTimeout/inactivityTimeout contract,
+    # 130-min recovery hard timeout), else the scan fails HEALTHY long sync runs mid-flight.
+    max-execution-minutes: 125
     step-timeout-ms: 60000
 
 # OAuth2 settings (platform credentials are managed in DB via Settings UI)

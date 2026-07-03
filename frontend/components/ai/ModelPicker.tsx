@@ -188,7 +188,10 @@ export function ModelPicker({
               <span>{currentProvider ? getProviderDisplayName(currentProvider) : ''}</span>
             </div>
           </SelectTrigger>
-          <SelectContent>
+          {/* This picker can be hosted inside the composer Options popover (z-[99999],
+              AttachmentHandler) - the default SelectContent z-[10001] would paint the
+              list BEHIND that host. z-[100000] matches ChatConfigPanel's convention. */}
+          <SelectContent className="z-[100000]">
             {filteredProviders.map(provider => (
               <SelectItem key={provider.name} value={provider.name}>
                 <div className="flex items-center gap-2">
@@ -241,7 +244,7 @@ export function ModelPicker({
               )}
             </div>
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent className="z-[100000]">
             {availableModels.map(model => (
               <SelectItem key={model.id} value={model.id}>
                 <div className="flex items-center gap-2 min-w-0 w-full">

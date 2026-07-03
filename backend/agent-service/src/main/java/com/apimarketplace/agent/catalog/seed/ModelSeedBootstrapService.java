@@ -81,6 +81,7 @@ public class ModelSeedBootstrapService {
     }
 
     @EventListener(ApplicationReadyEvent.class)
+    @org.springframework.core.annotation.Order(100) // BEFORE SeedBundleBootstrap (@Order(200)) - baseline first, authoritative bundle second
     public void seedOnStartup() {
         try {
             seedNow();

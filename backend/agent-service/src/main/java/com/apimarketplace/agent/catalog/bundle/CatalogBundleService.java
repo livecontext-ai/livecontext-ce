@@ -132,6 +132,9 @@ public class CatalogBundleService {
         entity.setChecksum(signer.checksum(payload));
         entity.setSignature(signer.sign(payload));
         entity.setRawBytesSize(payload.length);
+        // V381: persist the exact signed bytes. Serving reads THIS, never the
+        // live table - later catalog edits can no longer unserve any bundle.
+        entity.setPayload(new String(payload, java.nio.charset.StandardCharsets.UTF_8));
 
         CatalogBundleEntity saved = bundleRepository.save(entity);
         log.info("Built catalog bundle: version={}, models={}, bytes={}, checksum={}",
@@ -187,32 +190,33 @@ public class CatalogBundleService {
     }
 
     private SignedBundle toSignedBundle(CatalogBundleEntity entity) {
-        // Re-snapshot the catalog at the same version. The bundle was stored with
-        // only metadata; the payload is regenerated at read time from
-        // model_config_overrides. If someone edited a row since bundle creation,
-        // the freshly computed checksum won't match the stored one - we surface
-        // that as an error rather than serve a bundle whose signature doesn't
-        // match the bytes we hand out.
-        List<ModelConfigOverrideEntity> models = modelRepository.findAllByOrderByRankingAsc();
-        // Re-read the V156 sidecar so the re-signature byte-stream is identical
-        // to the one we signed at build time. If a row was added or edited
-        // between build and fetch, the freshChecksum below diverges and we
-        // surface that to the operator.
-        List<ModelCategorySettingsEntity> categorySettings = categoryRepository.findAll();
-        byte[] payload = CatalogBundlePayload.canonicalBytes(
-                entity.getVersion(), entity.getSchemaVersion(),
-                entity.getIssuer(), entity.getImportedAt(), models, categorySettings);
+        // V381: serve the exact bytes that were signed at build time. Later
+        // edits to the live catalog can never unserve a bundle any more - they
+        // only mean a newer bundle can be built (auto-rebuild handles that).
+        String stored = entity.getPayload();
+        if (stored == null) {
+            // Legacy row built before payload persistence. Its bytes cannot be
+            // reconstructed reliably (the live table has moved on), so refuse
+            // with a message written for the CE ADMIN who will actually read it
+            // in the Bundles tab - the operator detail goes to the cloud log.
+            log.warn("Catalog bundle v{} predates payload persistence (V381) and cannot be served; " +
+                    "the auto-rebuild scheduler will publish a replacement on its next tick " +
+                    "(or rebuild manually via the cloud admin Bundles tab).", entity.getVersion());
+            throw new IllegalStateException(
+                    "The cloud is republishing its model catalog. This install keeps its " +
+                    "current models until the new bundle is available - no action needed.");
+        }
 
+        byte[] payload = stored.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         String freshChecksum = signer.checksum(payload);
         if (!freshChecksum.equals(entity.getChecksum())) {
+            // Genuine row corruption (the stored bytes no longer hash to the
+            // signed checksum) - never expected in normal operation.
+            log.error("Catalog bundle v{} STORED payload diverges from its checksum - row corrupted; " +
+                    "rebuild + activate a new bundle.", entity.getVersion());
             throw new IllegalStateException(
-                    "Catalog bundle version " + entity.getVersion() + " is no longer servable: " +
-                    "the freshly-computed canonical bytes diverge from the stored checksum. " +
-                    "Likely cause: an admin edited model_config_overrides OR the V156/V157 " +
-                    "migration ran (sidecar backfill changed the canonical payload for every " +
-                    "row). Action: rebuild + activate a new bundle from the cloud admin UI " +
-                    "(POST /api/model-config/bundles then POST /api/model-config/bundles/{id}/activate). " +
-                    "Until that runs, CE clients keep their last-good cached bundle.");
+                    "The cloud is republishing its model catalog. This install keeps its " +
+                    "current models until the new bundle is available - no action needed.");
         }
 
         return new SignedBundle(
@@ -226,6 +230,66 @@ public class CatalogBundleService {
                 entity.getRawBytesSize(),
                 Base64.getEncoder().encodeToString(payload)
         );
+    }
+
+    /**
+     * True when the ACTIVE bundle no longer reflects the live catalog: either
+     * it predates payload persistence (V381, unservable) or the canonical
+     * re-serialisation of the live table diverges from its checksum (the
+     * catalog was edited since it was built). Used by the auto-rebuild
+     * scheduler; no active bundle means "not stale" (first activation is a
+     * deliberate admin decision).
+     */
+    @Transactional(readOnly = true)
+    public boolean isActiveBundleStale() {
+        Optional<CatalogBundleEntity> activeOpt = bundleRepository.findFirstByActiveTrue();
+        if (activeOpt.isEmpty()) return false;
+        CatalogBundleEntity active = activeOpt.get();
+        if (active.getPayload() == null) return true; // legacy row: replace it
+
+        List<ModelConfigOverrideEntity> models = modelRepository.findAllByOrderByRankingAsc();
+        List<ModelCategorySettingsEntity> categorySettings = categoryRepository.findAll();
+        byte[] fresh = CatalogBundlePayload.canonicalBytes(
+                active.getVersion(), active.getSchemaVersion(),
+                active.getIssuer(), active.getImportedAt(), models, categorySettings);
+        return !signer.checksum(fresh).equals(active.getChecksum());
+    }
+
+    /**
+     * Delete a bundle row. The ACTIVE bundle is protected - deactivate it by
+     * activating another bundle first.
+     *
+     * @throws IllegalArgumentException when the id does not exist
+     * @throws IllegalStateException when the bundle is active
+     */
+    @Transactional
+    public void deleteBundle(Long bundleId) {
+        CatalogBundleEntity bundle = bundleRepository.findById(bundleId)
+                .orElseThrow(() -> new IllegalArgumentException("Bundle not found: " + bundleId));
+        if (bundle.isActive()) {
+            throw new IllegalStateException(
+                    "Bundle " + bundleId + " (version " + bundle.getVersion() + ") is the ACTIVE bundle " +
+                    "and cannot be deleted - activate another bundle first.");
+        }
+        bundleRepository.delete(bundle);
+        log.info("Deleted catalog bundle id={} version={}", bundleId, bundle.getVersion());
+    }
+
+    /**
+     * Retention: delete INACTIVE bundles beyond the {@code keep} most recent
+     * (by version). The active bundle is never touched. Returns the number of
+     * rows deleted. Called by the auto-rebuild scheduler after each publish so
+     * the table cannot grow without bound.
+     */
+    @Transactional
+    public int pruneInactiveBundles(int keep) {
+        List<CatalogBundleEntity> inactive = bundleRepository.findByActiveFalseOrderByVersionDesc();
+        if (inactive.size() <= keep) return 0;
+        List<CatalogBundleEntity> toDelete = inactive.subList(keep, inactive.size());
+        int count = toDelete.size();
+        bundleRepository.deleteAll(toDelete);
+        log.info("Pruned {} inactive catalog bundles (kept the {} most recent)", count, keep);
+        return count;
     }
 
     /**

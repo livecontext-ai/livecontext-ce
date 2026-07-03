@@ -371,4 +371,70 @@ class CatalogBundleControllerTest {
         b.setActive(false);
         return b;
     }
+
+    // ==================== V381: DELETE + public seed ====================
+
+    @Test
+    @DisplayName("DELETE bundle: admin-only - USER role is refused before the service is touched")
+    void deleteRequiresAdmin() {
+        ResponseEntity<?> resp = controller.deleteBundle("USER", 5L);
+
+        org.assertj.core.api.Assertions.assertThat(resp.getStatusCode().value()).isEqualTo(403);
+        org.mockito.Mockito.verifyNoInteractions(service);
+    }
+
+    @Test
+    @DisplayName("DELETE bundle: unknown id maps to 404 with the error message")
+    void deleteUnknownIs404() {
+        org.mockito.Mockito.doThrow(new IllegalArgumentException("Bundle not found: 7"))
+                .when(service).deleteBundle(7L);
+
+        ResponseEntity<?> resp = controller.deleteBundle("ADMIN", 7L);
+
+        org.assertj.core.api.Assertions.assertThat(resp.getStatusCode().value()).isEqualTo(404);
+    }
+
+    @Test
+    @DisplayName("DELETE bundle: the ACTIVE bundle's IllegalStateException PROPAGATES (409 via GlobalExceptionHandler)")
+    void deleteActivePropagatesConflict() {
+        org.mockito.Mockito.doThrow(new IllegalStateException("is the ACTIVE bundle"))
+                .when(service).deleteBundle(9L);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.deleteBundle("ADMIN", 9L))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    @DisplayName("DELETE bundle: happy path deletes through the service and returns the id")
+    void deleteHappyPath() {
+        ResponseEntity<?> resp = controller.deleteBundle("ADMIN", 3L);
+
+        org.assertj.core.api.Assertions.assertThat(resp.getStatusCode().value()).isEqualTo(200);
+        org.mockito.Mockito.verify(service).deleteBundle(3L);
+    }
+
+    @Test
+    @DisplayName("PUBLIC /seed: serves the active signed bundle with NO auth and NO cloud-link check")
+    void seedIsPublicAndUngated() {
+        SignedBundle bundle = new SignedBundle(42L, 2, "c".repeat(64), "sig", "k", "cloud", 1, 10, "cGF5bG9hZA==");
+        org.mockito.Mockito.when(service.getActiveSignedBundle()).thenReturn(java.util.Optional.of(bundle));
+
+        // No roles header, no user, no install id - the method signature itself
+        // pins the public contract (adding an auth param would break this test).
+        ResponseEntity<?> resp = controller.seedBundle();
+
+        org.assertj.core.api.Assertions.assertThat(resp.getStatusCode().value()).isEqualTo(200);
+        org.assertj.core.api.Assertions.assertThat(resp.getBody()).isEqualTo(bundle);
+        org.mockito.Mockito.verifyNoInteractions(authClient); // the link gate must NOT run for /seed
+    }
+
+    @Test
+    @DisplayName("PUBLIC /seed: 404 when no bundle has ever been activated")
+    void seedIs404WhenNoneActive() {
+        org.mockito.Mockito.when(service.getActiveSignedBundle()).thenReturn(java.util.Optional.empty());
+
+        ResponseEntity<?> resp = controller.seedBundle();
+
+        org.assertj.core.api.Assertions.assertThat(resp.getStatusCode().value()).isEqualTo(404);
+    }
 }

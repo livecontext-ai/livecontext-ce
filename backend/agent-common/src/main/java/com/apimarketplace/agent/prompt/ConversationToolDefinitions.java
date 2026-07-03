@@ -22,9 +22,15 @@ public final class ConversationToolDefinitions {
 
     private ConversationToolDefinitions() {}
 
-    /** All conversation tool names - used for routing and filtering. */
+    /**
+     * All conversation tool names - used for routing and filtering.
+     * "request_credential" is a LEGACY ROUTING ALIAS only (sessions started
+     * before the rename to "credential"): it is never advertised in tool
+     * definitions but still routes to conversation-service, where it executes
+     * as credential(action='require').
+     */
     public static final Set<String> ALL_CONVERSATION_TOOL_NAMES = Set.of(
-        "set_conversation_title", "get_tool_result", "request_credential"
+        "set_conversation_title", "get_tool_result", "credential", "request_credential"
     );
 
     /**
@@ -39,7 +45,7 @@ public final class ConversationToolDefinitions {
             tools.add(createSetConversationTitleTool());
         }
         tools.add(createGetToolResultTool());
-        tools.add(createRequestCredentialTool());
+        tools.add(createCredentialTool());
         return tools;
     }
 
@@ -84,78 +90,121 @@ public final class ConversationToolDefinitions {
             .build();
     }
 
-    private static ToolDefinition createRequestCredentialTool() {
+    private static ToolDefinition createCredentialTool() {
         return ToolDefinition.builder()
-            .name("request_credential")
+            .name("credential")
             .description("""
-                Ask the user to connect (or reconnect) a third-party service credential.
+                The user's third-party credentials and workflow variables.
 
-                ═══ DECISION TABLE ═══
+                ACTIONS
+                - list: which external services the user has connected (never returns secret values).
+                  Response: {connected:[{name,integration,status,isDefault,account}],count,defaultCount,hint}.
+                  status: active (ready) | expiring (still works) | needs_reauth (only the user can
+                  Reconnect - you cannot fix it) | error (an admin must fix the configuration).
+                  Only isDefault=true credentials are used when executing tools.
+                - variables: the workflow variables usable in any workflow expression as {{$vars.name}}.
+                  Response: {variables:[{name,value,type,scope,secret,description}],count}. scope:
+                  workspace (shared with the workspace) | personal. type: STRING|NUMBER|BOOLEAN|JSON.
+                  secret=true variables return value=null (write-only) - you can reference them in
+                  workflows but never read their value back through listings. The RESOLVED value
+                  still appears in run outputs like any other parameter - do not echo run outputs
+                  containing a secret back to third parties.
+                - set_variable: create or update a workflow variable (update = same name, never
+                  blocked by the plan cap). Params: name (letters/digits/underscore, no leading
+                  digit, max 64), value (string; must parse for the variable's type),
+                  type (STRING|NUMBER|BOOLEAN|JSON; create default STRING), description,
+                  secret (boolean; true makes the value write-only/masked in listings).
+                  UPDATE SEMANTICS: omitted type/description/secret KEEP the existing values -
+                  you can rotate a value without re-passing metadata. Pass description="" to
+                  clear it; pass secret=false explicitly to make a hidden value readable again.
+                  Creating beyond the plan cap returns a LIMIT REACHED error: tell the user to
+                  upgrade or delete a variable, DO NOT RETRY.
+                - require: ask the user to connect (or reconnect) a third-party service - shows a
+                  Connect card. Params: services, reason, force.
+
+                REQUIRE DECISION TABLE
                 Situation                                  | Call you must make
                 -------------------------------------------|-----------------------------------------------
-                Tool returned "credentialsRequired"        | request_credential(services=["X"], reason="...")
-                Tool returned 401/403, FIRST attempt       | request_credential(services=["X"], reason="...")
-                  (you don't yet know if creds exist)      |   ↓ if you get an "already exist" error:
-                                                           |   → reason about lastUsedAt + original error
-                Token clearly rejected (old lastUsedAt,    | request_credential(services=["X"],
-                  401 says "expired"/"revoked"/            |                    reason="token expired",
-                  "invalid_grant", refresh failed)         |                    force=true)
-                401 might be scope/quota/account/endpoint  | DO NOT call request_credential again.
-                                                           | Try a different tool, narrow the scope, or
-                                                           | report the failure to the user.
+                Tool returned "credentialsRequired"        | credential(action="require", services=["X"], reason="...")
+                Tool returned 401/403, FIRST attempt       | credential(action="require", services=["X"], reason="...")
+                Token clearly rejected (old lastUsedAt,    | credential(action="require", services=["X"],
+                  401 says "expired"/"revoked"/            |            reason="token expired", force=true)
+                  "invalid_grant", refresh failed)         |
+                401 might be scope/quota/account/endpoint  | DO NOT call require again. Try a different
+                                                           | tool, narrow the scope, or report to the user.
 
-                ═══ CRITICAL - HOW TO FORCE A RECONNECT ═══
-                When you decide the token is rejected, you MUST literally include
-                `force: true` (boolean) in the arguments. Saying "I should force reconnect"
-                in your reasoning is NOT enough - you have to set the parameter.
+                FORCING A RECONNECT: you MUST literally include `force: true` (boolean) in the
+                arguments - deciding it in your reasoning is NOT enough. Without `force: true`, a
+                second require on a credential that already exists returns the same error again and
+                shows NO reconnect card. Do not loop.
 
-                Concrete example for an expired Gmail token:
-                  request_credential(
-                    services: ["gmail"],
-                    reason: "Gmail token expired (401 Authentication expired)",
-                    force: true
-                  )
+                REQUIRE RESPONSES: success = a Connect card (or, after force, a Reconnect warning
+                card) was shown to the user. Error "Credentials already exist for: ..." = the
+                credential is connected and NO card was shown; go back to the decision table.
 
-                Without `force: true`, calling this tool a second time on a credential
-                that already exists will just return the same "already exist" error
-                again - it will NOT show the user a reconnect card. Do not loop.
-
-                ═══ RESPONSE SHAPES ═══
-                • Success, credential created: a Connect card was shown to the user.
-                • Error "Credentials already exist for: …": the credential is already
-                  connected, so NO card was shown. This is NOT a hard failure to report -
-                  it is a blocker telling you to stop and decide: (a) try a different tool /
-                  approach (the 401/403 was likely scope/account/quota/endpoint, not the
-                  token), (b) only if you are confident the token itself was rejected, call
-                  again with `force: true`, or (c) report to the user.
-                • Success after `force: true`: a Reconnect warning card was shown.
-
-                ═══ ANTI-LOOP ═══
-                Never call with `force: true` more than once for the same service in
-                this conversation - the server will block the second attempt. If the
-                first forced reconnect didn't help, the problem is not the credential.
+                ANTI-LOOP: never call require with `force: true` more than once for the same
+                service in this conversation - the server blocks the second attempt. If the forced
+                reconnect didn't help, the problem is not the credential.
                 """)
             .parameters(List.of(
                 ToolParameter.builder()
+                    .name("action")
+                    .type("string")
+                    .description("One of: list, variables, set_variable, require.")
+                    .required(true)
+                    .enumValues(List.of("list", "variables", "set_variable", "require"))
+                    .build(),
+                ToolParameter.builder()
                     .name("services")
                     .type("array")
-                    .description("Array of service types. Example: [\"gmail\"] or [\"slack\", \"gmail\"]")
-                    .required(true)
+                    .description("require only. Array of service types. Example: [\"gmail\"] or [\"slack\", \"gmail\"]")
+                    .required(false)
                     .build(),
                 ToolParameter.builder()
                     .name("reason")
                     .type("string")
-                    .description("Why these services are needed (shown to user). Be concise.")
-                    .required(true)
+                    .description("require only. Why these services are needed (shown to user). Be concise.")
+                    .required(false)
                     .build(),
                 ToolParameter.builder()
                     .name("force")
                     .type("boolean")
-                    .description("MUST be set to true (boolean, not string) when you are escalating after getting an \"already exist\" error and you are confident the token itself was rejected. Without this flag, no reconnect card will be shown. Omit or false in all other cases.")
+                    .description("require only. MUST be set to true (boolean, not string) when you are escalating after an \"already exist\" error and you are confident the token itself was rejected. Without this flag, no reconnect card will be shown. Omit or false in all other cases.")
+                    .required(false)
+                    .build(),
+                ToolParameter.builder()
+                    .name("name")
+                    .type("string")
+                    .description("set_variable only. Variable name: letters, digits, underscore; must not start with a digit; max 64. Referenced in workflows as {{$vars.name}}.")
+                    .required(false)
+                    .build(),
+                ToolParameter.builder()
+                    .name("value")
+                    .type("string")
+                    .description("set_variable only. The value as text. For type NUMBER/BOOLEAN/JSON it must parse (e.g. \"42\", \"true\", '{\"a\":1}').")
+                    .required(false)
+                    .build(),
+                ToolParameter.builder()
+                    .name("type")
+                    .type("string")
+                    .description("set_variable only. Create default STRING; omitted on update KEEPS the stored type.")
+                    .required(false)
+                    .enumValues(List.of("STRING", "NUMBER", "BOOLEAN", "JSON"))
+                    .build(),
+                ToolParameter.builder()
+                    .name("description")
+                    .type("string")
+                    .description("set_variable only. Optional short note on what the variable is for (max 500).")
+                    .required(false)
+                    .build(),
+                ToolParameter.builder()
+                    .name("secret")
+                    .type("boolean")
+                    .description("set_variable only. true = the value is write-only: masked in every listing (UI and this tool), must be re-entered to change. Use for API keys and other sensitive config.")
                     .required(false)
                     .build()
             ))
-            .requiredParameters(List.of("services", "reason"))
+            .requiredParameters(List.of("action"))
             .build();
     }
 }

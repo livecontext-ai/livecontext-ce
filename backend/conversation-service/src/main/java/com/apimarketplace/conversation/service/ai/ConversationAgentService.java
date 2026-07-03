@@ -73,6 +73,17 @@ public class ConversationAgentService {
     private BridgeClient bridgeClient;
 
     /**
+     * {@code stream:hb} liveness heartbeats for DIRECT bridge dispatches (streaming +
+     * sync) - see {@link BridgeStreamHeartbeat}. Without it StreamTTLService's
+     * absolute-timeout pass interrupts a healthy direct bridge run at the TTL.
+     * Optional like {@link #bridgeClient} so the existing unit-test constructors stay
+     * untouched; it is a same-module {@code @Component}, always present at runtime,
+     * and only meaningful when the bridge itself is wired.
+     */
+    @Autowired(required = false)
+    private BridgeStreamHeartbeat bridgeStreamHeartbeat;
+
+    /**
      * Optional queue producer - wired only when {@code scaling.agent.queue.enabled=true}.
      * When present, cloud (non-bridge) agent executions are routed through Redis to the
      * shared {@code AgentQueueWorkerService} pool in agent-service rather than via
@@ -93,13 +104,14 @@ public class ConversationAgentService {
     private RedisResultWaiter resultWaiter;
 
     /**
-     * Maximum time to wait for an agent execution result on the queue path. Matches the
-     * 35-minute read timeout {@code AgentClient} uses for synchronous HTTP execution
-     * (see {@code AgentClient.createExecutionRestTemplate} - 65 min connection budget
-     * with a 35-min effective per-execution ceiling). If a chat session legitimately
-     * runs longer, the user sees the same timeout as before.
+     * Maximum time to wait for an agent execution result on the queue path. Matches
+     * {@code AgentClient.EXECUTION_READ_TIMEOUT} (130 min), the same total wall-clock
+     * budget the sync HTTP path grants: it must cover the executionTimeout /
+     * inactivityTimeout contract maximum (7200s) plus the 125-min bridge cap, else a
+     * legitimately long queued chat run is timed out to the user mid-flight (the
+     * previous 35-min value did exactly that).
      */
-    private static final Duration QUEUE_AWAIT_TIMEOUT = Duration.ofMinutes(35);
+    private static final Duration QUEUE_AWAIT_TIMEOUT = Duration.ofMinutes(130);
 
     /** Redis Pub/Sub WebSocket fan-out channel - the gateway (cloud) and MonolithWsHandler (CE) both relay it to the browser. */
     private static final String WS_CONVERSATION_PREFIX = "ws:conversation:";
@@ -288,8 +300,15 @@ public class ConversationAgentService {
             // (Remote sync streams via ConversationRedisStreamingCallback in agent-service.)
             if (eligibleForConvStream && useBridge) {
                 emulatedStreamId = streamId;
-                registerConversationStreamQuietly(streamId, conversationId, dto.model(), dto.provider());
+                registerConversationStreamQuietly(streamId, conversationId, dto.model(), dto.provider(),
+                        request.getUserId());
                 publishConversationStreamStarted(streamId, conversationId, dto.model());
+                // The row registered above is reapable by the absolute-timeout pass and this
+                // sync bridge dispatch bypasses agent-service - heartbeat it for the duration
+                // of the run. Released by finalizeBridgeSyncStream (every terminal path).
+                if (bridgeStreamHeartbeat != null) {
+                    bridgeStreamHeartbeat.register(streamId);
+                }
             }
 
             // Publish fleet activity for sync bridge dispatches (schedule / webhook). Without
@@ -443,10 +462,12 @@ public class ConversationAgentService {
      * not fail the agent run (live events still flow; only reconnect-replay would be lost).
      */
     private void registerConversationStreamQuietly(String streamId, String conversationId,
-                                                   String model, String provider) {
+                                                   String model, String provider, String ownerUserId) {
         if (streamId == null || conversationId == null) return;
         try {
-            stateService.registerExternalStream(streamId, conversationId, model, provider)
+            // Owner attribution feeds the stream:user index so /streams/active (the main
+            // chat page's reconnect probe) sees this externally-driven run too.
+            stateService.registerExternalStream(streamId, conversationId, model, provider, ownerUserId)
                     .block(STREAM_STATE_WRITE_TIMEOUT);
         } catch (Exception e) {
             log.warn("[SYNC_STREAM] Failed to register stream (best-effort) streamId={} conv={}: {}",
@@ -489,6 +510,10 @@ public class ConversationAgentService {
     private void finalizeBridgeSyncStream(String streamId, String conversationId, String model,
                                           boolean success, String fullContent, String error) {
         if (streamId == null) return;
+        // Single terminal funnel for the emulated sync stream - stop the reaper shield here.
+        if (bridgeStreamHeartbeat != null) {
+            bridgeStreamHeartbeat.unregister(streamId);
+        }
         if (success) {
             publishConversationStreamDone(streamId, conversationId, model, fullContent);
             updateConversationStreamStateQuietly(streamId, true, null);
@@ -665,6 +690,12 @@ public class ConversationAgentService {
     private void executeViaBridge(ChatRequest request, AgentLoopContext context, AgentExecutionRequestDto dto,
                                   StreamingOutput streamOutput, String conversationId) {
         String streamId = streamOutput.getCurrentStreamId();
+        // Shield the conversation Stream row from the absolute-timeout reaper while the
+        // blocking bridge call is in flight: this direct dispatch bypasses agent-service,
+        // so no other component writes the stream:hb key (see BridgeStreamHeartbeat).
+        if (bridgeStreamHeartbeat != null) {
+            bridgeStreamHeartbeat.register(streamId);
+        }
         try {
             // Gate against the resolved provider - BridgeClient bypasses
             // agent-service so this is the only enforcement point on the chat
@@ -721,6 +752,10 @@ public class ConversationAgentService {
         } catch (Exception e) {
             setCancelKeyQuietly(streamId);
             handleExecutionError(e, streamOutput, conversationId);
+        } finally {
+            if (bridgeStreamHeartbeat != null) {
+                bridgeStreamHeartbeat.unregister(streamId);
+            }
         }
     }
 

@@ -62,6 +62,11 @@ public class TaskNodeSpec implements NodeSpec {
                     .key("total")
                     .type("number")
                     .description("Total matching tasks (for list_tasks only)")
+                    .build(),
+                OutputFieldDef.builder()
+                    .key("resolved_params")
+                    .type("object")
+                    .description("Snapshot of the resolved request parameters (present on every result, including failures)")
                     .build()
             ))
             .keywords(List.of("task", "crud", "create", "delete", "update", "list", "agent", "assign", "delegation"))

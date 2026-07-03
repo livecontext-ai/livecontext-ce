@@ -31,14 +31,21 @@ public class ApplicationHelpModule implements ToolModule {
         return "help".equals(action);
     }
 
+    /** Section names accepted in the {@code topics} filter, in display order. */
+    private static final List<String> HELP_TOPICS = List.of(
+        "actions", "parameters", "response_fields", "examples", "tips",
+        "troubleshooting", "response_glossary", "related_tools");
+
     @Override
     public Optional<ToolExecutionResult> execute(String action, Map<String, Object> parameters,
                                                   String tenantId, ToolExecutionContext context) {
         if (!"help".equals(action)) return Optional.empty();
-        return Optional.of(executeHelp());
+        return Optional.of(executeHelp(parameters.get("topics")));
     }
 
-    private ToolExecutionResult executeHelp() {
+    private ToolExecutionResult executeHelp(Object topicsRaw) {
+        Set<String> topics = parseTopics(topicsRaw);
+        boolean all = topics.isEmpty();
         Map<String, Object> result = new LinkedHashMap<>();
 
         result.put("description", """
@@ -58,32 +65,58 @@ public class ApplicationHelpModule implements ToolModule {
             Flights names departure_id/arrival_id/outbound_date - burnt 1 tool call).
             """);
 
-        result.put("actions", buildActionDocs());
-        result.put("parameters", buildParameterDocs());
-        result.put("response_fields", buildResponseFieldDocs());
-        result.put("examples", buildExamples());
+        if (all || topics.contains("actions")) result.put("actions", buildActionDocs());
+        if (all || topics.contains("parameters")) result.put("parameters", buildParameterDocs());
+        if (all || topics.contains("response_fields")) result.put("response_fields", buildResponseFieldDocs());
+        if (all || topics.contains("examples")) result.put("examples", buildExamples());
 
-        result.put("tips", List.of(
+        if (all || topics.contains("tips")) result.put("tips", List.of(
             "LIST vs. GET: search/my return slim items (default_trigger_id + trigger_types only). `application(action='get', application_id='<id>')` is the ONE call that returns data_inputs_schema with required field names + select options. Call get before execute when you need to build data_inputs.",
-            "CREATE: requires the workflow to have (1) at least one interface node (entry auto-detected) AND (2) at least one successful automatic run to showcase - COMPLETED, PARTIAL_SUCCESS, or (for reusable triggers like webhook/manual/chat/schedule) WAITING_TRIGGER. If either is missing you get a hint - run the workflow first via workflow(action='execute') then retry. Optional run_id pins a specific showcase run and epoch pins a specific epoch; omit both to auto-pick the latest run + latest epoch. Idempotent - calling on an already-published workflow updates the listing. The response includes showcaseRunId, default_trigger_id + data_inputs_schema, so you can chain straight into execute without a second get call.",
+            "CREATE: needs an interface node AND a successful automatic run to showcase (full prerequisites and pinning rules → actions.publishing.create, fetch via topics=['actions']). The create response already includes showcaseRunId, default_trigger_id + data_inputs_schema, so you can chain straight into execute without a second get call.",
             "ACQUIRE gives you a full copy: workflow + interfaces + data source schemas.",
             "MULTI-TRIGGER APPS: when `default_trigger_id` is absent and `trigger_types` contains >1 entry, call `application(action='get', application_id='<id>')` to read `fireable_triggers[]` and pass an explicit `trigger_id` to execute. data_inputs_schema is only emitted for the single-trigger case.",
             "EXECUTE returns run_id, epoch, status, all node statuses with output/error data, plus application_id, workflow_id, and a [visualize:application:id:runId] marker. The marker auto-renders an interactive card for the user - no further action required from you.",
-            "RUN INSPECTION: after execute, drill down progressively: application(action='get_run', run_id='<runId>') → macro overview → application(action='get_run', run_id='<runId>', epoch=N) → epoch detail → application(action='get_node_output', run_id='<runId>', epoch=N, node_id='<id>') → full node output. No need to hop to the workflow tool.",
+            "RUN INSPECTION: after execute, drill down progressively: get_run (macro) → get_run with epoch=N (detail) → get_node_output (full node output) - no need to hop to the workflow tool. Params per step → actions.run_inspection (topics=['actions']).",
             "PAGINATION: search default=10/max=25, my default=25/max=50. Response carries `hasMore`, `offset`, `limit`, `total`. When `hint.action='next_page'`, call again with offset=hint.nextOffset. When `hint.action='refine'` (search at offset=0 with total>50), STOP paginating and narrow with `query` or `category` - past offset=200 without a filter the call is REFUSED with PAGINATION_LIMIT_WITHOUT_FILTER. When `hint` is absent, the response is complete - render and stop."
         ));
 
-        result.put("troubleshooting", Map.of(
+        if (all || topics.contains("troubleshooting")) result.put("troubleshooting", Map.of(
             "acquire_own_publication_error", "If acquire returns `RESOURCE_ALREADY_EXISTS` / 'cannot acquire your own publication' but the item showed `owned_by_me=false`, the underlying APPLICATION workflow is missing (interrupted publish). Repair with application(action='create', workflow_id='<wfId>'). The publication-service compares ownership by publisherId equality, not by APPLICATION-workflow existence, so the two signals can diverge.",
             "execute_missing_field_error", "Form trigger returned 'required fields missing: [...]'. The response carries the full field list and an example payload - match the names verbatim. Note: my/search emit only `default_trigger_id` + `trigger_types` (slim); always call `application(action='get', application_id='<id>')` first to read `data_inputs_schema.fields[]`. If get also omits data_inputs_schema, the app has multiple fireable triggers; pick one via `fireable_triggers[]` and pass `trigger_id`.",
             "get_or_execute_not_found_on_owned_app", "If get/execute returns RESOURCE_NOT_FOUND for an app that DID appear in my/search, you almost certainly passed `workflowId` where `application_id` was expected - my/search items carry both UUIDs adjacent (`id`/`application_id` vs `workflowId`). Use `application_id` (== `id`), never `workflowId`. Both the get AND execute error messages now echo the correct application_id when they detect this case - copy it and retry."
         ));
 
-        result.put("response_glossary", buildResponseGlossary());
+        if (all || topics.contains("response_glossary")) result.put("response_glossary", buildResponseGlossary());
 
-        result.put("related_tools", buildRelatedTools());
+        if (all || topics.contains("related_tools")) result.put("related_tools", buildRelatedTools());
+
+        if (!all) result.put("available_topics", HELP_TOPICS);
 
         return ToolExecutionResult.success(result);
+    }
+
+    /**
+     * Normalize the raw {@code topics} argument (array or bare string, like the
+     * catalog help sibling) to the set of known section names. Unknown entries are
+     * dropped; a filter with no known entry falls back to the full payload (empty
+     * set) so a typo never returns an empty help.
+     */
+    private Set<String> parseTopics(Object topicsRaw) {
+        Collection<?> collection;
+        if (topicsRaw instanceof Collection<?> c) {
+            collection = c;
+        } else if (topicsRaw instanceof String s && !s.isBlank()) {
+            collection = List.of(s);
+        } else {
+            return Set.of();
+        }
+        Set<String> topics = new LinkedHashSet<>();
+        for (Object t : collection) {
+            if (t == null) continue;
+            String name = t.toString().trim().toLowerCase(Locale.ROOT);
+            if (HELP_TOPICS.contains(name)) topics.add(name);
+        }
+        return topics;
     }
 
     /**
@@ -223,6 +256,8 @@ public class ApplicationHelpModule implements ToolModule {
         params.put("max_bytes", "integer - (for: get_node_output field-expand) text window size, default & cap 128 KB.");
         params.put("limit", "integer - Pagination. search: default=10, max=25. my: default=25, max=50. runs: default=20, max=100.");
         params.put("offset", "integer, default=0 - Pagination offset (search, my, runs)");
+        params.put("topics", "array - Optional help filter (help): any of " + String.join(", ", HELP_TOPICS)
+            + ". Omit for the full reference; unknown values are ignored (all-unknown falls back to the full payload).");
         return params;
     }
 

@@ -70,10 +70,23 @@ public class InternalAccessController {
             return ResponseEntity.badRequest().build();
         }
 
+        // Resolve the conversation OWNER once: it attributes the Redis stream (so the
+        // owner's /streams/active reconnect probe sees this externally-driven run and
+        // the main chat page auto-attaches mid-flight) AND stamps the DB row below.
+        String ownerUserId = null;
         try {
-            streamStateService.registerExternalStream(streamId, conversationId, model, provider)
+            ownerUserId = conversationRepository.findById(conversationId)
+                    .map(Conversation::getUserId)
+                    .orElse(null);
+        } catch (Exception e) {
+            log.warn("Failed to resolve owner of conversation {}: {}", conversationId, e.getMessage());
+        }
+
+        try {
+            streamStateService.registerExternalStream(streamId, conversationId, model, provider, ownerUserId)
                     .block();
-            log.debug("Registered external stream {} for conversation {}", streamId, conversationId);
+            log.debug("Registered external stream {} for conversation {} (owner {})",
+                    streamId, conversationId, ownerUserId);
         } catch (Exception e) {
             log.warn("Failed to register stream for conversation {}: {}", conversationId, e.getMessage());
         }
@@ -87,10 +100,7 @@ public class InternalAccessController {
         // if two executions overlap on the same conversation, the most recent registration
         // wins and the previous stream's DB row is stopped.
         try {
-            String userId = conversationRepository.findById(conversationId)
-                    .map(Conversation::getUserId)
-                    .orElse("system");
-            streamService.createStream(conversationId, streamId, userId);
+            streamService.createStream(conversationId, streamId, ownerUserId != null ? ownerUserId : "system");
         } catch (Exception e) {
             log.warn("Failed to create DB row for external stream {} (conversation {}): {}",
                     streamId, conversationId, e.getMessage());

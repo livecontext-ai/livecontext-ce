@@ -642,6 +642,25 @@ export function getToolDescription(toolName: string, args?: string, visualizatio
       // === CREDENTIALS ===
       case 'get_connected_services':
         return 'List connected services';
+      case 'credential':
+      case 'request_credential': {
+        // 'request_credential' = legacy alias of credential(action='require')
+        const action = parsed.action || (normalizedToolName === 'request_credential' ? 'require' : null);
+        switch (action) {
+          case 'list':
+            return 'List connected services';
+          case 'variables':
+            return 'List workflow variables';
+          case 'set_variable':
+            return parsed.name ? `Set variable $vars.${truncate(parsed.name, 20)}` : 'Set workflow variable';
+          case 'require': {
+            const services = Array.isArray(parsed.services) ? parsed.services.join(', ') : '';
+            return services ? `Request credential: ${truncate(services, 25)}` : 'Request credential';
+          }
+          default:
+            return 'Credentials';
+        }
+      }
 
       // === NATIVE CLAUDE CODE TOOLS (full agent toolset over the bridge) ===
       // Surface WHAT the agent is doing (the command / pattern / file / url) so the

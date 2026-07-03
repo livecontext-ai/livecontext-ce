@@ -32,12 +32,21 @@ class WorkflowBuilderActionConfigTest {
     // ===== READ_ONLY_ACTIONS - side-panel focus suppression =====
 
     @Test
-    @DisplayName("READ_ONLY_ACTIONS contains the 10 canonical read actions")
+    @DisplayName("READ_ONLY_ACTIONS contains the 11 canonical read actions")
     void readOnlyActions_canonicalSet() {
         assertThat(WorkflowBuilderActionConfig.READ_ONLY_ACTIONS)
                 .containsExactlyInAnyOrder(
-                        "get", "list", "runs", "get_run", "get_node_output",
+                        "get", "list", "runs", "get_run", "wait_run", "get_node_output",
                         "describe", "validate", "search", "help", "get_plan");
+    }
+
+    @Test
+    @DisplayName("wait_run is a valid hidden read action (regression guard)")
+    void waitRun_isAllowed() {
+        assertThat(WorkflowBuilderActionConfig.ALL_ACTIONS).contains("wait_run");
+        assertThat(WorkflowBuilderActionConfig.HIDDEN_ACTIONS).contains("wait_run");
+        assertThat(WorkflowBuilderActionConfig.PLAN_MUTATING_ACTIONS).doesNotContain("wait_run");
+        assertThat(WorkflowBuilderActionConfig.MODIFYING_ACTIONS).doesNotContain("wait_run");
     }
 
     @Test

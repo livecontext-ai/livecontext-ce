@@ -670,4 +670,78 @@ class ReferenceValidatorTest {
                     w.message().contains("mcp:missing"));
         }
     }
+
+    @Nested
+    @DisplayName("Workflow variable references ($vars / vars:)")
+    class WorkflowVariableReferenceTests {
+
+        @Test
+        @DisplayName("Should not warn for a vars: alias reference (workflow variable, not a node)")
+        void shouldNotWarnForVarsColonReference() {
+            Map<String, Object> step = new HashMap<>();
+            step.put("label", "Call API");
+            step.put("params", Map.of("url", "{{vars:api.base}}"));
+
+            stubSession(
+                    List.of(Map.of("label", "Start")),
+                    List.of(step),
+                    List.of()
+            );
+            lenient().when(session.hasMissingCredentials()).thenReturn(false);
+
+            ValidationResult result = ValidationResult.builder().build();
+            validator.validate(session, result);
+
+            assertThat(result.getWarnings()).noneMatch(w ->
+                    w.code().equals("INVALID_REFERENCE"));
+        }
+
+        @Test
+        @DisplayName("Should not warn for a $vars.x.y reference (workflow variable, not a node)")
+        void shouldNotWarnForDollarVarsReference() {
+            Map<String, Object> step = new HashMap<>();
+            step.put("label", "Call API");
+            step.put("params", Map.of("url", "{{$vars.x.y}}"));
+
+            stubSession(
+                    List.of(Map.of("label", "Start")),
+                    List.of(step),
+                    List.of()
+            );
+            lenient().when(session.hasMissingCredentials()).thenReturn(false);
+
+            ValidationResult result = ValidationResult.builder().build();
+            validator.validate(session, result);
+
+            assertThat(result.getWarnings()).noneMatch(w ->
+                    w.code().equals("INVALID_REFERENCE"));
+        }
+
+        @Test
+        @DisplayName("Should still warn for an unknown node reference alongside vars references")
+        void shouldStillWarnForUnknownNodeReference() {
+            Map<String, Object> step = new HashMap<>();
+            step.put("label", "Call API");
+            step.put("params", Map.of(
+                    "url", "{{vars:api.base}}",
+                    "input", "{{mcp:ghost.output.x}}"));
+
+            stubSession(
+                    List.of(Map.of("label", "Start")),
+                    List.of(step),
+                    List.of()
+            );
+            lenient().when(session.hasMissingCredentials()).thenReturn(false);
+
+            ValidationResult result = ValidationResult.builder().build();
+            validator.validate(session, result);
+
+            assertThat(result.getWarnings()).anyMatch(w ->
+                    w.code().equals("INVALID_REFERENCE") &&
+                    w.message().contains("mcp:ghost"));
+            assertThat(result.getWarnings()).noneMatch(w ->
+                    w.code().equals("INVALID_REFERENCE") &&
+                    w.message().contains("vars"));
+        }
+    }
 }

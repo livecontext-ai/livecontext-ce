@@ -25,18 +25,18 @@ import static org.mockito.Mockito.when;
 /**
  * Tests for the provider filtering logic in {@link ModelCatalogService}.
  *
- * <p>Both paths apply the SAME mode-aware provider filter so the admin Models
- * panel and the end-user picker always agree on visibility ("no provider, no
- * model"):
+ * <p>The two paths DIVERGE by design:
  * <ul>
  *   <li>Picker / runtime path ({@code getModelsForCategory}): drops providers
  *       with neither an env key nor a DB key, except cloud-relay supported ones
- *       when the tenant's LLM source is CLOUD.</li>
- *   <li>Admin config path ({@code getEffectiveModelList}): cloud-prod / CE BYOK
- *       ({@code isCloudSelected==false}) list only key-configured providers; CE
- *       cloud-connect ({@code isCloudSelected==true}) list every cloud-relay
- *       supported API provider without a local key. Bridges are re-added for
- *       the admin regardless (must always be configurable).</li>
+ *       when the tenant's LLM source is CLOUD ("no provider, no model" - a
+ *       selector must never offer an unrunnable model).</li>
+ *   <li>Admin config path ({@code getEffectiveModelList}): lists the FULL
+ *       catalog - every provider, cloud-prod and CE alike, keyed or not - so
+ *       each model can be ranked/priced/enabled before its key exists (the
+ *       ranking is what the signed bundle ships). Each row is annotated with an
+ *       {@code available} flag (would the picker offer it?) so the UI can badge
+ *       "not configured" without hiding the model.</li>
  * </ul>
  */
 @ExtendWith(MockitoExtension.class)
@@ -263,48 +263,51 @@ class ModelCatalogServiceProviderFilterTest {
     }
 
     @Test
-    @DisplayName("admin panel (BYOK/cloud-prod) HIDES a provider with NO key (env or DB) - no provider, no model")
-    void adminPanelHidesProviderWithoutAnyKeyInByok() {
-        // configured=false and no DB key: in cloud-prod / CE BYOK the admin
-        // Models panel applies the SAME key filter as the picker, so this
-        // provider is dropped. The admin must add its key before its models
-        // appear (reverses the prior "full catalog before keys" behavior, per
-        // product decision - admin == picker visibility).
+    @DisplayName("admin panel (BYOK/cloud-prod) SHOWS a keyless provider, annotated available=false (rank/price before the key exists)")
+    void adminPanelShowsKeylessProviderAnnotatedUnavailableInByok() {
+        // configured=false and no DB key: the admin Models panel lists the full
+        // catalog so the model can be ranked/priced, and marks it available=false
+        // so the UI can badge "not configured". The PICKER still hides it.
         when(llmProviderFactory.getAllModelsInfoAdmin()).thenReturn(
                 adminBase(provider("openai", false)));
         when(credentialRepository.hasDbKey("openai")).thenReturn(false);
         when(repository.findAllByOrderByRankingAsc()).thenReturn(List.of());
 
         List<Map<String, Object>> result = service.getEffectiveModelList();
-        assertThat(result).isEmpty();
+        assertThat(result).extracting(m -> m.get("id")).containsExactly("openai-model");
+        assertThat(result.get(0)).containsEntry("available", false);
         verify(credentialRepository).hasDbKey("openai");
     }
 
     @Test
-    @DisplayName("admin panel (BYOK/cloud-prod) keeps configured, drops unconfigured side by side")
-    void adminPanelFiltersUnconfiguredProvidersInByok() {
+    @DisplayName("admin panel (BYOK/cloud-prod) shows configured AND keyless side by side, each annotated by availability")
+    void adminPanelShowsConfiguredAndKeylessAnnotated() {
         when(llmProviderFactory.getAllModelsInfoAdmin()).thenReturn(
                 adminBase(provider("anthropic", true), provider("zai", false)));
-        // hasDbKey is evaluated for every provider (not short-circuited on
-        // configured), so stub both names.
         when(credentialRepository.hasDbKey("anthropic")).thenReturn(false);
         when(credentialRepository.hasDbKey("zai")).thenReturn(false);
         when(repository.findAllByOrderByRankingAsc()).thenReturn(List.of());
 
         List<Map<String, Object>> result = service.getEffectiveModelList();
-        // anthropic (env key) stays; keyless "zai" is dropped - matches the picker.
-        assertThat(result).extracting(m -> m.get("id")).containsExactly("anthropic-model");
+        assertThat(result).extracting(m -> m.get("id"))
+                .containsExactlyInAnyOrder("anthropic-model", "zai-model");
+        Map<String, Object> anthropic = result.stream()
+                .filter(m -> "anthropic-model".equals(m.get("id"))).findFirst().orElseThrow();
+        Map<String, Object> zai = result.stream()
+                .filter(m -> "zai-model".equals(m.get("id"))).findFirst().orElseThrow();
+        assertThat(anthropic).containsEntry("available", true);   // env key
+        assertThat(zai).containsEntry("available", false);        // no key
     }
 
     @Test
-    @DisplayName("admin panel (BYOK/cloud-prod) key filter: env key OR DB key keeps a provider, neither drops it")
-    void adminPanelKeyFilterRespectsEnvAndDbKeys() {
+    @DisplayName("admin panel availability flag: env key OR DB key => available=true, neither => available=false (ALL shown)")
+    void adminPanelAvailabilityFlagRespectsEnvAndDbKeys() {
         when(llmProviderFactory.getAllModelsInfoAdmin()).thenReturn(
                 adminBase(
                         provider("anthropic", true),    // env key
                         provider("zai", false),          // DB key only
                         provider("openai", true),        // env key
-                        provider("cohere", false)         // neither - dropped
+                        provider("cohere", false)         // neither - shown, available=false
                 ));
         // hasDbKey is evaluated for every provider (eager, not short-circuited
         // on configured), so stub all four names.
@@ -315,9 +318,15 @@ class ModelCatalogServiceProviderFilterTest {
         when(repository.findAllByOrderByRankingAsc()).thenReturn(List.of());
 
         List<Map<String, Object>> result = service.getEffectiveModelList();
-        // cohere (no env, no DB key) is the only one hidden.
+        // ALL shown now; the availability flag distinguishes them.
         assertThat(result).extracting(m -> m.get("id"))
-                .containsExactlyInAnyOrder("anthropic-model", "zai-model", "openai-model");
+                .containsExactlyInAnyOrder("anthropic-model", "zai-model", "openai-model", "cohere-model");
+        Map<String, Boolean> avail = new HashMap<>();
+        for (Map<String, Object> m : result) avail.put((String) m.get("id"), (Boolean) m.get("available"));
+        assertThat(avail.get("anthropic-model")).isTrue();  // env key
+        assertThat(avail.get("zai-model")).isTrue();        // DB key
+        assertThat(avail.get("openai-model")).isTrue();     // env key
+        assertThat(avail.get("cohere-model")).isFalse();    // neither
     }
 
     @Test
@@ -338,27 +347,34 @@ class ModelCatalogServiceProviderFilterTest {
     }
 
     @Test
-    @DisplayName("admin cloud-connect DROPS an unconfigured NON-relay API provider (cloud cannot execute it)")
-    void adminPanelCloudConnectDropsNonRelayUnconfiguredProvider() {
+    @DisplayName("admin cloud-connect SHOWS a non-relay keyless provider annotated available=false (relay can't run it)")
+    void adminPanelCloudConnectShowsNonRelayProviderUnavailable() {
         ReflectionTestUtils.setField(service, "cloudLlmRuntimeAccess", cloudLlmRuntimeAccess);
         when(cloudLlmRuntimeAccess.isCloudSelected("tenant-cloud")).thenReturn(true);
         // "local-openai-compatible" is NOT in CloudRelaySupport and has no key,
-        // so even in cloud-connect it is dropped (the relay can't run it).
+        // so the relay can't run it - but the admin panel still lists it for
+        // ranking, marked available=false. openai IS relay-supported (available).
         when(llmProviderFactory.getAllModelsInfoAdmin()).thenReturn(
                 adminBase(provider("openai", false), provider("local-openai-compatible", false)));
         when(repository.findAllByOrderByRankingAsc()).thenReturn(List.of());
 
         List<Map<String, Object>> result = service.getEffectiveModelList(null, "tenant-cloud");
-        assertThat(result).extracting(m -> m.get("id")).containsExactly("openai-model");
+        assertThat(result).extracting(m -> m.get("id"))
+                .containsExactlyInAnyOrder("openai-model", "local-openai-compatible-model");
+        Map<String, Object> openai = result.stream()
+                .filter(m -> "openai-model".equals(m.get("id"))).findFirst().orElseThrow();
+        Map<String, Object> local = result.stream()
+                .filter(m -> "local-openai-compatible-model".equals(m.get("id"))).findFirst().orElseThrow();
+        assertThat(openai).containsEntry("available", true);   // relay-supported
+        assertThat(local).containsEntry("available", false);   // not relay-supported, no key
     }
 
     @Test
-    @DisplayName("admin image_generation tab (BYOK) HIDES a keyless provider entirely (no provider, no model)")
-    void adminImageGenTabHidesKeylessProviderInByok() {
-        // openai has NO key (configured=false, no DB key). In BYOK/cloud-prod
-        // the base key filter drops it before the mode filter runs, so the
-        // image_generation tab shows nothing for it - the admin must add the
-        // key first (matches the picker; reverses prior keyless-surfacing).
+    @DisplayName("admin image_generation tab (BYOK) SHOWS a keyless provider's image-gen model, annotated available=false")
+    void adminImageGenTabShowsKeylessProviderUnavailable() {
+        // openai has NO key (configured=false, no DB key). The panel lists the
+        // full catalog, so the mode filter keeps the image model and it is shown
+        // for ranking, annotated available=false.
         Map<String, Object> openai = new LinkedHashMap<>();
         openai.put("name", "openai");
         openai.put("configured", false);
@@ -370,7 +386,9 @@ class ModelCatalogServiceProviderFilterTest {
         when(repository.findAllByOrderByRankingAsc()).thenReturn(List.of());
 
         List<Map<String, Object>> result = service.getEffectiveModelList("image_generation");
-        assertThat(result).isEmpty();
+        // Only the image-gen model survives the mode filter; shown, unavailable.
+        assertThat(result).extracting(m -> m.get("id")).containsExactly("gpt-image-1.5");
+        assertThat(result.get(0)).containsEntry("available", false);
     }
 
     @Test
@@ -390,6 +408,27 @@ class ModelCatalogServiceProviderFilterTest {
         assertThat(result.get(0))
                 .containsEntry("providerKind", "bridge")
                 .containsKey("bridgeAvailable");
+    }
+
+    @Test
+    @DisplayName("DIVERGENCE (new): the SAME keyless provider is SHOWN in the admin panel (available=false) but DROPPED from the picker")
+    void adminShowsWhatPickerDropsForKeylessProvider() {
+        // Fresh base per call: the picker path mutates the provider list (removeIf).
+        when(llmProviderFactory.getAllModelsInfoAdmin())
+                .thenAnswer(inv -> adminBase(provider("openrouter", false)));
+        lenient().when(credentialRepository.hasDbKey("openrouter")).thenReturn(false);
+        when(repository.findAllByOrderByRankingAsc()).thenReturn(List.of());
+
+        List<Map<String, Object>> admin = service.getEffectiveModelList();
+        Map<String, Object> picker = service.getModelsForCategory(null, "tenant-byok");
+
+        // Admin: shown, marked unavailable so the UI can badge "not configured".
+        assertThat(admin).extracting(m -> m.get("id")).containsExactly("openrouter-model");
+        assertThat(admin.get(0)).containsEntry("available", false);
+        // Picker: dropped entirely ("no provider, no model").
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> pickerProviders = (List<Map<String, Object>>) picker.get("providers");
+        assertThat(pickerProviders).isEmpty();
     }
 
     @Test

@@ -2967,6 +2967,14 @@
       "fetchError": "加载配置失败",
       "saveError": "保存更改失败",
       "noModels": "暂无已配置的模型",
+      "bundleShipInherit": "CE：自动",
+      "bundleShipOn": "CE：启用",
+      "bundleShipOff": "CE：停用",
+      "bundleShipTooltip": "CE 捆绑包为此模型分发的状态，独立于启用开关：自动跟随开关，启用即使此处停用也向自托管安装分发启用状态，停用则分发停用状态。",
+      "visionOnly": "仅视觉",
+      "visionOnlyTooltip": "仅显示支持视觉（多模态）的模型。浏览器智能体需要看到页面，因此默认开启。关闭可显示所有模型。",
+      "notConfigured": "未配置",
+      "notConfiguredTooltip": "已列出以便排序和定价，但尚不可用：此提供商没有 API 密钥（或云中继无法运行它）。添加密钥后即可使用。",
       "custom": "自定义",
       "modified": "已修改",
       "recommended": "推荐",
@@ -3049,6 +3057,7 @@
       "signingKey": "签名密钥",
       "statusActive": "活动",
       "notLinkedHint": "此安装尚未连接云端，这是全新安装的正常状态。请在“连接”标签页中完成连接以接收更新。",
+      "deleteBundle": "删除捆绑包",
       "statusCode": {
         "APPLY_FAILED": "应用失败",
         "CHECKSUM_INVALID": "校验和无效",
@@ -3134,8 +3143,8 @@
     }
   },
   "credentials": {
-    "title": "凭据",
-    "subtitle": "连接到外部服务",
+    "title": "凭据与变量",
+    "subtitle": "连接外部服务并管理可复用的工作流变量",
     "unauthorized": "未授权",
     "mustBeLoggedIn": "您必须登录才能管理凭据",
     "scope": {
@@ -3172,7 +3181,83 @@
     "availableLabel": "可用",
     "tabs": {
       "myCredentials": "我的凭据",
-      "availableIntegrations": "可用集成"
+      "availableIntegrations": "可用集成",
+      "credentials": "凭据",
+      "variables": "变量"
+    },
+    "variables": {
+      "title": "工作流变量",
+      "subtitle": "可在所有工作流中通过 $vars.name 使用的可复用值",
+      "add": "添加变量",
+      "edit": "编辑",
+      "delete": "删除",
+      "copyReference": "复制引用",
+      "searchPlaceholder": "搜索变量...",
+      "table": {
+        "columnReference": "引用",
+        "columnValue": "值",
+        "columnType": "类型",
+        "columnUpdated": "更新时间",
+        "noMatch": "没有变量与搜索匹配。"
+      },
+      "quota": {
+        "used": "{used} / {limit} 个变量",
+        "unlimited": "{used} 个变量",
+        "limitReached": "已达到套餐上限。升级套餐以添加更多变量。"
+      },
+      "empty": {
+        "title": "暂无变量",
+        "description": "创建可复用的值（URL、ID、配置），并在任意工作流中通过 $vars.name 引用。"
+      },
+      "scope": {
+        "workspace": "工作区",
+        "personal": "个人"
+      },
+      "types": {
+        "STRING": "文本",
+        "NUMBER": "数字",
+        "BOOLEAN": "布尔值",
+        "JSON": "JSON"
+      },
+      "fields": {
+        "name": "名称",
+        "type": "类型",
+        "value": "值",
+        "description": "描述（可选）",
+        "descriptionPlaceholder": "此变量的用途",
+        "secret": "隐藏值（机密）",
+        "secretHelp": "值将加密存储且不再显示，无论是在此处还是对代理。工作流运行时仍会使用它（其解析后的值可能出现在运行输出中）。如需更改，请输入新值。",
+        "secretReenter": "输入新值以替换隐藏的值"
+      },
+      "dialog": {
+        "createTitle": "新建变量",
+        "editTitle": "编辑变量",
+        "description": "值将加密存储，并在工作流运行时解析。",
+        "cancel": "取消",
+        "create": "创建",
+        "save": "保存"
+      },
+      "deleteDialog": {
+        "title": "删除变量",
+        "description": "删除“{name}”？引用它的工作流将把它解析为空。",
+        "confirm": "删除"
+      },
+      "validation": {
+        "name": "仅限字母、数字和下划线；不能以数字开头（最多 64 个字符）。",
+        "number": "请输入有效的数字。",
+        "boolean": "请输入 true 或 false。",
+        "json": "请输入有效的 JSON。"
+      },
+      "toasts": {
+        "loadFailed": "无法加载变量",
+        "created": "变量已创建",
+        "updated": "变量已更新",
+        "deleted": "变量已删除",
+        "saveFailed": "无法保存变量",
+        "deleteFailed": "无法删除变量",
+        "nameConflict": "此范围内已存在同名变量。",
+        "referenceCopied": "引用已复制"
+      }
     },
     "myCredentials": {
       "searchPlaceholder": "搜索凭据...",
@@ -3805,6 +3890,44 @@
     "toolCardBinaryFile": "二进制文件",
     "toolCardTestResult": "测试结果"
   },
+  "mcpServer": {
+    "title": "MCP 服务器",
+    "subtitle": "将 Claude Code、Cursor 等 MCP 客户端连接到您的 LiveContext 工具",
+    "copy": "复制",
+    "errors": {
+      "fetchFailed": "无法加载 MCP 服务器信息"
+    },
+    "endpoint": {
+      "title": "端点",
+      "description": "标准 MCP 端点(Streamable HTTP)。任何 MCP 客户端都可以通过 HTTP 连接。",
+      "toolCount": "{count} 个可用工具"
+    },
+    "apiKey": {
+      "title": "API 密钥",
+      "description": "对 MCP 端点的请求使用您的个人 API 密钥进行身份验证,通过 X-API-Key 请求头发送。请妥善保管。",
+      "generate": "生成密钥",
+      "regenerate": "重新生成密钥",
+      "regenerateWarning": "重新生成会立即使当前密钥失效。所有使用该密钥配置的客户端将停止工作,直到您更新为止。",
+      "regenerateConfirm": "立即重新生成",
+      "regenerateCancel": "取消",
+      "shownOnce": "此密钥仅显示一次。请立即复制并妥善保存。",
+      "createdAt": "创建于 {date}",
+      "noKey": "尚无 API 密钥。生成一个以连接 MCP 客户端。"
+    },
+    "toasts": {
+      "keyGenerated": "API 密钥已生成",
+      "keyGenerationFailed": "无法生成 API 密钥",
+      "keyGenerationFailedMessage": "请重试。"
+    },
+    "snippet": {
+      "title": "客户端配置",
+      "description": "将以下任一配置复制到您的 MCP 客户端。JSON 块放入 mcpServers 配置文件;命令用于将服务器添加到 Claude Code。",
+      "claudeCode": "Claude Code(命令)",
+      "jsonConfig": "JSON 配置(Cursor、Claude Desktop 等)",
+      "keyPlaceholder": "YOUR_API_KEY",
+      "placeholderHint": "请将 YOUR_API_KEY 替换为您的 API 密钥(在上方生成)。"
+    }
+  },
   "mcp": {
     "tabs": {
       "overview": "概览",
@@ -4365,6 +4488,11 @@
         "workspaces3": "3 个工作区",
         "workspaces10": "10 个工作区",
         "workspacesUnlimited": "无限工作区",
+        "variables3": "3 个工作流变量",
+        "variables25": "25 个工作流变量",
+        "variables100": "100 个工作流变量",
+        "variables500": "500 个工作流变量",
+        "variablesUnlimited": "无限工作流变量",
         "concurrent1": "1 个并发执行",
         "concurrent5": "5 个并发执行",
         "concurrent20": "20 个并发执行",
@@ -4840,6 +4968,10 @@
     "capExceededGeneric": "Member quota exceeded ({dimension}): {consumed} of {cap}. Ask your organization admin to raise this cap."
   },
   "settings": {
+    "nav": {
+      "scrollLeft": "向左滚动",
+      "scrollRight": "向右滚动"
+    },
     "unauthorized": "未授权访问",
     "mustBeLoggedIn": "您必须登录才能访问设置。",
     "signIn": "登录",
@@ -6482,7 +6614,8 @@
           "stubBody": "后端桥接处于桩模式（browser-use 0.12.x 不暴露 Chromium DevTools 端口）。身份验证 + 步骤流已激活；像素镜像将在上游绑定发布时到达。",
           "stubTitle": "实时屏幕录制不可用",
           "title": "浏览器代理 - 实时",
-          "waiting": "正在等待浏览器会话启动……"
+          "waiting": "正在等待浏览器会话启动……",
+          "taskFinishedLive": "代理已完成任务。页面仍然活动：您可以接管控制或关闭此面板。"
         },
         "status": {
           "completed": "已完成",
@@ -6501,7 +6634,8 @@
           "resume": "恢复代理",
           "title": "接管控制？"
         },
-        "viewLiveTrace": "查看实时浏览器"
+        "viewLiveTrace": "查看实时浏览器",
+        "tabLabel": "浏览器代理"
       }
     },
     "forms": {
@@ -8862,6 +8996,8 @@
       "toolCalls": "工具调用",
       "tools": "工具",
       "unknownAgent": "未知",
+      "agent": "代理",
+      "system": "系统",
       "unsavedChanges": "未保存的更改",
       "updateFailed": "更新任务失败",
       "updated": "已更新"

@@ -124,6 +124,40 @@ class DataSourceToolsProviderTest {
         }
 
         @Test
+        @DisplayName("where param advertises the full operator contract: enum, textual comparison warning, bare column name")
+        void whereParamAdvertisesOperatorContract() {
+            // Regression guard: 'where' used to say only "Format: {column, operator, value}" - the
+            // agent could not know the operator vocabulary, that ordering operators compare as TEXT
+            // (lexicographic), or that 'data.' prefixes are unnecessary, without a help round-trip.
+            when(vectorFeatureGate.isVectorAllowed()).thenReturn(false);
+            String whereDesc = provider.getTools().get(0).parameters().stream()
+                    .filter(p -> "where".equals(p.name()))
+                    .findFirst().orElseThrow().description();
+            assertThat(whereDesc)
+                    .contains("'IS NOT NULL'")
+                    .contains("'IN'")
+                    .contains("'LIKE'")
+                    .contains("lexicographic")
+                    .contains("no 'data.' prefix");
+        }
+
+        @Test
+        @DisplayName("action param documents each action group and the delete-all idiom (no bare 'See help')")
+        void actionParamDocumentsGroups() {
+            // Regression guard: the action description was a 40-char "See help for details." stub -
+            // 13 actions with zero guidance. It must name each group's key params and the
+            // delete-ALL-rows idiom (delete_rows requires a where; there is no truncate action).
+            when(vectorFeatureGate.isVectorAllowed()).thenReturn(false);
+            String actionDesc = provider.getTools().get(0).parameters().stream()
+                    .filter(p -> "action".equals(p.name()))
+                    .findFirst().orElseThrow().description();
+            assertThat(actionDesc)
+                    .contains("query_rows")
+                    .contains("update_rows (where + set)")
+                    .contains("operator:'IS NOT NULL'");
+        }
+
+        @Test
         @DisplayName("when vector is allowed, columns advertises the vector type and similarity is a real search")
         void vectorAllowedDescriptions() {
             when(vectorFeatureGate.isVectorAllowed()).thenReturn(true);

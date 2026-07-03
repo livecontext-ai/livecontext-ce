@@ -236,7 +236,7 @@ export function TaskExtrasEditor({ task, onSaved, only }: { task: Task; onSaved:
                 className={`flex items-center justify-center w-4 h-4 rounded border flex-shrink-0 ${
                   item.done ? 'bg-[var(--accent-primary)] border-[var(--accent-primary)] text-[var(--accent-foreground)]' : 'border-theme'
                 }`}>
-                {item.done && <span className="text-[10px] leading-none">✓</span>}
+                {item.done && <span className="text-xs leading-none">✓</span>}
               </button>
               <span className={`flex-1 text-xs ${item.done ? 'line-through text-theme-muted' : 'text-theme-primary'}`}>{item.text}</span>
               <button type="button" disabled={busy} aria-label="remove item"

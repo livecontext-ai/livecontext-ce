@@ -90,6 +90,12 @@ public class UnifiedExecutionEngine {
     @Autowired(required = false)
     private com.apimarketplace.orchestrator.services.streaming.redis.WorkflowRedisPublisher workflowRedisPublisher;
 
+    // Per-run {{$vars.*}} bundle (fetched once per run from auth-service).
+    // Optional: not wired in plain unit-test construction - resolution then
+    // degrades to "no variables defined".
+    @Autowired(required = false)
+    private com.apimarketplace.orchestrator.services.context.WorkflowVariableBundleCache workflowVariableBundleCache;
+
     // Generic per-node execution policy application (retry / backoff / continue-on-failure).
     // Default instance keeps plain unit-test construction working; Spring overrides via setter.
     // A node WITHOUT a nodePolicy block resolves to NodePolicy.DEFAULT → the runner is a pure
@@ -274,6 +280,15 @@ public class UnifiedExecutionEngine {
                     // active org from the context rather than re-reading the
                     // legacy metadata['__orgId__'] stash.
                     .withOrganization(tree.getOrganizationId(), tree.getOrganizationRole());
+
+                    // Attach the {{$vars.*}} bundle under globalData "vars" so
+                    // EvalContextBuilder and V2TemplateAdapter see it on every node.
+                    if (workflowVariableBundleCache != null) {
+                        context = context.withGlobalData(
+                            com.apimarketplace.orchestrator.services.template.VarsSyntaxNormalizer.VARS_NAMESPACE,
+                            workflowVariableBundleCache.getBundle(
+                                tree.getRunId(), tree.getTenantId(), tree.getOrganizationId()));
+                    }
 
                     ExecutionContext finalContext = traverseTree(
                         tree.getRootNode(),

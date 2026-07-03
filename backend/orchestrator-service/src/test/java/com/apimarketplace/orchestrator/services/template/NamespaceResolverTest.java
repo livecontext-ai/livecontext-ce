@@ -1071,4 +1071,114 @@ class NamespaceResolverTest {
             assertEquals(2, result);
         }
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // resolveVarsNamespace() - workflow variables bundle
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("resolveVarsNamespace()")
+    class ResolveVarsNamespaceTests {
+
+        // Real navigator so deep-path tests exercise actual JSON navigation
+        // into the bundle values rather than a stubbed answer.
+        private final NamespaceResolver realNavResolver = new NamespaceResolver(new PathNavigator());
+
+        @Test
+        @DisplayName("Should return the value for a simple variable name from the bundle")
+        void shouldReturnValueForSimpleName() {
+            // Arrange
+            Map<String, Object> globals = new HashMap<>();
+            globals.put("vars", Map.of("api_url", "https://api.example.com"));
+            when(context.getGlobalVariables()).thenReturn(globals);
+
+            // Act
+            Object result = resolver.resolveVarsNamespace("api_url", context);
+
+            // Assert
+            assertEquals("https://api.example.com", result);
+        }
+
+        @Test
+        @DisplayName("Should navigate a deeper path into a JSON-typed variable value")
+        void shouldNavigateDeeperPathIntoJsonValue() {
+            Map<String, Object> globals = new HashMap<>();
+            globals.put("vars", Map.of("config", Map.of("api", Map.of("url", "https://deep.example.com"))));
+            when(context.getGlobalVariables()).thenReturn(globals);
+
+            Object result = realNavResolver.resolveVarsNamespace("config.api.url", context);
+
+            assertEquals("https://deep.example.com", result);
+        }
+
+        @Test
+        @DisplayName("Should return null when the bundle is absent from global variables")
+        void shouldReturnNullWhenBundleAbsent() {
+            when(context.getGlobalVariables()).thenReturn(new HashMap<>());
+
+            Object result = resolver.resolveVarsNamespace("api_url", context);
+
+            assertNull(result);
+        }
+
+        @Test
+        @DisplayName("Should return null when the variable name is unknown in the bundle")
+        void shouldReturnNullWhenNameUnknown() {
+            Map<String, Object> globals = new HashMap<>();
+            globals.put("vars", Map.of("api_url", "https://api.example.com"));
+            when(context.getGlobalVariables()).thenReturn(globals);
+
+            Object result = resolver.resolveVarsNamespace("does_not_exist", context);
+
+            assertNull(result);
+        }
+
+        @Test
+        @DisplayName("Should return null for a null path")
+        void shouldReturnNullForNullPath() {
+            assertNull(resolver.resolveVarsNamespace(null, context));
+        }
+
+        @Test
+        @DisplayName("Should return null for an empty path")
+        void shouldReturnNullForEmptyPath() {
+            assertNull(resolver.resolveVarsNamespace("", context));
+        }
+
+        @Test
+        @DisplayName("Should return null when the vars global variable is not a map")
+        void shouldReturnNullWhenBundleIsNotAMap() {
+            Map<String, Object> globals = new HashMap<>();
+            globals.put("vars", "not-a-map");
+            when(context.getGlobalVariables()).thenReturn(globals);
+
+            Object result = resolver.resolveVarsNamespace("api_url", context);
+
+            assertNull(result);
+        }
+
+        @Test
+        @DisplayName("Should route vars.name through the vars branch of resolveVariable")
+        void shouldRouteVarsDottedPathThroughResolveVariable() {
+            Map<String, Object> globals = new HashMap<>();
+            globals.put("vars", Map.of("api_url", "https://api.example.com"));
+            when(context.getGlobalVariables()).thenReturn(globals);
+
+            Object result = resolver.resolveVariable("vars.api_url", context);
+
+            assertEquals("https://api.example.com", result);
+        }
+
+        @Test
+        @DisplayName("Should resolve the vars: prefix defensively in resolvePrefixedVariable")
+        void shouldResolveVarsPrefixDefensively() {
+            Map<String, Object> globals = new HashMap<>();
+            globals.put("vars", Map.of("api_url", "https://api.example.com"));
+            when(context.getGlobalVariables()).thenReturn(globals);
+
+            Object result = resolver.resolvePrefixedVariable("vars:api_url", context);
+
+            assertEquals("https://api.example.com", result);
+        }
+    }
 }

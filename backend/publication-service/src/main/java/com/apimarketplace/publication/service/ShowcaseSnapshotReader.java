@@ -45,9 +45,100 @@ public class ShowcaseSnapshotReader {
      * sets, plan…) shaped exactly like the orchestrator's
      * {@code /showcase/run-state} response so the existing frontend store
      * can ingest it without branching.
+     *
+     * <p>Self-heal for legacy snapshots whose {@code runState.edges} is empty:
+     * captures made before the per-epoch edge sourcing fix filtered edges
+     * through the JSONB epoch node view, which is empty for finished runs
+     * (closed epochs are pruned from the StateSnapshot), so every edge was
+     * dropped and the marketplace "All epochs" canvas showed no edge
+     * statusCounts. When that happens, synthesize the edge list from the
+     * snapshot's own {@code epochStates} sub-tree (durable per-epoch counts,
+     * the same source the working per-epoch view reads) - no republish needed.
      */
     public Optional<Map<String, Object>> readRunState(WorkflowPublicationEntity pub) {
-        return readSection(pub, "runState");
+        Optional<Map<String, Object>> section = readSection(pub, "runState");
+        if (section.isEmpty()) return section;
+
+        Object edges = section.get().get("edges");
+        if (edges instanceof List<?> list && !list.isEmpty()) {
+            return section;
+        }
+        List<Map<String, Object>> synthesized = synthesizeEdgesFromEpochStates(pub);
+        if (synthesized.isEmpty()) {
+            return section;
+        }
+        // Copy before patching - the section map backs the entity's JSONB and
+        // must stay intact for other readers / the persistence layer.
+        Map<String, Object> healed = new LinkedHashMap<>(section.get());
+        healed.put("edges", synthesized);
+        return Optional.of(healed);
+    }
+
+    /**
+     * Build a {@code runState.edges}-shaped list from the snapshot's
+     * {@code epochStates} sub-tree, summing counts per edge across epochs
+     * ("all epochs" semantics). Entries mirror the orchestrator's
+     * {@code EdgeState} serialization ({@code from}/{@code to}/{@code status}/
+     * {@code completedCount}/{@code skippedCount}/{@code totalCount}) plus a
+     * {@code statusCounts} map preserving statuses EdgeState cannot carry.
+     *
+     * <p><b>SYNC</b>: the parse/derive logic (arrow split, case-insensitive status
+     * summing, status precedence RUNNING &gt; FAILED &gt; COMPLETED &gt; SKIPPED) is
+     * mirrored by {@code ShowcaseSnapshotBuilder.epochEdgeStates} in
+     * orchestrator-service (the capture-time source for fresh snapshots). The two
+     * services share no module, so the copy lives here - keep both sides aligned.
+     */
+    private static List<Map<String, Object>> synthesizeEdgesFromEpochStates(WorkflowPublicationEntity pub) {
+        Map<String, Object> snap = pub.getShowcaseSnapshot();
+        Object epochStates = snap != null ? snap.get("epochStates") : null;
+        if (!(epochStates instanceof Map<?, ?> esMap) || esMap.isEmpty()) {
+            return List.of();
+        }
+
+        // edgeKey ("from->to") → status (uppercased) → summed count
+        Map<String, Map<String, Integer>> totals = new LinkedHashMap<>();
+        for (Object epochEntry : esMap.values()) {
+            if (!(epochEntry instanceof Map<?, ?> epochState)) continue;
+            Object edgesObj = epochState.get("edges");
+            if (!(edgesObj instanceof Map<?, ?> edgeMap)) continue;
+            for (Map.Entry<?, ?> edge : edgeMap.entrySet()) {
+                if (!(edge.getValue() instanceof Map<?, ?> counts)) continue;
+                Map<String, Integer> merged = totals.computeIfAbsent(
+                        String.valueOf(edge.getKey()), k -> new LinkedHashMap<>());
+                for (Map.Entry<?, ?> count : counts.entrySet()) {
+                    if (!(count.getValue() instanceof Number n)) continue;
+                    merged.merge(String.valueOf(count.getKey()).toUpperCase(Locale.ROOT),
+                            n.intValue(), Integer::sum);
+                }
+            }
+        }
+
+        List<Map<String, Object>> result = new ArrayList<>(totals.size());
+        for (Map.Entry<String, Map<String, Integer>> entry : totals.entrySet()) {
+            String key = entry.getKey();
+            int arrow = key.indexOf("->");
+            if (arrow <= 0 || arrow + 2 >= key.length()) continue;
+            Map<String, Integer> counts = entry.getValue();
+            int completed = counts.getOrDefault("COMPLETED", 0);
+            int skipped = counts.getOrDefault("SKIPPED", 0);
+            int failed = counts.getOrDefault("FAILED", 0);
+            int running = counts.getOrDefault("RUNNING", 0);
+            if (completed == 0 && skipped == 0 && failed == 0 && running == 0) continue;
+            String status = running > 0 ? "RUNNING"
+                    : failed > 0 ? "FAILED"
+                    : completed > 0 ? "COMPLETED"
+                    : "SKIPPED";
+            Map<String, Object> edge = new LinkedHashMap<>();
+            edge.put("from", key.substring(0, arrow));
+            edge.put("to", key.substring(arrow + 2));
+            edge.put("status", status);
+            edge.put("completedCount", completed);
+            edge.put("skippedCount", skipped);
+            edge.put("totalCount", completed + skipped);
+            edge.put("statusCounts", counts);
+            result.add(edge);
+        }
+        return result;
     }
 
     /**

@@ -134,6 +134,7 @@ const SPEL_SUGGESTIONS: SuggestionItem[] = [
   { label: 'core:split.output.items', insert: 'core:split.output.items', description: 'Split items list (persisted output)', category: 'variable', returnType: 'array' },
   { label: 'core:split.output.item_count', insert: 'core:split.output.item_count', description: 'Split total item count (persisted output)', category: 'variable', returnType: 'number' },
   { label: 'core:loop.output.iteration', insert: 'core:loop.output.iteration', description: 'Loop iteration (1-based)', category: 'variable', returnType: 'number' },
+  { label: '$vars.', insert: '$vars.', description: 'Workflow variable (reusable value from Settings > Credentials > Variables)', category: 'variable', returnType: 'any' },
   { label: 'true', insert: 'true', description: 'Boolean true', category: 'variable', returnType: 'boolean' },
   { label: 'false', insert: 'false', description: 'Boolean false', category: 'variable', returnType: 'boolean' },
   { label: 'null', insert: 'null', description: 'Null value', category: 'variable', returnType: 'any' },
@@ -228,10 +229,11 @@ export function ExpressionEditor({
     return depth > 0;
   }, []);
 
-  // Get current word for filtering
+  // Get current word for filtering. '$' is included so typing "$vars" filters
+  // to the workflow-variable suggestions.
   const getCurrentWord = React.useCallback((text: string, pos: number): string => {
     let start = pos;
-    while (start > 0 && /[\w.]/.test(text[start - 1])) {
+    while (start > 0 && /[\w.$]/.test(text[start - 1])) {
       start--;
     }
     return text.substring(start, pos);
@@ -432,9 +434,9 @@ export function ExpressionEditor({
 
     const cursorPos = getCursorPosition();
 
-    // Find word start to replace
+    // Find word start to replace ('$' included so "$vars" is replaced whole)
     let start = cursorPos;
-    while (start > 0 && /[\w.]/.test(value[start - 1])) {
+    while (start > 0 && /[\w.$]/.test(value[start - 1])) {
       start--;
     }
 
@@ -903,6 +905,7 @@ export function ExpressionEditor({
               <p><code className="bg-slate-100 dark:bg-slate-700 px-1 rounded">{'{{'}core:split.output.current_index{'}}'}</code> - Current index (in body nodes)</p>
               <p><code className="bg-slate-100 dark:bg-slate-700 px-1 rounded">{'{{'}core:split.output.items{'}}'}</code> - Full items list</p>
               <p><code className="bg-slate-100 dark:bg-slate-700 px-1 rounded">{'{{'}core:loop.output.iteration{'}}'}</code> - Loop iteration</p>
+              <p><code className="bg-slate-100 dark:bg-slate-700 px-1 rounded">{'{{'}$vars.name{'}}'}</code> - Workflow variable (Settings &gt; Credentials &gt; Variables)</p>
             </div>
           </div>
 

@@ -69,6 +69,29 @@ CDP_CLOSE_SESSION_GONE = 4404      # session no longer active
 CDP_CLOSE_SID_MISMATCH = 4403      # token sid != url sid
 
 
+import contextlib
+
+
+@contextlib.contextmanager
+def _viewer_scope(sess):
+    """Balance the session's live-view viewer bookkeeping.
+
+    Increments ``viewer_count`` on entry and ALWAYS decrements (+ stamps
+    ``last_viewer_disconnect``) on exit, whatever raised in between - the
+    endpoint lookup, the greeting send, or the bridge loop. A leaked
+    increment would make the runner's post-completion hold see a phantom
+    viewer, keeping Chromium open with nobody watching until the idle
+    timeout. ``sess`` may already be unregistered by exit time; plain field
+    writes on the dangling object are harmless then.
+    """
+    sess.viewer_count += 1
+    try:
+        yield sess
+    finally:
+        sess.viewer_count = max(0, sess.viewer_count - 1)
+        sess.last_viewer_disconnect = time.time()
+
+
 def _mark_session_activity(sess) -> None:
     """Refresh the takeover activity clock from a live user input.
 
@@ -130,112 +153,125 @@ async def cdp_websocket(
         await ws.close(code=CDP_CLOSE_SESSION_GONE, reason="session not active")
         return
 
-    # 3. Accept and announce.
+    # 3. Accept and announce. The viewer scope opens IMMEDIATELY after the
+    # increment: everything below (endpoint lookup, greeting send, bridge
+    # loop) can raise, and a leaked increment would make the runner's
+    # post-completion hold see a phantom viewer forever.
     await ws.accept()
-    logger.info(
-        "cdp ws accepted: session_id=%s run_id=%s node_id=%s user_id=%s",
-        session_id, run_id, node_id, user_id,
-    )
+    with _viewer_scope(sess):
+        logger.info(
+            "cdp ws accepted: session_id=%s run_id=%s node_id=%s user_id=%s viewers=%d",
+            session_id, run_id, node_id, user_id, sess.viewer_count,
+        )
 
-    # Resolve the live Chromium CDP WS URL. Two sources, in order:
-    #   1. In-process runner: BrowserAgentSession.cdp_endpoint_url + the
-    #      sibling .cdp_browser_url, both set by
-    #      runner.py::_extract_cdp_endpoints right after browser-use boots.
-    #   2. Docker-isolated runner: container publishes the URL on
-    #      `agent:browser:cdp:{session_id}` (15min TTL). cdp.py reads it.
-    #      Docker mode currently exposes only the page-level URL - tab
-    #      follow falls back to legacy single-page screencast in that case.
-    cdp_endpoint = sess.cdp_endpoint_url
-    cdp_browser_url = sess.cdp_browser_url
-    if not cdp_endpoint:
-        try:
-            redis = get_redis()
-            cdp_endpoint = await redis.get(f"agent:browser:cdp:{session_id}")
-            if isinstance(cdp_endpoint, bytes):
-                cdp_endpoint = cdp_endpoint.decode("utf-8", errors="ignore")
-        except Exception:
-            logger.debug("cdp endpoint Redis lookup failed", exc_info=True)
-            cdp_endpoint = None
-
-    bridge_mode = "live" if cdp_endpoint else "stub"
-
-    await _send_json(ws, {
-        "type": "greeting",
-        "session_id": session_id,
-        "run_id": run_id,
-        "node_id": node_id,
-        "step_index": sess.step_index,
-        "last_url": sess.last_url,
-        "bridge_mode": bridge_mode,
-    })
-
-    # 4. Drive the bridge.
-    #    LIVE mode: full bidirectional proxy to the Chromium CDP endpoint.
-    #    Frames flow client ↔ Chromium; we tap inbound to push PAUSE on
-    #    first Input.* and to tail the steps stream onto the same socket.
-    #    STUB mode: passive - only step-stream tail + PAUSE on first input.
-    pause_pushed = False
-
-    def _mark_user_activity() -> None:
-        # Every live user input (click/key/scroll/mouse-move) refreshes the
-        # activity clock + flags the takeover, so the runner's post-completion
-        # hold keeps Chromium open while the user is actively driving and
-        # releases it on inactivity.
-        _mark_session_activity(sess)
-
-    try:
-        tail = asyncio.create_task(_tail_steps_to_ws(ws, run_id, node_id))
-        try:
-            if bridge_mode == "live":
-                await _proxy_live_cdp(
-                    ws=ws,
-                    cdp_url=cdp_endpoint,
-                    browser_url=cdp_browser_url,
-                    run_id=run_id,
-                    node_id=node_id,
-                    on_pause_pushed=lambda: setattr(sess, "paused", True),
-                    on_user_activity=_mark_user_activity,
-                )
-            else:
-                while True:
-                    msg = await ws.receive_text()
-                    if _is_user_input(msg):
-                        _mark_user_activity()
-                        if not pause_pushed:
-                            await _push_pause(run_id, node_id)
-                            pause_pushed = True
-                            await _send_json(ws, {"type": "paused", "reason": "user_takeover"})
-                    await _send_json(ws, {"type": "ack", "echo": msg[:200]})
-        finally:
-            tail.cancel()
+        # Resolve the live Chromium CDP WS URL. Two sources, in order:
+        #   1. In-process runner: BrowserAgentSession.cdp_endpoint_url + the
+        #      sibling .cdp_browser_url, both set by
+        #      runner.py::_extract_cdp_endpoints right after browser-use boots.
+        #   2. Docker-isolated runner: container publishes the URL on
+        #      `agent:browser:cdp:{session_id}` (15min TTL). cdp.py reads it.
+        #      Docker mode currently exposes only the page-level URL - tab
+        #      follow falls back to legacy single-page screencast in that case.
+        cdp_endpoint = sess.cdp_endpoint_url
+        cdp_browser_url = sess.cdp_browser_url
+        if not cdp_endpoint:
             try:
-                await tail
-            except (asyncio.CancelledError, Exception):
-                pass
-    except WebSocketDisconnect:
-        logger.info("cdp ws disconnected: session_id=%s pause_pushed=%s mode=%s",
-                    session_id, pause_pushed, bridge_mode)
-    except Exception:
-        logger.exception("cdp ws bridge error: session_id=%s", session_id)
+                redis = get_redis()
+                cdp_endpoint = await redis.get(f"agent:browser:cdp:{session_id}")
+                if isinstance(cdp_endpoint, bytes):
+                    cdp_endpoint = cdp_endpoint.decode("utf-8", errors="ignore")
+            except Exception:
+                logger.debug("cdp endpoint Redis lookup failed", exc_info=True)
+                cdp_endpoint = None
+
+        bridge_mode = "live" if cdp_endpoint else "stub"
+
+        await _send_json(ws, {
+            "type": "greeting",
+            "session_id": session_id,
+            "run_id": run_id,
+            "node_id": node_id,
+            "step_index": sess.step_index,
+            "last_url": sess.last_url,
+            "bridge_mode": bridge_mode,
+        })
+
+        # 4. Drive the bridge.
+        #    LIVE mode: full bidirectional proxy to the Chromium CDP endpoint.
+        #    Frames flow client ↔ Chromium; we tap inbound to push PAUSE on
+        #    first Input.* and to tail the steps stream onto the same socket.
+        #    STUB mode: passive - only step-stream tail + PAUSE on first input.
+        pause_pushed = False
+
+        def _mark_user_activity() -> None:
+            # Every live user input (click/key/scroll/mouse-move) refreshes the
+            # activity clock + flags the takeover, so the runner's post-completion
+            # hold keeps Chromium open while the user is actively driving and
+            # releases it on inactivity.
+            _mark_session_activity(sess)
+
         try:
-            await ws.close(code=status.WS_1011_INTERNAL_ERROR)
+            tail = asyncio.create_task(_tail_steps_to_ws(ws, run_id, node_id))
+            try:
+                if bridge_mode == "live":
+                    await _proxy_live_cdp(
+                        ws=ws,
+                        cdp_url=cdp_endpoint,
+                        browser_url=cdp_browser_url,
+                        run_id=run_id,
+                        node_id=node_id,
+                        # Tags the PAUSE this proxy pushes on first user input
+                        # so a sibling session's consumer (post-completion
+                        # hold, loop iteration) requeues instead of
+                        # swallowing it - the live bridge is the PRIMARY
+                        # production path for takeover.
+                        session_id=session_id,
+                        on_pause_pushed=lambda: setattr(sess, "paused", True),
+                        on_user_activity=_mark_user_activity,
+                    )
+                else:
+                    while True:
+                        msg = await ws.receive_text()
+                        if _is_user_input(msg):
+                            _mark_user_activity()
+                            if not pause_pushed:
+                                await _push_pause(run_id, node_id, session_id)
+                                pause_pushed = True
+                                await _send_json(ws, {"type": "paused", "reason": "user_takeover"})
+                        await _send_json(ws, {"type": "ack", "echo": msg[:200]})
+            finally:
+                tail.cancel()
+                try:
+                    await tail
+                except (asyncio.CancelledError, Exception):
+                    pass
+        except WebSocketDisconnect:
+            logger.info("cdp ws disconnected: session_id=%s pause_pushed=%s mode=%s",
+                        session_id, pause_pushed, bridge_mode)
         except Exception:
-            pass
+            logger.exception("cdp ws bridge error: session_id=%s", session_id)
+            try:
+                await ws.close(code=status.WS_1011_INTERNAL_ERROR)
+            except Exception:
+                pass
 
 
 # Tuned screencast params - pulled out so the multi-tab swap path uses the
-# same payload as the single-page path. Frame budget (~120 KB at q=92,
-# 1200×675) sized so 15 fps stays under ~1.8 MB/s through Caddy + the
-# disabled-deflate Cloudflare WS tunnel. Tightening quality below 92 in
-# earlier tuning runs produced visible JPEG ringing on rendered text in
-# the side panel; widening past 1200 hit a fractional CSS scale ratio
-# that softened text via bilinear interpolation.
+# same payload as the single-page path. 1600×900 matches the 16:9 of the
+# agent's 1920×1080 viewport (a 1.2x downscale instead of the previous
+# 1.6x at 1200×675), so text survives the frontend's DPR-aware canvas on
+# wide side panels and retina displays. The frontend paints with
+# imageSmoothingQuality='high', which handles the fractional CSS scale
+# that used to soften text pre-DPR-fix. Frame budget ~170 KB at q=85 →
+# 15 fps stays under ~2.6 MB/s through Caddy + the disabled-deflate
+# Cloudflare WS tunnel (user-approved ~2x bandwidth for sharpness).
+# Below q=85 JPEG ringing becomes visible on rendered text.
 _SCREENCAST_PARAMS: dict[str, Any] = {
     "format": "jpeg",
-    "quality": 92,
+    "quality": 85,
     "everyNthFrame": 1,
-    "maxWidth": 1200,
-    "maxHeight": 675,
+    "maxWidth": 1600,
+    "maxHeight": 900,
 }
 
 
@@ -266,6 +302,7 @@ async def _proxy_live_cdp(
     browser_url: Optional[str] = None,
     run_id: str,
     node_id: str,
+    session_id: str = "",
     on_pause_pushed,
     on_user_activity=lambda: None,
 ) -> None:
@@ -297,19 +334,22 @@ async def _proxy_live_cdp(
     if not browser_url:
         await _proxy_live_cdp_single_page(
             ws=ws, cdp_url=cdp_url, run_id=run_id, node_id=node_id,
+            session_id=session_id,
             on_pause_pushed=on_pause_pushed, on_user_activity=on_user_activity,
             websockets=websockets,
         )
     else:
         await _proxy_live_cdp_multi_tab(
             ws=ws, initial_page_url=cdp_url, browser_url=browser_url,
-            run_id=run_id, node_id=node_id, on_pause_pushed=on_pause_pushed,
+            run_id=run_id, node_id=node_id, session_id=session_id,
+            on_pause_pushed=on_pause_pushed,
             on_user_activity=on_user_activity, websockets=websockets,
         )
 
 
 async def _proxy_live_cdp_single_page(
     *, ws: WebSocket, cdp_url: str, run_id: str, node_id: str,
+    session_id: str = "",
     on_pause_pushed, on_user_activity=lambda: None, websockets,
 ) -> None:
     """Legacy single-page proxy. See :func:`_proxy_live_cdp` docstring."""
@@ -334,7 +374,7 @@ async def _proxy_live_cdp_single_page(
                     if _is_user_input(msg):
                         on_user_activity()
                         if not pause_pushed:
-                            await _push_pause(run_id, node_id)
+                            await _push_pause(run_id, node_id, session_id)
                             pause_pushed = True
                             on_pause_pushed()
                             await _send_json(ws, {"type": "paused", "reason": "user_takeover"})
@@ -376,7 +416,8 @@ async def _proxy_live_cdp_single_page(
 
 async def _proxy_live_cdp_multi_tab(
     *, ws: WebSocket, initial_page_url: str, browser_url: str,
-    run_id: str, node_id: str, on_pause_pushed,
+    run_id: str, node_id: str, session_id: str = "",
+    on_pause_pushed,
     on_user_activity=lambda: None, websockets,
 ) -> None:
     """Multi-tab proxy. Subscribes to browser-level ``Target.*`` events and
@@ -529,7 +570,7 @@ async def _proxy_live_cdp_multi_tab(
                     if _is_user_input(msg):
                         on_user_activity()
                         if not pause_pushed:
-                            await _push_pause(run_id, node_id)
+                            await _push_pause(run_id, node_id, session_id)
                             pause_pushed = True
                             on_pause_pushed()
                             await _send_json(ws, {"type": "paused", "reason": "user_takeover"})
@@ -659,19 +700,24 @@ def _is_user_input(msg: str) -> bool:
     return isinstance(method, str) and method.startswith("Input.")
 
 
-async def _push_pause(run_id: str, node_id: str) -> None:
+async def _push_pause(run_id: str, node_id: str, session_id: str = "") -> None:
     """LPUSH a PAUSE control to the runner so it pauses at the next step.
 
     The runner's ``_drain_control`` picks this up before its next
     ``agent.step()`` call. Mirrors the agent.py /agent/sessions/{id}/abort
-    pattern.
+    pattern. ``session_id`` (when known) tags the command so a control
+    consumer for ANOTHER session sharing the same (run_id, node_id) key
+    requeues it instead of swallowing it.
     """
     if not run_id or not node_id:
         logger.warning("push_pause: missing run_id/node_id, skipping")
         return
     redis = get_redis()
     key = control_key(run_id, node_id)
-    await redis.lpush(key, json.dumps({"cmd": "PAUSE"}))
+    payload = {"cmd": "PAUSE"}
+    if session_id:
+        payload["session_id"] = session_id
+    await redis.lpush(key, json.dumps(payload))
     await redis.expire(key, 600)
 
 

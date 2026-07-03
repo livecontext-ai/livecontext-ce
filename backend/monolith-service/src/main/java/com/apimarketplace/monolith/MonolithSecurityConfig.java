@@ -1,6 +1,8 @@
 package com.apimarketplace.monolith;
 
+import com.apimarketplace.auth.dto.UserResolutionResponse;
 import com.apimarketplace.auth.security.JwtKeyPairManager;
+import com.apimarketplace.auth.service.ApiKeyService;
 import com.apimarketplace.common.web.GatewayFilterProperties;
 import com.apimarketplace.common.web.MonolithSecurityFilter;
 import com.apimarketplace.publication.service.SharedLinkService;
@@ -27,7 +29,8 @@ public class MonolithSecurityConfig {
     @Bean
     public MonolithSecurityFilter monolithSecurityFilter(GatewayFilterProperties properties,
                                                          JwtKeyPairManager keyPairManager,
-                                                         SharedLinkService sharedLinkService) {
+                                                         SharedLinkService sharedLinkService,
+                                                         ApiKeyService apiKeyService) {
         return new MonolithSecurityFilter(
                 keyPairManager::getPublicKey,
                 properties.getPublicPaths(),
@@ -38,7 +41,26 @@ public class MonolithSecurityConfig {
                                 link.getResourceType().name(),
                                 link.getResourceToken(),
                                 link.getResourceId() != null ? link.getResourceId().toString() : null))
-                        .orElse(null)
+                        .orElse(null),
+                // API-key auth (X-API-Key / "Bearer lc_live_..."), same trust model as the cloud
+                // gateway's ApiKeyResolver: the lc_live_ key resolves to its owner's identity.
+                apiKey -> {
+                    UserResolutionResponse resolved = apiKeyService.resolveByPlaintextKey(apiKey);
+                    if (resolved == null || !resolved.canMakeRequest()) {
+                        return null;
+                    }
+                    return new MonolithSecurityFilter.JwtClaims(
+                            String.valueOf(resolved.getUserId()),
+                            resolved.getProviderId(),
+                            resolved.getEmail(),
+                            resolved.getRoles() != null ? String.join(",", resolved.getRoles()) : "USER",
+                            resolved.getDefaultOrganizationId(),
+                            resolved.getDefaultOrganizationRole(),
+                            resolved.getMemberships().stream()
+                                    .map(m -> new MonolithSecurityFilter.OrgMembershipClaim(
+                                            m.getOrgId(), m.getRole(), m.isPersonal(), m.isPaused()))
+                                    .toList());
+                }
         );
     }
 

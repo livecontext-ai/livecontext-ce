@@ -45,6 +45,7 @@ const messages = {
           stubTitle: 'Live screencast unavailable',
           stubBody: 'stub',
           clickToTakeControl: 'Click to take control',
+          taskFinishedLive: 'Agent finished - page stays live',
         },
         takeover: { title: 't', description: 'd', cancel: 'c', confirm: 'ok', resume: 'Resume agent', banner: 'You have control' },
       },
@@ -381,6 +382,106 @@ describe('BrowserLiveCdpPanel - takeover (take control / resume)', () => {
     await waitFor(() => expect(postMock).toHaveBeenCalledWith(
       '/internal/browser-agent/runs/run_9/nodes/node_9/takeover-resume', { session_id: 'ses_9' },
     ));
+  });
+});
+
+/**
+ * Post-completion detached hold: the runner now keeps Chromium open after
+ * the task completes while this panel is connected, so a `final` step on a
+ * LIVE bridge must NOT kill the interactive canvas - the user can still
+ * take control of the final page. Terminal states remain: `final` in stub
+ * mode, `error`/`terminated`, and WS close 4404.
+ */
+describe('BrowserLiveCdpPanel - task finished but page still live (detached hold)', () => {
+  const realWS = (globalThis as any).WebSocket;
+  const realRO = (globalThis as any).ResizeObserver;
+
+  beforeEach(() => {
+    getMock.mockReset();
+    getMock.mockRejectedValue({ status: 404 });
+    postMock.mockReset();
+    postMock.mockResolvedValue({ status: 'resumed' });
+    wsSent = [];
+    wsLast = null;
+    (globalThis as any).WebSocket = FakeWebSocket as any;
+    (globalThis as any).ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+  });
+
+  afterEach(() => {
+    (globalThis as any).WebSocket = realWS;
+    (globalThis as any).ResizeObserver = realRO;
+  });
+
+  function renderLive() {
+    return render(
+      <NextIntlClientProvider locale="en" messages={messages as any} onError={() => {}}>
+        <BrowserLiveCdpPanel
+          nodeId="node_h"
+          runId="run_h"
+          sessionId="ses_h"
+          cdpWsUrl="ws://internal/cdp/ses_h"
+          cdpToken="tok"
+          status="running"
+          embedded
+          onClose={() => {}}
+        />
+      </NextIntlClientProvider>,
+    );
+  }
+
+  function pushStep(payload: Record<string, unknown>) {
+    wsLast?.onmessage?.({ data: JSON.stringify({ type: 'step_event', payload }) });
+  }
+
+  it('keeps the live canvas and Take control after a `final` step on a live bridge', async () => {
+    renderLive();
+    await screen.findByTitle('Browser agent screencast');
+    await act(async () => { pushStep({ type: 'final', step_index: 2 }); });
+    // Interactive surface survives the task completion.
+    expect(screen.getByTitle('Browser agent screencast')).toBeTruthy();
+    expect(screen.getByText('Click to take control')).toBeTruthy();
+    // And the user is told the agent is done while the page stays live.
+    expect(screen.getByText('Agent finished - page stays live')).toBeTruthy();
+    expect(screen.queryByText('Session ended')).toBeNull();
+  });
+
+  it('still allows taking control after the task finished', async () => {
+    renderLive();
+    await screen.findByTitle('Browser agent screencast');
+    await act(async () => { pushStep({ type: 'final', step_index: 2 }); });
+    fireEvent.click(screen.getByText('Click to take control'));
+    expect(screen.getByText('You have control')).toBeTruthy();
+    // The finished ribbon yields to the takeover banner (single top bar).
+    expect(screen.queryByText('Agent finished - page stays live')).toBeNull();
+  });
+
+  it('`final` on a STUB bridge stays terminal (nothing interactive to hold for)', async () => {
+    (globalThis as any).WebSocket = class extends FakeWebSocket {
+      constructor(url: string) {
+        super(url);
+        queueMicrotask(() => {
+          this.onmessage?.({ data: JSON.stringify({ type: 'greeting', bridge_mode: 'stub' }) });
+        });
+      }
+    } as any;
+    renderLive();
+    await screen.findByText('Live screencast unavailable');
+    await act(async () => { pushStep({ type: 'final', step_index: 1 }); });
+    // Stub mode has no canvas; the disconnect-relabel event path relies on
+    // sessionEnded flipping - pin it via the header state (no take-control).
+    expect(screen.queryByText('Click to take control')).toBeNull();
+  });
+
+  it('`error` remains terminal even on a live bridge (crash paths tear down inline)', async () => {
+    renderLive();
+    await screen.findByTitle('Browser agent screencast');
+    await act(async () => { pushStep({ type: 'error', step_index: 1 }); });
+    // sessionEnded → liveAvailable false → canvas gone.
+    expect(screen.queryByTitle('Browser agent screencast')).toBeNull();
   });
 });
 

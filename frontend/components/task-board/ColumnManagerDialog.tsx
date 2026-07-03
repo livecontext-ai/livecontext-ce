@@ -218,7 +218,7 @@ export function ColumnManagerDialog({ statuses, onClose, onChanged }: {
                 </Select>
               )}
               <div className="flex items-center gap-1 flex-shrink-0">
-                <span className="text-[10px] uppercase tracking-wide text-theme-muted">{t('manageColumns.wipPlaceholder')}</span>
+                <span className="text-xs uppercase tracking-wide text-theme-muted">{t('manageColumns.wipPlaceholder')}</span>
                 <Input
                   data-testid={`column-wip-${s.key}`}
                   type="number"

@@ -60,7 +60,7 @@ public class AgentScalingConfig {
 
     /**
      * Worker pool sizes - independently configurable per agent type.
-     * Agent loops are long-running (1-65 min), classify/guardrail are fast (1-5s).
+     * Agent loops are long-running (up to the 7200s executionTimeout contract), classify/guardrail are fast (1-5s).
      */
     public static class Worker {
         /** Thread pool size for full agent loop execution. Default: 8. */

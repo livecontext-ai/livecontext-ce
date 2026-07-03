@@ -43,12 +43,14 @@ class AgentTaskRecurrenceServiceTest {
     @Mock private AgentTaskRecurrenceRepository recurrenceRepository;
     @Mock private AgentTaskRepository taskRepository;
     @Mock private AgentRepository agentRepository;
+    @Mock private TaskBoardPublisher taskBoardPublisher;
 
     private AgentTaskRecurrenceService service;
 
     @BeforeEach
     void setUp() {
         service = new AgentTaskRecurrenceService(recurrenceRepository, taskRepository, agentRepository);
+        service.setTaskBoardPublisher(taskBoardPublisher);
     }
 
     @Test
@@ -138,10 +140,11 @@ class AgentTaskRecurrenceServiceTest {
     }
 
     @Test
-    @DisplayName("fireOnce copies the recurrence template into one task and skips missed intervals")
+    @DisplayName("fireOnce claims the fire slot then copies the template into one task, skipping missed intervals")
     void fireOnceCopiesTemplateIntoOneTaskAndSkipsMissedIntervals() {
         AgentTaskRecurrenceEntity recurrence = recurrence();
-        recurrence.setNextFireAt(Instant.now().minusSeconds(3600));
+        Instant staleNextFire = Instant.now().minusSeconds(3600);
+        recurrence.setNextFireAt(staleNextFire);
         recurrence.setFireCount(7);
         Map<String, Object> context = new HashMap<>();
         context.put("workspace", "sales");
@@ -152,8 +155,8 @@ class AgentTaskRecurrenceServiceTest {
             task.setId(UUID.fromString("33333333-3333-3333-3333-333333333333"));
             return task;
         });
-        when(recurrenceRepository.save(any(AgentTaskRecurrenceEntity.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(recurrenceRepository.claimFireSlot(any(UUID.class), any(Instant.class),
+                any(Instant.class), any(Instant.class))).thenReturn(1);
 
         Optional<AgentTaskEntity> result = service.fireOnce(recurrence);
 
@@ -173,10 +176,77 @@ class AgentTaskRecurrenceServiceTest {
         assertThat(task.getStatus()).isEqualTo(AgentTaskEntity.STATUS_PENDING);
         assertThat(task.getDepth()).isZero();
 
-        assertThat(recurrence.getFireCount()).isEqualTo(8);
-        assertThat(recurrence.getLastFiredAt()).isNotNull();
-        assertThat(recurrence.getNextFireAt()).isAfter(recurrence.getLastFiredAt());
-        verify(recurrenceRepository).save(recurrence);
+        // The tracker advances via the CAS claim, not an entity save: expected =
+        // the stale next_fire_at read from findDue, next = strictly in the future
+        // (single-step catch-up past all missed windows).
+        ArgumentCaptor<Instant> expectedCaptor = ArgumentCaptor.forClass(Instant.class);
+        ArgumentCaptor<Instant> nextCaptor = ArgumentCaptor.forClass(Instant.class);
+        verify(recurrenceRepository).claimFireSlot(
+                org.mockito.ArgumentMatchers.eq(recurrence.getId()),
+                expectedCaptor.capture(), nextCaptor.capture(), any(Instant.class));
+        assertThat(expectedCaptor.getValue()).isEqualTo(staleNextFire);
+        assertThat(nextCaptor.getValue()).isAfter(Instant.now().minusSeconds(1));
+        verify(recurrenceRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("fireOnce publishes task_created so open boards see the cron-spawned task live")
+    void fireOncePublishesTaskCreated() {
+        // Regression: fireOnce saved the task directly with no TaskBoardPublisher
+        // wiring - every other creation path publishes via assignTask, so
+        // cron-spawned tasks stayed invisible on an open board until the slow poll.
+        AgentTaskRecurrenceEntity recurrence = recurrence();
+        when(taskRepository.save(any(AgentTaskEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(recurrenceRepository.claimFireSlot(any(UUID.class), any(Instant.class),
+                any(Instant.class), any(Instant.class))).thenReturn(1);
+
+        Optional<AgentTaskEntity> result = service.fireOnce(recurrence);
+
+        assertThat(result).isPresent();
+        verify(taskBoardPublisher).publishTaskCreated(TENANT_ID, result.get());
+    }
+
+    @Test
+    @DisplayName("fireOnce publishes nothing when the fire slot claim loses")
+    void fireOncePublishesNothingWhenClaimLoses() {
+        AgentTaskRecurrenceEntity recurrence = recurrence();
+        when(recurrenceRepository.claimFireSlot(any(UUID.class), any(Instant.class),
+                any(Instant.class), any(Instant.class))).thenReturn(0);
+
+        service.fireOnce(recurrence);
+
+        org.mockito.Mockito.verifyNoInteractions(taskBoardPublisher);
+    }
+
+    @Test
+    @DisplayName("fireOnce spawns nothing when the fire slot was already claimed by a concurrent tick")
+    void fireOnceSpawnsNothingWhenFireSlotAlreadyClaimed() {
+        // Regression: ShedLock lockAtMostFor expiry (or clock skew) lets a second
+        // instance re-fetch the same due row. Pre-fix, fireOnce created the task
+        // unconditionally and BOTH instances spawned one. Post-fix, the losing
+        // CAS claim (0 rows updated) must spawn nothing.
+        AgentTaskRecurrenceEntity recurrence = recurrence();
+        when(recurrenceRepository.claimFireSlot(any(UUID.class), any(Instant.class),
+                any(Instant.class), any(Instant.class))).thenReturn(0);
+
+        Optional<AgentTaskEntity> result = service.fireOnce(recurrence);
+
+        assertThat(result).isEmpty();
+        verify(taskRepository, never()).save(any());
+        verify(recurrenceRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("fireOnce skips a row with no next_fire_at instead of firing unconditionally")
+    void fireOnceSkipsRowWithoutNextFireAt() {
+        AgentTaskRecurrenceEntity recurrence = recurrence();
+        recurrence.setNextFireAt(null);
+
+        Optional<AgentTaskEntity> result = service.fireOnce(recurrence);
+
+        assertThat(result).isEmpty();
+        verify(taskRepository, never()).save(any());
+        verify(recurrenceRepository, never()).claimFireSlot(any(), any(), any(), any());
     }
 
     @Test

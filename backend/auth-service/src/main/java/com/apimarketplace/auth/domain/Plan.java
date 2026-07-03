@@ -72,6 +72,11 @@ public class Plan {
     @Column(name = "max_workspaces")
     private Integer maxWorkspaces;
 
+    // Max workflow variables ({{$vars.name}}) per scope. NULL = unlimited.
+    // See V383__workflow_variables.sql for seed values (FREE=3).
+    @Column(name = "max_workflow_variables")
+    private Integer maxWorkflowVariables;
+
     // Constructeurs
     public Plan() {}
 
@@ -226,6 +231,14 @@ public class Plan {
         this.maxWorkspaces = maxWorkspaces;
     }
 
+    public Integer getMaxWorkflowVariables() {
+        return maxWorkflowVariables;
+    }
+
+    public void setMaxWorkflowVariables(Integer maxWorkflowVariables) {
+        this.maxWorkflowVariables = maxWorkflowVariables;
+    }
+
     /**
      * Returns the configured creation limit for the given resource type.
      * NULL means unlimited (consistent with included_* quotas).
@@ -239,6 +252,7 @@ public class Plan {
             case "INTERFACE"  -> maxInterfaces;
             case "APPLICATION" -> maxApplications;
             case "PUBLICATION" -> maxPublications;
+            case "WORKFLOW_VARIABLE" -> maxWorkflowVariables;
             default -> null;
         };
     }

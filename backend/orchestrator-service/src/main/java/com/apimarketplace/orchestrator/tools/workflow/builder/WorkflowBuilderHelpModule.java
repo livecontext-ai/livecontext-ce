@@ -116,6 +116,19 @@ public class WorkflowBuilderHelpModule implements ToolModule {
         sessionMgmt.put("execute", "Run the saved workflow. Must finish/save first. Params: data_inputs (optional)");
         actions.put("session_management", sessionMgmt);
 
+        Map<String, String> runInspection = new LinkedHashMap<>();
+        runInspection.put("runs", "List recent runs of a workflow. Params: workflow_id (required), limit");
+        runInspection.put("get_run", "Snapshot of a run, without blocking. Params: run_id (required); " +
+            "omit epoch for the macro overview, pass epoch=N for that epoch's per-node detail.");
+        runInspection.put("wait_run", "Block until the run finishes (or needs input), then return the same report as get_run. " +
+            "Params: run_id (required), timeout_seconds (default 120, max 240). " +
+            "Returns as soon as the run leaves the running state - including paused/awaiting-input states, since those wait on " +
+            "an action from you or the user. On timeout the response has timed_out=true and the run keeps going: call wait_run " +
+            "again to keep waiting. After an execute, ONE wait_run replaces a get_run poll loop.");
+        runInspection.put("get_node_output", "Full output/error of a single node in a run. Params: run_id, epoch, node_id " +
+            "(+ optional item_index / iteration / spawn / field paging)");
+        actions.put("run_inspection", runInspection);
+
         actions.put("node_operations", Map.of(
             "add_node", "Add a node. Params: type (required), label (required), params={...}, connect_after (label of predecessor)",
             "modify", "Modify a node's params. Params: node (label), params={...}, connect_after (optional - replaces the incoming connection with a new one from the specified predecessor). params MERGES into the existing node (keys you omit are kept). To DELETE a param key, set it to null, e.g. params={AccountSid: null}. The response's changes.after shows the node's real post-merge value, so check it to confirm a deletion took effect.",

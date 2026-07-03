@@ -68,13 +68,21 @@ public class RedisStreamStateService implements StreamStateService {
     }
 
     @Override
-    public Mono<StreamMetadata> registerExternalStream(String streamId, String conversationId, String model, String provider) {
-        StreamMetadata metadata = StreamMetadata.create(streamId, "internal", conversationId, model, provider);
+    public Mono<StreamMetadata> registerExternalStream(String streamId, String conversationId, String model, String provider,
+                                                       String ownerUserId) {
+        // Attribute the stream to the conversation OWNER when known. The owner
+        // attribution feeds the stream:user:{userId} index that /streams/active
+        // reads, so the main chat page auto-attaches to externally-driven runs
+        // (workflow agent nodes, task assignees). "internal" keeps the legacy
+        // metadata-only behavior (no user index) and delete() stays symmetric:
+        // it removes the user-index entry via the userId stored in the metadata.
+        String userId = (ownerUserId != null && !ownerUserId.isBlank()) ? ownerUserId : "internal";
+        StreamMetadata metadata = StreamMetadata.create(streamId, userId, conversationId, model, provider);
 
         String key = streamKey(streamId);
         Map<String, String> fields = new HashMap<>();
         fields.put("streamId", streamId);
-        fields.put("userId", "internal");
+        fields.put("userId", userId);
         fields.put("conversationId", conversationId != null ? conversationId : "");
         fields.put("model", model != null ? model : "");
         fields.put("provider", provider != null ? provider : "");
@@ -83,11 +91,17 @@ public class RedisStreamStateService implements StreamStateService {
         fields.put("lastActivity", metadata.lastActivity().toString());
         fields.put("contentLength", "0");
 
+        Mono<Boolean> userIndex = "internal".equals(userId)
+                ? Mono.just(true)
+                : indexByUserId(userId, streamId);
+
         return redisTemplate.opsForHash().putAll(key, fields)
                 .then(redisTemplate.expire(key, StreamRedisKeys.STREAM_TTL))
                 .then(indexByConversationId(conversationId, streamId))
+                .then(userIndex)
                 .thenReturn(metadata)
-                .doOnSuccess(m -> log.info("✅ [STREAM] Registered external stream: {} for conversation: {}", streamId, conversationId))
+                .doOnSuccess(m -> log.info("✅ [STREAM] Registered external stream: {} for conversation: {} (owner: {})",
+                        streamId, conversationId, userId))
                 .doOnError(e -> log.error("❌ [STREAM] Failed to register external stream: {}", e.getMessage()));
     }
 

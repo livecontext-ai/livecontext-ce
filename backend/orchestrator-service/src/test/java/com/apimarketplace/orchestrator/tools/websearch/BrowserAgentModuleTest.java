@@ -63,6 +63,83 @@ class BrowserAgentModuleTest {
     }
 
     @Test
+    @DisplayName("agent_browse from a workflow-hosted agent: meta hash records runType=workflow + "
+            + "workflowRunId + hostNodeId, and workflow WINS over the agent-entity conversationId")
+    @SuppressWarnings("unchecked")
+    void agentBrowseWorkflowHostedMetaHash() throws Exception {
+        when(config.getBrowserAgentBlpopTimeout()).thenReturn(150);
+        when(config.getCallbackBaseUrl()).thenReturn("http://orchestrator:8099");
+        when(redisTemplate.opsForList()).thenReturn(listOps);
+        org.springframework.data.redis.core.HashOperations<String, Object, Object> hashOps =
+                mock(org.springframework.data.redis.core.HashOperations.class);
+        when(redisTemplate.opsForHash()).thenReturn((org.springframework.data.redis.core.HashOperations) hashOps);
+        when(listOps.leftPop(eq("agent:browser:result:job-wf"), any(Duration.class)))
+                .thenReturn("{\"final_result\":\"done\",\"stop_reason\":\"COMPLETED\"}");
+        when(restTemplate.postForObject(eq(SERVICE_URL + "/jobs/submit"), any(), eq(Map.class)))
+                .thenReturn(Map.of("job_id", "job-wf"));
+
+        // A generic workflow agent node: has BOTH an agent-entity conversation
+        // (nobody watches it during the run) and the hosting workflow pair.
+        ToolExecutionContext context = new ToolExecutionContext(
+                "user-1",
+                Map.of(
+                        "__streamId__", "stream-1",
+                        "__toolCallId__", "call-1",
+                        "conversationId", "conv-agent-entity",
+                        "__workflowRunId__", "wf-run-9",
+                        "__workflowNodeId__", "agent_1"),
+                Map.of(), java.util.Set.of(), null, null, null, null);
+
+        module.execute("agent_browse",
+                Map.of("task", "x", "llm", Map.of("provider", "openai", "model", "gpt-4o")),
+                null, context);
+
+        ArgumentCaptor<Map<Object, Object>> fieldsCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(hashOps).putAll(eq("agent:browse:meta:stream-1:call-1"), fieldsCaptor.capture());
+        Map<Object, Object> fields = fieldsCaptor.getValue();
+        assertThat(fields)
+                .containsEntry("runType", "workflow")
+                .containsEntry("workflowRunId", "wf-run-9")
+                .containsEntry("hostNodeId", "agent_1")
+                .containsEntry("userId", "user-1")
+                .doesNotContainKey("conversationId");
+    }
+
+    @Test
+    @DisplayName("agent_browse from plain chat: meta hash keeps the conversationId chat routing")
+    @SuppressWarnings("unchecked")
+    void agentBrowseChatMetaHashUnchanged() throws Exception {
+        when(config.getBrowserAgentBlpopTimeout()).thenReturn(150);
+        when(config.getCallbackBaseUrl()).thenReturn("http://orchestrator:8099");
+        when(redisTemplate.opsForList()).thenReturn(listOps);
+        org.springframework.data.redis.core.HashOperations<String, Object, Object> hashOps =
+                mock(org.springframework.data.redis.core.HashOperations.class);
+        when(redisTemplate.opsForHash()).thenReturn((org.springframework.data.redis.core.HashOperations) hashOps);
+        when(listOps.leftPop(eq("agent:browser:result:job-chat"), any(Duration.class)))
+                .thenReturn("{\"final_result\":\"done\",\"stop_reason\":\"COMPLETED\"}");
+        when(restTemplate.postForObject(eq(SERVICE_URL + "/jobs/submit"), any(), eq(Map.class)))
+                .thenReturn(Map.of("job_id", "job-chat"));
+
+        ToolExecutionContext context = new ToolExecutionContext(
+                "user-1",
+                Map.of(
+                        "__streamId__", "stream-1",
+                        "__toolCallId__", "call-1",
+                        "conversationId", "conv-chat"),
+                Map.of(), java.util.Set.of(), null, null, null, null);
+
+        module.execute("agent_browse",
+                Map.of("task", "x", "llm", Map.of("provider", "openai", "model", "gpt-4o")),
+                null, context);
+
+        ArgumentCaptor<Map<Object, Object>> fieldsCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(hashOps).putAll(eq("agent:browse:meta:stream-1:call-1"), fieldsCaptor.capture());
+        assertThat(fieldsCaptor.getValue())
+                .containsEntry("conversationId", "conv-chat")
+                .doesNotContainKey("runType");
+    }
+
+    @Test
     @DisplayName("canHandle covers all five browser actions and only those")
     void canHandleSet() {
         assertThat(module.canHandle("agent_browse")).isTrue();

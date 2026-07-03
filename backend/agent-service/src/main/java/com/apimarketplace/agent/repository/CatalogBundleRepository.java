@@ -17,6 +17,8 @@ public interface CatalogBundleRepository extends JpaRepository<CatalogBundleEnti
 
     Optional<CatalogBundleEntity> findTopByOrderByVersionDesc();
 
+    java.util.List<CatalogBundleEntity> findByActiveFalseOrderByVersionDesc();
+
     /**
      * Atomically clear the active flag on every row. Callers run this inside
      * the same TX as a subsequent {@code save(newActive)} so the partial

@@ -73,7 +73,8 @@ class WorkflowPublishApplicationAutoPromotionIntegrationTest {
                 mock(WorkflowManagementService.class), runRepository,
                 mock(AgentWorkflowFireService.class), mock(WorkflowPlanVersionService.class),
                 mock(WorkflowPinService.class), publicationClient,
-                mock(CredentialClient.class), workflowRepository, resolver);
+                mock(CredentialClient.class), workflowRepository, resolver,
+                mock(com.apimarketplace.orchestrator.tools.utility.AgentCancellationProbe.class));
     }
 
     private WorkflowEntity persistWorkflow(String name, Map<String, Object> plan) {

@@ -22,7 +22,7 @@ import { useExecutionPagedResource } from '@/hooks/agent/useExecutionPagedResour
 import { LoadOlderSentinel } from '@/components/agent-fleet/LoadOlderSentinel';
 import { useSidePanelSafe } from '@/contexts/SidePanelContext';
 import { AgentPanelContent, AGENT_CONVERSATION_TAB } from '@/components/app/AgentPanelContent';
-import { StatusIcon, PriorityBadge } from './TaskListView';
+import { StatusIcon, PriorityBadge } from './TaskBadges';
 import { CreateTaskDialog } from './CreateTaskDialog';
 import { TaskExtrasEditor } from './TaskExtrasEditor';
 import { cn } from '@/lib/utils';
@@ -42,6 +42,8 @@ interface TaskDetailPanelProps {
   labels?: TaskLabel[];
   /** Pre-stage a status transition (e.g. drag from pending → in_progress column) */
   initialStagedStatus?: TaskStatus;
+  /** VIEWER org-role: browse-only panel - every mutating control is hidden or disabled. */
+  readOnly?: boolean;
   onClose: () => void;
   onRefresh: () => void;
   onSelectTask?: (taskId: string) => void;
@@ -164,7 +166,7 @@ function useTaskStagedEdits(task: Task | null, initialStagedStatus?: TaskStatus)
   };
 }
 
-export function TaskDetailPanel({ taskId, agents, people = [], statuses = [], labels = [], initialStagedStatus, onClose, onRefresh, onSelectTask }: TaskDetailPanelProps) {
+export function TaskDetailPanel({ taskId, agents, people = [], statuses = [], labels = [], initialStagedStatus, readOnly = false, onClose, onRefresh, onSelectTask }: TaskDetailPanelProps) {
   const t = useTranslations('taskBoard');
   const { user, avatarUrl: userAvatarUrl } = useAuth();
   const [task, setTask] = useState<Task | null>(null);
@@ -572,7 +574,7 @@ export function TaskDetailPanel({ taskId, agents, people = [], statuses = [], la
           <div className="flex-1 min-w-0">
             <EditableText
               value={task.title}
-              disabled={false}
+              disabled={readOnly}
               onSave={(v) => handleUpdate({ title: v })}
               className="text-base font-semibold text-theme-primary leading-snug"
             />
@@ -637,7 +639,7 @@ export function TaskDetailPanel({ taskId, agents, people = [], statuses = [], la
           {/* Tab content */}
           <div className="flex-1 overflow-y-auto p-5">
             {activeTab === 'overview' && (
-              <OverviewTab task={task} childTasks={children} agents={agents} people={people} agentMap={agentMap} isTerminal={isTerminal} onUpdate={handleUpdate} onRefresh={() => { loadData(); onRefresh(); }} onSelectTask={onSelectTask} t={t} />
+              <OverviewTab task={task} childTasks={children} agents={agents} people={people} agentMap={agentMap} isTerminal={isTerminal} readOnly={readOnly} onUpdate={handleUpdate} onRefresh={() => { loadData(); onRefresh(); }} onSelectTask={onSelectTask} t={t} />
             )}
             {activeTab === 'notes' && (
               <NotesTab
@@ -648,6 +650,7 @@ export function TaskDetailPanel({ taskId, agents, people = [], statuses = [], la
                 noteContent={noteContent}
                 setNoteContent={setNoteContent}
                 submitting={submitting}
+                readOnly={readOnly}
                 onAddNote={handleAddNote}
                 t={t}
               />
@@ -684,7 +687,7 @@ export function TaskDetailPanel({ taskId, agents, people = [], statuses = [], la
               value={staged.effectiveStatus}
               onValueChange={(v) => staged.stageChange({ status: v as TaskStatus })}
             >
-              <SelectTrigger className="min-h-0 h-7 text-xs rounded-md w-full">
+              <SelectTrigger disabled={readOnly} className="min-h-0 h-7 text-xs rounded-md w-full">
                 <div className="flex items-center gap-1.5">
                   <StatusIcon status={staged.effectiveStatus} />
                   <span className="capitalize">
@@ -718,7 +721,7 @@ export function TaskDetailPanel({ taskId, agents, people = [], statuses = [], la
                 value={staged.effectivePriority}
                 onValueChange={(v) => staged.stageChange({ priority: v as TaskPriority })}
               >
-                <SelectTrigger className="min-h-0 h-7 text-xs rounded-md w-full">
+                <SelectTrigger disabled={readOnly} className="min-h-0 h-7 text-xs rounded-md w-full">
                   <div className="flex items-center gap-1.5">
                     <PriorityBadge priority={staged.effectivePriority} />
                   </div>
@@ -749,7 +752,7 @@ export function TaskDetailPanel({ taskId, agents, people = [], statuses = [], la
                     else staged.stageChange({ agentId: v });
                   }}
                 >
-                  <SelectTrigger className={cn(
+                  <SelectTrigger disabled={readOnly} className={cn(
                     'min-h-0 h-7 text-xs rounded-md w-full',
                     staged.stagedChanges.status === 'in_progress' && !staged.hasAssignee && 'border-amber-400 dark:border-amber-500 text-amber-600 dark:text-amber-400',
                   )}>
@@ -795,8 +798,11 @@ export function TaskDetailPanel({ taskId, agents, people = [], statuses = [], la
             </MetaField>
           </div>
 
-          {/* Labels (core) - kept with the common settings above. */}
-          <TaskExtrasEditor task={task} only="labels" onSaved={() => { loadData(); onRefresh(); }} />
+          {/* Labels (core) - kept with the common settings above. Write-side editor, so a
+              VIEWER does not get it (the header summary already shows labels read-only). */}
+          {!readOnly && (
+            <TaskExtrasEditor task={task} only="labels" onSaved={() => { loadData(); onRefresh(); }} />
+          )}
 
           {/* Advanced config (reviewer / max attempts / estimate / blockers / checklist),
               collapsed by default unless the task already carries any of it. */}
@@ -824,7 +830,7 @@ export function TaskDetailPanel({ taskId, agents, people = [], statuses = [], la
                   else staged.stageChange({ reviewerAgentId: v });
                 }}
               >
-                <SelectTrigger className="min-h-0 h-7 text-xs rounded-md w-full">
+                <SelectTrigger disabled={readOnly} className="min-h-0 h-7 text-xs rounded-md w-full">
                   <SelectValue placeholder={t('actions.noReviewer')} />
                 </SelectTrigger>
                 <SelectContent>
@@ -871,7 +877,7 @@ export function TaskDetailPanel({ taskId, agents, people = [], statuses = [], la
                     max={20}
                     step={1}
                     value={maxReviewDraft}
-                    disabled={isTerminal || staged.isCancelStaged}
+                    disabled={isTerminal || staged.isCancelStaged || readOnly}
                     onChange={(e) => setMaxReviewDraft(e.target.value)}
                     onBlur={() => {
                       const n = parseInt(maxReviewDraft, 10);
@@ -891,8 +897,11 @@ export function TaskDetailPanel({ taskId, agents, people = [], statuses = [], la
             </div>
           )}
 
-          {/* Card fields (estimate / blockers / checklist) - advanced. */}
-          <TaskExtrasEditor task={task} only="rest" onSaved={() => { loadData(); onRefresh(); }} />
+          {/* Card fields (estimate / blockers / checklist) - advanced. Write-side editor,
+              hidden for a VIEWER (the header summary shows these read-only). */}
+          {!readOnly && (
+            <TaskExtrasEditor task={task} only="rest" onSaved={() => { loadData(); onRefresh(); }} />
+          )}
           </div>
           )}
 
@@ -940,8 +949,9 @@ export function TaskDetailPanel({ taskId, agents, people = [], statuses = [], la
           </div>{/* end scrollable settings + card fields */}
 
           {/* ── Action Area - pinned to the bottom of the rail so the contextual
-              buttons stay visible however far the settings scroll. ── */}
-          {hasActions && (
+              buttons stay visible however far the settings scroll. Every zone mutates
+              (stop/apply/approve/reject/delete/execute/cancel), so a VIEWER gets none. ── */}
+          {hasActions && !readOnly && (
           <div data-testid="task-action-bar" className="flex-shrink-0 border-t border-theme p-3 space-y-3 bg-theme-secondary/40">
 
           {/* Zone 0: Stop agent - shown when an agent is actively running */}
@@ -1315,7 +1325,7 @@ function ActorAvatar({ actorType, actorId, agentMap, resolveUser }: {
 // ─── Tab: Overview ──────────────────────────────────────────────
 
 function OverviewTab({
-  task, childTasks, agents, people, agentMap, isTerminal, onUpdate, onRefresh, onSelectTask, t,
+  task, childTasks, agents, people, agentMap, isTerminal, readOnly = false, onUpdate, onRefresh, onSelectTask, t,
 }: {
   task: Task;
   childTasks: Task[];
@@ -1323,6 +1333,7 @@ function OverviewTab({
   people: TaskPerson[];
   agentMap: Map<string, Agent>;
   isTerminal: boolean;
+  readOnly?: boolean;
   onSelectTask?: (taskId: string) => void;
   onUpdate: (fields: Record<string, unknown>) => void;
   onRefresh: () => void;
@@ -1337,7 +1348,7 @@ function OverviewTab({
         <h4 className="text-xs font-medium text-theme-muted uppercase tracking-wide mb-2">{t('detail.instructions')}</h4>
         <EditableTextarea
           value={task.instructions || ''}
-          disabled={false}
+          disabled={readOnly}
           onSave={(v) => onUpdate({ instructions: v })}
           placeholder={t('detail.instructions')}
           className="text-sm text-theme-primary leading-relaxed bg-theme-secondary/40 rounded-xl px-4 py-3"
@@ -1367,14 +1378,16 @@ function OverviewTab({
           <h4 className="text-xs font-medium text-theme-muted uppercase tracking-wide">
             {t('detail.children')} ({childTasks.length})
           </h4>
-          <button
-            type="button"
-            onClick={() => setShowCreateSubtask(true)}
-            className="flex items-center gap-1 text-xs text-theme-muted hover:text-theme-primary transition-colors"
-          >
-            <Plus className="h-3 w-3" />
-            {t('actions.createSubtask')}
-          </button>
+          {!readOnly && (
+            <button
+              type="button"
+              onClick={() => setShowCreateSubtask(true)}
+              className="flex items-center gap-1 text-xs text-theme-muted hover:text-theme-primary transition-colors"
+            >
+              <Plus className="h-3 w-3" />
+              {t('actions.createSubtask')}
+            </button>
+          )}
         </div>
         {childTasks.length === 0 ? (
           <p className="text-xs text-theme-muted">{t('detail.noChildren')}</p>
@@ -1424,7 +1437,7 @@ function OverviewTab({
 // ─── Tab: Notes ─────────────────────────────────────────────────
 
 function NotesTab({
-  task, agentMap, resolveUser, selfName, noteContent, setNoteContent, submitting, onAddNote, t,
+  task, agentMap, resolveUser, selfName, noteContent, setNoteContent, submitting, readOnly = false, onAddNote, t,
 }: {
   task: Task;
   agentMap: Map<string, Agent>;
@@ -1433,6 +1446,7 @@ function NotesTab({
   noteContent: string;
   setNoteContent: (s: string) => void;
   submitting: boolean;
+  readOnly?: boolean;
   onAddNote: () => void;
   t: ReturnType<typeof useTranslations>;
 }) {
@@ -1448,7 +1462,7 @@ function NotesTab({
             const isAgent = !!note.authorAgentId;
             // Each note author resolves to their own displayName (never the viewer's name).
             const author = isAgent ? null : resolveUser(note.authorUserId);
-            const name = isAgent ? (agent?.name || 'Agent') : (author?.name || selfName);
+            const name = isAgent ? (agent?.name || t('detail.agent')) : (author?.name || selfName);
 
             return (
               <div key={note.id} className="flex gap-2.5">
@@ -1457,7 +1471,7 @@ function NotesTab({
                     <AvatarDisplay avatarUrl={agent.avatarUrl} name={name} size="sm" className="!w-6 !h-6 flex-shrink-0 mt-0.5" />
                   ) : (
                     <div className="w-6 h-6 rounded-full flex-shrink-0 mt-0.5 bg-theme-tertiary flex items-center justify-center">
-                      <span className="text-[10px] font-medium text-theme-muted">{name.charAt(0).toUpperCase()}</span>
+                      <span className="text-xs font-medium text-theme-muted">{name.charAt(0).toUpperCase()}</span>
                     </div>
                   )
                 ) : (
@@ -1478,7 +1492,8 @@ function NotesTab({
         )}
       </div>
 
-      {/* Add note input - fixed at bottom */}
+      {/* Add note input - fixed at bottom (a note is a write, so a VIEWER gets no composer) */}
+      {!readOnly && (
       <div className="flex items-center gap-2 pt-3 mt-3 border-t border-theme flex-shrink-0">
         <Input
           type="text"
@@ -1498,6 +1513,7 @@ function NotesTab({
           <Send className="h-3.5 w-3.5" />
         </Button>
       </div>
+      )}
     </div>
   );
 }
@@ -1553,7 +1569,7 @@ function ExecutionsTab({
             {/* Agent */}
             <div className="flex items-center gap-1.5 min-w-0 flex-1">
               {agent && <AvatarDisplay avatarUrl={agent.avatarUrl} name={agent.name} size="sm" className="!w-5 !h-5 flex-shrink-0" />}
-              <span className="text-sm text-theme-primary truncate">{agent?.name || 'Agent'}</span>
+              <span className="text-sm text-theme-primary truncate">{agent?.name || t('detail.agent')}</span>
             </div>
 
             {/* Stats */}
@@ -1825,8 +1841,8 @@ function ActivityTab({
       {events.map((evt) => {
         const agent = evt.actorId ? agentMap.get(evt.actorId) : null;
         const actorName = evt.actorType === 'agent'
-          ? (agent?.name || 'Agent')
-          : evt.actorType === 'user' ? resolveUser(evt.actorId).name : 'System';
+          ? (agent?.name || t('detail.agent'))
+          : evt.actorType === 'user' ? resolveUser(evt.actorId).name : t('detail.system');
 
         return (
           <div key={evt.id} className="flex gap-2.5">

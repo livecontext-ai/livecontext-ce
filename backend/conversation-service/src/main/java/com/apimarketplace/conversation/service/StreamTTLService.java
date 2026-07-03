@@ -70,6 +70,16 @@ public class StreamTTLService {
      * Direct-chat streams created by ChatStreamingService/ChatStreamInitializer store the real
      * LLM provider name (openai, anthropic, …) and never publish a heartbeat - they MUST NOT be
      * subject to heartbeat-loss detection, only to the absolute timeout fallback.
+     * <p>
+     * BRIDGE conversation runs (provider "claude-code"/"codex"/…) DO hold a heartbeat while
+     * dispatched - agent-service's ActiveStreamRegistry covers worker-executed bridge runs
+     * (queued chats, execution-link routes) and conversation-service's
+     * {@link com.apimarketplace.conversation.service.ai.BridgeStreamHeartbeat} covers the
+     * DIRECT dispatches (interactive chat on a picked CLI provider, sync schedule/webhook).
+     * They stay OUT of this set on purpose: their Redis provider is the CLI slug, which is
+     * indistinguishable from a hypothetical heartbeat-less stream of the same provider, so
+     * they get only the absolute-pass protection (live heartbeat → skip), never fast-loss
+     * detection.
      */
     private static final Set<String> HEARTBEAT_MONITORED_PROVIDERS = Set.of("remote-agent");
 

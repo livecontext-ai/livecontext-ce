@@ -55,8 +55,8 @@ public class OrchestrationRecoveryService {
 
     private static final Logger logger = LoggerFactory.getLogger(OrchestrationRecoveryService.class);
 
-    /** Fallback when no WorkflowExecutionConfig is available (tests). */
-    private static final Duration DEFAULT_ZOMBIE_THRESHOLD = Duration.ofMinutes(62);
+    /** Fallback when no WorkflowExecutionConfig is available (tests). Mirrors max-execution-minutes (125) + 2 min grace. */
+    private static final Duration DEFAULT_ZOMBIE_THRESHOLD = Duration.ofMinutes(127);
 
     private final WorkflowRunRepository runRepository;
     private final SignalWaitRepository signalWaitRepository;

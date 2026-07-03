@@ -28,7 +28,7 @@ public final class ToolAccessControl {
         // the rows), so a read-mode builder agent (workflowAccessMode='read') MUST be able
         // to inspect a workflow's table data - without them, the gate would wrongly deny a
         // read. The write counterparts insert_row/update_row/delete_row stay WRITE.
-        Map.entry("workflow",    Set.of("load", "get", "list", "describe", "validate", "runs", "get_run", "get_node_output", "search", "help", "get_plan", "read_rows", "find_rows")),
+        Map.entry("workflow",    Set.of("load", "get", "list", "describe", "validate", "runs", "get_run", "wait_run", "get_node_output", "search", "help", "get_plan", "read_rows", "find_rows")),
         Map.entry("interface",   Set.of("get", "list", "help")),
         Map.entry("agent",       Set.of("get", "list", "help", "inbox", "outbox", "review_inbox", "backlog", "recurrence_list", "get_history", "search_messages")),
         Map.entry("application", Set.of("search", "my", "get", "visualize", "help")),

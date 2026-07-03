@@ -48,8 +48,13 @@ class BrowserAgentBudgetGuardTest {
         lenient().when(redisTemplate.opsForValue()).thenReturn(valueOps);
     }
 
+    /**
+     * Guard in FAIL-FAST mode (queue-wait disabled) - the mode where the
+     * concurrent pre-check actively rejects. The queue-enabled default is
+     * covered by {@link #queueWaitEnabled_skipsConcurrentPreCheck()}.
+     */
     private BrowserAgentBudgetGuard guard(int concurrentLimit, int dailyStepsLimit) {
-        return new BrowserAgentBudgetGuard(redisTemplate, concurrentLimit, dailyStepsLimit);
+        return new BrowserAgentBudgetGuard(redisTemplate, concurrentLimit, dailyStepsLimit, false);
     }
 
     // ── Direct guard contract ─────────────────────────────────────────────
@@ -81,6 +86,37 @@ class BrowserAgentBudgetGuardTest {
             .contains("limit=1");
         // We never read the steps key once concurrent already failed.
         verify(valueOps, never()).get(anyString());
+    }
+
+    @Test
+    @DisplayName("queue-wait enabled (default): concurrent pre-check is SKIPPED - the runner queues instead")
+    void queueWaitEnabled_skipsConcurrentPreCheck() {
+        // Saturated concurrent LIST, but queueing delegated to the runner:
+        // the guard must NOT pre-reject (that would defeat the FIFO queue
+        // that lets a workflow split run its browser branches in turn).
+        lenient().when(listOps.size(BrowserAgentBudgetGuard.concurrentKey("user-1"))).thenReturn(5L);
+        when(valueOps.get(anyString())).thenReturn("0");
+
+        BrowserAgentBudgetGuard queued = new BrowserAgentBudgetGuard(redisTemplate, 1, 200, true);
+        Optional<ToolExecutionResult> result = queued.checkBudget("user-1");
+
+        assertThat(result).isEmpty();
+        // The concurrent LLEN is not even consulted.
+        verify(listOps, never()).size(anyString());
+    }
+
+    @Test
+    @DisplayName("queue-wait enabled still rejects on the daily steps quota (a hard cap, not a queueable resource)")
+    void queueWaitEnabled_stillEnforcesDailySteps() {
+        String stepsKey = BrowserAgentBudgetGuard.stepsKey("user-1", BrowserAgentBudgetGuard.todayUtc());
+        when(valueOps.get(stepsKey)).thenReturn("200");
+
+        BrowserAgentBudgetGuard queued = new BrowserAgentBudgetGuard(redisTemplate, 1, 200, true);
+        Optional<ToolExecutionResult> result = queued.checkBudget("user-1");
+
+        assertThat(result).isPresent();
+        assertThat(result.get().errorCode()).isEqualTo(ToolErrorCode.RATE_LIMITED);
+        assertThat(result.get().error()).contains("daily steps quota exhausted");
     }
 
     @Test

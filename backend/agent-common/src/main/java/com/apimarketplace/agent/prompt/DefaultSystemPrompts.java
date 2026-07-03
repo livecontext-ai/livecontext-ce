@@ -56,7 +56,7 @@ public final class DefaultSystemPrompts {
 
         - Same tool + similar args fails twice → stop.
         - Errors: retry once, then report.
-        - 401/403: call `request_credential` (no force). Already exists + recent → try different scope. `force=true` only if token revoked; never twice.
+        - 401/403: call `credential(action='require')` (no force). Already exists + recent → try different scope. `force=true` only if token revoked; never twice.
         """;
 
     private static final String HELP_FIRST_CORE = """
@@ -173,12 +173,18 @@ public final class DefaultSystemPrompts {
         Set.of("files")
     );
 
+    public static final PromptModule WAIT = new PromptModule(
+        "wait",
+        "\n        - wait - Pause deliberately: wait(action='sleep', seconds=N) blocks server-side then returns (one tool call). Use it between status checks on something in progress or after a rate limit - never busy-poll. To wait for a workflow run, prefer workflow(action='wait_run', run_id=…).\n",
+        Set.of("wait")
+    );
+
     /**
      * All resource modules in display order.
      * To add a new resource: create a PromptModule constant + add it here.
      */
     public static final List<PromptModule> ALL_RESOURCE_MODULES = List.of(
-        CATALOG, TABLE, INTERFACE, AGENT, SKILL, WORKFLOW, APPLICATION, WEB_SEARCH, IMAGE_GENERATION, FILES
+        CATALOG, TABLE, INTERFACE, AGENT, SKILL, WORKFLOW, APPLICATION, WEB_SEARCH, IMAGE_GENERATION, FILES, WAIT
     );
 
 

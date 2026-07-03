@@ -120,7 +120,14 @@ public class DataSourceToolsProvider implements ToolsProvider {
             ToolParameter.builder()
                 .name("action")
                 .type("string")
-                .description("Action to perform. See help for details.")
+                .description("Action to perform. "
+                    + "Table CRUD: create (data and/or columns), list, get, update (name/description), delete. "
+                    + "Rows: query_rows (where and/or similarity, limit), insert_rows (rows), update_rows (where + set), "
+                    + "delete_rows (where REQUIRED - there is no truncate action: to delete ALL rows use "
+                    + "where={column:'id', operator:'IS NOT NULL'}). "
+                    + "Schema: add_columns (columns). "
+                    + "Marketplace: publish (title + interface_id), unpublish. "
+                    + "help: full reference (column types, WHERE syntax, examples).")
                 .required(true)
                 .enumValues(VALID_ACTIONS)
                 .build(),
@@ -156,7 +163,12 @@ public class DataSourceToolsProvider implements ToolsProvider {
             ToolParameter.builder()
                 .name("where")
                 .type("object")
-                .description("WHERE condition (for: query_rows, update_rows, delete_rows). Format: {column, operator, value}")
+                .description("WHERE condition (for: query_rows, update_rows, delete_rows). Format: {column, operator, value}. "
+                    + "Operators: '=', '!=', '>', '<', '>=', '<=', 'LIKE', 'IN' (value = non-empty array), "
+                    + "'IS NULL', 'IS NOT NULL' (no value needed). "
+                    + "column = bare column name, no 'data.' prefix; 'id' = the row's primary key. "
+                    + "All comparisons are TEXTUAL: '>' '<' '>=' '<=' compare as strings (lexicographic), NOT numerically - "
+                    + "do not rely on them for number/date ranges.")
                 .required(false)
                 .build(),
             ToolParameter.builder()
@@ -173,8 +185,8 @@ public class DataSourceToolsProvider implements ToolsProvider {
                     : "Not available on this deployment (self-hosted-only feature). Use where filters for querying.")
                 .required(false)
                 .build(),
-            intParam("limit", "Max results to return (for: list, query_rows)", false, 25),
-            intParam("offset", "Pagination offset (for: list)", false, 0),
+            intParam("limit", "Max results to return. Default 25 for list, 20 for query_rows. query_rows has NO offset - to page a large result, narrow with where instead of raising limit. (for: list, query_rows)", false, 25),
+            intParam("offset", "Pagination offset (for: list ONLY - query_rows does not support it)", false, 0),
 
             // ==================== Marketplace publication (publish, unpublish) ====================
             stringParam("title", "Marketplace listing title - REQUIRED for publish", false),
@@ -190,7 +202,6 @@ public class DataSourceToolsProvider implements ToolsProvider {
                 Persistent database table storage. For create: pass data=[{colName: value, ...}] - keys become column names (use descriptive names from user context, NEVER 'Colonne 1' or 'col1'). Or columns=[{name, type}] for empty schema.
                 Call table(action='help') for column types, WHERE syntax, and examples.
                 Marketplace: publish requires title + interface_id (landing page). unpublish marks the listing inactive - acquirers keep their copies.
-                Actions: create, list, get, update, delete, query_rows, insert_rows, update_rows, delete_rows, add_columns, publish, unpublish, help
                 """)
             .category(ToolCategory.DATASOURCE)
             .parameters(params)

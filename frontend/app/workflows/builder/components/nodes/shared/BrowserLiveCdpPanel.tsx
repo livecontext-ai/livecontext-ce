@@ -67,6 +67,15 @@ export function BrowserLiveCdpPanel({
   const [takeoverActive, setTakeoverActive] = React.useState(false);
   const [wsConnected, setWsConnected] = React.useState(false);
   const [bridgeMode, setBridgeMode] = React.useState<'stub' | 'live' | null>(null);
+  // Ref mirror of bridgeMode for the WS onmessage closure (state reads
+  // there are stale - the socket handlers are bound once per socket).
+  const bridgeModeRef = React.useRef<'stub' | 'live' | null>(null);
+  // The agent's TASK is done (runner emitted the `final` step event) but
+  // the browser may still be open: the runner's post-completion detached
+  // hold keeps Chromium live while this panel is connected, so the user
+  // can take control of the final page. Distinct from `sessionEnded`,
+  // which means the browser itself is gone.
+  const [taskFinished, setTaskFinished] = React.useState(false);
   // Letterbox geometry of the last painted frame (CSS px). paintFrame draws the
   // frame object-contain (aspect preserved, black bars) INSIDE a slot-filling
   // canvas - undistorted AND full-size - and records the drawn box here so a
@@ -199,7 +208,7 @@ export function BrowserLiveCdpPanel({
   // ── DPR-aware canvas resize ───────────────────────────────────────
   // Watch the canvas's CSS box and resize its bitmap buffer to match
   // (display CSS pixels × devicePixelRatio). Without this, the canvas
-  // keeps its 1200×675 intrinsic size while CSS stretches it to
+  // keeps its 1600×900 intrinsic size while CSS stretches it to
   // arbitrary device-pixel dimensions - fractional bilinear scale
   // softens the rendered text (the bug 3 Opus agents diagnosed
   // unanimously). Redraw the latest cached frame on resize so a panel
@@ -341,23 +350,36 @@ export function BrowserLiveCdpPanel({
         // a CDP endpoint (browser-use binding gap, container down) and
         // the WS will only carry step_event tail messages.
         if (msg.type === 'greeting' && typeof msg.bridge_mode === 'string') {
-          setBridgeMode(msg.bridge_mode === 'live' ? 'live' : 'stub');
+          const mode = msg.bridge_mode === 'live' ? 'live' : 'stub';
+          bridgeModeRef.current = mode;
+          setBridgeMode(mode);
         }
         if (msg.type === 'paused') {
           setTakeoverActive(true);
         }
-        // Runner emits `{type: "final", step_index, ...}` as the very
-        // last entry on the per-session steps stream before closing
-        // Chromium. cdp.py forwards step events down the WS as
-        // {type: 'step_event', payload: {...the runner event...}}.
-        // We watch for both shapes (defensive - some runner builds
-        // wrap, others forward verbatim) and flip `sessionEnded` so
-        // the panel can transition to its terminal-state UI.
+        // Runner emits `{type: "final", step_index, ...}` on the
+        // per-session steps stream the moment the agent's TASK completes.
+        // cdp.py forwards step events down the WS as {type: 'step_event',
+        // payload: {...the runner event...}}. We watch for both shapes
+        // (defensive - some runner builds wrap, others forward verbatim).
+        //
+        // `final` on a LIVE bridge does NOT end the session anymore: the
+        // runner's post-completion detached hold keeps Chromium open
+        // while this panel is connected, so the user can still take
+        // control of the final page. The session truly ends when the WS
+        // closes (4404/4403) or reconnects exhaust. In STUB mode there is
+        // nothing interactive to hold for - terminal immediately, as are
+        // `error`/`terminated` (crash paths tear the browser down inline).
         const stepPayload = msg.type === 'step_event' && msg.payload
           ? msg.payload
           : msg;
-        if (stepPayload && (stepPayload.type === 'final'
-            || stepPayload.type === 'error'
+        if (stepPayload && stepPayload.type === 'final') {
+          setTaskFinished(true);
+          if (bridgeModeRef.current !== 'live') {
+            setSessionEnded(true);
+          }
+        }
+        if (stepPayload && (stepPayload.type === 'error'
             || stepPayload.type === 'terminated')) {
           setSessionEnded(true);
         }
@@ -889,6 +911,15 @@ export function BrowserLiveCdpPanel({
           </div>
         )}
 
+        {/* Task-finished ribbon: the agent is done but the page is still
+            live (post-completion hold) - tell the user the result is in and
+            the page remains theirs to drive until they close the panel. */}
+        {liveAvailable && taskFinished && !takeoverActive && (
+          <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-center gap-1.5 bg-emerald-600/90 px-3 py-1.5 text-xs text-white">
+            <span className="truncate">{t('panel.taskFinishedLive')}</span>
+          </div>
+        )}
+
         {/* Take control - shown while a live screencast is flowing and the
             user hasn't taken over yet. Clicking pauses the agent and hands the
             page to the user (forms, clicks, scroll, paste). */}
@@ -938,7 +969,7 @@ export function BrowserLiveCdpPanel({
  * Paint a decoded image onto the canvas using a DPR-aware backing
  * store. The canvas's intrinsic width/height are sized to the display
  * rect × devicePixelRatio so the GPU-side blit canvas → screen is 1:1
- * (no CSS bilinear softening). The 1200×675 source JPEG is downscaled
+ * (no CSS bilinear softening). The 1600×900 source JPEG is downscaled
  * by Chromium's higher-quality 2D `drawImage` path with
  * `imageSmoothingQuality='high'`. Result: text stays crisp at any
  * panel width on both DPR=1 and DPR=2 displays.

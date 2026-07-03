@@ -19,6 +19,7 @@ import {
   ClipboardCheck,
   Plug,
   ScrollText,
+  Server,
   Star,
   Gift,
 } from 'lucide-react';
@@ -63,8 +64,9 @@ export const settingsNavItems: SettingsNavItem[] = [
   { href: '/app/settings/public-access', label: 'Public Access', icon: Globe, groupStart: true },
 
   // ── Credentials & keys ───────────────────────────
-  { href: '/app/settings/credentials', label: 'Credentials', icon: KeyRound, groupStart: true },
+  { href: '/app/settings/credentials', label: 'Credentials & Variables', icon: KeyRound, groupStart: true },
   { href: '/app/settings/custom-apis', label: 'Custom APIs', icon: Plug },
+  { href: '/app/settings/mcp-server', label: 'MCP Server', icon: Server },
   { href: '/app/settings/platform-credentials', label: 'Platform Keys', icon: Shield, adminOnly: true },
   { href: '/app/settings/ai-providers', label: 'AI Providers', icon: Key, adminOnly: true },
   // NOTE: signed catalog bundles (model + API) are no longer a standalone page -

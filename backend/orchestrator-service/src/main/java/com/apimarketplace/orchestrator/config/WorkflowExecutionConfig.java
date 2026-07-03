@@ -33,7 +33,9 @@ public class WorkflowExecutionConfig {
     // Timeouts
     private long stepTimeoutMs = 60000;
     private long workflowTimeoutMs = 3600000;
-    private long maxExecutionMinutes = 60;
+    // Only live consumer: the zombie-run threshold (+2 min grace); must exceed the longest
+    // legitimate agent run (7200s executionTimeout/inactivityTimeout contract).
+    private long maxExecutionMinutes = 125;
     
     // Retry configuration
     private int maxRetryAttempts = 3;

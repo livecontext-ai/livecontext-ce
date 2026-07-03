@@ -109,6 +109,10 @@ public final class EvalContextBuilder {
         context.getGlobalData("index").ifPresent(idx -> evalContext.put("index", idx));
         context.getGlobalData("items").ifPresent(items -> evalContext.put("items", items));
 
+        // 6. Workflow-variable bundle for {{$vars.name}} / {{vars:name}} conditions
+        // (both normalized to vars.name by VarsSyntaxNormalizer before evaluation).
+        context.getGlobalData("vars").ifPresent(vars -> evalContext.put("vars", vars));
+
         logger.debug("EvalContextBuilder standard context built: keys={}", evalContext.keySet());
 
         return evalContext;
@@ -167,6 +171,9 @@ public final class EvalContextBuilder {
         context.getGlobalData("item").ifPresent(item -> evalContext.put("item", item));
         context.getGlobalData("index").ifPresent(idx -> evalContext.put("index", idx));
         context.getGlobalData("items").ifPresent(items -> evalContext.put("items", items));
+
+        // 6. Workflow-variable bundle for {{$vars.name}} / {{vars:name}} expressions
+        context.getGlobalData("vars").ifPresent(vars -> evalContext.put("vars", vars));
 
         return evalContext;
     }

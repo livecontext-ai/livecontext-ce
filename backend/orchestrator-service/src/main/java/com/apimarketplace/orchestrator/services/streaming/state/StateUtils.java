@@ -58,7 +58,11 @@ public final class StateUtils {
         "last_action",
         "cost_usd",
         "run_id",
-        "node_id"
+        "node_id",
+        // Control node id (tool-call id) when the browser session is hosted
+        // by a GENERIC agent node - the event's nodeId addresses the HOST
+        // builder node while REST control stays keyed by this id.
+        "control_node_id"
     );
 
     /**

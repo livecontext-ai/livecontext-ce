@@ -1,7 +1,6 @@
 package com.apimarketplace.catalog.domain;
 
 import jakarta.persistence.*;
-import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
@@ -35,8 +34,11 @@ public class ToolResponseEntity {
     @Column(name = "schema")
     private String schema;
 
-    @NotBlank
-    @Column(name = "example", nullable = false)
+    // JSON example content is stored in example_jsonb (this column stays NULL for
+    // JSON responses, which is the vast majority). The DB column is nullable, so no
+    // @NotBlank / nullable=false here: those contradicted the storage model and made
+    // every managed-entity flush (e.g. setOtherResponsesAsNonDefault) fail validation.
+    @Column(name = "example")
     private String example;
 
     @JdbcTypeCode(SqlTypes.JSON)

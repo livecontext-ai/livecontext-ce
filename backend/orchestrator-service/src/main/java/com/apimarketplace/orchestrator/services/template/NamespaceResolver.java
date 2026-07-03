@@ -57,6 +57,7 @@ public class NamespaceResolver {
                 case "triggers" -> resolveTriggersNamespace(remainingPath, context);
                 case "data" -> resolveDataNamespace(remainingPath, context);
                 case "current_item" -> resolveCurrentItemPath(remainingPath, context);
+                case "vars" -> resolveVarsNamespace(remainingPath, context);
                 case "secrets" -> null; // TODO: Implement secrets resolution
                 default -> null;
             };
@@ -474,6 +475,31 @@ public class NamespaceResolver {
     }
 
     /**
+     * Resolve {@code vars.name[.deeper.path]} against the per-run workflow
+     * variable bundle attached to the context's global variables under the
+     * {@code "vars"} key (fetched once per run from auth-service). Both author
+     * forms ({{$vars.name}} canonical, {{vars:name}} alias) are normalized to
+     * this dotted shape by VarsSyntaxNormalizer before reaching the resolver.
+     */
+    public Object resolveVarsNamespace(String path, WorkflowExecutionContext context) {
+        if (path == null || path.isEmpty()) {
+            return null;
+        }
+        Object bundle = context.getGlobalVariables().get(VarsSyntaxNormalizer.VARS_NAMESPACE);
+        if (!(bundle instanceof Map<?, ?> bundleMap)) {
+            logger.debug("[resolveVarsNamespace] no workflow-variable bundle in context (path '{}')", path);
+            return null;
+        }
+        String[] parts = path.split("\\.", 2);
+        Object value = bundleMap.get(parts[0]);
+        if (value == null || parts.length == 1) {
+            return value;
+        }
+        // Deeper navigation into JSON-typed variables: {{$vars.config.api.url}}
+        return pathNavigator.navigatePath(value, parts[1]);
+    }
+
+    /**
      * Resolve prefixed variables (handles 4 prefix formats).
      */
     @SuppressWarnings("unchecked")
@@ -527,6 +553,12 @@ public class NamespaceResolver {
         if (variablePath.startsWith("note:")) {
             // Notes are non-executable visual elements, they produce no output
             return null;
+        }
+
+        // vars:name alias - normally rewritten to vars.name by VarsSyntaxNormalizer
+        // before reaching here; kept as a defensive branch for direct callers.
+        if (variablePath.startsWith("vars:")) {
+            return resolveVarsNamespace(variablePath.substring("vars:".length()), context);
         }
 
         Object directItemAlias = resolveDirectItemAlias(variablePath, context);

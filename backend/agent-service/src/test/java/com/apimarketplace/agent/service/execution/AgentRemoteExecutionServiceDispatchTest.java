@@ -37,6 +37,7 @@ class AgentRemoteExecutionServiceDispatchTest {
     @Mock private GuardrailService guardrailService;
     @Mock private BridgeLoopDispatcher bridgeDispatcher;
     @Mock private com.apimarketplace.agent.service.ModelCatalogService modelCatalogService;
+    @Mock private ActiveStreamRegistry activeStreamRegistry;
 
     private AgentRemoteExecutionService service;
 
@@ -45,7 +46,8 @@ class AgentRemoteExecutionServiceDispatchTest {
         service = new AgentRemoteExecutionService(
             agentLoopService, new ObjectMapper(), redisStreamingCallback,
             conversationRedisStreamingCallback, coreToolsCache, agentActivityPublisher,
-            guardChainFactory, classifyService, guardrailService, bridgeDispatcher, modelCatalogService);
+            guardChainFactory, classifyService, guardrailService, bridgeDispatcher, modelCatalogService,
+            activeStreamRegistry);
     }
 
     @Test

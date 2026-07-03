@@ -153,71 +153,34 @@ public class CatalogToolsProvider implements ToolsProvider {
                 .required(false)
                 .build(),
             stringParam("api_id", "API UUID (for action='update_api', 'delete_api')", false),
-            arrayParam("topics", "Help topics (for action='help'): 'register' (API registration fields), 'schema' (response schema & SpEL), 'shaping' (response shaping - expand, max_items, digest, nextAction). Omit for general overview. Example: ['shaping']", false)
+            arrayParam("topics", "Help topics (for action='help'): 'register' (API registration fields), 'schema' (response schema & SpEL), 'shaping' (response shaping - expand, max_items, digest, nextAction), 'file_storage' (how file outputs are persisted & rendered). Omit for general overview. Example: ['shaping']", false)
         );
 
         return AgentToolDefinition.builder()
             .name("catalog")
             .description("""
-                Unified catalog tool for discovering, executing, and registering API tools.
+                Discover, execute, and register external API tools (Gmail, Slack, ...).
 
                 Actions:
-                - search: Find external API tools by keyword
-                  catalog(action='search', query='gmail send email')
-                  Restrict to known API(s): catalog(action='search', api='gmail', query='list messages')
-                  or catalog(action='search', apis=['gmail','slack'], query='send message')
+                - search: find API tools by keyword. catalog(action='search', query='gmail send email').
+                  Scope to known API(s) with api='gmail' or apis=['gmail','slack'].
+                - response_schema: full contract of one tool. catalog(action='response_schema', tool_id='<uuid>').
+                  Returns the input contract (param names, types, required, defaults; closed enums in
+                  inputSchema[*].allowedValues - you must pick ONE of those), the output skeleton
+                  (paths + SpEL examples) for mapping into a next step, and `credential`
+                  (type: api_key | oauth2 | bearer_token | basic_auth | none; requiredScopes) = what
+                  credential(action='require') would ask the user to connect ('none' = no credential, just execute).
+                - execute: run a tool with the user's credentials. catalog(action='execute', tool_id='<uuid>', params={...}).
+                - register_api / update_api / delete_api / list_custom_apis: manage your own custom APIs.
+                  register_api needs api_definition (apiName, baseUrl, endpoints with outputSchema each);
+                  call catalog(action='help', topics=['register']) FIRST for the field reference.
+                - help: catalog(action='help') overview, or topics=['register'|'schema'|'shaping'|'file_storage'].
 
-                - execute: Execute an API tool with real user credentials (one-time actions)
-                  catalog(action='execute', tool_id='<uuid>', params={...})
+                FLOW for a tool you don't already know: search -> response_schema -> execute.
+                Never skip response_schema: it tells you which values each param accepts, so execute()
+                doesn't fail on a bad enum.
 
-                - response_schema: Get the tool's full schema - the input parameter
-                  contract (which values are admissible - names, types, required flag, defaults,
-                  closed enums via allowedValues), the output response structure (skeleton,
-                  paths, SpEL examples) for mapping into the next step, AND the credential
-                  requirement in `credential`: `credential.type` is the kind of credential the
-                  tool needs (api_key | oauth2 | bearer_token | basic_auth | none) and
-                  `credential.requiredScopes` lists the OAuth scopes a connection would request.
-                  Use it to tell the user what request_credential will ask them to connect
-                  (`type:"none"` means the tool needs no credential - just execute).
-                  catalog(action='response_schema', tool_id='<uuid>')
-                  Always call this BEFORE catalog(action='execute') on a tool you don't already know:
-                  it tells you which params accept which values so execute() doesn't 400 on a
-                  bad enum.
-
-                - help: Get documentation (general overview, or specific topics)
-                  catalog(action='help') - general overview
-                  catalog(action='help', topics=['register']) - API registration field reference
-                  catalog(action='help', topics=['schema']) - response schema & SpEL mapping guide
-
-                - register_api: Register a custom API with endpoints (outputSchema REQUIRED per endpoint)
-                  catalog(action='register_api', api_definition={apiName:'My API', baseUrl:'https://...', endpoints:[{name, endpoint, method, description, outputSchema:[{key,type,description}], params:[...]}]})
-
-                - update_api: Update an existing custom API
-                  catalog(action='update_api', api_id='<uuid>', api_definition={...updated fields...})
-
-                - delete_api: Delete a custom API you own
-                  catalog(action='delete_api', api_id='<uuid>')
-
-                - list_custom_apis: List your registered custom APIs
-                  catalog(action='list_custom_apis')
-
-                NOT FOR INTERNAL RESOURCES:
-                - Tables -> use table(action='...')
-                - Interfaces -> use interface(action='...')
-
-                USAGE FLOW (existing APIs):
-                1. catalog(action='search', query='gmail list messages') -> get tool_id
-                   If you already know the API: catalog(action='search', api='gmail', query='list messages')
-                2. catalog(action='response_schema', tool_id='uuid') -> learn the param contract
-                   (especially `inputSchema[*].allowedValues` - must pick ONE of those; default
-                   in `inputSchema[*].default` is the recommended pre-fill) and the output skeleton
-                3. catalog(action='execute', tool_id='uuid', params={...}) -> execute NOW
-
-                USAGE FLOW (custom APIs):
-                1. catalog(action='help', topics=['register']) -> get field reference
-                2. catalog(action='register_api', api_definition={...}) -> get apiId
-                3. catalog(action='search', query='my custom api') -> find tools
-                4. catalog(action='execute', tool_id='uuid', params={...}) -> execute
+                NOT FOR INTERNAL RESOURCES: tables -> table(action='...'), interfaces -> interface(action='...').
                 """)
             .category(ToolCategory.CATALOG)
             .parameters(params)

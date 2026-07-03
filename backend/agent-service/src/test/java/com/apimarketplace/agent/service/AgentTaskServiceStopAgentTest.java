@@ -303,6 +303,41 @@ class AgentTaskServiceStopAgentTest {
     }
 
     @Test
+    @DisplayName("Records NO 'agent stopped' audit event when the agent completed concurrently (force-unlock CAS matched 0 rows)")
+    void noAuditEventWhenForceUnlockLosesRace() {
+        // Regression: between the status pre-check and the force-unlock CAS, a
+        // natural completion can land. The CAS then updates 0 rows - pre-fix the
+        // EVT_AGENT_STOPPED audit event was still written, claiming a stop that
+        // never happened.
+        UUID taskId = UUID.randomUUID();
+        UUID execId = UUID.randomUUID();
+        UUID agentId = UUID.randomUUID();
+
+        AgentTaskEntity task = buildTask(taskId, AgentTaskEntity.STATUS_IN_PROGRESS);
+        task.setAssigneeExecutionId(execId);
+        task.setAssignedToAgentId(agentId);
+
+        when(conversationClient.findAgentConversation(
+                agentId.toString(), TENANT, ORG)).thenReturn(null);
+        when(taskRepository.forceUnlockAssigneeExecution(taskId)).thenReturn(0);
+
+        AgentTaskEntity completed = buildTask(taskId, AgentTaskEntity.STATUS_IN_REVIEW);
+        completed.setAssignedToAgentId(agentId);
+        when(taskRepository.findByIdAndOrganizationIdStrict(taskId, ORG))
+                .thenReturn(Optional.of(task))
+                .thenReturn(Optional.of(completed));
+
+        AtomicReference<TaskResponse> ref = new AtomicReference<>();
+        TenantResolver.runWithOrgScope(ORG, () ->
+                ref.set(service.stopAgentExecution(TENANT, ORG, taskId, "assignee")));
+
+        verify(self, never()).recordEvent(any(), eq(AgentTaskEventEntity.EVT_AGENT_STOPPED),
+                any(), any(), anyMap(), anyMap());
+        // The response reflects the task's REAL state (natural completion), not a fake stop.
+        assertThat(ref.get().status()).isEqualTo(AgentTaskEntity.STATUS_IN_REVIEW);
+    }
+
+    @Test
     @DisplayName("Rejects invalid role parameter")
     void rejectsInvalidRole() {
         UUID taskId = UUID.randomUUID();

@@ -24,6 +24,7 @@ import { ColumnManagerDialog } from './ColumnManagerDialog';
 import { taskService, type BulkTaskAction } from '@/lib/api/orchestrator/task.service';
 import { BulkDeleteModal } from '@/components/ui/BulkDeleteModal';
 import { selectTaskActivityAgentIds } from './taskActivitySubscriptions';
+import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 import {
   useAgentActivitySubscriber,
   useAgentActivityStore,
@@ -99,6 +100,11 @@ export function TaskBoardPage() {
   const t = useTranslations('taskBoard');
   const board = useTaskBoard();
   const sidePanel = useSidePanelSafe();
+  // VIEWER org-role gate (same pattern as AgentTable/WorkflowTable): a VIEWER of the
+  // active workspace browses the board read-only - every mutating affordance (create,
+  // drag, bulk actions, column manager, detail-panel edits) is hidden or disabled.
+  // The backend 403s these calls too; this is UX polish + defense in depth.
+  const readOnly = !useCanMutateInCurrentOrg();
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showColumnManager, setShowColumnManager] = useState(false);
   const [dragTaskId, setDragTaskId] = useState<string | null>(null);
@@ -341,6 +347,7 @@ export function TaskBoardPage() {
 
   const handleDrop = useCallback((targetColumn: string, e: React.DragEvent) => {
     e.preventDefault();
+    if (readOnly) return;
     if (!dragTaskId) return;
     const taskId = dragTaskId;
     setDragTaskId(null);
@@ -395,7 +402,7 @@ export function TaskBoardPage() {
       try { await taskService.updateTask(taskId, { status: targetColumn as TaskStatus }); board.refresh(); }
       catch { board.refresh(); }
     })();
-  }, [dragTaskId, board]);
+  }, [dragTaskId, board, readOnly]);
 
   // Loading skeleton
   if (board.loading && board.tasks.length === 0) {
@@ -579,6 +586,7 @@ export function TaskBoardPage() {
                     </button>
                   );
                 })}
+                {!readOnly && (
                 <div className="border-t border-theme mt-1 pt-1">
                   <button
                     type="button"
@@ -590,13 +598,16 @@ export function TaskBoardPage() {
                     {t('manageColumns.open')}
                   </button>
                 </div>
+                )}
               </div>
             )}
           </div>
-          <Button onClick={() => setShowCreateDialog(true)} size="sm" className="h-7 px-3 text-xs gap-1">
-            <Plus className="h-3 w-3" />
-            {t('actions.createTask')}
-          </Button>
+          {!readOnly && (
+            <Button onClick={() => setShowCreateDialog(true)} size="sm" className="h-7 px-3 text-xs gap-1">
+              <Plus className="h-3 w-3" />
+              {t('actions.createTask')}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -635,7 +646,8 @@ export function TaskBoardPage() {
                 onDrop={handleDrop}
                 onSelectTask={board.setSelectedTaskId}
                 onOpenAgent={openAgentPanel}
-                onAddTask={col.key === 'pending' ? () => setShowCreateDialog(true) : undefined}
+                onAddTask={!readOnly && col.key === 'pending' ? () => setShowCreateDialog(true) : undefined}
+                readOnly={readOnly}
                 userId={selfPerson?.userId ?? null}
                 userName={selfName}
                 selectedIds={selection.columnKey === col.key ? selection.ids : EMPTY_IDS}
@@ -648,7 +660,7 @@ export function TaskBoardPage() {
       )}
 
       {/* Bulk action bar - appears when ≥1 card is selected (same-column) */}
-      {selection.ids.size > 0 && (
+      {selection.ids.size > 0 && !readOnly && (
         <BulkActionBar
           count={selection.ids.size}
           isDeletedColumn={selection.columnKey === 'deleted'}
@@ -684,6 +696,7 @@ export function TaskBoardPage() {
           statuses={board.statuses}
           labels={board.labels}
           initialStagedStatus={initialStagedStatusTaskId === board.selectedTaskId ? 'in_progress' as const : undefined}
+          readOnly={readOnly}
           onClose={() => { board.setSelectedTaskId(null); setInitialStagedStatusTaskId(null); }}
           onRefresh={board.refresh}
           onSelectTask={board.setSelectedTaskId}
@@ -825,12 +838,14 @@ interface KanbanColumnProps {
   selectedIds: ReadonlySet<string>;
   onToggleSelect: (taskId: string) => void;
   onToggleSelectAll: () => void;
+  /** VIEWER org-role: hide drag/select affordances (read-only browsing stays). */
+  readOnly?: boolean;
 }
 
 function KanbanColumn({
   columnKey, icon, title, count, wipLimit, tasks, agentMap, taskMap, terminalStatusKeys, peopleById, labelsById,
   dragTaskId, onDragStart, onDrop, onSelectTask, onOpenAgent, onAddTask,
-  userId, userName, selectedIds, onToggleSelect, onToggleSelectAll,
+  userId, userName, selectedIds, onToggleSelect, onToggleSelectAll, readOnly = false,
 }: KanbanColumnProps) {
   const t = useTranslations('taskBoard');
   const [isDragOver, setIsDragOver] = useState(false);
@@ -854,7 +869,7 @@ function KanbanColumn({
       {/* Column header */}
       <div className="flex items-center gap-2 px-3 py-2 bg-theme-secondary border-b border-slate-200 dark:border-slate-700/50">
         {/* Select-all checkbox - visible on hover or when this column has a selection */}
-        {tasks.length > 0 && (
+        {tasks.length > 0 && !readOnly && (
           <button
             type="button"
             data-testid={`task-column-selectall-${columnKey}`}
@@ -906,6 +921,7 @@ function KanbanColumn({
             selected={selectedIds.has(task.id)}
             selectionActive={selectedCount > 0}
             onToggleSelect={() => onToggleSelect(task.id)}
+            readOnly={readOnly}
           />
         ))}
         {onAddTask && (
@@ -924,7 +940,7 @@ function KanbanColumn({
 
 // ─── Kanban Card ─────────────────────────────────────────────────
 
-function KanbanCard({ task, agentMap, taskMap, terminalStatusKeys, peopleById, labelsById, isDragging, onDragStart, onClick, onOpenAgent, userId, userName, isDeletedColumn, selected, selectionActive, onToggleSelect }: {
+function KanbanCard({ task, agentMap, taskMap, terminalStatusKeys, peopleById, labelsById, isDragging, onDragStart, onClick, onOpenAgent, userId, userName, isDeletedColumn, selected, selectionActive, onToggleSelect, readOnly = false }: {
   task: Task;
   agentMap: Map<string, Agent>;
   taskMap: Map<string, Task>;
@@ -941,6 +957,8 @@ function KanbanCard({ task, agentMap, taskMap, terminalStatusKeys, peopleById, l
   selected: boolean;
   selectionActive: boolean;
   onToggleSelect: () => void;
+  /** VIEWER org-role: card is not draggable and has no selection checkbox. */
+  readOnly?: boolean;
 }) {
   const t = useTranslations('taskBoard');
   // Resolve a human id, preferring the server-enriched task.users map and falling
@@ -1015,8 +1033,8 @@ function KanbanCard({ task, agentMap, taskMap, terminalStatusKeys, peopleById, l
       data-testid={`task-card-${task.id}`}
       data-task-status={task.status}
       data-task-title={task.title}
-      draggable
-      onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; onDragStart(); }}
+      draggable={!readOnly}
+      onDragStart={(e) => { if (readOnly) return; e.dataTransfer.effectAllowed = 'move'; onDragStart(); }}
       onClick={onClick}
       className={`group relative overflow-hidden bg-[var(--bg-primary)] rounded-xl border-2 border-l-[3px] cursor-pointer
         transition-colors duration-200
@@ -1031,6 +1049,7 @@ function KanbanCard({ task, agentMap, taskMap, terminalStatusKeys, peopleById, l
     >
       {/* Selection checkbox - visible on hover, or when this card / its column has a selection.
           Stops propagation so it never opens the detail panel or starts a drag. */}
+      {!readOnly && (
       <button
         type="button"
         data-testid={`task-card-select-${task.id}`}
@@ -1045,6 +1064,7 @@ function KanbanCard({ task, agentMap, taskMap, terminalStatusKeys, peopleById, l
       >
         {selected && <Check className="h-3 w-3" />}
       </button>
+      )}
       {/* Shimmer scan effect when agent is actively working - same as workflow nodes */}
       {agentRunning && (
         <div
@@ -1077,7 +1097,7 @@ function KanbanCard({ task, agentMap, taskMap, terminalStatusKeys, peopleById, l
             {cardLabels.slice(0, 4).map(l => (
               <span
                 key={l.id}
-                className="inline-flex items-center gap-1 max-w-[120px] rounded px-1.5 py-0.5 text-[10px] font-medium bg-theme-tertiary text-theme-secondary"
+                className="inline-flex items-center gap-1 max-w-[120px] rounded px-1.5 py-0.5 text-xs font-medium bg-theme-tertiary text-theme-secondary"
               >
                 {l.color && /^#[0-9a-fA-F]{3,8}$/.test(l.color) && (
                   <span className="h-1.5 w-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: l.color }} />
@@ -1085,13 +1105,13 @@ function KanbanCard({ task, agentMap, taskMap, terminalStatusKeys, peopleById, l
                 <span className="truncate">{l.name}</span>
               </span>
             ))}
-            {cardLabels.length > 4 && <span className="text-[10px] text-theme-muted self-center">+{cardLabels.length - 4}</span>}
+            {cardLabels.length > 4 && <span className="text-xs text-theme-muted self-center">+{cardLabels.length - 4}</span>}
           </div>
         )}
 
         {/* Meta badges: due/overdue (F5), estimate (F12), blocked (F9), checklist + attachments (F10) */}
         {(due || task.estimateMinutes != null || blockedCount > 0 || checklistTotal > 0 || attachCount > 0) && (
-          <div className="flex flex-wrap items-center gap-2 mt-1.5 text-[10px] text-theme-muted" data-testid={`task-card-meta-${task.id}`}>
+          <div className="flex flex-wrap items-center gap-2 mt-1.5 text-xs text-theme-muted" data-testid={`task-card-meta-${task.id}`}>
             {due && (
               <span className={`inline-flex items-center gap-0.5 ${overdue ? 'text-red-500 dark:text-red-400 font-medium' : ''}`} title={due.toLocaleString(getClientLocale())}>
                 <CalendarClock className="h-3 w-3" /> {formatDueShort(due)}
@@ -1151,9 +1171,9 @@ function KanbanCard({ task, agentMap, taskMap, terminalStatusKeys, peopleById, l
                 <PublisherAvatar userId={reviewerUser.userId} name={refName(reviewerUser)} size={20} variant="neutral" />
               </div>
             ) : (
-              <div title={`${t('actions.reviewer')}: ${userName || 'You'}`}
+              <div title={`${t('actions.reviewer')}: ${userName || t('detail.you')}`}
                 className="relative z-0 rounded-full ring-2 ring-[var(--bg-primary)]">
-                <PublisherAvatar userId={userId ?? null} name={userName || 'You'} size={20} variant="neutral" />
+                <PublisherAvatar userId={userId ?? null} name={userName || t('detail.you')} size={20} variant="neutral" />
               </div>
             )}
             {assigneeAgent ? (
@@ -1170,7 +1190,7 @@ function KanbanCard({ task, agentMap, taskMap, terminalStatusKeys, peopleById, l
             ) : (
               <div title={t('filters.unassigned')}
                 className="relative z-10 w-6 h-6 rounded-full ring-2 ring-[var(--bg-primary)] bg-slate-100 dark:bg-slate-700 flex items-center justify-center">
-                <span className="text-[10px] text-theme-muted">?</span>
+                <span className="text-xs text-theme-muted">?</span>
               </div>
             )}
           </div>

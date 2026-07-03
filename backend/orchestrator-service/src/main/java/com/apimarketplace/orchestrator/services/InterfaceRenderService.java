@@ -68,6 +68,12 @@ public class InterfaceRenderService implements InterfaceRenderer {
     @Autowired
     private OrchestratorLimitsConfig renderLimits;
 
+    // Per-run {{$vars.*}} bundle for interface variable_mapping resolution.
+    // Optional: absent in plain unit tests -> $vars simply does not resolve there
+    // (graceful degradation), same pattern as the execution engine.
+    @Autowired(required = false)
+    private com.apimarketplace.orchestrator.services.context.WorkflowVariableBundleCache workflowVariableBundleCache;
+
     /**
      * Résultat du rendu d'une interface.
      *
@@ -508,6 +514,23 @@ public class InterfaceRenderService implements InterfaceRenderer {
      * {@code maxResolvedVariableBytes} short-circuits the loop. {@code __truncated}
      * markers are stamped so templates can render "Showing N of M".
      */
+    /**
+     * The run's {@code {{$vars.*}}} bundle (workspace/personal variables), keyed
+     * by runId in the RunScopedCache so repeated renders reuse one fetch. Fetched
+     * with the run OWNER's tenant + org so a workspace variable resolves for any
+     * viewer of the run. Empty when the cache is unwired (unit tests) or the run
+     * row is gone.
+     */
+    private Map<String, Object> resolveVarsBundle(String runId, String ownerTenantId) {
+        if (workflowVariableBundleCache == null || runId == null || ownerTenantId == null) {
+            return Map.of();
+        }
+        String orgId = workflowRunRepository.findByRunIdPublic(runId)
+                .map(WorkflowRunEntity::getOrgId)
+                .orElse(null);
+        return workflowVariableBundleCache.getBundle(runId, ownerTenantId, orgId);
+    }
+
     private Map<String, Object> resolveVariablesOptimized(
             Map<String, String> mappings,
             String runId,
@@ -523,12 +546,17 @@ public class InterfaceRenderService implements InterfaceRenderer {
         logger.info("[InterfaceRender] Resolving {} variables for runId={}, epoch={}, spawn={}, itemIndex={}, mappings={}",
                 mappings.size(), runId, epoch, spawn, itemIndex, mappings.keySet());
 
+        // Per-run {{$vars.*}} bundle so interface variable_mapping can reference
+        // workspace variables at render time. tenantId here is the run OWNER's
+        // tenant (callers pass ownerTenantId); the org is read off the run row.
+        Map<String, Object> varsBundle = resolveVarsBundle(runId, tenantId);
+
         // Narrowed path: storage rows filtered by referenced step_keys + size cap.
         // Pass maxRowsPerVariable for EARLY truncation (before SpEL evaluation) to prevent
         // OOM from large deserialized collections occupying heap during resolution.
         Map<String, Object> resolved = runContextService.evaluateExpressionsForItemNarrowed(
                 runId, tenantId, epoch, spawn, itemIndex, mappings,
-                renderLimits.getMaxStorageRowBytes(), renderLimits.getMaxRowsPerVariable());
+                renderLimits.getMaxStorageRowBytes(), renderLimits.getMaxRowsPerVariable(), varsBundle);
 
         // Post-SpEL clamp + cumulative byte budget short-circuit. Mutates {@code resolved}
         // in-place rebuilt into a new map so iteration order is preserved.

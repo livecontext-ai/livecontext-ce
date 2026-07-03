@@ -13,7 +13,7 @@
 import * as React from 'react';
 import clsx from 'clsx';
 import { Handle, NodeProps, Position } from 'reactflow';
-import { Eye, Globe } from 'lucide-react';
+import { Eye } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 
 import { getNodeVisual } from '../../data/nodeVisuals';
@@ -30,8 +30,7 @@ import { findNodeClassById } from '../../nodes/nodeClasses';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
 import { useNodeExecutionStatus } from '../../contexts/StepByStepContext';
 import { NodeBottomBar } from './NodeBottomBar';
-import { useSidePanelSafe } from '@/contexts/SidePanelContext';
-import { AgentBrowsePanelContent } from '@/components/app/AgentBrowsePanelContent';
+import { useBrowserLiveView } from './shared/useBrowserLiveView';
 
 /**
  * Get iconSlug for Browser Agent node based on provider, mirroring
@@ -82,66 +81,9 @@ export function BrowserAgentNode({ data, selected, id }: NodeProps<BuilderNodeDa
   const borderColor = getStatusBorderColor(effectiveStatus, hasError, isRunMode || viewingEpoch != null);
   const isSkipped = !executionStatus.isStepByStepMode && effectiveStatus === 'skipped';
 
-  // Session id is published by the backend via the per-step stream and
-  // surfaced on data.lastBrowserSessionId by the run-context wiring.
-  const sessionId = data.lastBrowserSessionId;
-  const sidePanel = useSidePanelSafe();
-
-  // Open the live-view in the system right-side panel. The content JSX
-  // is captured at click time, so without the useEffect below the panel
-  // would freeze with whatever liveCoords were available at the moment
-  // of click - clicking BEFORE cdp_ready arrives leaves it stuck on
-  // "no session". The useEffect rewrites the tab content WHEN-AND-ONLY-WHEN
-  // the live coords actually change shape (undefined→defined, or any
-  // primitive value differs), avoiding redundant updateTab calls that
-  // would force BrowserLiveCdpPanel to re-run its prop-driven reconnect
-  // bookkeeping (cdpToken/sessionId/cdpWsUrl in its deps) and cause WS
-  // churn on every unrelated parent re-render.
-  const tabId = `agent-browse-${id}`;
-  const liveCoords = React.useMemo(() => {
-    return sessionId && data.lastBrowserCdpToken
-        && data.lastBrowserCdpWsUrl && data.lastBrowserRunId
-      ? {
-          sessionId,
-          cdpToken: data.lastBrowserCdpToken,
-          cdpWsUrl: data.lastBrowserCdpWsUrl,
-          currentUrl: data.lastBrowserCurrentUrl ?? '',
-          runId: data.lastBrowserRunId,
-          nodeId: id,
-        }
-      : undefined;
-  }, [sessionId, id, data.lastBrowserCdpToken,
-      data.lastBrowserCdpWsUrl, data.lastBrowserRunId,
-      data.lastBrowserCurrentUrl]);
-
-  const handleOpenPanel = React.useCallback(() => {
-    if (!sidePanel) return;
-    sidePanel.openTab({
-      id: tabId,
-      label: data.label || 'Browser Agent',
-      icon: <Globe className="w-4 h-4" />,
-      content: <AgentBrowsePanelContent liveCoords={liveCoords} />,
-      preferredWidth: 0.4,
-      // keepMounted keeps the CDP WS alive across tab switches.
-      keepMounted: true,
-    });
-  }, [sidePanel, tabId, data.label, liveCoords]);
-
-  // Sync the open panel's content with newly-arrived live coords. Only
-  // run when the tab is already registered (skip auto-open) AND the
-  // memoized liveCoords identity actually changed (the useMemo above
-  // handles primitive-equality so unrelated re-renders don't fire this).
-  const lastPushedCoordsRef = React.useRef<typeof liveCoords | null>(null);
-  React.useEffect(() => {
-    if (!sidePanel) return;
-    if (lastPushedCoordsRef.current === liveCoords) return;
-    const tabExists = sidePanel.tabs?.some(t => t.id === tabId);
-    if (!tabExists) return;
-    lastPushedCoordsRef.current = liveCoords;
-    sidePanel.updateTab(tabId, {
-      content: <AgentBrowsePanelContent liveCoords={liveCoords} />,
-    });
-  }, [sidePanel, tabId, liveCoords]);
+  // Live-view side-panel wiring (open tab + live-coords sync) - shared
+  // with the generic agent node via useBrowserLiveView.
+  const { openLiveView: handleOpenPanel } = useBrowserLiveView(id, data);
 
   return (
     <>

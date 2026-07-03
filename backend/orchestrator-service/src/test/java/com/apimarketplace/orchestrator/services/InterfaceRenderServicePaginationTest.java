@@ -68,7 +68,7 @@ class InterfaceRenderServicePaginationTest {
         // Standard path resolves "title" (not in variablePages)
         when(runContextService.evaluateExpressionsForItemNarrowed(
                 eq(RUN_ID), eq(TENANT), eq(EPOCH), eq(SPAWN), eq(ITEM_INDEX),
-                anyMap(), anyInt(), anyInt()))
+                anyMap(), anyInt(), anyInt(), anyMap()))
             .thenReturn(Map.of("title", "My Emails"));
 
         // Invoke the private method via reflection
@@ -126,7 +126,7 @@ class InterfaceRenderServicePaginationTest {
         assertThat(result.get("rows__paginationSupported")).isEqualTo(true);
 
         verify(runContextService, never()).evaluateExpressionsForItemNarrowed(
-                any(), any(), anyInt(), anyInt(), anyInt(), anyMap(), anyInt(), anyInt());
+                any(), any(), anyInt(), anyInt(), anyInt(), anyMap(), anyInt(), anyInt(), anyMap());
     }
 
     @Test
@@ -145,7 +145,7 @@ class InterfaceRenderServicePaginationTest {
         // Falls back to standard
         when(runContextService.evaluateExpressionsForItemNarrowed(
                 eq(RUN_ID), eq(TENANT), eq(EPOCH), eq(SPAWN), eq(ITEM_INDEX),
-                anyMap(), anyInt(), anyInt()))
+                anyMap(), anyInt(), anyInt(), anyMap()))
             .thenReturn(Map.of("data", "25/05"));
 
         Method method = InterfaceRenderService.class.getDeclaredMethod(

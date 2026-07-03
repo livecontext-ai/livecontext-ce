@@ -140,7 +140,11 @@ async def session_abort(session_id: str):
     redis = get_redis()
     import json
     key = control_key(s.run_id, s.node_id)
-    await redis.lpush(key, json.dumps({"cmd": "ABORT"}))
+    # session_id tags the command so a control consumer for ANOTHER session
+    # sharing the same (run_id, node_id) key (loop iteration, re-trigger,
+    # post-completion hold of the previous session) requeues it instead of
+    # swallowing it - see runner._cmd_is_for_session.
+    await redis.lpush(key, json.dumps({"cmd": "ABORT", "session_id": session_id}))
     await redis.expire(key, 600)
     return {"accepted": True, "session_id": session_id}
 
@@ -170,7 +174,8 @@ async def session_resume(session_id: str):
     redis = get_redis()
     import json
     key = control_key(s.run_id, s.node_id)
-    await redis.lpush(key, json.dumps({"cmd": "RESUME"}))
+    # session_id tag: same cross-session isolation as /abort above.
+    await redis.lpush(key, json.dumps({"cmd": "RESUME", "session_id": session_id}))
     await redis.expire(key, 600)
     return {"accepted": True, "session_id": session_id}
 

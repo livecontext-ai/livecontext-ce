@@ -136,7 +136,7 @@ public class WebSearchConfig {
         // The Lettuce command timeout MUST exceed the longest BLPOP this
         // template handles. Two paths use this template:
         //   - generic web jobs (fetch/search/...) → blpopTimeout (150 s)
-        //   - agent_browse → browserAgentBlpopTimeout (205 s, longer to
+        //   - agent_browse → browserAgentBlpopTimeout (600 s default, longer to
         //     match the bumped agent client ceiling at 240 s)
         // Without max(...) here, an agent_browse BLPOP at 205 s would
         // trip RedisCommandTimeoutException at the lower 180 s ceiling

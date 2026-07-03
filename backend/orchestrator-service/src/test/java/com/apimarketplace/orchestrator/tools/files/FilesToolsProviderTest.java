@@ -863,6 +863,31 @@ class FilesToolsProviderTest {
         }
 
         @Test
+        @DisplayName("concepts pointer chain resolves at BOTH ends: finding_a_file -> reading_content -> show_to_user keep their deferred content")
+        void conceptsPointerChainResolvesBothEnds() {
+            // 2026-07 dedup: finding_a_file no longer restates the view type-trichotomy and
+            // reading_content no longer restates the visualize path - each points at the
+            // concept that owns the rule. Guard both ends so a later trim of an authority
+            // cannot silently dangle the pointer.
+            Map<String, Object> out = data(provider.execute("files", Map.of("action", "help"), ctx(null, null)));
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> concepts = (Map<String, Object>) out.get("concepts");
+            assertThat(concepts.get("finding_a_file").toString()).contains("reading_content");
+            String reading = concepts.get("reading_content").toString();
+            assertThat(reading)
+                    .as("authority for the view type-trichotomy")
+                    .contains("extracted to")
+                    .contains("SEE")
+                    .contains("url")
+                    .contains("show_to_user");
+            assertThat(concepts.get("show_to_user").toString())
+                    .as("authority for making a file visible to the user")
+                    .contains("marker")
+                    .contains("visualize");
+        }
+
+        @Test
         @DisplayName("exposes a single 'files' tool under the UTILITY category with its declared actions")
         void getToolsExposesSingleFilesTool() {
             List<AgentToolDefinition> tools = provider.getTools();

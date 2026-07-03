@@ -147,9 +147,10 @@ public class CoreToolsCache {
      */
     private void refreshMissingFromSources(Set<String> missing) {
         // Tools owned by orchestrator: workflow, application, web_search,
-        // image_generation, files, get_connected_services, store_file, download_file
+        // image_generation, files, wait, get_connected_services, store_file, download_file
         if (missing.stream().anyMatch(t -> t.equals("workflow") || t.equals("application")
-                || t.equals("web_search") || t.equals("image_generation") || t.equals("files"))) {
+                || t.equals("web_search") || t.equals("image_generation") || t.equals("files")
+                || t.equals("wait"))) {
             fetchToolsFrom(orchestratorUrl + "/api/agent-tools", "orchestrator");
         }
         if (missing.contains("agent") || missing.contains("skill")) {

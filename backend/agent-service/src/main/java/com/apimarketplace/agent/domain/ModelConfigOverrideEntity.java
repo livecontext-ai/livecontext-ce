@@ -47,6 +47,25 @@ public class ModelConfigOverrideEntity {
     @Column(name = "enabled")
     private Boolean enabled;
 
+    /**
+     * Cloud-admin-only bundle override (V381): what the CE bundle ships for
+     * this model, decoupled from the cloud's own {@code enabled}. NULL =
+     * inherit {@code enabled} (historical behavior); TRUE/FALSE = ship that
+     * value to CE installs regardless of the cloud's greying. Never
+     * serialized into the payload itself - the payload carries the resolved
+     * effective enabled - and never applied on the CE side.
+     */
+    @Column(name = "bundle_enabled")
+    private Boolean bundleEnabled;
+
+    /**
+     * Request-intake flag (same contract as {@code rateLimitsExplicitlySet}):
+     * true when the caller's body carried the bundleEnabled key, so the save
+     * path can distinguish "reset to inherit" (explicit null) from "untouched".
+     */
+    @Transient
+    private boolean bundleEnabledExplicitlySet = false;
+
     @Column(name = "display_name", nullable = false, length = 255)
     private String displayName;
 
@@ -256,6 +275,12 @@ public class ModelConfigOverrideEntity {
 
     public String getModelId() { return modelId; }
     public void setModelId(String modelId) { this.modelId = modelId; }
+
+    public Boolean getBundleEnabled() { return bundleEnabled; }
+    public void setBundleEnabled(Boolean bundleEnabled) { this.bundleEnabled = bundleEnabled; }
+
+    public boolean isBundleEnabledExplicitlySet() { return bundleEnabledExplicitlySet; }
+    public void setBundleEnabledExplicitlySet(boolean v) { this.bundleEnabledExplicitlySet = v; }
 
     public Boolean getEnabled() { return enabled; }
     public void setEnabled(Boolean enabled) { this.enabled = enabled; }

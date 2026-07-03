@@ -398,6 +398,42 @@ class AgentNodeAsyncTest {
         }
 
         @Test
+        @DisplayName("Async queue carries inactivityTimeout=0 (disabled) VERBATIM - 0 must not be dropped as falsy")
+        void asyncQueueCarriesZeroInactivityVerbatim() {
+            AgentNode node = createAsyncNode("agent");
+            node.setRuntimeOverrides(new AgentRuntimeOverrides(null, null, null, null, 0));
+
+            NodeExecutionResult result = node.execute(context.withOrganization("org-async-1", "ADMIN"));
+
+            AgentExecutionRequestMessage queueMessage =
+                (AgentExecutionRequestMessage) result.output().get("queueMessage");
+            @SuppressWarnings("unchecked")
+            Map<String, Object> credentials = (Map<String, Object>) queueMessage.requestPayload().get("credentials");
+            // 0 = watchdog disabled; a falsy-drop here would silently re-enable the 5-min
+            // default on whichever pod dequeues the run.
+            assertThat(credentials).containsEntry("__inactivityTimeoutSeconds__", 0);
+        }
+
+        @Test
+        @DisplayName("Async queue carries the contract boundary windows 10 and 7200 unchanged (no clamping in the producer)")
+        void asyncQueueCarriesBoundaryWindowsUnchanged() {
+            for (int boundary : new int[] {10, 7200}) {
+                AgentNode node = createAsyncNode("agent");
+                node.setRuntimeOverrides(new AgentRuntimeOverrides(null, null, null, null, boundary));
+
+                NodeExecutionResult result = node.execute(context.withOrganization("org-async-1", "ADMIN"));
+
+                AgentExecutionRequestMessage queueMessage =
+                    (AgentExecutionRequestMessage) result.output().get("queueMessage");
+                @SuppressWarnings("unchecked")
+                Map<String, Object> credentials = (Map<String, Object>) queueMessage.requestPayload().get("credentials");
+                assertThat(credentials)
+                    .as("boundary window %s must ride unchanged in the queue payload", boundary)
+                    .containsEntry("__inactivityTimeoutSeconds__", boundary);
+            }
+        }
+
+        @Test
         @DisplayName("Async queue omits __inactivityTimeoutSeconds__ when there is no per-agent override (platform 5-min default applies)")
         void asyncQueueOmitsInactivityCredentialWhenNull() {
             AgentNode node = createAsyncNode("agent");
@@ -830,20 +866,24 @@ class AgentNodeAsyncTest {
             com.apimarketplace.agent.client.queue.AgentExecutionRequestMessage queueMessage =
                 (com.apimarketplace.agent.client.queue.AgentExecutionRequestMessage) result.output().get("queueMessage");
             assertThat(queueMessage.requestPayload())
-                .as("async queue payload must forward conversationId so the bridge streams live to the conversation panel")
+                .as("async queue payload must forward conversationId so the worker streams live to the conversation panel")
                 .containsEntry("conversationId", "conv-7730cebb")
-                // The design decision: conversationId rides ALONGSIDE streamingFormat="workflow".
-                // The bridge ignores streamingFormat and keys its ws:conversation channel purely on
-                // conversationId, while keeping "workflow" preserves the direct-API worker's
-                // workflow-envelope run-view / fleet card (flipping it to "conversation" would
-                // swap that mutually-exclusive callback and regress the run-view). Pin the
-                // coexistence so a future accidental flip reddens here.
-                .containsEntry("streamingFormat", "workflow");
+                // Agents WITH a conversation stream in "conversation" format, mirroring the
+                // inline path: the direct-API worker then instantiates the conversation
+                // callback (live transcript on ws:conversation + snapshot buffers) instead of
+                // the workflow-format one whose onChunk/onThinking are no-ops. The run view
+                // does NOT regress: the worker TEES the workflow-envelope callback alongside
+                // (TeeStreamingCallback keyed on nodeId/workflowRunId), so both surfaces
+                // stream. Pin the pairing so an accidental flip back to the silent-panel
+                // "workflow" pin reddens here.
+                .containsEntry("streamingFormat", "conversation")
+                .containsEntry("nodeId", "agent:smart_assistant")
+                .containsEntry("workflowRunId", "run-async-1");
 
             // Cross-service contract: the worker serializes requestPayload to JSON
             // (AgentQueueProducer) and deserializes it into AgentExecutionRequestDto
             // (AgentRemoteExecutionService.executeByType). Prove the map key "conversationId"
-            // actually lands on the DTO field the bridge dispatch reads back - a rename on
+            // actually lands on the DTO field the dispatch reads back - a rename on
             // either side would silently re-open the "stuck in thinking" gap.
             try {
                 com.fasterxml.jackson.databind.ObjectMapper mapper =
@@ -854,10 +894,32 @@ class AgentNodeAsyncTest {
                 assertThat(roundTripped.conversationId())
                     .as("conversationId must survive the queue->worker JSON round-trip onto the DTO")
                     .isEqualTo("conv-7730cebb");
-                assertThat(roundTripped.streamingFormat()).isEqualTo("workflow");
+                assertThat(roundTripped.streamingFormat()).isEqualTo("conversation");
+                assertThat(roundTripped.nodeId())
+                    .as("nodeId must survive the round-trip - the worker's tee keys the workflow-envelope callback on it")
+                    .isEqualTo("agent:smart_assistant");
+                assertThat(roundTripped.workflowRunId()).isEqualTo("run-async-1");
             } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
                 throw new AssertionError("requestPayload must round-trip to AgentExecutionRequestDto", e);
             }
+        }
+
+        @Test
+        @DisplayName("agent WITHOUT a conversation keeps the workflow streaming format (no conversation channel to feed)")
+        void asyncAgentWithoutConversationKeepsWorkflowFormat() {
+            // When no conversation manager is wired (or conversation resolution fails),
+            // there is no ws:conversation channel to stream to - the payload must fall
+            // back to the workflow format so the run view still gets its tool envelopes.
+            AgentNode node = buildNodeWithConversation("agent");
+            when(mockConversationManager.ensureConversation(any(), any(), any(), any())).thenReturn(null);
+
+            NodeExecutionResult result = node.execute(context);
+
+            com.apimarketplace.agent.client.queue.AgentExecutionRequestMessage queueMessage =
+                (com.apimarketplace.agent.client.queue.AgentExecutionRequestMessage) result.output().get("queueMessage");
+            assertThat(queueMessage.requestPayload())
+                .containsEntry("streamingFormat", "workflow")
+                .doesNotContainKey("conversationId");
         }
 
         @Test

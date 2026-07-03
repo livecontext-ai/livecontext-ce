@@ -155,6 +155,19 @@ public class CreditController {
             @RequestBody ChatBudgetRequest request) {
         BigDecimal balance = creditService.getBalance(userId);
 
+        // Unlimited mode (CE): every billing gate below exists to protect a ledger
+        // this deployment does not enforce. In particular the unknown-model
+        // fail-closed must NOT fire: a CE whose model catalog is behind the cloud
+        // (bundle not yet synced) would otherwise report "insufficient credits"
+        // for any newer model - a billing error for what is a catalog-freshness
+        // situation, on an install where credits can never be insufficient.
+        if (creditService.isUnlimited()) {
+            return ResponseEntity.ok(Map.of(
+                    "allowed", true,
+                    "balance", balance,
+                    "estimatedCost", BigDecimal.ZERO));
+        }
+
         // Fail-closed on missing pricing context. Without a known (provider, model) the
         // pricing service falls back to mid-tier default rates, which under-estimate
         // frontier/bridge models by up to ~70×. The pre-flight gate would let the turn

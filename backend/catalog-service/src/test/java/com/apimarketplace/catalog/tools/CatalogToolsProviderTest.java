@@ -117,6 +117,31 @@ class CatalogToolsProviderTest {
                     "action", "query", "api", "apis", "limit", "tool_id", "params",
                     "expand", "max_items", "api_definition", "api_id", "topics");
         }
+
+        @Test
+        @DisplayName("description keeps the load-bearing contracts after the 2026-07 compaction (response_schema-before-execute, credential block, internal-resources routing)")
+        void descriptionKeepsLoadBearingContracts() {
+            // Regression guard for the description rewrite (2 USAGE FLOW walkthroughs removed,
+            // response_schema paragraph compressed): the rules an agent cannot recover from any
+            // other part of the schema must survive any future trim.
+            String description = provider.getTools().get(0).description();
+            assertThat(description)
+                    // the one ordering rule that prevents 400s on unknown tools
+                    .contains("search -> response_schema -> execute")
+                    .contains("Never skip response_schema")
+                    // the input-contract vocabulary the agent reads back
+                    .contains("allowedValues")
+                    // the credential triage block - must point at the UNIFIED tool's
+                    // require action, not the legacy request_credential name
+                    .contains("credential(action='require')")
+                    .contains("api_key | oauth2 | bearer_token | basic_auth | none")
+                    // routing away from internal resources
+                    .contains("NOT FOR INTERNAL RESOURCES")
+                    // help topics list must stay complete (file_storage was missing pre-fix)
+                    .contains("'file_storage'")
+                    // the legacy tool name must not resurface in agent-facing text
+                    .doesNotContain("request_credential");
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════

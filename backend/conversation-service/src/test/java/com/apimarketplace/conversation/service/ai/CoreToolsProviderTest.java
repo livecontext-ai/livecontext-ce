@@ -175,7 +175,9 @@ class CoreToolsProviderTest {
             assertThat(names).contains("set_conversation_title");
             assertThat(names).doesNotContain("tasks");
             assertThat(names).contains("get_tool_result");
-            assertThat(names).contains("request_credential");
+            assertThat(names).contains("credential");
+            // Legacy routing alias must never be advertised to the LLM.
+            assertThat(names).doesNotContain("request_credential");
         }
 
         @Test
@@ -206,7 +208,8 @@ class CoreToolsProviderTest {
             List<String> names = result.stream().map(ToolDefinition::name).toList();
             assertThat(names).doesNotContain("tasks");
             assertThat(names).contains("get_tool_result");
-            assertThat(names).contains("request_credential");
+            assertThat(names).contains("credential");
+            assertThat(names).doesNotContain("request_credential");
         }
     }
 
@@ -235,7 +238,8 @@ class CoreToolsProviderTest {
             assertThat(names).contains("catalog", "web_search");
             assertThat(names).doesNotContain("workflow", "table");
             // Conversation tools should still be included
-            assertThat(names).contains("get_tool_result", "request_credential");
+            assertThat(names).contains("get_tool_result", "credential");
+            assertThat(names).doesNotContain("request_credential");
         }
 
         @Test
@@ -270,7 +274,8 @@ class CoreToolsProviderTest {
             List<String> names = result.stream().map(ToolDefinition::name).toList();
             assertThat(names).doesNotContain("catalog");
             // Conversation tools always present
-            assertThat(names).contains("get_tool_result", "request_credential");
+            assertThat(names).contains("get_tool_result", "credential");
+            assertThat(names).doesNotContain("request_credential");
         }
     }
 

@@ -253,7 +253,7 @@ public class ShowcaseSnapshotBuilder {
             // visible fields (status, statusCounts, output for interface
             // template rendering) - not the raw execution payloads.
             response.put("steps", buildRunStateSteps(runIdPublic, state.steps(), epochNodeView, epochFilter));
-            response.put("edges", filterEdgesForEpoch(state.edges(), epochNodeView));
+            response.put("edges", buildRunStateEdges(runIdPublic, state.edges(), epochNodeView, epochFilter));
             response.put("readySteps", epochNodeView != null ? epochNodeView.ready() : state.readySteps());
             response.put("completedStepIds", epochNodeView != null ? epochNodeView.completed() : state.completedStepIds());
             response.put("failedStepIds", epochNodeView != null ? epochNodeView.failed() : state.failedStepIds());
@@ -454,6 +454,93 @@ public class ShowcaseSnapshotBuilder {
             result.add(m);
         }
         return result;
+    }
+
+    /**
+     * Edge counts for the {@code runState} section.
+     *
+     * <p>For an epoch-pinned capture, the durable per-epoch edge rows
+     * ({@code WorkflowEpochService} - the same source {@link #buildEpochStates}
+     * freezes for the working per-epoch view) are the PRIMARY source. The JSONB
+     * StateSnapshot prunes a closed epoch's node sets ({@code closeAndPruneEpoch}),
+     * so {@link #filterEdgesForEpoch} sees an empty node view on a finished run
+     * and drops EVERY edge - the marketplace "All epochs" canvas then renders no
+     * edge statusCounts while nodes keep theirs (steps already fall back to the
+     * aggregation table in {@link #buildRunStateSteps}). Falls back to the
+     * node-view filter when no per-epoch edge rows exist (legacy runs).
+     */
+    private List<WorkflowRunState.EdgeState> buildRunStateEdges(
+            String runIdPublic,
+            List<WorkflowRunState.EdgeState> edges,
+            EpochNodeView epochNodeView,
+            Integer epochFilter) {
+        if (epochFilter != null) {
+            List<WorkflowRunState.EdgeState> epochEdges = epochEdgeStates(runIdPublic, epochFilter);
+            if (!epochEdges.isEmpty()) {
+                return epochEdges;
+            }
+        }
+        return filterEdgesForEpoch(edges, epochNodeView);
+    }
+
+    /**
+     * Convert the per-epoch edge rows ({@code edges: {"from->to": {STATUS: count}}})
+     * into {@code EdgeState}s. Returns an empty list when the epoch has no edge
+     * rows so the caller can fall back to the JSONB-derived filter.
+     *
+     * <p><b>SYNC</b>: the parse/derive logic (arrow split, case-insensitive status
+     * summing, status precedence RUNNING &gt; FAILED &gt; COMPLETED &gt; SKIPPED) is
+     * mirrored by {@code ShowcaseSnapshotReader.synthesizeEdgesFromEpochStates} in
+     * publication-service (the read-time self-heal for legacy snapshots frozen with
+     * empty edges). Orchestrator and publication-service share no module, so the
+     * copy lives there - keep both sides aligned.
+     */
+    private List<WorkflowRunState.EdgeState> epochEdgeStates(String runIdPublic, int epoch) {
+        try {
+            Map<String, Object> epochState = workflowEpochService.getEpochState(runIdPublic, epoch);
+            Object edgesObj = epochState != null ? epochState.get("edges") : null;
+            if (!(edgesObj instanceof Map<?, ?> edgeMap) || edgeMap.isEmpty()) {
+                return List.of();
+            }
+            List<WorkflowRunState.EdgeState> result = new ArrayList<>(edgeMap.size());
+            for (Map.Entry<?, ?> entry : edgeMap.entrySet()) {
+                String key = String.valueOf(entry.getKey());
+                int arrow = key.indexOf("->");
+                if (arrow <= 0 || arrow + 2 >= key.length()
+                        || !(entry.getValue() instanceof Map<?, ?> counts)) continue;
+                int completed = 0;
+                int skipped = 0;
+                int failed = 0;
+                int running = 0;
+                for (Map.Entry<?, ?> count : counts.entrySet()) {
+                    int value = count.getValue() instanceof Number n ? n.intValue() : 0;
+                    switch (String.valueOf(count.getKey()).toUpperCase(Locale.ROOT)) {
+                        case "COMPLETED" -> completed += value;
+                        case "SKIPPED" -> skipped += value;
+                        case "FAILED" -> failed += value;
+                        case "RUNNING" -> running += value;
+                        default -> { }
+                    }
+                }
+                if (completed == 0 && skipped == 0 && failed == 0 && running == 0) continue;
+                RunStatus status = running > 0 ? RunStatus.RUNNING
+                        : failed > 0 ? RunStatus.FAILED
+                        : completed > 0 ? RunStatus.COMPLETED
+                        : RunStatus.SKIPPED;
+                result.add(new WorkflowRunState.EdgeState(
+                        key.substring(0, arrow),
+                        key.substring(arrow + 2),
+                        status,
+                        completed,
+                        skipped,
+                        completed + skipped));
+            }
+            return result;
+        } catch (Exception e) {
+            log.debug("[ShowcaseSnapshot] per-epoch edge counts unavailable for {} epoch {}: {}",
+                    runIdPublic, epoch, e.getMessage());
+            return List.of();
+        }
     }
 
     private static List<WorkflowRunState.EdgeState> filterEdgesForEpoch(

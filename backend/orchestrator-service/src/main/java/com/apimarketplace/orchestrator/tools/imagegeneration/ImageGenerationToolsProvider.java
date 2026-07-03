@@ -246,8 +246,7 @@ public class ImageGenerationToolsProvider implements ToolsProvider {
                         + "MUST come from action='help'.available_models.", false),
                 stringParam("quality", "'low' | 'medium' (default) | 'high'. OpenAI only - "
                         + "Google models have a single quality tier (generate).", false),
-                intParam("n", "Image count, default 1, cap 10 (generate). "
-                        + "OpenAI: single API call. Google: serial calls per image.", false, 1),
+                intParam("n", "Image count, default 1, cap 10 (generate).", false, 1),
                 stringParam("size", "'1024x1024' (default; only square supported in v1)", false)
         );
 

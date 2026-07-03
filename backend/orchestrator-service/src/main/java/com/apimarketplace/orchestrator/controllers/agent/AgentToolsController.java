@@ -62,6 +62,9 @@ public class AgentToolsController {
         if (request.get("workflowRunId") != null) {
             credentials.put("__workflowRunId__", request.get("workflowRunId"));
         }
+        if (request.get("workflowNodeId") != null) {
+            credentials.put("__workflowNodeId__", request.get("workflowNodeId"));
+        }
         for (String allowedKey : List.of(
                 "allowedToolIds",
                 "allowedWorkflowIds",
@@ -291,6 +294,9 @@ public class AgentToolsController {
         }
         if (request.get("workflowRunId") != null) {
             credentials.put("__workflowRunId__", request.get("workflowRunId"));
+        }
+        if (request.get("workflowNodeId") != null) {
+            credentials.put("__workflowNodeId__", request.get("workflowNodeId"));
         }
         if (request.get("allowedToolIds") != null) {
             credentials.put("allowedToolIds", request.get("allowedToolIds"));

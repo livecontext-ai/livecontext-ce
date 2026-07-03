@@ -654,6 +654,44 @@ class CreditControllerTest {
         }
 
         @Test
+        @DisplayName("unlimited mode (CE): unknown model is ALLOWED - billing gates must not fire without billing")
+        void unlimitedModeAllowsUnknownModel() {
+            // Regression: a fresh CE whose model catalog lagged the cloud (bundle not
+            // synced) had every workflow agent on a newer model die with
+            // "Insufficient credits (pre-flight tenant budget)" - the unknown-model
+            // fail-closed ran BEFORE the unlimited no-op. On an unlimited install the
+            // free-inference loophole this gate closes cannot exist.
+            when(creditService.getBalance(USER_ID)).thenReturn(BigDecimal.ZERO);
+            when(creditService.isUnlimited()).thenReturn(true);
+
+            var request = new CreditController.ChatBudgetRequest(
+                    "anthropic", "claude-fable-5", 4100, 8192);
+            ResponseEntity<Map<String, Object>> response = controller.checkChatBudget(USER_ID, request);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(response.getBody())
+                    .containsEntry("allowed", true)
+                    .containsEntry("estimatedCost", BigDecimal.ZERO);
+            // The pricing gate must not even be consulted in unlimited mode.
+            verify(pricingService, never()).hasPricing(any(), any());
+        }
+
+        @Test
+        @DisplayName("limited mode: unknown model stays fail-closed (the cloud loophole guard is preserved)")
+        void limitedModeStillFailsClosedOnUnknownModel() {
+            when(creditService.getBalance(USER_ID)).thenReturn(new BigDecimal("100.00"));
+            when(creditService.isUnlimited()).thenReturn(false);
+            when(pricingService.hasPricing("anthropic", "claude-unknown-99")).thenReturn(false);
+
+            var request = new CreditController.ChatBudgetRequest(
+                    "anthropic", "claude-unknown-99", 100, 100);
+            ResponseEntity<Map<String, Object>> response = controller.checkChatBudget(USER_ID, request);
+
+            assertThat(response.getStatusCode().value()).isEqualTo(402);
+            assertThat(response.getBody()).containsEntry("allowed", false);
+        }
+
+        @Test
         @DisplayName("returns 402 allowed=false when projected cost exceeds balance - the critical regression guard")
         void returns402WhenProjectedExceedsBalance() {
             // Regression: production user had 1.50 credits, pre-check returned allowed (balance >= 1),

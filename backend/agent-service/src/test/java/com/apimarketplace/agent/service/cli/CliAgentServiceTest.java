@@ -1,14 +1,19 @@
 package com.apimarketplace.agent.service.cli;
 
 import com.apimarketplace.agent.domain.AgentEntity;
+import com.apimarketplace.agent.domain.ToolCall;
 import com.apimarketplace.agent.domain.ToolDefinition;
+import com.apimarketplace.agent.domain.ToolResult;
 import com.apimarketplace.agent.dto.cli.CliSessionStartRequest;
 import com.apimarketplace.agent.dto.cli.CliSessionResponse;
+import com.apimarketplace.agent.dto.cli.CliToolRequest;
+import com.apimarketplace.agent.dto.cli.CliToolResponse;
 import com.apimarketplace.agent.service.AgentObservabilityService;
 import com.apimarketplace.agent.service.AgentService;
 import com.apimarketplace.agent.service.execution.AgentToolsConfigCredentials;
 import com.apimarketplace.agent.service.execution.CoreToolsCache;
 import com.apimarketplace.agent.service.execution.RemoteToolExecutionService;
+import com.apimarketplace.agent.tool.ToolExecutionService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -326,7 +331,9 @@ class CliAgentServiceTest {
             List<String> names = toolNames(response.sessionId());
             assertThat(names).doesNotContain("set_conversation_title");
             // Other conversation tools remain available.
-            assertThat(names).contains("get_tool_result", "request_credential");
+            assertThat(names).contains("get_tool_result", "credential");
+            // Legacy routing alias is never advertised in session tool definitions.
+            assertThat(names).doesNotContain("request_credential");
         }
 
         @Test
@@ -499,6 +506,79 @@ class CliAgentServiceTest {
             assertThat(response).isNotNull();
             assertThat(getSessionCredentials(response.sessionId())).doesNotContainKey("allowedTableIds");
             verify(agentService, never()).getAgent(any(), any(), any(), any());
+        }
+    }
+
+    @Nested
+    @DisplayName("ToolExecutionService injection seam (CE monolith adapter)")
+    class ToolExecutionServiceInjectionSeam {
+
+        // REGRESSION: the CE bridge 401 bug. CliAgentService used to inject the
+        // CONCRETE RemoteToolExecutionService, bypassing the CE monolith's
+        // @Primary MonolithToolExecutionService adapter - so every bridge-session
+        // conversation tool (credential, get_tool_result, set_conversation_title)
+        // routed to the JWT-protected /api/internal/conversation/tools/execute
+        // callback WITHOUT a JWT and died with 401. The dependency must stay the
+        // com.apimarketplace.agent.tool.ToolExecutionService INTERFACE so the
+        // monolith's @Primary adapter intercepts in-process.
+
+        @Test
+        @DisplayName("executeTool dispatches through ANY ToolExecutionService impl - a non-Remote stub receives the call and its result is relayed")
+        void executeToolDispatchesThroughInterfaceImpl() {
+            // A plain interface impl that is NOT RemoteToolExecutionService: this
+            // is exactly the shape of the CE monolith's @Primary adapter. If the
+            // constructor parameter reverts to the concrete class, this stops
+            // compiling - the build itself pins the seam.
+            List<ToolCall> received = new java.util.ArrayList<>();
+            ToolExecutionService nonRemoteStub = new ToolExecutionService() {
+                @Override
+                public ToolResult executeTool(ToolCall toolCall, ToolDefinition toolDefinition,
+                                              String tenantId, Map<String, Object> credentials) {
+                    received.add(toolCall);
+                    return ToolResult.builder()
+                        .toolCall(toolCall)
+                        .success(true)
+                        .content("in-process adapter result")
+                        .build();
+                }
+
+                @Override
+                public boolean isToolAvailable(ToolDefinition toolDefinition, String tenantId) {
+                    return true;
+                }
+            };
+            CliAgentService inProcessService = new CliAgentService(
+                coreToolsCache, nonRemoteStub,
+                mock(AgentObservabilityService.class), agentService, new ObjectMapper());
+
+            // conversationId present → the session advertises the conversation
+            // tools (credential/get_tool_result) - the exact tools the CE bug hit.
+            CliSessionResponse session = inProcessService.startSession(
+                new CliSessionStartRequest(null, null, "claude-code", "conv-1",
+                    null, null, Boolean.TRUE, null, null, null),
+                "tenant-1", "org-test");
+
+            CliToolResponse response = inProcessService.executeTool(
+                new CliToolRequest(session.sessionId(), "credential", Map.of("action", "list")),
+                "tenant-1");
+
+            assertThat(response.success()).isTrue();
+            assertThat(response.result()).isEqualTo("in-process adapter result");
+            assertThat(received).hasSize(1);
+            assertThat(received.get(0).toolName()).isEqualTo("credential");
+        }
+
+        @Test
+        @DisplayName("the injected dependency is declared as the ToolExecutionService INTERFACE, not RemoteToolExecutionService")
+        void dependencyIsDeclaredAsInterface() throws Exception {
+            Field field = CliAgentService.class.getDeclaredField("remoteToolExecutionService");
+
+            assertThat(field.getType())
+                .as("CliAgentService must depend on the interface so the CE monolith's "
+                    + "@Primary MonolithToolExecutionService intercepts conversation tools "
+                    + "in-process (concrete injection = bridge 401 on every conversation tool)")
+                .isEqualTo(ToolExecutionService.class)
+                .isNotEqualTo(RemoteToolExecutionService.class);
         }
     }
 }

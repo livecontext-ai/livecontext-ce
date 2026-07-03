@@ -196,9 +196,9 @@ class DefaultSystemPromptsTest {
     // ═══════════════════════════════════════════════════════════════════════════════
 
     @Test
-    @DisplayName("ALL_RESOURCE_MODULES contains 10 modules (incl. image_generation, files)")
-    void allResourceModulesContains10Modules() {
-        assertThat(DefaultSystemPrompts.ALL_RESOURCE_MODULES).hasSize(10);
+    @DisplayName("ALL_RESOURCE_MODULES contains 11 modules (incl. image_generation, files, wait)")
+    void allResourceModulesContains11Modules() {
+        assertThat(DefaultSystemPrompts.ALL_RESOURCE_MODULES).hasSize(11);
     }
 
     @Test
@@ -220,6 +220,15 @@ class DefaultSystemPromptsTest {
     }
 
     @Test
+    @DisplayName("WAIT module is registered with key 'wait' and points at workflow wait_run for runs")
+    void waitModuleRegistered() {
+        assertThat(DefaultSystemPrompts.WAIT.key()).isEqualTo("wait");
+        assertThat(DefaultSystemPrompts.WAIT.toolNames()).containsExactly("wait");
+        assertThat(DefaultSystemPrompts.WAIT.promptSection())
+                .contains("wait", "sleep", "wait_run");
+    }
+
+    @Test
     @DisplayName("getAllCoreToolNames returns all tool names")
     void getAllCoreToolNamesReturnsAllToolNames() {
         Set<String> allNames = DefaultSystemPrompts.getAllCoreToolNames();
@@ -228,7 +237,7 @@ class DefaultSystemPromptsTest {
             .contains("catalog",
                 "table", "interface", "agent", "skill",
                 "workflow",
-                "application", "web_search", "image_generation", "files");
+                "application", "web_search", "image_generation", "files", "wait");
     }
 
     @Test

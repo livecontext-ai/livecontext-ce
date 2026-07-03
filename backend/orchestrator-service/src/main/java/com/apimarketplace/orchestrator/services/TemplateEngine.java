@@ -8,6 +8,7 @@ import com.apimarketplace.orchestrator.services.template.NamespaceResolver;
 import com.apimarketplace.orchestrator.services.template.PathNavigator;
 import com.apimarketplace.orchestrator.services.template.SpelEvaluator;
 import com.apimarketplace.orchestrator.services.template.SpelProtectedRegions;
+import com.apimarketplace.orchestrator.services.template.VarsSyntaxNormalizer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.expression.Expression;
@@ -370,6 +371,10 @@ public class TemplateEngine implements TemplateResolver {
     private TransformResult transformToSpelExpressionWithHumanReadable(String expression,
                                                                         WorkflowExecutionContext context,
                                                                         Map<String, Object> variables) {
+        // $vars.name / vars:name -> vars.name BEFORE the token scan: the leading
+        // '$' is not an identifier char and would otherwise leak into the SpEL
+        // output as a literal, producing an unparseable expression.
+        expression = VarsSyntaxNormalizer.normalize(expression);
         Matcher varMatcher = VARIABLE_IDENTIFIER_PATTERN.matcher(expression);
         StringBuilder spelResult = new StringBuilder();
         StringBuilder humanResult = new StringBuilder();
@@ -569,7 +574,7 @@ public class TemplateEngine implements TemplateResolver {
         StringBuffer result = new StringBuffer();
 
         while (matcher.find()) {
-            String variablePath = matcher.group(1).trim();
+            String variablePath = VarsSyntaxNormalizer.normalize(matcher.group(1).trim());
             Object value = pathNavigator.getVariableValueFromMap(variablePath, variables);
 
             if (value != null) {

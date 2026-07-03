@@ -1,12 +1,9 @@
 package com.apimarketplace.orchestrator.controllers.mcp;
 
 import com.apimarketplace.agent.mcp.McpMessageTypes.*;
-import com.apimarketplace.agent.registry.AgentToolDefinition;
 import com.apimarketplace.agent.registry.AgentToolRegistry;
 import com.apimarketplace.agent.registry.ToolCategory;
-import com.apimarketplace.agent.tools.ToolsProvider;
-import com.apimarketplace.agent.tools.ToolsRegistrationService;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.apimarketplace.orchestrator.services.mcp.McpProtocolService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -18,7 +15,9 @@ import java.util.Map;
 
 /**
  * MCP (Model Context Protocol) Server Controller.
- * Implements the MCP specification for exposing tools to AI agents.
+ * Exposes the tool registry through REST-shaped MCP endpoints (one path per method).
+ * The standard single-endpoint Streamable HTTP transport lives at /mcp
+ * ({@link McpStreamableHttpController}); both delegate to {@link McpProtocolService}.
  */
 @Slf4j
 @RestController
@@ -28,8 +27,7 @@ import java.util.Map;
 public class McpServerController {
 
     private final AgentToolRegistry registry;
-    private final ToolsRegistrationService registrationService;
-    private final ObjectMapper objectMapper;
+    private final McpProtocolService protocolService;
 
     private static final String PROTOCOL_VERSION = "2024-11-05";
 
@@ -51,7 +49,6 @@ public class McpServerController {
     public ResponseEntity<JsonRpcResponse> initialize(@RequestBody JsonRpcRequest request) {
         log.info("MCP initialize request from client");
 
-        InitializeResponse response = InitializeResponse.create();
         return ResponseEntity.ok(JsonRpcResponse.success(Map.of(
             "protocolVersion", PROTOCOL_VERSION,
             "serverInfo", Map.of(
@@ -71,10 +68,8 @@ public class McpServerController {
      */
     @GetMapping("/tools/list")
     public ResponseEntity<Map<String, Object>> listTools() {
-        List<Map<String, Object>> mcpTools = registry.getToolsInMcpFormat();
-
         return ResponseEntity.ok(Map.of(
-            "tools", mcpTools
+            "tools", protocolService.listTools()
         ));
     }
 
@@ -84,10 +79,8 @@ public class McpServerController {
      */
     @PostMapping("/tools/list")
     public ResponseEntity<JsonRpcResponse> listToolsRpc(@RequestBody JsonRpcRequest request) {
-        List<Map<String, Object>> mcpTools = registry.getToolsInMcpFormat();
-
         return ResponseEntity.ok(JsonRpcResponse.success(Map.of(
-            "tools", mcpTools
+            "tools", protocolService.listTools()
         ), request.id()));
     }
 
@@ -114,7 +107,7 @@ public class McpServerController {
             }
 
             // Check if tool exists
-            if (!registry.hasTool(toolName)) {
+            if (!protocolService.hasTool(toolName)) {
                 return ResponseEntity.ok(JsonRpcResponse.error(
                     JsonRpcError.METHOD_NOT_FOUND,
                     "Tool not found: " + toolName,
@@ -130,47 +123,8 @@ public class McpServerController {
             String orgId = httpRequest.getHeader("X-Organization-ID");
             String orgRole = httpRequest.getHeader("X-Organization-Role");
 
-            ToolsProvider.ToolExecutionContext context = new ToolsProvider.ToolExecutionContext(
-                tenantId,
-                Map.of(),
-                Map.of(),
-                java.util.Set.of(),  // No approved services for MCP calls
-                null,  // viewingWorkflowId
-                null,  // viewingWorkflowName
-                orgId,
-                orgRole
-            );
-
-            // Execute tool
-            ToolsProvider.ToolExecutionResult result = registrationService.executeTool(
-                toolName, arguments, context
-            );
-
-            if (result.success()) {
-                // Format response as MCP tool result
-                String textContent;
-                if (result.data() instanceof Map || result.data() instanceof List) {
-                    textContent = objectMapper.writeValueAsString(result.data());
-                } else {
-                    textContent = result.data() != null ? result.data().toString() : "";
-                }
-
-                return ResponseEntity.ok(JsonRpcResponse.success(Map.of(
-                    "content", List.of(Map.of(
-                        "type", "text",
-                        "text", textContent
-                    )),
-                    "isError", false
-                ), request.id()));
-            } else {
-                return ResponseEntity.ok(JsonRpcResponse.success(Map.of(
-                    "content", List.of(Map.of(
-                        "type", "text",
-                        "text", result.error() != null ? result.error() : "Tool execution failed"
-                    )),
-                    "isError", true
-                ), request.id()));
-            }
+            Map<String, Object> result = protocolService.callTool(toolName, arguments, tenantId, orgId, orgRole);
+            return ResponseEntity.ok(JsonRpcResponse.success(result, request.id()));
 
         } catch (Exception e) {
             log.error("Error calling tool via MCP: {}", e.getMessage(), e);
@@ -190,42 +144,8 @@ public class McpServerController {
      */
     @GetMapping("/resources/list")
     public ResponseEntity<Map<String, Object>> listResources() {
-        // Resources represent schemas and documentation
-        List<Map<String, Object>> resources = List.of(
-            Map.of(
-                "uri", "schema://workflow",
-                "name", "Workflow Schema",
-                "description", "JSON Schema for workflow plans",
-                "mimeType", "application/json"
-            ),
-            Map.of(
-                "uri", "schema://agent",
-                "name", "Agent Schema",
-                "description", "JSON Schema for agent configuration",
-                "mimeType", "application/json"
-            ),
-            Map.of(
-                "uri", "schema://interface",
-                "name", "Interface Schema",
-                "description", "JSON Schema for interfaces (display, interactive apps, multi-page)",
-                "mimeType", "application/json"
-            ),
-            Map.of(
-                "uri", "schema://datasource",
-                "name", "DataSource Schema",
-                "description", "JSON Schema for data sources",
-                "mimeType", "application/json"
-            ),
-            Map.of(
-                "uri", "docs://tools",
-                "name", "Tools Documentation",
-                "description", "Full documentation of all available tools",
-                "mimeType", "text/markdown"
-            )
-        );
-
         return ResponseEntity.ok(Map.of(
-            "resources", resources
+            "resources", protocolService.listResources()
         ));
     }
 
@@ -258,7 +178,7 @@ public class McpServerController {
                 ));
             }
 
-            String content = getResourceContent(uri);
+            String content = protocolService.getResourceContent(uri);
             if (content == null) {
                 return ResponseEntity.ok(JsonRpcResponse.error(
                     JsonRpcError.INVALID_PARAMS,
@@ -270,7 +190,7 @@ public class McpServerController {
             return ResponseEntity.ok(JsonRpcResponse.success(Map.of(
                 "contents", List.of(Map.of(
                     "uri", uri,
-                    "mimeType", uri.startsWith("schema://") ? "application/json" : "text/markdown",
+                    "mimeType", protocolService.resourceMimeType(uri),
                     "text", content
                 ))
             ), request.id()));
@@ -311,57 +231,5 @@ public class McpServerController {
                 ))
                 .toList()
         ));
-    }
-
-    // ==================== Helper Methods ====================
-
-    private String getResourceContent(String uri) {
-        try {
-            return switch (uri) {
-                case "schema://workflow" -> objectMapper.writerWithDefaultPrettyPrinter()
-                    .writeValueAsString(com.apimarketplace.agent.registry.ToolSchemaGenerator.getWorkflowPlanSchema());
-                case "schema://agent" -> objectMapper.writerWithDefaultPrettyPrinter()
-                    .writeValueAsString(com.apimarketplace.agent.registry.ToolSchemaGenerator.getAgentConfigSchema());
-                case "schema://interface" -> objectMapper.writerWithDefaultPrettyPrinter()
-                    .writeValueAsString(com.apimarketplace.agent.registry.ToolSchemaGenerator.getInterfaceSchema());
-                case "schema://datasource" -> objectMapper.writerWithDefaultPrettyPrinter()
-                    .writeValueAsString(com.apimarketplace.agent.registry.ToolSchemaGenerator.getDataSourceSchema());
-                case "docs://tools" -> generateToolsDocumentation();
-                default -> null;
-            };
-        } catch (Exception e) {
-            log.error("Error generating resource content for {}: {}", uri, e.getMessage());
-            return null;
-        }
-    }
-
-    private String generateToolsDocumentation() {
-        StringBuilder sb = new StringBuilder();
-        sb.append("# LiveContext Agent Tools\n\n");
-        sb.append("This document lists all available tools for AI agents.\n\n");
-
-        for (ToolCategory category : ToolCategory.values()) {
-            List<AgentToolDefinition> tools = registry.getToolsByCategory(category);
-            if (tools.isEmpty()) continue;
-
-            sb.append("## ").append(category.getDisplayName()).append("\n\n");
-            sb.append(category.getDescription()).append("\n\n");
-
-            for (AgentToolDefinition tool : tools) {
-                sb.append("### `").append(tool.name()).append("`\n\n");
-                sb.append(tool.description()).append("\n\n");
-
-                if (tool.helpText() != null && !tool.helpText().isBlank()) {
-                    sb.append(tool.helpText()).append("\n\n");
-                }
-
-                if (!tool.requiredParameters().isEmpty()) {
-                    sb.append("**Required Parameters:** ");
-                    sb.append(String.join(", ", tool.requiredParameters())).append("\n\n");
-                }
-            }
-        }
-
-        return sb.toString();
     }
 }

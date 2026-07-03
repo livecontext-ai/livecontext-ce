@@ -241,6 +241,31 @@ class ToolResponseControllerIntegrationTest {
         }
 
         @Test
+        @DisplayName("should accept a clean caller token when the configured secret has a trailing newline")
+        void shouldAcceptCleanTokenWhenConfiguredSecretHasTrailingNewline() throws Exception {
+            // Regression: a k8s secret provisioned with a trailing newline must not
+            // silently 403 every legitimate caller sending the trimmed value.
+            ToolResponseController paddedController = new ToolResponseController(
+                    toolResponseService, mappingResolverService, mappingRegistry);
+            ReflectionTestUtils.setField(paddedController, "catalogAdminToken", ADMIN_TOKEN + "\n");
+            MockMvc paddedMvc = MockMvcBuilders.standaloneSetup(paddedController)
+                    .setControllerAdvice(new GlobalExceptionHandler())
+                    .build();
+
+            ToolResponseDto inputDto = createSampleResponse();
+            inputDto.setId(null);
+            when(toolResponseService.createResponse(any(ToolResponseDto.class), eq(USER_ID)))
+                    .thenReturn(createSampleResponse());
+
+            paddedMvc.perform(post("/api/tool-responses")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(inputDto))
+                            .header("X-User-ID", USER_ID)
+                            .header("X-Internal-Admin-Token", ADMIN_TOKEN))
+                    .andExpect(status().isCreated());
+        }
+
+        @Test
         @DisplayName("should create response with null userId when header is empty")
         void shouldCreateResponseWithNullUserId() throws Exception {
             ToolResponseDto inputDto = createSampleResponse();

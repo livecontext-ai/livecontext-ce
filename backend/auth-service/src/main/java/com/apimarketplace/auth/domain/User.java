@@ -80,7 +80,7 @@ public class User implements UserDetails {
     @Column(name = "api_key_hash", length = 64)
     private String apiKeyHash;
 
-    @Column(name = "api_key_hint", length = 10)
+    @Column(name = "api_key_hint", length = 20)
     private String apiKeyHint;
 
     @Column(name = "api_key_created_at")

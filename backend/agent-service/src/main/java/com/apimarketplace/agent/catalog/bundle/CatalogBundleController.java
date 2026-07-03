@@ -124,6 +124,45 @@ public class CatalogBundleController {
         }
     }
 
+    /**
+     * Admin: delete an INACTIVE bundle. 409 when the bundle is active (activate
+     * another one first), 404 when the id is unknown. Retention also prunes
+     * old inactive bundles automatically (see CatalogBundleAutoRebuildScheduler);
+     * this endpoint is the manual counterpart.
+     */
+    @DeleteMapping("/api/model-config/bundles/{id}")
+    public ResponseEntity<?> deleteBundle(
+            @RequestHeader(value = "X-User-Roles", defaultValue = "USER") String roles,
+            @PathVariable Long id) {
+        var denied = AdminRoleGuard.denyIfNotAdmin(roles);
+        if (denied != null) return denied;
+        try {
+            bundleService.deleteBundle(id);
+            return ResponseEntity.ok(Map.of("deleted", id));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", e.getMessage()));
+        }
+        // IllegalStateException (active bundle) maps to 409 via GlobalExceptionHandler.
+    }
+
+    /**
+     * PUBLIC seed download: the currently active signed bundle, WITHOUT the
+     * cloud-link gate. Consumed by the CE release pipeline (publish-ce bakes it
+     * into catalog-seeds/model-bundle.json) so a fresh, never-linked install
+     * starts with the models of its release instead of a stale hardcoded seed.
+     * Deliberate policy: the RELEASE-TIME snapshot is free; the continuous
+     * 15-minute sync stays a cloud-link benefit. The payload is Ed25519-signed
+     * and verified by the consumer, so serving it anonymously exposes nothing
+     * an attacker could exploit beyond public model metadata.
+     * 404 when no bundle has been activated yet.
+     */
+    @GetMapping("/api/catalog-bundles/seed")
+    public ResponseEntity<?> seedBundle() {
+        Optional<SignedBundle> bundle = bundleService.getActiveSignedBundle();
+        return bundle.<ResponseEntity<?>>map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
     /** Admin: list all bundles (newest first). */
     @GetMapping("/api/model-config/bundles")
     public ResponseEntity<?> listBundles(

@@ -49,7 +49,7 @@ public final class WorkflowBuilderActionConfig {
      */
     public static final List<String> HIDDEN_ACTIONS = List.of(
             "get_plan", "set_plan",
-            "get", "list", "delete", "runs", "get_run", "get_node_output",
+            "get", "list", "delete", "runs", "get_run", "wait_run", "get_node_output",
             // Advance a paused run (gated in chat via ToolAuthorizationPolicy):
             "resolve_approval", "continue_interface",
             // `create` is the legacy name for `finish`. Still routes through the
@@ -139,7 +139,7 @@ public final class WorkflowBuilderActionConfig {
      * {@code execute}) still get the visualization → side panel focuses as before.
      */
     public static final Set<String> READ_ONLY_ACTIONS = Set.of(
-            "get", "list", "runs", "get_run", "get_node_output",
+            "get", "list", "runs", "get_run", "wait_run", "get_node_output",
             "describe", "validate", "search", "help", "get_plan"
     );
 

@@ -11,9 +11,12 @@ import { useCurrentOrg } from "@/lib/stores/current-org-store";
 import {
   CredentialTabs,
   CredentialTab,
+  CredentialsPrimaryTabs,
+  CredentialsPrimaryTab,
   MyCredentialsList,
   AvailableCredentialsList,
   MyOAuthAppsSection,
+  VariablesSection,
 } from "./components";
 import {
   CredentialWizard,
@@ -32,6 +35,9 @@ export default function CredentialsPage() {
   const searchParams = useSearchParams();
 
   // State
+  // Primary toggle: Credentials | Variables. The classic my/available toggle
+  // becomes the secondary level, shown only under Credentials.
+  const [primaryTab, setPrimaryTab] = useState<CredentialsPrimaryTab>("credentials");
   const [activeTab, setActiveTab] = useState<CredentialTab>("my");
   const [selectedTemplate, setSelectedTemplate] = useState<CredentialTemplate | null>(null);
   const [requirements, setRequirements] = useState<CredentialWizardRequirement[]>([]);
@@ -102,6 +108,7 @@ export default function CredentialsPage() {
       cleanCallbackUrl();
 
       // Optionally switch to "My Credentials" tab to show the new credential
+      setPrimaryTab('credentials');
       setActiveTab('my');
     } else if (error) {
       // Show error notification
@@ -246,14 +253,23 @@ export default function CredentialsPage() {
     // Authenticated - show tabs and content
     return (
       <>
-        {/* Tabs */}
-        <div className="flex justify-center">
-          <CredentialTabs activeTab={activeTab} onTabChange={setActiveTab} />
+        {/* Primary toggle: Credentials | Variables */}
+        <div className="flex flex-col items-center gap-3">
+          <CredentialsPrimaryTabs activeTab={primaryTab} onTabChange={setPrimaryTab} />
+          {/* Secondary toggle, only within Credentials */}
+          {primaryTab === "credentials" && (
+            <CredentialTabs activeTab={activeTab} onTabChange={setActiveTab} />
+          )}
         </div>
 
         {/* Content */}
         <div>
-          {activeTab === "my" ? (
+          {primaryTab === "variables" ? (
+            <VariablesSection
+              refreshSignal={credentialsRefreshSignal}
+              addToast={addToast}
+            />
+          ) : activeTab === "my" ? (
             <div className="space-y-10">
               <MyOAuthAppsSection
                 onAddNew={() => {

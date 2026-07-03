@@ -255,7 +255,7 @@ class ToolAccessControlTest {
     void workflowReadModeAllowsBuilderInspectionActions() {
         for (String readAction : List.of(
                 "load", "get", "list", "describe", "validate", "get_plan",
-                "get_node_output", "runs", "get_run", "search", "help",
+                "get_node_output", "runs", "get_run", "wait_run", "search", "help",
                 // builder-internal TABLE reads - pure reads, must pass in read-mode
                 "read_rows", "find_rows")) {
             assertThat(ToolAccessControl.checkWriteAccess(

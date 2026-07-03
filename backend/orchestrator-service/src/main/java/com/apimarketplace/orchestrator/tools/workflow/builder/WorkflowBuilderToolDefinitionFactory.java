@@ -31,7 +31,12 @@ public class WorkflowBuilderToolDefinitionFactory {
      */
     public AgentToolDefinition buildToolDefinition() {
         List<ToolParameter> params = List.of(
-            stringParam("action", "Action: init, load, save, finish, add_node, connect, disconnect, modify, remove, undo, describe, validate, search, execute, get, list, delete, runs, get_run, get_node_output, get_plan, set_plan, pin, unpin, publish, unpublish, help. Note: 'finish' finalizes and saves the workflow draft (closes the build session - do NOT call any further workflow actions after a successful finish). 'create' is a back-compat alias for 'finish'. 'pin' promotes a version to production (requires workflow_id + version, version must have a successful run). 'unpin' clears the pin (production triggers stop firing until re-pinned). 'publish' adds the workflow to the marketplace (requires workflow_id + title; optional interface_id as showcase landing page, visibility, credits_per_use). If the workflow has interface nodes and you omit interface_id, publish auto-promotes it to an application (auto entry interface + latest run + display_mode=APPLICATION) so its app preview renders. 'unpublish' marks the marketplace listing inactive - existing acquirers keep their copies. 'resolve_approval' resolves a USER APPROVAL on a paused run (run_id + decision='approved'|'rejected'; node_id optional when exactly one approval is pending; optional comment). 'continue_interface' advances a paused interface node past its __continue (run_id; node_id optional when one interface is paused; optional data). Both advance run state and are gated by the chat authorization card, like execute.", true),
+            stringParam("action", "Action: init, load, save, finish, add_node, connect, disconnect, modify, remove, undo, describe, validate, search, execute, get, list, delete, runs, get_run, wait_run, get_node_output, get_plan, set_plan, pin, unpin, publish, unpublish, resolve_approval, continue_interface, help. " +
+                "'wait_run' blocks until the run leaves the running state (or timeout_seconds elapses) and returns the same report as get_run - after an execute, prefer ONE wait_run over a get_run poll loop. " +
+                "'finish' finalizes and saves the draft and CLOSES the build session - do NOT call any further workflow actions after a successful finish ('create' is a back-compat alias). " +
+                "'pin' promotes a version to production (workflow_id + version; the version needs a successful run); 'unpin' clears it (production triggers stop firing until re-pinned). " +
+                "'publish' lists the workflow on the marketplace (workflow_id + title; optional interface_id, visibility, credits_per_use - full rules incl. application auto-promotion in workflow(action='help')); 'unpublish' deactivates the listing (acquirers keep their copies). " +
+                "'resolve_approval' resolves a USER APPROVAL on a paused run (run_id + decision='approved'|'rejected'; node_id optional when exactly one is pending; optional comment). 'continue_interface' advances a paused interface node past its __continue (run_id; node_id optional when one is paused; optional data). Both are gated by the chat authorization card, like execute.", true),
             stringParam("decision", "Approval decision for action='resolve_approval': 'approved' or 'rejected'.", false),
             stringParam("comment", "Optional note recorded with action='resolve_approval'.", false),
             objectParam("data", "Optional form/submit payload for action='continue_interface' (or extra data for resolve_approval).", false),
@@ -50,7 +55,8 @@ public class WorkflowBuilderToolDefinitionFactory {
             arrayParam("interface_ids", "Interface UUIDs (for: add_node type='interface')", false),
             objectParam("plan", "Complete workflow plan JSON (for: set_plan)", false),
             stringParam("workflow_id", "Workflow UUID (for: get, delete, runs)", false),
-            stringParam("run_id", "Run ID (for: get_run, get_node_output)", false),
+            stringParam("run_id", "Run ID (for: get_run, wait_run, get_node_output)", false),
+            intParam("timeout_seconds", "(for: wait_run) Max seconds to block waiting for the run. Default 120, max 240. On timeout the response has timed_out=true and the run keeps going - call wait_run again to keep waiting.", false, null),
             intParam("epoch", "Epoch number (for: get_run detail, get_node_output). Omit for macro overview in get_run.", false, null),
             stringParam("node_id", "Node ID to inspect (for: get_node_output). Use the node_id from get_run epoch detail.", false),
             intParam("item_index", "(for: get_node_output) Zoom into one item of a split fan-out. Omit to get a list of all items + status_counts. Mutually combinable with iteration / spawn.", false, null),
@@ -88,6 +94,10 @@ public class WorkflowBuilderToolDefinitionFactory {
             .helpText(nodeLibraryService.getAlwaysAvailableHelp())
             .requiresAuth(true)
             .tags(List.of("workflow", "builder", "interactive"))
+            // Must exceed wait_run's max blocking window (workflow.wait-run.max-timeout-seconds,
+            // default 240s) or the agent loop's per-tool timeout kills the wait mid-way.
+            // Every other workflow action returns in seconds; this only widens the safety net.
+            .timeoutMs(300_000L)
             .build();
     }
 }

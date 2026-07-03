@@ -306,6 +306,10 @@ public class SpelEvaluator {
      */
     private String transformExpressionForMap(String expression, Map<String, Object> context,
                                               StandardEvaluationContext evalContext, PathNavigator pathNavigator) {
+        // $vars.name / vars:name -> vars.name so the bundle registered under the
+        // "vars" context key resolves through plain dotted navigation (the
+        // leading '$' is not an identifier char and would break the SpEL output).
+        expression = VarsSyntaxNormalizer.normalize(expression);
         // Matches variable paths including array access: core:split.output.edges[0].node.text
         java.util.regex.Pattern varPattern = java.util.regex.Pattern.compile(
             "\\b([a-zA-Z_][a-zA-Z0-9_]*(?::[a-zA-Z_][a-zA-Z0-9_]*)?(?:\\[\\d+]|\\.[a-zA-Z_][a-zA-Z0-9_]*)*)(?![\\w:])"

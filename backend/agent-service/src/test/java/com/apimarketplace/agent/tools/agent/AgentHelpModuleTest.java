@@ -355,6 +355,50 @@ class AgentHelpModuleTest {
                         && t.contains("not a stuck task"));
     }
 
+    /**
+     * Regression guard - the assign default is start_mode='execute' (sync,
+     * BLOCKS until terminal). Two examples (worker_agent, task_lifecycle)
+     * previously still described the pre-start_mode behavior ("assign is
+     * async - it returns immediately", "returns {task_id, status:'in_progress'}"),
+     * so an LLM copying the recipe verbatim got a blocking call instead of the
+     * promised fire-and-forget, and a wrong status expectation (the non-blocking
+     * modes return status='pending', never 'in_progress'). The examples must
+     * pass start_mode explicitly for the async flow and never claim assign is
+     * async by default.
+     */
+    @Test
+    @DisplayName("Examples match the documented assign default: execute blocks, async requires explicit start_mode")
+    @SuppressWarnings("unchecked")
+    void examplesMatchAssignExecuteDefault() {
+        Optional<ToolExecutionResult> result = module.execute("help", Map.of(), "tenant-x", null);
+        assertThat(result).isPresent();
+        Map<String, Object> data = (Map<String, Object>) result.get().data();
+        Map<String, Object> examples = (Map<String, Object>) data.get("examples");
+
+        // worker_agent: the fire-and-forget recipe must pass start_mode explicitly
+        // and must not present async as the default.
+        Map<String, Object> worker = (Map<String, Object>) examples.get("worker_agent");
+        String workerText = worker.get("description") + " " + worker.get("usage");
+        assertThat(workerText)
+                .contains("start_mode='in_progress'")
+                .containsIgnoringCase("BLOCKS")
+                .doesNotContain("assign is async");
+
+        // task_lifecycle: same rule, and the immediate-return status is 'pending',
+        // never 'in_progress' (workers promote it on pickup).
+        Map<String, Object> lifecycle = (Map<String, Object>) examples.get("task_lifecycle");
+        String lifecycleDescription = (String) lifecycle.get("description");
+        assertThat(lifecycleDescription)
+                .contains("start_mode='execute'")
+                .containsIgnoringCase("BLOCKS")
+                .doesNotContain("assign is ASYNC");
+        List<String> steps = (List<String>) lifecycle.get("steps");
+        assertThat(steps.get(0))
+                .contains("start_mode='in_progress'")
+                .contains("status:'pending'")
+                .doesNotContain("status:'in_progress'");
+    }
+
     // ===================================================================
     // help_models - CLI-bridge admin-only gating (claude-code / codex /
     // gemini-cli / mistral-vibe). The LLM must never be shown a model the

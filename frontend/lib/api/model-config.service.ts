@@ -12,6 +12,16 @@ export interface ModelConfigEntry {
   hasOverride?: boolean;
   isCustom?: boolean;
   enabled?: boolean;
+  /**
+   * Admin panel only (`getEffectiveModelList`): would the picker/runtime offer
+   * this model under the tenant's LLM source? The admin panel lists the FULL
+   * catalog (keyed or not) so every model can be ranked/priced; `available:false`
+   * marks a model shown for configuration but not yet usable (no key). Absent =
+   * treat as available (back-compat). Bridge rows use `bridgeAvailable` instead.
+   */
+  available?: boolean;
+  /** Cloud-admin bundle override (V381): what the CE bundle ships. null/undefined = inherits enabled. */
+  bundleEnabled?: boolean | null;
   rateLimitTpm?: number | null;
   rateLimitRpm?: number | null;
   rateLimitTpmPerTenant?: number | null;
@@ -82,6 +92,8 @@ export interface CatalogBundleSyncStatus {
 
 export interface ModelConfigOverrideInput {
   provider: string;
+  /** Cloud-admin only (V381): what the CE bundle ships for this model. null resets to inherit. */
+  bundleEnabled?: boolean | null;
   modelId: string;
   enabled?: boolean;
   displayName?: string;
@@ -198,6 +210,10 @@ class ModelConfigService {
 
   async syncNow(): Promise<CatalogBundleSyncStatus> {
     return apiClient.post<CatalogBundleSyncStatus>('/model-config/bundles/sync-now', {});
+  }
+
+  async deleteBundle(id: number): Promise<void> {
+    await apiClient.delete(`/model-config/bundles/${id}`);
   }
 
   // ── Catalog Sync (LiteLLM + OpenRouter) ──────────────────────────────────

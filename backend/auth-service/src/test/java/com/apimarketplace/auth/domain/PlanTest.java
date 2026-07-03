@@ -114,5 +114,24 @@ class PlanTest {
             assertThat(plan.getResourceLimit("BOGUS")).isNull();
             assertThat(plan.getResourceLimit(null)).isNull();
         }
+
+        @Test
+        @DisplayName("resolves WORKFLOW_VARIABLE to max_workflow_variables (V382 cap)")
+        void resolvesWorkflowVariableLimit() {
+            Plan plan = new Plan("FREE", "Free", "Free plan");
+            plan.setMaxWorkflowVariables(3);
+
+            assertThat(plan.getResourceLimit("WORKFLOW_VARIABLE")).isEqualTo(3);
+            // Case-insensitive like every other resource key.
+            assertThat(plan.getResourceLimit("workflow_variable")).isEqualTo(3);
+        }
+
+        @Test
+        @DisplayName("null max_workflow_variables means unlimited (ENTERPRISE/PAYG seed)")
+        void nullWorkflowVariableLimitIsUnlimited() {
+            Plan plan = new Plan("ENTERPRISE_GOLD", "Ent", "Enterprise");
+
+            assertThat(plan.getResourceLimit("WORKFLOW_VARIABLE")).isNull();
+        }
     }
 }

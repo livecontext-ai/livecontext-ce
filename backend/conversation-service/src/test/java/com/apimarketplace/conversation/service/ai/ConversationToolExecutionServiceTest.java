@@ -14,6 +14,10 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import org.springframework.http.MediaType;
+import org.springframework.test.web.client.MockRestServiceServer;
+import org.springframework.web.client.RestTemplate;
+
 import java.lang.reflect.Field;
 import java.util.HashMap;
 import java.util.List;
@@ -23,6 +27,13 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.headerDoesNotExist;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
 @DisplayName("ConversationToolExecutionService")
 @ExtendWith(MockitoExtension.class)
@@ -59,6 +70,22 @@ class ConversationToolExecutionServiceTest {
         Field mcpGatewayUrlField = ConversationToolExecutionService.class.getDeclaredField("mcpGatewayUrl");
         mcpGatewayUrlField.setAccessible(true);
         mcpGatewayUrlField.set(service, "http://localhost:8083");
+
+        Field authServiceUrlField = ConversationToolExecutionService.class.getDeclaredField("authServiceUrl");
+        authServiceUrlField.setAccessible(true);
+        authServiceUrlField.set(service, "http://localhost:8083");
+    }
+
+    /**
+     * Binds a MockRestServiceServer to the service's internally-constructed
+     * RestTemplate so the auth-service internal endpoints (credentials/all,
+     * variables/list, variables/set) can be stubbed without a live server.
+     */
+    private MockRestServiceServer bindAuthServiceServer() throws Exception {
+        Field restTemplateField = ConversationToolExecutionService.class.getDeclaredField("restTemplate");
+        restTemplateField.setAccessible(true);
+        RestTemplate restTemplate = (RestTemplate) restTemplateField.get(service);
+        return MockRestServiceServer.bindTo(restTemplate).build();
     }
 
     private ToolCall createToolCall(String id, String toolName, Map<String, Object> arguments) {
@@ -287,8 +314,14 @@ class ConversationToolExecutionServiceTest {
         }
     }
 
+    /**
+     * The require flow, exercised through the LEGACY {@code request_credential}
+     * alias (pre-rename sessions). The alias must keep routing to the exact
+     * same behavior as {@code credential(action='require')} - these tests pin
+     * that the rename did not change the require semantics for old sessions.
+     */
     @Nested
-    @DisplayName("request_credential")
+    @DisplayName("require flow via legacy request_credential alias")
     class RequestCredentialTests {
 
         @Test
@@ -537,6 +570,502 @@ class ConversationToolExecutionServiceTest {
     }
 
     @Nested
+    @DisplayName("credential - unified action dispatch")
+    class CredentialDispatchTests {
+
+        private ToolResult execute(String toolName, Map<String, Object> args, Map<String, Object> credentials) {
+            return service.executeTool(
+                createToolCall("call_1", toolName, args),
+                createToolDefinition(toolName), "tenant-1", credentials);
+        }
+
+        // ── action routing ───────────────────────────────────────────────────
+
+        @Test
+        @DisplayName("credential(action='require') routes to the require flow (same validation as the legacy alias)")
+        void requireActionRoutesToRequireFlow() {
+            Map<String, Object> args = new HashMap<>();
+            args.put("action", "require");
+            args.put("reason", "Need access"); // no services → require-flow error
+
+            ToolResult result = execute("credential", args, Map.of());
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.error()).contains("'services' parameter is required");
+        }
+
+        @Test
+        @DisplayName("credential(action='require', services=[...]) produces the approval card like the legacy alias")
+        void requireActionProducesApprovalCard() {
+            Map<String, Object> args = new HashMap<>();
+            args.put("action", "require");
+            args.put("services", List.of("gmail"));
+            args.put("reason", "Need to send emails");
+
+            ToolResult result = execute("credential", args, Map.of());
+
+            assertThat(result.success()).isTrue();
+            assertThat(result.content()).contains("credentials_required");
+            assertThat(result.metadata()).containsEntry("serviceApprovalRequested", true);
+        }
+
+        @Test
+        @DisplayName("action is case-insensitive and trimmed")
+        void actionIsNormalized() {
+            Map<String, Object> args = new HashMap<>();
+            args.put("action", "  REQUIRE ");
+            args.put("reason", "Need access");
+
+            ToolResult result = execute("credential", args, Map.of());
+
+            // Reached the require flow (its own validation fired), not the unknown-action error.
+            assertThat(result.error()).contains("'services' parameter is required");
+        }
+
+        @Test
+        @DisplayName("unknown action → error listing the valid actions")
+        void unknownActionListsValidActions() {
+            ToolResult result = execute("credential", Map.of("action", "rotate"), Map.of());
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.error()).contains("list, variables, set_variable, require");
+        }
+
+        @Test
+        @DisplayName("missing action → same error listing the valid actions")
+        void missingActionListsValidActions() {
+            ToolResult result = execute("credential", new HashMap<>(), Map.of());
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.error()).contains("list, variables, set_variable, require");
+        }
+
+        @Test
+        @DisplayName("legacy request_credential toolName forces the require action even if args carry another action")
+        void legacyAliasAlwaysRoutesToRequire() {
+            Map<String, Object> args = new HashMap<>();
+            args.put("action", "list"); // must be IGNORED for the legacy name
+            args.put("reason", "Need access");
+
+            ToolResult result = execute("request_credential", args, Map.of());
+
+            // Require-flow validation fired → proof the alias never dispatches to list.
+            assertThat(result.success()).isFalse();
+            assertThat(result.error()).contains("'services' parameter is required");
+        }
+
+        // ── action=list ──────────────────────────────────────────────────────
+
+        @Test
+        @DisplayName("list maps auth-service rows to {connected,count,defaultCount,hint} WITHOUT leaking credential_data secrets")
+        void listMapsRowsWithoutLeakingSecrets() throws Exception {
+            MockRestServiceServer server = bindAuthServiceServer();
+            String rows = """
+                [
+                  {"name":"Gmail","integration":"gmail","status":"ACTIVE","is_default":true,
+                   "credential_data":{"access_token":"SECRET_TOKEN_XYZ_123","refresh_token":"SECRET_REFRESH_ABC","email":"user@example.com"}},
+                  {"name":"Slack","integration":"slack","status":"NEEDS_REAUTH","is_default":false,
+                   "credential_data":{"api_key":"SECRET_SLACK_KEY_456"}}
+                ]
+                """;
+            server.expect(requestTo("http://localhost:8083/api/internal/credentials/all?userId=tenant-1"))
+                .andExpect(method(org.springframework.http.HttpMethod.GET))
+                .andExpect(header("X-Organization-ID", "org-1"))
+                .andRespond(withSuccess(rows, MediaType.APPLICATION_JSON));
+
+            ToolResult result = execute("credential", Map.of("action", "list"),
+                Map.of("__orgId__", "org-1"));
+
+            assertThat(result.success()).isTrue();
+            String content = result.content();
+            // Allowlisted fields survive.
+            assertThat(content)
+                .contains("\"name\":\"Gmail\"")
+                .contains("\"integration\":\"gmail\"")
+                .contains("\"status\":\"active\"")
+                .contains("\"status\":\"needs_reauth\"")
+                .contains("\"isDefault\":true")
+                .contains("\"account\":\"user@example.com\"")
+                .contains("\"count\":2")
+                .contains("\"defaultCount\":1")
+                .contains("hint");
+            // The token material planted in credential_data must NEVER reach the LLM.
+            assertThat(content)
+                .doesNotContain("SECRET_TOKEN_XYZ_123")
+                .doesNotContain("SECRET_REFRESH_ABC")
+                .doesNotContain("SECRET_SLACK_KEY_456")
+                .doesNotContain("credential_data")
+                .doesNotContain("access_token");
+            server.verify();
+        }
+
+        @Test
+        @DisplayName("list with no connected services → count 0 and the 'connect one first' hint")
+        void listEmptyGivesGuidanceHint() throws Exception {
+            MockRestServiceServer server = bindAuthServiceServer();
+            server.expect(requestTo("http://localhost:8083/api/internal/credentials/all?userId=tenant-1"))
+                .andExpect(headerDoesNotExist("X-Organization-ID"))
+                .andRespond(withSuccess("[]", MediaType.APPLICATION_JSON));
+
+            ToolResult result = execute("credential", Map.of("action", "list"), Map.of());
+
+            assertThat(result.success()).isTrue();
+            assertThat(result.content())
+                .contains("\"count\":0")
+                .contains("No services connected yet");
+            server.verify();
+        }
+
+        @Test
+        @DisplayName("list surfaces a transport failure as a tool error, not an exception")
+        void listRelaysTransportFailureAsError() throws Exception {
+            MockRestServiceServer server = bindAuthServiceServer();
+            server.expect(requestTo("http://localhost:8083/api/internal/credentials/all?userId=tenant-1"))
+                .andRespond(withStatus(org.springframework.http.HttpStatus.INTERNAL_SERVER_ERROR));
+
+            ToolResult result = execute("credential", Map.of("action", "list"), Map.of());
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.error()).contains("Could not list connected services");
+        }
+
+        // ── action=variables ─────────────────────────────────────────────────
+
+        @Test
+        @DisplayName("variables returns the auth-service list plus count and the {{$vars.name}} usage hint")
+        void variablesReturnsListWithUsageHint() throws Exception {
+            MockRestServiceServer server = bindAuthServiceServer();
+            String body = """
+                {"variables":[{"name":"api_url","value":"https://x","type":"STRING","scope":"personal","description":null}],
+                 "count":1}
+                """;
+            server.expect(requestTo("http://localhost:8083/api/internal/variables/list?tenantId=tenant-1"))
+                .andExpect(method(org.springframework.http.HttpMethod.GET))
+                .andExpect(header("X-Organization-ID", "org-1"))
+                .andRespond(withSuccess(body, MediaType.APPLICATION_JSON));
+
+            ToolResult result = execute("credential", Map.of("action", "variables"),
+                Map.of("__orgId__", "org-1"));
+
+            assertThat(result.success()).isTrue();
+            assertThat(result.content())
+                .contains("\"api_url\"")
+                .contains("\"count\":1")
+                .contains("{{$vars.name}}")
+                .contains("set_variable");
+            server.verify();
+        }
+
+        @Test
+        @DisplayName("variables surfaces a transport failure as a tool error")
+        void variablesRelaysTransportFailureAsError() throws Exception {
+            MockRestServiceServer server = bindAuthServiceServer();
+            server.expect(requestTo("http://localhost:8083/api/internal/variables/list?tenantId=tenant-1"))
+                .andRespond(withStatus(org.springframework.http.HttpStatus.INTERNAL_SERVER_ERROR));
+
+            ToolResult result = execute("credential", Map.of("action", "variables"), Map.of());
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.error()).contains("Could not list workflow variables");
+        }
+
+        // ── action=set_variable ──────────────────────────────────────────────
+
+        @Test
+        @DisplayName("set_variable posts the payload with X-Organization-ID from credentials.__orgId__ and returns saved+reference")
+        void setVariablePostsPayloadWithOrgHeader() throws Exception {
+            MockRestServiceServer server = bindAuthServiceServer();
+            server.expect(requestTo("http://localhost:8083/api/internal/variables/set?tenantId=tenant-1"))
+                .andExpect(method(org.springframework.http.HttpMethod.POST))
+                .andExpect(header("X-Organization-ID", "org-1"))
+                .andExpect(jsonPath("$.name").value("api_base_url"))
+                .andExpect(jsonPath("$.value").value("https://api.example.com"))
+                // No type arg -> the key must be ABSENT (see the retype
+                // regression test below), never an injected STRING default.
+                .andExpect(jsonPath("$.type").doesNotExist())
+                .andExpect(jsonPath("$.description").value("base url"))
+                .andRespond(withSuccess(
+                    "{\"id\":1,\"name\":\"api_base_url\",\"value\":\"https://api.example.com\",\"type\":\"STRING\",\"scope\":\"workspace\"}",
+                    MediaType.APPLICATION_JSON));
+
+            Map<String, Object> args = new HashMap<>();
+            args.put("action", "set_variable");
+            args.put("name", " api_base_url "); // trimmed before sending
+            args.put("value", "https://api.example.com");
+            args.put("description", "base url");
+
+            ToolResult result = execute("credential", args, Map.of("__orgId__", "org-1"));
+
+            assertThat(result.success()).isTrue();
+            assertThat(result.content())
+                .contains("\"saved\"")
+                .contains("{{$vars.api_base_url}}")
+                .contains("hint");
+            server.verify();
+        }
+
+        @Test
+        @DisplayName("REGRESSION (VIEWER write bypass): set_variable forwards X-Organization-Role when credentials carry __orgRole__ - the internal VIEWER gate depends on it")
+        void setVariableForwardsOrgRoleHeader() throws Exception {
+            MockRestServiceServer server = bindAuthServiceServer();
+            server.expect(requestTo("http://localhost:8083/api/internal/variables/set?tenantId=tenant-1"))
+                .andExpect(method(org.springframework.http.HttpMethod.POST))
+                .andExpect(header("X-Organization-ID", "org-1"))
+                .andExpect(header("X-Organization-Role", "MEMBER"))
+                // MonolithOrganizationContextFilter strips org headers without a
+                // user identity - X-User-ID must accompany them.
+                .andExpect(header("X-User-ID", "tenant-1"))
+                .andRespond(withSuccess("{\"id\":1,\"name\":\"api_url\"}", MediaType.APPLICATION_JSON));
+
+            Map<String, Object> args = new HashMap<>();
+            args.put("action", "set_variable");
+            args.put("name", "api_url");
+            args.put("value", "https://x");
+
+            ToolResult result = execute("credential", args,
+                Map.of("__orgId__", "org-1", "__orgRole__", "MEMBER"));
+
+            assertThat(result.success()).isTrue();
+            server.verify();
+        }
+
+        @Test
+        @DisplayName("set_variable sends NO X-Organization-Role header when __orgRole__ is absent (personal scope)")
+        void setVariableOmitsOrgRoleHeaderWhenAbsent() throws Exception {
+            MockRestServiceServer server = bindAuthServiceServer();
+            server.expect(requestTo("http://localhost:8083/api/internal/variables/set?tenantId=tenant-1"))
+                .andExpect(headerDoesNotExist("X-Organization-Role"))
+                .andExpect(headerDoesNotExist("X-Organization-ID"))
+                .andRespond(withSuccess("{\"id\":1,\"name\":\"api_url\"}", MediaType.APPLICATION_JSON));
+
+            Map<String, Object> args = new HashMap<>();
+            args.put("action", "set_variable");
+            args.put("name", "api_url");
+            args.put("value", "https://x");
+
+            ToolResult result = execute("credential", args, Map.of());
+
+            assertThat(result.success()).isTrue();
+            server.verify();
+        }
+
+        @Test
+        @DisplayName("set_variable relays the 403 org_role_read_only message verbatim so a VIEWER's agent sees the do-not-retry guidance")
+        void setVariableRelays403ViewerMessage() throws Exception {
+            MockRestServiceServer server = bindAuthServiceServer();
+            server.expect(requestTo("http://localhost:8083/api/internal/variables/set?tenantId=tenant-1"))
+                .andRespond(withStatus(org.springframework.http.HttpStatus.FORBIDDEN)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body("{\"error\":\"org_role_read_only\",\"message\":\"Viewers cannot modify workspace variables. "
+                        + "Tell the user their workspace role is read-only. DO NOT RETRY.\"}"));
+
+            Map<String, Object> args = new HashMap<>();
+            args.put("action", "set_variable");
+            args.put("name", "api_url");
+            args.put("value", "https://x");
+
+            ToolResult result = execute("credential", args,
+                Map.of("__orgId__", "org-1", "__orgRole__", "VIEWER"));
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.error())
+                .contains("Viewers cannot modify workspace variables")
+                .contains("DO NOT RETRY");
+        }
+
+        @Test
+        @DisplayName("REGRESSION (silent retype): set_variable OMITS the type key when the arg is absent - the backend preserves the stored type")
+        void setVariableOmitsTypeWhenAbsent() throws Exception {
+            // FLIPPED PIN: this used to assert $.type == "STRING" (the injected
+            // default). That default was the retype bug: an agent rotating a
+            // NUMBER/JSON variable's VALUE without re-passing type had the row
+            // silently retyped to STRING by the backend. The key must be absent
+            // so auth-service's preserve-on-omit contract keeps the stored type.
+            MockRestServiceServer server = bindAuthServiceServer();
+            server.expect(requestTo("http://localhost:8083/api/internal/variables/set?tenantId=tenant-1"))
+                .andExpect(jsonPath("$.type").doesNotExist())
+                .andExpect(jsonPath("$.description").doesNotExist())
+                .andRespond(withSuccess("{\"id\":2,\"name\":\"retries\",\"type\":\"NUMBER\"}",
+                    MediaType.APPLICATION_JSON));
+
+            Map<String, Object> args = new HashMap<>();
+            args.put("action", "set_variable");
+            args.put("name", "retries");
+            args.put("value", "7");
+
+            ToolResult result = execute("credential", args, Map.of());
+
+            assertThat(result.success()).isTrue();
+            server.verify();
+        }
+
+        @Test
+        @DisplayName("set_variable forwards an explicit type verbatim")
+        void setVariableForwardsExplicitType() throws Exception {
+            MockRestServiceServer server = bindAuthServiceServer();
+            server.expect(requestTo("http://localhost:8083/api/internal/variables/set?tenantId=tenant-1"))
+                .andExpect(jsonPath("$.type").value("NUMBER"))
+                .andRespond(withSuccess("{\"id\":2,\"name\":\"retries\",\"type\":\"NUMBER\"}",
+                    MediaType.APPLICATION_JSON));
+
+            Map<String, Object> args = new HashMap<>();
+            args.put("action", "set_variable");
+            args.put("name", "retries");
+            args.put("value", "3");
+            args.put("type", "NUMBER");
+
+            ToolResult result = execute("credential", args, Map.of());
+
+            assertThat(result.success()).isTrue();
+            server.verify();
+        }
+
+        @Test
+        @DisplayName("set_variable forwards secret=true in the payload when the arg is passed as a boolean")
+        void setVariableForwardsSecretTrue() throws Exception {
+            MockRestServiceServer server = bindAuthServiceServer();
+            server.expect(requestTo("http://localhost:8083/api/internal/variables/set?tenantId=tenant-1"))
+                .andExpect(jsonPath("$.secret").value(true))
+                .andRespond(withSuccess(
+                    "{\"id\":3,\"name\":\"api_key\",\"value\":null,\"type\":\"STRING\",\"secret\":true}",
+                    MediaType.APPLICATION_JSON));
+
+            Map<String, Object> args = new HashMap<>();
+            args.put("action", "set_variable");
+            args.put("name", "api_key");
+            args.put("value", "sk-123");
+            args.put("secret", Boolean.TRUE);
+
+            ToolResult result = execute("credential", args, Map.of());
+
+            assertThat(result.success()).isTrue();
+            server.verify();
+        }
+
+        @Test
+        @DisplayName("set_variable tolerates a stringified \"true\" for secret (LLMs serialize booleans differently)")
+        void setVariableParsesStringifiedSecret() throws Exception {
+            MockRestServiceServer server = bindAuthServiceServer();
+            server.expect(requestTo("http://localhost:8083/api/internal/variables/set?tenantId=tenant-1"))
+                .andExpect(jsonPath("$.secret").value(true))
+                .andRespond(withSuccess("{\"id\":3,\"name\":\"api_key\",\"secret\":true}",
+                    MediaType.APPLICATION_JSON));
+
+            Map<String, Object> args = new HashMap<>();
+            args.put("action", "set_variable");
+            args.put("name", "api_key");
+            args.put("value", "sk-123");
+            args.put("secret", "true");
+
+            ToolResult result = execute("credential", args, Map.of());
+
+            assertThat(result.success()).isTrue();
+            server.verify();
+        }
+
+        @Test
+        @DisplayName("set_variable omits the secret key entirely when the arg is absent - the backend default decides")
+        void setVariableOmitsSecretWhenAbsent() throws Exception {
+            MockRestServiceServer server = bindAuthServiceServer();
+            server.expect(requestTo("http://localhost:8083/api/internal/variables/set?tenantId=tenant-1"))
+                .andExpect(jsonPath("$.secret").doesNotExist())
+                .andRespond(withSuccess("{\"id\":4,\"name\":\"api_url\",\"secret\":false}",
+                    MediaType.APPLICATION_JSON));
+
+            Map<String, Object> args = new HashMap<>();
+            args.put("action", "set_variable");
+            args.put("name", "api_url");
+            args.put("value", "https://x");
+
+            ToolResult result = execute("credential", args, Map.of());
+
+            assertThat(result.success()).isTrue();
+            server.verify();
+        }
+
+        @Test
+        @DisplayName("set_variable relays the 409 PLAN_RESOURCE_LIMIT_EXCEEDED message verbatim so the LLM sees the do-not-retry guidance")
+        void setVariableRelaysPlanCap409Message() throws Exception {
+            MockRestServiceServer server = bindAuthServiceServer();
+            String conflictBody = """
+                {"error":"PLAN_RESOURCE_LIMIT_EXCEEDED","resourceType":"WORKFLOW_VARIABLE",
+                 "planCode":"FREE","currentCount":3,"limit":3,
+                 "message":"LIMIT REACHED: Your FREE plan allows max 3 workflow variables (currently 3/3). Tell the user to upgrade their plan or delete an existing variable. DO NOT RETRY this operation."}
+                """;
+            server.expect(requestTo("http://localhost:8083/api/internal/variables/set?tenantId=tenant-1"))
+                .andRespond(withStatus(org.springframework.http.HttpStatus.CONFLICT)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(conflictBody));
+
+            Map<String, Object> args = new HashMap<>();
+            args.put("action", "set_variable");
+            args.put("name", "v4");
+            args.put("value", "x");
+
+            ToolResult result = execute("credential", args, Map.of());
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.error())
+                .contains("LIMIT REACHED")
+                .contains("FREE")
+                .contains("DO NOT RETRY");
+        }
+
+        @Test
+        @DisplayName("set_variable relays a 400 validation message from auth-service (invalid_variable)")
+        void setVariableRelays400ValidationMessage() throws Exception {
+            MockRestServiceServer server = bindAuthServiceServer();
+            server.expect(requestTo("http://localhost:8083/api/internal/variables/set?tenantId=tenant-1"))
+                .andRespond(withStatus(org.springframework.http.HttpStatus.BAD_REQUEST)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body("{\"error\":\"invalid_variable\",\"message\":\"value is not a valid number\"}"));
+
+            Map<String, Object> args = new HashMap<>();
+            args.put("action", "set_variable");
+            args.put("name", "retries");
+            args.put("value", "abc");
+            args.put("type", "NUMBER");
+
+            ToolResult result = execute("credential", args, Map.of());
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.error()).isEqualTo("value is not a valid number");
+        }
+
+        @Test
+        @DisplayName("set_variable without name → error with a copy-pastable example, no HTTP call")
+        void setVariableMissingNameFailsFast() {
+            Map<String, Object> args = new HashMap<>();
+            args.put("action", "set_variable");
+            args.put("value", "x");
+
+            ToolResult result = execute("credential", args, Map.of());
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.error())
+                .contains("requires 'name' and 'value'")
+                .contains("credential(action=\"set_variable\"");
+        }
+
+        @Test
+        @DisplayName("set_variable with blank name or missing value → same fail-fast error")
+        void setVariableBlankNameOrMissingValueFailsFast() {
+            Map<String, Object> blankName = new HashMap<>();
+            blankName.put("action", "set_variable");
+            blankName.put("name", "   ");
+            blankName.put("value", "x");
+            assertThat(execute("credential", blankName, Map.of()).error())
+                .contains("requires 'name' and 'value'");
+
+            Map<String, Object> noValue = new HashMap<>();
+            noValue.put("action", "set_variable");
+            noValue.put("name", "api_url");
+            assertThat(execute("credential", noValue, Map.of()).error())
+                .contains("requires 'name' and 'value'");
+        }
+    }
+
+    @Nested
     @DisplayName("isToolAvailable")
     class IsToolAvailableTests {
 
@@ -555,7 +1084,14 @@ class ConversationToolExecutionServiceTest {
         }
 
         @Test
-        @DisplayName("should return true for request_credential")
+        @DisplayName("should return true for the unified credential tool")
+        void shouldReturnTrueForCredential() {
+            ToolDefinition toolDef = createToolDefinition("credential");
+            assertThat(service.isToolAvailable(toolDef, "tenant-1")).isTrue();
+        }
+
+        @Test
+        @DisplayName("should return true for the legacy request_credential alias (pre-rename sessions)")
         void shouldReturnTrueForRequestCredential() {
             ToolDefinition toolDef = createToolDefinition("request_credential");
             assertThat(service.isToolAvailable(toolDef, "tenant-1")).isTrue();

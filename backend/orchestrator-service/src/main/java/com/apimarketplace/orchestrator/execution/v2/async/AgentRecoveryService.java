@@ -80,7 +80,17 @@ public class AgentRecoveryService {
     private final StepCompletionOrchestrator stepCompletionOrchestrator;
     private final WorkflowStepDataRepository stepDataRepository;
 
-    /** Hard timeout - past this we give up and deliver a synthetic failure. */
+    /**
+     * Hard timeout - past this we give up and deliver a synthetic failure.
+     *
+     * <p>The check is pure wall-clock from the offload time (there is no per-task worker
+     * liveness signal), so this MUST exceed the longest LEGITIMATE run: executionTimeout /
+     * inactivityTimeout are valid up to 7200s and the bridge hard cap is 125 min - hence the
+     * 130-min default. A lower value synthetically fails HEALTHY long agent runs mid-flight
+     * (the pre-2026-07 default of 30 min did exactly that). The cost is slower recovery when
+     * a worker genuinely dies without delivering; ops that never run long agents can lower
+     * {@code scaling.agent.recovery.hard-timeout-ms}.
+     */
     private final Duration hardTimeout;
 
     /**
@@ -130,7 +140,7 @@ public class AgentRecoveryService {
             WorkflowRunRepository runRepository,
             @Autowired(required = false) StepCompletionOrchestrator stepCompletionOrchestrator,
             @Autowired(required = false) WorkflowStepDataRepository stepDataRepository,
-            @Value("${scaling.agent.recovery.hard-timeout-ms:1800000}") long hardTimeoutMs) {
+            @Value("${scaling.agent.recovery.hard-timeout-ms:7800000}") long hardTimeoutMs) {
         this.pendingStore = pendingStore;
         this.registry = registry;
         this.completionService = completionService;

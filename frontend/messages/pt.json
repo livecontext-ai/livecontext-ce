@@ -2967,6 +2967,14 @@
       "fetchError": "Erro ao carregar a configuração",
       "saveError": "Erro ao salvar as alterações",
       "noModels": "Nenhum modelo configurado",
+      "bundleShipInherit": "CE: auto",
+      "bundleShipOn": "CE: ativo",
+      "bundleShipOff": "CE: inativo",
+      "bundleShipTooltip": "O que o bundle CE distribui para este modelo, independentemente do interruptor de ativação: auto o segue, ativo distribui o modelo habilitado para instalações auto-hospedadas mesmo desabilitado aqui, inativo o distribui desabilitado.",
+      "visionOnly": "Somente visão",
+      "visionOnlyTooltip": "Mostrar apenas modelos com suporte a visão (multimodais). Agentes de navegador precisam ver a página, por isso vem ativado por padrão. Desative para mostrar todos os modelos.",
+      "notConfigured": "Não configurado",
+      "notConfiguredTooltip": "Listado para você poder ordenar e precificar, mas ainda não utilizável: sem chave de API para este provedor (ou o relay na nuvem não consegue executá-lo). Adicione uma chave para usá-lo.",
       "custom": "personalizado",
       "modified": "Modificado do padrão",
       "recommended": "Recomendado",
@@ -3049,6 +3057,7 @@
       "signingKey": "Chave de assinatura",
       "statusActive": "ativo",
       "notLinkedHint": "Esta instalação ainda não está vinculada à nuvem: é o estado normal de uma instalação nova. Vincule-a na aba Conexão para receber atualizações.",
+      "deleteBundle": "Excluir bundle",
       "statusCode": {
         "APPLY_FAILED": "falha ao aplicar",
         "CHECKSUM_INVALID": "checksum inválido",
@@ -3134,8 +3143,8 @@
     }
   },
   "credentials": {
-    "title": "Credenciais",
-    "subtitle": "Conectar a servicos externos",
+    "title": "Credenciais e Variáveis",
+    "subtitle": "Conecte serviços externos e gerencie variáveis de workflow reutilizáveis",
     "unauthorized": "Nao Autorizado",
     "mustBeLoggedIn": "Voce deve estar logado para gerenciar credenciais",
     "scope": {
@@ -3172,7 +3181,83 @@
     "availableLabel": "Disponíveis",
     "tabs": {
       "myCredentials": "Minhas Credenciais",
-      "availableIntegrations": "Integracoes Disponiveis"
+      "availableIntegrations": "Integracoes Disponiveis",
+      "credentials": "Credenciais",
+      "variables": "Variáveis"
+    },
+    "variables": {
+      "title": "Variáveis de workflow",
+      "subtitle": "Valores reutilizáveis disponíveis em todos os seus workflows via $vars.name",
+      "add": "Adicionar variável",
+      "edit": "Editar",
+      "delete": "Excluir",
+      "copyReference": "Copiar referência",
+      "searchPlaceholder": "Buscar variáveis...",
+      "table": {
+        "columnReference": "Referência",
+        "columnValue": "Valor",
+        "columnType": "Tipo",
+        "columnUpdated": "Atualizada",
+        "noMatch": "Nenhuma variável corresponde à sua busca."
+      },
+      "quota": {
+        "used": "{used} / {limit} variáveis",
+        "unlimited": "{used} variáveis",
+        "limitReached": "Limite do plano atingido. Faça upgrade para adicionar mais variáveis."
+      },
+      "empty": {
+        "title": "Nenhuma variável ainda",
+        "description": "Crie valores reutilizáveis (URLs, IDs, configurações) e referencie-os em qualquer workflow com $vars.name."
+      },
+      "scope": {
+        "workspace": "Workspace",
+        "personal": "Pessoal"
+      },
+      "types": {
+        "STRING": "Texto",
+        "NUMBER": "Número",
+        "BOOLEAN": "Booleano",
+        "JSON": "JSON"
+      },
+      "fields": {
+        "name": "Nome",
+        "type": "Tipo",
+        "value": "Valor",
+        "description": "Descrição (opcional)",
+        "descriptionPlaceholder": "Para que serve esta variável",
+        "secret": "Ocultar valor (secreto)",
+        "secretHelp": "O valor é armazenado criptografado e nunca mais é exibido, nem aqui nem para agentes. Os workflows continuam a usá-lo na execução (o valor resolvido pode aparecer nas saídas das execuções). Para alterá-lo, insira um novo valor.",
+        "secretReenter": "Insira um novo valor para substituir o oculto"
+      },
+      "dialog": {
+        "createTitle": "Nova variável",
+        "editTitle": "Editar variável",
+        "description": "O valor é armazenado criptografado e resolvido na execução do workflow.",
+        "cancel": "Cancelar",
+        "create": "Criar",
+        "save": "Salvar"
+      },
+      "deleteDialog": {
+        "title": "Excluir variável",
+        "description": "Excluir \"{name}\"? Workflows que a referenciam vão resolvê-la como vazia.",
+        "confirm": "Excluir"
+      },
+      "validation": {
+        "name": "Apenas letras, dígitos e underscores; não pode começar com dígito (máx. 64).",
+        "number": "Insira um número válido.",
+        "boolean": "Insira true ou false.",
+        "json": "Insira um JSON válido."
+      },
+      "toasts": {
+        "loadFailed": "Não foi possível carregar as variáveis",
+        "created": "Variável criada",
+        "updated": "Variável atualizada",
+        "deleted": "Variável excluída",
+        "saveFailed": "Não foi possível salvar a variável",
+        "deleteFailed": "Não foi possível excluir a variável",
+        "nameConflict": "Já existe uma variável com esse nome neste escopo.",
+        "referenceCopied": "Referência copiada"
+      }
     },
     "myCredentials": {
       "searchPlaceholder": "Buscar credenciais...",
@@ -3805,6 +3890,44 @@
     "toolCardBinaryFile": "Arquivo binário",
     "toolCardTestResult": "Resultado do teste"
   },
+  "mcpServer": {
+    "title": "Servidor MCP",
+    "subtitle": "Conecte clientes MCP como Claude Code ou Cursor às suas ferramentas LiveContext",
+    "copy": "Copiar",
+    "errors": {
+      "fetchFailed": "Não foi possível carregar as informações do servidor MCP"
+    },
+    "endpoint": {
+      "title": "Endpoint",
+      "description": "Endpoint MCP padrão (Streamable HTTP). Qualquer cliente MCP pode se conectar por HTTP.",
+      "toolCount": "{count} ferramentas disponíveis"
+    },
+    "apiKey": {
+      "title": "Chave de API",
+      "description": "As requisições ao endpoint MCP são autenticadas com a sua chave de API pessoal, enviada no cabeçalho X-API-Key. Mantenha-a em segredo.",
+      "generate": "Gerar chave",
+      "regenerate": "Regenerar chave",
+      "regenerateWarning": "Regenerar invalida a sua chave atual imediatamente. Todos os clientes configurados com ela deixarão de funcionar até você atualizá-la.",
+      "regenerateConfirm": "Regenerar agora",
+      "regenerateCancel": "Cancelar",
+      "shownOnce": "Esta chave é exibida apenas uma vez. Copie-a agora e guarde-a em um local seguro.",
+      "createdAt": "Criada em {date}",
+      "noKey": "Nenhuma chave de API ainda. Gere uma para conectar um cliente MCP."
+    },
+    "toasts": {
+      "keyGenerated": "Chave de API gerada",
+      "keyGenerationFailed": "Não foi possível gerar a chave de API",
+      "keyGenerationFailedMessage": "Tente novamente."
+    },
+    "snippet": {
+      "title": "Configuração do cliente",
+      "description": "Copie um destes blocos no seu cliente MCP. O bloco JSON vai em um arquivo de configuração mcpServers; o comando adiciona o servidor ao Claude Code.",
+      "claudeCode": "Claude Code (comando)",
+      "jsonConfig": "Configuração JSON (Cursor, Claude Desktop, ...)",
+      "keyPlaceholder": "SUA_CHAVE_API",
+      "placeholderHint": "Substitua SUA_CHAVE_API pela sua chave de API (gere uma acima)."
+    }
+  },
   "mcp": {
     "tabs": {
       "overview": "Visao Geral",
@@ -4365,6 +4488,11 @@
         "workspaces3": "3 workspaces",
         "workspaces10": "10 workspaces",
         "workspacesUnlimited": "Workspaces ilimitados",
+        "variables3": "3 variáveis de workflow",
+        "variables25": "25 variáveis de workflow",
+        "variables100": "100 variáveis de workflow",
+        "variables500": "500 variáveis de workflow",
+        "variablesUnlimited": "Variáveis de workflow ilimitadas",
         "concurrent1": "1 execução simultânea",
         "concurrent5": "5 execuções simultâneas",
         "concurrent20": "20 execuções simultâneas",
@@ -4840,6 +4968,10 @@
     "capExceededGeneric": "Cota do membro excedida ({dimension}): {consumed} de {cap}. Peca ao admin da sua organizacao para aumentar este limite."
   },
   "settings": {
+    "nav": {
+      "scrollLeft": "Rolar para a esquerda",
+      "scrollRight": "Rolar para a direita"
+    },
     "unauthorized": "Acesso Nao Autorizado",
     "mustBeLoggedIn": "Voce deve estar logado para acessar as configuracoes.",
     "signIn": "Entrar",
@@ -6482,7 +6614,8 @@
           "stubBody": "A ponte do backend está em modo stub (browser-use 0.12.x não expõe a porta do Chromium DevTools). Autenticação + fluxo de etapas estão ativos; o espelho de pixels chegará quando o vínculo upstream for publicado.",
           "stubTitle": "Screencast ao vivo indisponível",
           "title": "Agente de navegador - Ao vivo",
-          "waiting": "Aguardando o início da sessão do navegador…"
+          "waiting": "Aguardando o início da sessão do navegador…",
+          "taskFinishedLive": "O agente terminou. A página continua ativa: você pode assumir o controle ou fechar este painel."
         },
         "status": {
           "completed": "Concluído",
@@ -6501,7 +6634,8 @@
           "resume": "Retomar agente",
           "title": "Assumir o controle?"
         },
-        "viewLiveTrace": "Ver navegador ao vivo"
+        "viewLiveTrace": "Ver navegador ao vivo",
+        "tabLabel": "Agente de navegador"
       }
     },
     "forms": {
@@ -8862,6 +8996,8 @@
       "toolCalls": "Chamadas de ferramentas",
       "tools": "Ferramentas",
       "unknownAgent": "Desconhecido",
+      "agent": "Agente",
+      "system": "Sistema",
       "unsavedChanges": "Alterações não salvas",
       "updateFailed": "Falha ao atualizar a tarefa",
       "updated": "Atualizada"

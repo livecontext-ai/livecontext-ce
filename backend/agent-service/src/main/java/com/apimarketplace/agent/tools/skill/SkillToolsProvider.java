@@ -134,11 +134,9 @@ public class SkillToolsProvider implements ToolsProvider {
         return AgentToolDefinition.builder()
             .name("skill")
             .description("""
-                Reusable instruction sets for AI agents. 'description' (short) goes into agent system prompt. 'instructions' (detailed markdown) are fetched on demand via discover_skill.
-                assign is ADDITIVE: adds skills to agent without removing existing ones. Max 10 skills per agent.
-                Call skill(action='help') for full documentation and examples.
+                Reusable instruction sets for AI agents. 'description' (short) goes into the agent's system prompt; 'instructions' (detailed markdown) are fetched on demand when the agent activates the skill.
                 Marketplace: publish requires title + interface_id (landing page). unpublish marks the listing inactive - acquirers keep their copies.
-                Actions: create, get, list, update, delete, assign, create_folder, list_folders, rename_folder, move_folder, delete_folder, publish, unpublish, help
+                Call skill(action='help') for full documentation and examples.
                 """)
             .category(ToolCategory.AGENT)
             .parameters(params)

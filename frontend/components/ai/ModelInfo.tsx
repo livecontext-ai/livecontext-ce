@@ -48,6 +48,14 @@ import { getProviderDisplayName } from '@/lib/ai-providers/providerIcons';
 
 type Tier = 'top' | 'high' | 'mid' | 'budget';
 
+/**
+ * Hover tooltips in this file render inside portalled menus that stack far
+ * above the app (model menu z-[10000], picker SelectContent z-[100000], the
+ * (i) detail card z-[100001]); the tooltip default z-[9999] would paint them
+ * BEHIND those hosts, so they take the top slot of the ladder.
+ */
+const MENU_TOOLTIP_Z = 'z-[100002]';
+
 const TIER_CLASSES: Record<Tier, string> = {
   top: 'bg-violet-500/15 text-violet-700 dark:text-violet-300 border-violet-500/30',
   high: 'bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/30',
@@ -156,7 +164,7 @@ export function CapabilityIcons({ model, maxInline = 4, className }: CapabilityI
                 <Icon className="h-3.5 w-3.5" />
               </span>
             </TooltipTrigger>
-            <TooltipContent>
+            <TooltipContent className={MENU_TOOLTIP_Z}>
               <div className="text-xs">
                 <div className="font-semibold">{t(`capability.${key}`)}</div>
                 <div className="text-slate-500 dark:text-slate-400">
@@ -198,7 +206,7 @@ export function TierBadge({ tier, className }: TierBadgeProps) {
             {t(`tier.${tier}`)}
           </Badge>
         </TooltipTrigger>
-        <TooltipContent>{t(`tierTooltip.${tier}`)}</TooltipContent>
+        <TooltipContent className={MENU_TOOLTIP_Z}>{t(`tierTooltip.${tier}`)}</TooltipContent>
       </Tooltip>
     </TooltipProvider>
   );
@@ -235,7 +243,7 @@ export function ProviderKindBadge({ providerKind, className }: ProviderKindBadge
             {t(`providerKind.${providerKind}` as 'providerKind.cloud')}
           </Badge>
         </TooltipTrigger>
-        <TooltipContent>
+        <TooltipContent className={MENU_TOOLTIP_Z}>
           {t(`providerKindTooltip.${providerKind}` as 'providerKindTooltip.cloud')}
         </TooltipContent>
       </Tooltip>
@@ -292,7 +300,7 @@ export function ModelOptionDisplay({
                   aria-label={t('recommended')}
                 />
               </TooltipTrigger>
-              <TooltipContent>{t('recommended')}</TooltipContent>
+              <TooltipContent className={MENU_TOOLTIP_Z}>{t('recommended')}</TooltipContent>
             </Tooltip>
           </TooltipProvider>
         )}
@@ -305,7 +313,7 @@ export function ModelOptionDisplay({
                   aria-label={t('deprecatedBadge')}
                 />
               </TooltipTrigger>
-              <TooltipContent>{t('deprecatedBadge')}</TooltipContent>
+              <TooltipContent className={MENU_TOOLTIP_Z}>{t('deprecatedBadge')}</TooltipContent>
             </Tooltip>
           </TooltipProvider>
         )}
@@ -390,9 +398,13 @@ export function ModelInfoPopover({ model, trigger, className }: ModelInfoPopover
             </button>
           )}
         </PopoverTrigger>
+        {/* The default PopoverContent z-50 paints this card BEHIND every host that
+            opens it: the composer model menu (z-[10000], ModelSelectorDropdown), the
+            composer Options popover (z-[99999]) and the pickers' SelectContent
+            (z-[100000]) - so it must sit above them all. */}
         <PopoverContent
           align="end"
-          className="w-80 p-4 text-sm bg-theme-primary border-theme"
+          className="w-80 p-4 text-sm bg-theme-primary border-theme z-[100001]"
           data-model-selector-keep-open
           onPointerDown={e => e.stopPropagation()}
           onMouseDown={e => e.stopPropagation()}

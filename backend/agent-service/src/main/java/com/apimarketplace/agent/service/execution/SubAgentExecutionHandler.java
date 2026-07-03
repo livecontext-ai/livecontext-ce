@@ -1533,6 +1533,9 @@ public class SubAgentExecutionHandler {
             forwardCredential(creds, parentCreds, "__orgId__");
             forwardCredential(creds, parentCreds, "__orgRole__");
             forwardCredential(creds, parentCreds, "__workflowRunId__");
+            // Hosting workflow NODE - keeps the browser-agent live view of a
+            // sub-agent's agent_browse addressed to the host builder node.
+            forwardCredential(creds, parentCreds, "__workflowNodeId__");
             // Forward tool callback URL for conversation-local tools
             forwardCredential(creds, parentCreds, "__toolCallbackUrl__");
             // Forward approved services

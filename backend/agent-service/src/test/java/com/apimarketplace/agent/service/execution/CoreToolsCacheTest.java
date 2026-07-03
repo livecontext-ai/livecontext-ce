@@ -312,7 +312,7 @@ class CoreToolsCacheTest {
             // orchestrator is back and advertises its tools.
             when(restTemplate.exchange(eq(ORCH), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
                 .thenReturn(toolsFor()) // initial: orchestrator unreachable -> no tools
-                .thenReturn(toolsFor("workflow", "application", "web_search", "image_generation", "files"));
+                .thenReturn(toolsFor("workflow", "application", "web_search", "image_generation", "files", "wait"));
             when(restTemplate.exchange(eq(AGENT), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
                 .thenReturn(toolsFor("agent", "skill"));
             when(restTemplate.exchange(eq(DATASOURCE), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
@@ -326,7 +326,7 @@ class CoreToolsCacheTest {
 
             // Sanity: only orchestrator-owned tools are missing after the initial load.
             assertThat(cache.getMissingTools())
-                .containsExactlyInAnyOrder("workflow", "application", "web_search", "image_generation", "files");
+                .containsExactlyInAnyOrder("workflow", "application", "web_search", "image_generation", "files", "wait");
             assertThat(cache.getCoreTools().stream().map(ToolDefinition::name))
                 .containsExactlyInAnyOrder("agent", "skill", "table", "interface", "catalog");
 
@@ -337,7 +337,7 @@ class CoreToolsCacheTest {
             assertThat(cache.getMissingTools()).isEmpty();
             assertThat(cache.getCoreTools().stream().map(ToolDefinition::name))
                 .containsExactlyInAnyOrder("catalog", "table", "interface", "agent", "skill",
-                    "workflow", "application", "web_search", "image_generation", "files");
+                    "workflow", "application", "web_search", "image_generation", "files", "wait");
             // ...and the originally-loaded tools were preserved (the cache was NOT cleared,
             // unlike refreshCoreTools()), so no consumer ever sees them disappear.
             assertThat(cache.getCoreTools().stream().map(ToolDefinition::name))
@@ -358,7 +358,7 @@ class CoreToolsCacheTest {
         void periodicRefreshIsNoOpWhenCacheAlreadyComplete() {
             // Given: every source loads its tools so the cache is complete.
             when(restTemplate.exchange(eq(ORCH), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
-                .thenReturn(toolsFor("workflow", "application", "web_search", "image_generation", "files"));
+                .thenReturn(toolsFor("workflow", "application", "web_search", "image_generation", "files", "wait"));
             when(restTemplate.exchange(eq(AGENT), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
                 .thenReturn(toolsFor("agent", "skill"));
             when(restTemplate.exchange(eq(DATASOURCE), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
@@ -377,7 +377,7 @@ class CoreToolsCacheTest {
 
             // Then: no source is contacted and the cache is untouched.
             verify(restTemplate, never()).exchange(anyString(), eq(HttpMethod.GET), any(), eq(Map.class));
-            assertThat(cache.getCoreTools()).hasSize(10);
+            assertThat(cache.getCoreTools()).hasSize(11);
         }
 
         @Test

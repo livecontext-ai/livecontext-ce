@@ -1752,4 +1752,69 @@ class SpelEvaluatorTest {
                 "Cache must be shared across paths (size only grows, never shrinks within test)");
         }
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // evaluateWithMap() - workflow variables ($vars / vars:) normalization
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("evaluateWithMap() - workflow variables ($vars / vars:)")
+    class EvaluateWithMapWorkflowVariablesTests {
+
+        // Real navigator: the Map path must actually navigate into the "vars"
+        // bundle entry after normalization, not just be stubbed to succeed.
+        private final PathNavigator realPathNavigator = new PathNavigator();
+
+        @Test
+        @DisplayName("Should evaluate $vars.n > 3 to true against the vars bundle in the map context")
+        void shouldEvaluateDollarVarsComparison() {
+            // Arrange
+            Map<String, Object> context = Map.of("vars", Map.of("n", 5));
+
+            // Act
+            Object result = spelEvaluator.evaluateWithMap("$vars.n > 3", context, realPathNavigator);
+
+            // Assert
+            assertEquals(true, result);
+        }
+
+        @Test
+        @DisplayName("Should navigate a nested path like $vars.config.url through the bundle")
+        void shouldNavigateNestedDollarVarsPath() {
+            Map<String, Object> context = Map.of(
+                "vars", Map.of("config", Map.of("url", "https://api.example.com")));
+
+            Object result = spelEvaluator.evaluateWithMap("$vars.config.url", context, realPathNavigator);
+
+            assertEquals("https://api.example.com", result);
+        }
+
+        @Test
+        @DisplayName("Should evaluate the vars:n alias identically to $vars.n")
+        void shouldEvaluateVarsColonAlias() {
+            Map<String, Object> context = Map.of("vars", Map.of("n", 5));
+
+            Object result = spelEvaluator.evaluateWithMap("vars:n == 5", context, realPathNavigator);
+
+            assertEquals(true, result);
+        }
+
+        @Test
+        @DisplayName("Should evaluate to false when the comparison does not hold")
+        void shouldEvaluateFalseWhenComparisonFails() {
+            Map<String, Object> context = Map.of("vars", Map.of("n", 2));
+
+            Object result = spelEvaluator.evaluateWithMap("$vars.n > 3", context, realPathNavigator);
+
+            assertEquals(false, result);
+        }
+
+        @Test
+        @DisplayName("Should evaluate to null when the vars bundle is absent from the context")
+        void shouldEvaluateToNullWithoutBundle() {
+            Object result = spelEvaluator.evaluateWithMap("$vars.n", Map.of(), realPathNavigator);
+
+            assertNull(result);
+        }
+    }
 }

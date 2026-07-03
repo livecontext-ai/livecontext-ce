@@ -87,8 +87,7 @@ public class AgentTaskController {
      * tasks they have no legitimate access to.
      * <p>
      * Batch A2 (2026-05-20) - routes through the org-strict membership check
-     * when an orgId is in the request scope. The caller's role gate is
-     * already enforced upstream by the gateway via {@code X-Organization-Role}.
+     * when an orgId is in the request scope.
      */
     private void assertAgentBelongsToTenant(UUID agentId, String tenantId) {
         String orgScope = TenantResolver.currentRequestOrganizationId();
@@ -99,6 +98,23 @@ public class AgentTaskController {
             throw new IllegalStateException(
                     "agent " + agentId + " does not belong to the caller's tenant");
         }
+    }
+
+    /**
+     * Org-role write gate: a VIEWER member is read-only on the task board.
+     * The gateway (cloud) and the CE monolith org filter only RESOLVE and
+     * inject a validated {@code X-Organization-Role}; they do not block
+     * writes, so enforcement lives here per endpoint, mirroring
+     * SkillController / DataSourceCrudController.
+     */
+    private boolean isViewerRole(HttpServletRequest request) {
+        String orgRole = tenantResolver.resolveOrgRole(request);
+        return orgRole != null && "VIEWER".equalsIgnoreCase(orgRole.trim());
+    }
+
+    private static ResponseEntity<?> viewerForbidden() {
+        return ResponseEntity.status(403).body(Map.of(
+                "error", "your workspace role is read-only (VIEWER): task mutations are not allowed"));
     }
 
     // ========================================================================
@@ -116,6 +132,9 @@ public class AgentTaskController {
     @PutMapping("/tasks/rank")
     public ResponseEntity<?> reorderTasks(@RequestBody ReorderTasksRequest body, HttpServletRequest request) {
         String tenantId = tenantResolver.resolve(request);
+        if (isViewerRole(request)) {
+            return viewerForbidden();
+        }
         if (body == null || body.orderedTaskIds() == null || body.orderedTaskIds().isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("error", "orderedTaskIds is required"));
         }
@@ -140,6 +159,9 @@ public class AgentTaskController {
                                          HttpServletRequest request) {
         String tenantId = tenantResolver.resolve(request);
         tenantResolver.resolveOrgId(request);
+        if (isViewerRole(request)) {
+            return viewerForbidden();
+        }
         try {
             AgentTaskEntity t = taskService.setTaskEstimate(tenantId, taskId, null, tenantId,
                     body == null ? null : body.estimateMinutes(),
@@ -160,6 +182,9 @@ public class AgentTaskController {
                                          HttpServletRequest request) {
         String tenantId = tenantResolver.resolve(request);
         tenantResolver.resolveOrgId(request);
+        if (isViewerRole(request)) {
+            return viewerForbidden();
+        }
         try {
             List<String> ids = body == null ? List.of() : body.blockedByIds();
             AgentTaskEntity t = taskService.setTaskBlockers(tenantId, taskId, null, tenantId, ids);
@@ -178,6 +203,9 @@ public class AgentTaskController {
                                           HttpServletRequest request) {
         String tenantId = tenantResolver.resolve(request);
         tenantResolver.resolveOrgId(request);
+        if (isViewerRole(request)) {
+            return viewerForbidden();
+        }
         try {
             AgentTaskEntity t = taskService.setTaskChecklist(tenantId, taskId, null, tenantId,
                     body == null ? null : body.items());
@@ -193,6 +221,9 @@ public class AgentTaskController {
                                             HttpServletRequest request) {
         String tenantId = tenantResolver.resolve(request);
         tenantResolver.resolveOrgId(request);
+        if (isViewerRole(request)) {
+            return viewerForbidden();
+        }
         try {
             AgentTaskEntity t = taskService.setTaskAttachments(tenantId, taskId, null, tenantId,
                     body == null ? null : body.attachments());
@@ -521,6 +552,9 @@ public class AgentTaskController {
             @RequestBody CreateTaskRequest request,
             HttpServletRequest httpRequest) {
         String tenantId = tenantResolver.resolve(httpRequest);
+        if (isViewerRole(httpRequest)) {
+            return viewerForbidden();
+        }
         try {
             AgentTaskEntity t = taskService.assignTask(tenantId, null, tenantId, request);
             return ResponseEntity.ok(TaskResponse.from(t));
@@ -547,6 +581,9 @@ public class AgentTaskController {
             HttpServletRequest httpRequest) {
         String tenantId = tenantResolver.resolve(httpRequest);
         String organizationId = tenantResolver.resolveOrgId(httpRequest);
+        if (isViewerRole(httpRequest)) {
+            return viewerForbidden();
+        }
         if (!isTaskInScope(taskId, tenantId, organizationId)) {
             return ResponseEntity.status(404).body(Map.of("error", "task not found"));
         }
@@ -568,6 +605,9 @@ public class AgentTaskController {
             HttpServletRequest httpRequest) {
         String tenantId = tenantResolver.resolve(httpRequest);
         String organizationId = tenantResolver.resolveOrgId(httpRequest);
+        if (isViewerRole(httpRequest)) {
+            return viewerForbidden();
+        }
         if (!isTaskInScope(taskId, tenantId, organizationId)) {
             return ResponseEntity.status(404).body(Map.of("error", "task not found"));
         }
@@ -609,6 +649,9 @@ public class AgentTaskController {
             HttpServletRequest httpRequest) {
         String tenantId = tenantResolver.resolve(httpRequest);
         String organizationId = tenantResolver.resolveOrgId(httpRequest);
+        if (isViewerRole(httpRequest)) {
+            return viewerForbidden();
+        }
 
         String action = request.action() == null ? "" : request.action().trim().toLowerCase();
         if (!BULK_ACTIONS.contains(action)) {
@@ -695,6 +738,9 @@ public class AgentTaskController {
             HttpServletRequest httpRequest) {
         String tenantId = tenantResolver.resolve(httpRequest);
         String organizationId = tenantResolver.resolveOrgId(httpRequest);
+        if (isViewerRole(httpRequest)) {
+            return viewerForbidden();
+        }
         // Audit 2026-05-17 round-4 - scope pre-check on the task before mutation.
         if (!isTaskInScope(taskId, tenantId, organizationId)) {
             return ResponseEntity.status(404).body(Map.of("error", "task not found"));
@@ -728,6 +774,9 @@ public class AgentTaskController {
             HttpServletRequest httpRequest) {
         String tenantId = tenantResolver.resolve(httpRequest);
         String organizationId = tenantResolver.resolveOrgId(httpRequest);
+        if (isViewerRole(httpRequest)) {
+            return viewerForbidden();
+        }
         if (!isTaskInScope(taskId, tenantId, organizationId)) {
             return ResponseEntity.status(404).body(Map.of("error", "task not found"));
         }
@@ -754,6 +803,9 @@ public class AgentTaskController {
             HttpServletRequest httpRequest) {
         String tenantId = tenantResolver.resolve(httpRequest);
         String organizationId = tenantResolver.resolveOrgId(httpRequest);
+        if (isViewerRole(httpRequest)) {
+            return viewerForbidden();
+        }
         if (!isTaskInScope(taskId, tenantId, organizationId)) {
             return ResponseEntity.status(404).body(Map.of("error", "task not found"));
         }
@@ -783,6 +835,9 @@ public class AgentTaskController {
             HttpServletRequest httpRequest) {
         String tenantId = tenantResolver.resolve(httpRequest);
         String organizationId = tenantResolver.resolveOrgId(httpRequest);
+        if (isViewerRole(httpRequest)) {
+            return viewerForbidden();
+        }
         if (!isTaskInScope(taskId, tenantId, organizationId)) {
             return ResponseEntity.status(404).body(Map.of("error", "task not found"));
         }
@@ -813,6 +868,9 @@ public class AgentTaskController {
             HttpServletRequest httpRequest) {
         String tenantId = tenantResolver.resolve(httpRequest);
         String organizationId = tenantResolver.resolveOrgId(httpRequest);
+        if (isViewerRole(httpRequest)) {
+            return viewerForbidden();
+        }
         if (!isTaskInScope(taskId, tenantId, organizationId)) {
             return ResponseEntity.status(404).body(Map.of("error", "task not found"));
         }
@@ -852,6 +910,9 @@ public class AgentTaskController {
             HttpServletRequest httpRequest) {
         String tenantId = tenantResolver.resolve(httpRequest);
         String organizationId = tenantResolver.resolveOrgId(httpRequest);
+        if (isViewerRole(httpRequest)) {
+            return viewerForbidden();
+        }
         if (!isTaskInScope(taskId, tenantId, organizationId)) {
             return ResponseEntity.status(404).body(Map.of("error", "task not found"));
         }
@@ -880,6 +941,9 @@ public class AgentTaskController {
             HttpServletRequest httpRequest) {
         String tenantId = tenantResolver.resolve(httpRequest);
         String organizationId = tenantResolver.resolveOrgId(httpRequest);
+        if (isViewerRole(httpRequest)) {
+            return viewerForbidden();
+        }
         if (!isTaskInScope(taskId, tenantId, organizationId)) {
             return ResponseEntity.status(404).body(Map.of("error", "task not found"));
         }

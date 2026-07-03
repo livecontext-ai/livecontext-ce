@@ -159,6 +159,31 @@ async def blpop_control(
         return None
 
 
+async def requeue_control(
+    redis: aioredis.Redis,
+    run_id: str,
+    node_id: str,
+    cmd: dict[str, Any],
+) -> None:
+    """Put a popped control command BACK at the TAIL of the queue.
+
+    Used when a consumer pops a command tagged with a DIFFERENT session_id
+    (two sessions can share the same (run_id, node_id) control key: loop
+    iterations, re-triggers, a previous session's post-completion hold).
+    Tail placement lets the rightful owner's own BLPOP pick it up without
+    this consumer spinning on it at the head. Best-effort: a failed requeue
+    is logged; PAUSE/RESUME are state flips, so a rare loss is recoverable
+    by the user re-clicking.
+    """
+    key = control_key(run_id, node_id)
+    try:
+        await redis.rpush(key, json.dumps(cmd))
+        await redis.expire(key, 600)
+    except Exception:
+        logger.warning("control requeue failed (run=%s node=%s cmd=%r)",
+                       run_id, node_id, cmd.get("cmd"), exc_info=True)
+
+
 async def push_result(
     redis: aioredis.Redis,
     job_id: str,

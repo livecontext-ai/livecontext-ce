@@ -274,12 +274,19 @@ public class RunContextService {
      */
     @Transactional(readOnly = true)
     public Map<String, Object> evaluateExpressionsForItem(String runId, String tenantId, int epoch, int spawn, int itemIndex, Map<String, String> mappings) {
+        return evaluateExpressionsForItem(runId, tenantId, epoch, spawn, itemIndex, mappings, null);
+    }
+
+    /** Vars-aware overload - merges the run's {@code $vars} bundle into the eval context. */
+    @Transactional(readOnly = true)
+    public Map<String, Object> evaluateExpressionsForItem(String runId, String tenantId, int epoch, int spawn, int itemIndex,
+                                                          Map<String, String> mappings, Map<String, Object> varsBundle) {
         if (mappings == null || mappings.isEmpty()) {
             return Map.of();
         }
 
         Map<String, Object> context = loadRunContextForItem(runId, tenantId, epoch, spawn, itemIndex);
-        return evaluateExpressionsWithContext(context, mappings);
+        return evaluateExpressionsWithContext(context, mappings, varsBundle);
     }
 
     /**
@@ -311,7 +318,13 @@ public class RunContextService {
     @Transactional(readOnly = true)
     public Map<String, Object> evaluateExpressionsForItemNarrowed(String runId, String tenantId, int epoch, int spawn, int itemIndex,
                                                                    Map<String, String> mappings, int maxRowBytes) {
-        return evaluateExpressionsForItemNarrowed(runId, tenantId, epoch, spawn, itemIndex, mappings, maxRowBytes, 0);
+        return evaluateExpressionsForItemNarrowed(runId, tenantId, epoch, spawn, itemIndex, mappings, maxRowBytes, 0, null);
+    }
+
+    /** Back-compat overload without the {@code $vars} bundle (non-interface callers). */
+    public Map<String, Object> evaluateExpressionsForItemNarrowed(String runId, String tenantId, int epoch, int spawn, int itemIndex,
+                                                                   Map<String, String> mappings, int maxRowBytes, int maxCollectionSize) {
+        return evaluateExpressionsForItemNarrowed(runId, tenantId, epoch, spawn, itemIndex, mappings, maxRowBytes, maxCollectionSize, null);
     }
 
     /**
@@ -324,17 +337,20 @@ public class RunContextService {
      */
     @Transactional(readOnly = true)
     public Map<String, Object> evaluateExpressionsForItemNarrowed(String runId, String tenantId, int epoch, int spawn, int itemIndex,
-                                                                   Map<String, String> mappings, int maxRowBytes, int maxCollectionSize) {
+                                                                   Map<String, String> mappings, int maxRowBytes, int maxCollectionSize,
+                                                                   Map<String, Object> varsBundle) {
         if (mappings == null || mappings.isEmpty()) {
             return Map.of();
         }
         if (spawn > 0) {
-            return evaluateExpressionsForItem(runId, tenantId, epoch, spawn, itemIndex, mappings);
+            return evaluateExpressionsForItem(runId, tenantId, epoch, spawn, itemIndex, mappings, varsBundle);
         }
 
         java.util.Set<String> tokens = extractStepKeyTokens(mappings.values());
         if (tokens.isEmpty()) {
-            return evaluateExpressionsForItem(runId, tenantId, epoch, spawn, itemIndex, mappings);
+            // Pure literals or a mapping that references ONLY {{$vars.x}} (no
+            // step_key token): resolve against just the vars bundle + defaults.
+            return evaluateExpressionsForItem(runId, tenantId, epoch, spawn, itemIndex, mappings, varsBundle);
         }
 
         // Pre-query distinct step_keys (cheap projection) to resolve aliases → full keys.
@@ -347,7 +363,7 @@ public class RunContextService {
             // run, or all rows have NULL step_key). Resolve against empty context so SpEL
             // literals + {{var|default}} defaults still surface - early-return Map.of() would
             // silently drop user-facing labels and defaults.
-            return evaluateExpressionsWithContext(Map.of(), mappings);
+            return evaluateExpressionsWithContext(Map.of(), mappings, varsBundle);
         }
 
         java.util.Set<String> targetStepKeys = resolveTokensToFullStepKeys(tokens, distinctStepKeys);
@@ -355,13 +371,13 @@ public class RunContextService {
             // Every token referred to a step_key NOT in this epoch (typo, dropped upstream
             // node, prefix-drift). Same fallback: let SpEL evaluate the literals + defaults
             // for the partial-resolution case rather than wiping the entire variable set.
-            return evaluateExpressionsWithContext(Map.of(), mappings);
+            return evaluateExpressionsWithContext(Map.of(), mappings, varsBundle);
         }
 
         Map<String, Object> context = loadBoundedContextForItem(
             runId, tenantId, epoch, itemIndex, targetStepKeys, maxRowBytes, maxCollectionSize);
 
-        return evaluateExpressionsWithContext(context, mappings);
+        return evaluateExpressionsWithContext(context, mappings, varsBundle);
     }
 
     private Map<String, Object> loadNarrowedContextForItem(String runId, String tenantId, int epoch, int itemIndex,
@@ -583,6 +599,25 @@ public class RunContextService {
      * Useful when context is already available (e.g., during execution).
      */
     public Map<String, Object> evaluateExpressionsWithContext(Map<String, Object> context, Map<String, String> mappings) {
+        return evaluateExpressionsWithContext(context, mappings, null);
+    }
+
+    /**
+     * Vars-aware overload: merges the per-run workflow-variable bundle under the
+     * {@code "vars"} key so {@code {{$vars.name}}} / {@code {{vars:name}}} resolve
+     * at interface RENDER time. The interface path rebuilds its context from
+     * persisted storage (never the in-memory execution context), so the bundle
+     * must be injected here; {@code VarsSyntaxNormalizer} already runs inside the
+     * Map-based template path, only the {@code "vars"} entry was missing.
+     * A {@code null}/empty bundle is a no-op (every non-interface caller).
+     */
+    public Map<String, Object> evaluateExpressionsWithContext(Map<String, Object> context, Map<String, String> mappings,
+                                                              Map<String, Object> varsBundle) {
+        if (varsBundle != null && !varsBundle.isEmpty() && !context.containsKey("vars")) {
+            Map<String, Object> merged = new LinkedHashMap<>(context);
+            merged.put("vars", varsBundle);
+            context = merged;
+        }
         Map<String, Object> resolved = new LinkedHashMap<>();
 
         for (Map.Entry<String, String> entry : mappings.entrySet()) {

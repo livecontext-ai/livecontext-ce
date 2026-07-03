@@ -136,6 +136,47 @@ class AgentNodeRuntimeOverridesTest {
     }
 
     @Test
+    @DisplayName("execute() carries inactivityTimeout=0 (disabled) VERBATIM - 0 must not be dropped as falsy")
+    void executeForwardsZeroInactivityVerbatim() {
+        AgentNode node = newNode();
+        injectAgentClient(node);
+        node.setRuntimeOverrides(new AgentRuntimeOverrides(null, null, null, null, 0));
+
+        when(mockAgentClient.executeAgent(any(AgentExecutionRequestDto.class)))
+            .thenReturn(successResponse());
+
+        node.execute(context);
+
+        ArgumentCaptor<AgentExecutionRequestDto> captor = ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
+        verify(mockAgentClient).executeAgent(captor.capture());
+        org.assertj.core.api.Assertions.assertThat(captor.getValue().credentials())
+            .as("0 = watchdog disabled; dropping it would silently re-enable the 5-min default")
+            .containsEntry("__inactivityTimeoutSeconds__", 0);
+    }
+
+    @Test
+    @DisplayName("execute() carries the contract boundary windows 10 and 7200 unchanged (no clamping in the producer)")
+    void executeForwardsBoundaryWindowsUnchanged() {
+        for (int boundary : new int[] {10, 7200}) {
+            org.mockito.Mockito.reset(mockAgentClient);
+            AgentNode node = newNode();
+            injectAgentClient(node);
+            node.setRuntimeOverrides(new AgentRuntimeOverrides(null, null, null, null, boundary));
+
+            when(mockAgentClient.executeAgent(any(AgentExecutionRequestDto.class)))
+                .thenReturn(successResponse());
+
+            node.execute(context);
+
+            ArgumentCaptor<AgentExecutionRequestDto> captor = ArgumentCaptor.forClass(AgentExecutionRequestDto.class);
+            verify(mockAgentClient).executeAgent(captor.capture());
+            org.assertj.core.api.Assertions.assertThat(captor.getValue().credentials())
+                .as("boundary window %s must ride unchanged", boundary)
+                .containsEntry("__inactivityTimeoutSeconds__", boundary);
+        }
+    }
+
+    @Test
     @DisplayName("execute() OMITS the inactivity credential when the override is null (the 5-min default applies)")
     void executeOmitsInactivityCredentialWhenNull() {
         AgentNode node = newNode();

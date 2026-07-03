@@ -655,7 +655,7 @@ public class WorkflowBuilderLoader {
                         "service", e.getValue().get("serviceName")
                     ))
                     .toList());
-                credRecap.put("connect_now", "request_credential(services=" + services + ", reason='Workflow execution')");
+                credRecap.put("connect_now", "credential(action='require', services=" + services + ", reason='Workflow execution')");
                 credRecap.put("note", "Workflow is saved but will FAIL at execution without these credentials");
                 result.put("⚠️_CREDENTIALS_MISSING", credRecap);
 

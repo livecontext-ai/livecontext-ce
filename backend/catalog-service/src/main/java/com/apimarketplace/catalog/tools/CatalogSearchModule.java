@@ -370,9 +370,9 @@ public class CatalogSearchModule implements ToolModule {
             List<String> serviceTypes = new ArrayList<>(servicesRequiringApprovalMap.keySet());
             // JIT MODE: Need credentials now for immediate execution
             resultMap.put("credentialsRequired", Map.of(
-                "action", "request_credential",
+                "action", "credential",
                 "services", serviceTypes,
-                "call", String.format("request_credential(services=%s, reason=\"%s\")", serviceTypes, query),
+                "call", String.format("credential(action=\"require\", services=%s, reason=\"%s\")", serviceTypes, query),
                 "alt", "Or search for alternative APIs if user has other services connected"
             ));
         }

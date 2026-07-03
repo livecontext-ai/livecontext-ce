@@ -1240,7 +1240,8 @@ public class FilesToolsProvider implements ToolsProvider {
             + "only. Long content pages with offset (follow the 'NEXT' call). Every view also returns a 'marker' - "
             + "echo it verbatim and a click-to-open card lets the user see the file (works for any file, every time).\n"
             + "- visualize: show a file to the user as a clickable card in the chat; they click it to open the "
-            + "file (preview + download). Use when the user wants to SEE a file.\n"
+            + "file (preview + download). Use when the user wants to SEE a file you did NOT view - after a view, "
+            + "echoing its 'marker' already shows the same card, no visualize needed.\n"
             + "- create_folder: make a manual folder (params: name, optional folder=parent). Returns folder_id.\n"
             + "- move_to_folder: move files/folders into a manual folder or to the root (params: file_ids, optional folder=target). "
             + "Returns moved_count + failed[].\n"
@@ -1395,9 +1396,9 @@ public class FilesToolsProvider implements ToolsProvider {
             + "workflow_id='<id>') - also a flat list. (3) browsing by workflow → files(action='list', folder='wf:<id>') "
             + "then drill epoch → run → item via each folder_ref. query/run_id/workflow_id apply to the FLAT list only "
             + "(omit `folder`); folder browsing returns a level's folders+files unfiltered. Once you see the file row, "
-            + "OPEN it: files(action='view', file_id=…) for content (documents come back as text, images you SEE, "
-            + "other binaries give a url), or files(action='get', file_id=…) for metadata + the `ref` you wire into a "
-            + "workflow. Show it to the user with files(action='visualize', file_id=…).");
+            + "OPEN it: files(action='view', file_id=…) for content (what each file type returns → the reading_content "
+            + "concept), files(action='get', file_id=…) for metadata + the `ref` you wire into a workflow, "
+            + "files(action='visualize', file_id=…) to show it to the user.");
         out.put("truncation_and_expand",
             "view inlines text/JSON up to 128 KB. When the file is larger, the response has truncated=true, "
             + "original_length (total chars), and a 'NEXT' call. Call that NEXT (it carries the right offset) "
@@ -1418,10 +1419,10 @@ public class FilesToolsProvider implements ToolsProvider {
             + "only the 'url'. "
             + "For every object-storage file, view also returns an opaque absolute `url` (no tenant id, no storage "
             + "path) that opens the ORIGINAL file inside the signed-in app (not a public anonymous link), plus a `ref` "
-            + "(FileRef) you wire into a workflow node. To show a file to the USER, files(action='visualize', "
-            + "file_id=…) renders a clickable card. A document over the extract cap returns 'extract_note' instead of "
+            + "(FileRef) you wire into a workflow node. A document over the extract cap returns 'extract_note' instead of "
             + "'content' - open it via the url, or wire its `ref` into an ExtractFromFile workflow node for chunked "
-            + "extraction. Deleting files is the user's job; you have no delete action.");
+            + "extraction. Showing a file to the USER → the show_to_user concept. "
+            + "Deleting files is the user's job; you have no delete action.");
         out.put("interface_screenshots",
             "A file whose `step` starts with 'interface:' and whose kind is image is a RENDERED interface "
             + "screenshot, captured FULL-PAGE (the whole scrollable interface, never cropped to the viewport). "
@@ -1454,8 +1455,7 @@ public class FilesToolsProvider implements ToolsProvider {
             + "create_folder) and the root accept moves. Create a manual folder with files(action='create_folder', name=…) and put "
             + "files in it with files(action='move_to_folder', file_ids=[…], folder='<folder_id>'). A file moved into a manual folder "
             + "leaves its workflow grouping (it no longer appears under the workflow folder). A move reports per-id problems in "
-            + "`failed` (each with a `reason`) and the rest in `moved_count` - read `failed` rather than retrying blindly. "
-            + "Listing pages 25 by default (max 50); a folder name is capped at 100 chars.");
+            + "`failed` (each with a `reason`) and the rest in `moved_count` - read `failed` rather than retrying blindly.");
         out.put("use_in_workflow",
             "To use a stored file as input to a workflow, call files(action='get', file_id) and copy its `ref` object "
             + "(a FileRef {_type:'file', path, name, mimeType, size, url}) into the node parameter that takes a file, "

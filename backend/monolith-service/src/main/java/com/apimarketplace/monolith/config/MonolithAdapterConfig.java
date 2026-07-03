@@ -192,4 +192,30 @@ public class MonolithAdapterConfig {
             MeterRegistry meterRegistry) {
         return new RedisEventBus(stringRedisTemplate, redisMessageListenerContainer, meterRegistry);
     }
+
+    /**
+     * Primary {@link StringRedisTemplate} for the monolith - resolves the
+     * by-type ambiguity that breaks CE with the browser agent enabled.
+     *
+     * <p>With {@code WEBSEARCH_ENABLED=true} (the CE browser-agent opt-in),
+     * orchestrator's {@code WebSearchConfig} contributes
+     * {@code webSearchRedisTemplate} NEXT TO the {@code stringRedisTemplate}
+     * the catalog config declares, and every UNQUALIFIED
+     * {@code StringRedisTemplate} injection in the merged context
+     * ({@code OrchestratorLifecycleGate}, browser-agent controllers, ...)
+     * fails with "expected single matching bean but found 2" - the monolith
+     * could not BOOT with the browser-agent profile at all. The standalone
+     * orchestrator never sees this because Spring Boot's auto-configured
+     * template backs off ({@code @ConditionalOnMissingBean}) leaving a single
+     * candidate. {@code @Primary} restores unqualified resolution here;
+     * {@code @Qualifier("webSearchRedisTemplate")} /
+     * {@code @Qualifier("stringRedisTemplate")} consumers are unaffected
+     * (qualifier match beats primary).</p>
+     */
+    @Bean
+    @Primary
+    public StringRedisTemplate monolithPrimaryStringRedisTemplate(
+            RedisConnectionFactory connectionFactory) {
+        return new StringRedisTemplate(connectionFactory);
+    }
 }

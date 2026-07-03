@@ -16,6 +16,7 @@ import { nodeRegistry } from '../../registry/nodeRegistry';
 import { ParentNodesDataPreview } from './outputs/ParentNodesDataPreview';
 import { useStepByStep } from '../../contexts/StepByStepContext';
 import { useApprovalReviewTarget } from '../../services/approvalReviewStore';
+import { useWorkflowVariables } from '@/lib/hooks/useWorkflowVariables';
 
 interface InputColumnProps {
   node: Node<BuilderNodeData> | null;
@@ -49,6 +50,11 @@ export const InputColumn = ({
   const canDrag = !isPreviewOnly;
   const stepByStep = useStepByStep();
   const isStepByStepMode = stepByStep?.isStepByStepMode ?? false;
+
+  // Workflow variables ($vars) of the active scope - draggable like the other
+  // global variables below. Disabled in preview-only mode (marketplace) where
+  // the viewer may not even be the workflow owner.
+  const { variables: workflowVariables } = useWorkflowVariables(!isPreviewOnly);
 
   // When an approval review is being driven for THIS node, the reviewer needs
   // the upstream context of the exact item under review: auto-expand the
@@ -169,6 +175,7 @@ export const InputColumn = ({
       label: string;
       type: string;
       path: string;
+      expressionToken?: boolean;
       properties?: Array<{ name: string; label: string; type: string; path: string }>;
     }> = [];
 
@@ -229,10 +236,20 @@ export const InputColumn = ({
       });
     }
 
-    // FindNode body context variables - uses {{table:label.output.current_item}} format
-    // FindNode behaves like Split but uses table: prefix instead of core:
+    // Workflow variables ($vars) - org/personal reusable values, available in
+    // every node regardless of type or position in the DAG. Rendered with the
+    // SpEL token styling so they read as droppable expressions.
+    for (const wfVar of workflowVariables) {
+      variables.push({
+        name: wfVar.name,
+        label: `{{$vars.${wfVar.name}}}`,
+        type: wfVar.type.toLowerCase(),
+        path: `{{$vars.${wfVar.name}}}`,
+        expressionToken: true,
+      });
+    }
     return variables;
-  }, [isWhileGroupNode, isWhileBodyNode, parentWhileNode, isLoopNode, isLoopChild, loopNode, node, isSplitNode, isSplitChild, splitNode]);
+  }, [isWhileGroupNode, isWhileBodyNode, parentWhileNode, isLoopNode, isLoopChild, loopNode, node, isSplitNode, isSplitChild, splitNode, workflowVariables]);
 
   // Render content (shared between embedded and non-embedded modes)
   const renderContent = () => {

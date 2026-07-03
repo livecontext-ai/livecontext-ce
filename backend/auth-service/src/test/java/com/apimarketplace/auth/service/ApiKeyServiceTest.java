@@ -37,6 +37,9 @@ class ApiKeyServiceTest {
     @Mock
     private UserResolutionService userResolutionService;
 
+    @Mock
+    private GatewayCacheClient gatewayCacheClient;
+
     private ApiKeyService apiKeyService;
 
     private static final Long USER_ID = 42L;
@@ -48,7 +51,8 @@ class ApiKeyServiceTest {
         apiKeyService = new ApiKeyService(
                 userRepository,
                 encryptionService,
-                userResolutionService
+                userResolutionService,
+                gatewayCacheClient
         );
     }
 

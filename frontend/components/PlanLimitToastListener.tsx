@@ -15,7 +15,7 @@ import { useToast } from './Toast';
 
 interface PlanLimitDetail {
   error: string;
-  resourceType: 'WORKFLOW' | 'AGENT' | 'DATASOURCE' | 'INTERFACE' | 'APPLICATION';
+  resourceType: 'WORKFLOW' | 'AGENT' | 'DATASOURCE' | 'INTERFACE' | 'APPLICATION' | 'PUBLICATION' | 'WORKFLOW_VARIABLE';
   planCode: string;
   currentCount: number;
   limit: number;
@@ -28,14 +28,14 @@ const STRINGS = {
     message: (r: string, limit: number, plan: string, hint: string) =>
       `Your ${plan} plan allows ${limit} ${r}(s). ${hint}`,
     defaultHint: 'Upgrade your plan to create more.',
-    resources: { workflow: 'workflow', agent: 'agent', datasource: 'table', interface: 'interface', application: 'application' },
+    resources: { workflow: 'workflow', agent: 'agent', datasource: 'table', interface: 'interface', application: 'application', publication: 'publication', workflow_variable: 'workflow variable' },
   },
   fr: {
     title: (r: string) => `Limite de ${r} atteinte`,
     message: (r: string, limit: number, plan: string, hint: string) =>
       `Votre plan ${plan} autorise ${limit} ${r}(s). ${hint}`,
     defaultHint: 'Passez à un plan supérieur pour en créer davantage.',
-    resources: { workflow: 'workflow', agent: 'agent', datasource: 'table', interface: 'interface', application: 'application' },
+    resources: { workflow: 'workflow', agent: 'agent', datasource: 'table', interface: 'interface', application: 'application', publication: 'publication', workflow_variable: 'variable de workflow' },
   },
 } as const;
 
