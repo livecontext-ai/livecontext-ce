@@ -86,7 +86,7 @@ class ApplicationToolsProviderTest {
             assertThat(paramNames).containsExactlyInAnyOrder(
                 "action", "workflow_id", "application_id", "query", "category", "title", "description",
                 "data_inputs", "trigger_id", "run_id", "epoch", "node_id",
-                "item_index", "iteration", "spawn", "field", "max_bytes", "limit", "offset"
+                "item_index", "iteration", "spawn", "field", "max_bytes", "limit", "offset", "topics"
             );
         }
 

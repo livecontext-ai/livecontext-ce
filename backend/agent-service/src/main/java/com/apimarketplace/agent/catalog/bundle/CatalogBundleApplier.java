@@ -4,10 +4,12 @@ import com.apimarketplace.agent.domain.CatalogBundleEntity;
 import com.apimarketplace.agent.domain.CatalogBundleSyncStatusEntity;
 import com.apimarketplace.agent.repository.CatalogBundleRepository;
 import com.apimarketplace.agent.repository.CatalogBundleSyncStatusRepository;
+import com.apimarketplace.agent.cloud.CeBlockedProviders;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -47,6 +49,16 @@ public class CatalogBundleApplier {
     private final CatalogBundleRepository bundleRepo;
     private final CatalogBundleSyncStatusRepository syncStatusRepo;
     private final ObjectMapper objectMapper;
+
+    /**
+     * {@code auth.mode}: {@code "embedded"} ⇒ this is a CE (self-hosted) install,
+     * so the openrouter aggregator and cohere are stripped from the bundle before
+     * merge - multi-provider aggregation is the hosted product's value and must
+     * not be pushed to CE via the signed cloud catalog. Empty (cloud / tests) ⇒
+     * no filtering. Field injection so the @RequiredArgsConstructor stays intact.
+     */
+    @Value("${auth.mode:}")
+    private String authMode = "";
 
     public record ApplyResult(Status status, long version, int inserted, int updated,
                               int deprecated, int skippedCustom, int skippedUserModified,
@@ -88,6 +100,14 @@ public class CatalogBundleApplier {
             return ApplyResult.failed("payload parse failed: " + e.getMessage());
         }
 
+        // 1b. CE boundary: strip the openrouter aggregator + cohere from the
+        // bundle BEFORE merge on a self-hosted install (auth.mode=embedded), so
+        // the signed cloud catalog can never materialize them into CE's picker.
+        // Because MergeOptions.forBundle deprecates rows absent from the bundle,
+        // removing them here also DEPRECATES any openrouter/cohere row a previous
+        // bundle already applied - a self-healing cleanup. No-op in cloud.
+        modelMaps = filterCeBlockedRows(modelMaps);
+
         // 2. Delegate the actual per-row merge.
         CatalogMergeService.MergeResult merge =
                 mergeService.merge(modelMaps, MergeOptions.forBundle(bundle.version()));
@@ -126,6 +146,30 @@ public class CatalogBundleApplier {
         return new ApplyResult(Status.APPLIED, bundle.version(),
                 merge.inserted(), merge.updated(), merge.deprecated(),
                 merge.skippedCustom(), merge.skippedUserModified(), null);
+    }
+
+    /**
+     * On CE ({@code auth.mode=embedded}) drop every bundle row whose provider is
+     * CE-blocked (openrouter, cohere). No-op in cloud / tests (empty authMode).
+     * Package-private for unit testing.
+     */
+    List<Map<String, Object>> filterCeBlockedRows(List<Map<String, Object>> modelMaps) {
+        if (!"embedded".equalsIgnoreCase(authMode == null ? "" : authMode.trim())) {
+            return modelMaps;
+        }
+        List<Map<String, Object>> filtered = new ArrayList<>(modelMaps.size());
+        int blocked = 0;
+        for (Map<String, Object> m : modelMaps) {
+            if (m.get("provider") instanceof String p && CeBlockedProviders.isBlocked(p)) {
+                blocked++;
+                continue;
+            }
+            filtered.add(m);
+        }
+        if (blocked > 0) {
+            log.info("CE bundle apply: filtered {} CE-blocked model row(s) (openrouter/cohere) before merge", blocked);
+        }
+        return filtered;
     }
 
     /**

@@ -330,6 +330,45 @@ class BrowserAgentTakeoverControllerTest {
     }
 
     @Test
+    @DisplayName("abort: owner -> 200 + aborter.abortSession(runId,nodeId,session_id) called")
+    void abortOwnerCallsAborter() {
+        WorkflowRunRepository runRepo = org.mockito.Mockito.mock(WorkflowRunRepository.class);
+        when(runRepo.findByRunIdPublic("run_1")).thenReturn(Optional.of(runOwnedBy("user_1", null)));
+        com.apimarketplace.orchestrator.tools.websearch.BrowserAgentRunAborter aborter =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.tools.websearch.BrowserAgentRunAborter.class);
+
+        BrowserAgentTakeoverController c = new BrowserAgentTakeoverController(
+                signalService, null, null, null, runRepo);
+        c.setRunAborter(aborter);
+
+        ResponseEntity<Map<String, Object>> response = c.abort(
+                "run_1", "node_1", Map.of("session_id", "ses_x"), "user_1", null);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody()).containsEntry("status", "aborting");
+        verify(aborter).abortSession("run_1", "node_1", "ses_x");
+    }
+
+    @Test
+    @DisplayName("abort: non-owner -> 404 and the aborter is never called")
+    void abortNonOwnerDenied() {
+        WorkflowRunRepository runRepo = org.mockito.Mockito.mock(WorkflowRunRepository.class);
+        when(runRepo.findByRunIdPublic("run_victim")).thenReturn(Optional.of(runOwnedBy("user_victim", null)));
+        com.apimarketplace.orchestrator.tools.websearch.BrowserAgentRunAborter aborter =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.tools.websearch.BrowserAgentRunAborter.class);
+
+        BrowserAgentTakeoverController c = new BrowserAgentTakeoverController(
+                signalService, null, null, null, runRepo);
+        c.setRunAborter(aborter);
+
+        ResponseEntity<Map<String, Object>> response = c.abort(
+                "run_victim", "node_1", Map.of("session_id", "ses_x"), "user_attacker", null);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        verify(aborter, org.mockito.Mockito.never()).abortSession(anyString(), anyString(), anyString());
+    }
+
+    @Test
     @DisplayName("refresh: CHAT run - no signal, but meta-hash sessionId matches -> token minted (live view survives JWT expiry)")
     void refreshMintsViaMetaHashForChatRun() {
         // Chat runs never raise workflow signals; before the meta-hash

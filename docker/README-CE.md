@@ -188,6 +188,10 @@ docker compose --env-file docker/.env.ce.browser-agent up -d
 - **Model:** the agent node picks the model (default **gemini 3.1 flash**). The
   app injects the install's Google/Gemini key into each browse job, so set
   `GEMINI_API_KEY` (or add a Google credential in the app) for it to run.
+- **web_search:** the same `browser-agent` profile also starts a **SearXNG**
+  metasearch sidecar, wired via `WEBSEARCH_SEARXNG_URL`, so `web_search` returns
+  results. Its config (kept engines + JSON output) is mounted read-only from
+  `searxng/settings.yml`; set a unique `server.secret_key` there for your install.
 - **Live view:** the side panel always shows the **final page** the agent saw
   (captured screenshot). The real-time screencast additionally needs
   `WEBSEARCH_CDP_JWT_SECRET` set to the same value on both the app and the
@@ -195,6 +199,24 @@ docker compose --env-file docker/.env.ce.browser-agent up -d
 - Set only one of the two and the feature is broken (a container the app never
   calls, or a module with no container) - always use the env file so they stay
   coupled.
+
+## Interface screenshots + PDF renderer - opt-in
+
+Interface nodes can render a page to a **PNG screenshot** (`generateScreenshot`)
+or a **PDF** (`generatePdf`). That needs a headless Playwright/Chromium sidecar,
+which is **off by default** (~1 GB image). Turn it on with the bundled env file,
+which starts the `screenshot-renderer` container (`renderer` Docker profile) and
+points the app at it (`SCREENSHOT_RENDERER_URL=http://screenshot-renderer:8094`):
+
+```bash
+docker compose --env-file docker/.env.ce.renderer up -d
+```
+
+- **Best-effort when off:** with the renderer disabled the interface node still
+  runs, it just emits no screenshot/PDF output - the rest of the workflow is
+  unaffected.
+- Set only one half and it stays off (a container the app never calls, or the URL
+  with no container) - always use the env file so they stay coupled.
 
 ## Common Commands
 

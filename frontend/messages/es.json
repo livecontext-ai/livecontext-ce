@@ -3892,7 +3892,7 @@
   },
   "mcpServer": {
     "title": "Servidor MCP",
-    "subtitle": "Conecta clientes MCP como Claude Code o Cursor a tus herramientas de LiveContext",
+    "subtitle": "Conecta clientes MCP como Claude Code, Cursor o Codex a tus herramientas de LiveContext",
     "copy": "Copiar",
     "errors": {
       "fetchFailed": "No se pudo cargar la información del servidor MCP"
@@ -3924,6 +3924,7 @@
       "description": "Copia uno de estos bloques en tu cliente MCP. El bloque JSON va en un archivo de configuración mcpServers; el comando añade el servidor a Claude Code.",
       "claudeCode": "Claude Code (comando)",
       "jsonConfig": "Configuración JSON (Cursor, Claude Desktop, ...)",
+      "codex": "Codex (~/.codex/config.toml)",
       "keyPlaceholder": "TU_CLAVE_API",
       "placeholderHint": "Sustituye TU_CLAVE_API por tu clave API (genera una arriba)."
     }
@@ -6635,7 +6636,13 @@
           "title": "¿Tomar el control?"
         },
         "viewLiveTrace": "Ver navegador en vivo",
-        "tabLabel": "Agente de navegador"
+        "tabLabel": "Agente de navegador",
+        "chrome": {
+          "stop": "Detener el navegador",
+          "back": "Atrás",
+          "forward": "Adelante",
+          "refresh": "Actualizar"
+        }
       }
     },
     "forms": {

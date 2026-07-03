@@ -104,7 +104,35 @@ export function BrowserAgentParametersForm({
     id: llm.model ?? data.model ?? '',
   };
   const handleModelPick = (next: SelectedModel) => {
-    updateParam('llm', { ...llm, provider: next.provider, model: next.id });
+    // Keep THREE storage sites in sync in ONE atomic onUpdate, mirroring
+    // classify/guardrail which write data.provider/data.model directly:
+    //  - params.llm            : the runner contract (BrowserAgentModule
+    //                            reads params.llm.provider/model).
+    //  - paramExpressions.llm  : the plan exporter's read source
+    //                            (convertParamExpressionsToInputs).
+    //  - data.provider/model   : the ModelPicker's display fallback AND the
+    //                            fields agentProcessor.ts emits as
+    //                            agent.provider/model. If we update only
+    //                            params.llm (as updateParam does), these two
+    //                            stay stale: AgentNodeCreator only hoists
+    //                            params.llm -> data.provider/model when they
+    //                            are BLANK, so after the first save every
+    //                            later model change reverts on reload to the
+    //                            old data.model. Writing all three here is
+    //                            what makes the picked model stick.
+    const nextLlm = { ...llm, provider: next.provider, model: next.id };
+    const nextParams = { ...params, llm: nextLlm };
+    const nextExpressions: Record<string, string> = {
+      ...((data.paramExpressions as Record<string, string> | undefined) ?? {}),
+      llm: JSON.stringify(nextLlm),
+    };
+    onUpdate({
+      ...data,
+      provider: next.provider,
+      model: next.id,
+      params: nextParams,
+      paramExpressions: nextExpressions,
+    } as unknown as BuilderNodeData);
   };
 
   const interactionMode = readParam<string>('interaction_mode', DEFAULT_INTERACTION_MODE);

@@ -159,6 +159,21 @@ public class ExecutionServiceInjector {
     @Autowired(required = false)
     private BrowserAgentModule browserAgentModule;
 
+    /**
+     * CE→cloud browser-agent relay client - bean is gated on {@code websearch.enabled=false}
+     * (CE default), so it is present only where the local {@link BrowserAgentModule} is absent.
+     * Optional so cloud builds (and unit tests) still assemble a complete registry.
+     */
+    @Autowired(required = false)
+    private com.apimarketplace.orchestrator.tools.websearch.CloudBrowserAgentRelayClient cloudBrowserAgentRelayClient;
+
+    /**
+     * Resolves the CE cloud-link source + credentials per tenant. Present only where the
+     * CE cloud-link wiring exists (marketplace.mode=remote). Optional in cloud / unit tests.
+     */
+    @Autowired(required = false)
+    private com.apimarketplace.agent.cloud.CloudLlmRuntimeAccess cloudLlmRuntimeAccess;
+
     /** F2.2 - used by SubWorkflowNode to register parent→child run links so a
      *  parent cancel cascades to in-flight sub-runs. Optional in unit tests. */
     @Autowired(required = false)
@@ -242,6 +257,8 @@ public class ExecutionServiceInjector {
             .workflowRedisPublisher(workflowRedisPublisher)
             .interfaceScreenshotService(interfaceScreenshotService)
             .interfaceRenderService(interfaceRenderService)
+            .cloudBrowserAgentRelayClient(cloudBrowserAgentRelayClient)
+            .cloudLlmRuntimeAccess(cloudLlmRuntimeAccess)
             .build();
     }
 

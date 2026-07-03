@@ -75,6 +75,8 @@ public class ServiceRegistry {
     private final com.apimarketplace.orchestrator.services.streaming.redis.WorkflowRedisPublisher workflowRedisPublisher;
     private final InterfaceScreenshotService interfaceScreenshotService;
     private final InterfaceRenderService interfaceRenderService;
+    private final com.apimarketplace.orchestrator.tools.websearch.CloudBrowserAgentRelayClient cloudBrowserAgentRelayClient;
+    private final com.apimarketplace.agent.cloud.CloudLlmRuntimeAccess cloudLlmRuntimeAccess;
 
     private ServiceRegistry(Builder builder) {
         this.toolsGateway = builder.toolsGateway;
@@ -110,6 +112,8 @@ public class ServiceRegistry {
         this.workflowRedisPublisher = builder.workflowRedisPublisher;
         this.interfaceScreenshotService = builder.interfaceScreenshotService;
         this.interfaceRenderService = builder.interfaceRenderService;
+        this.cloudBrowserAgentRelayClient = builder.cloudBrowserAgentRelayClient;
+        this.cloudLlmRuntimeAccess = builder.cloudLlmRuntimeAccess;
     }
 
     public com.apimarketplace.orchestrator.services.triggers.TriggerUserResolver getTriggerUserResolver() {
@@ -234,6 +238,26 @@ public class ServiceRegistry {
         return browserAgentModule;
     }
 
+    /**
+     * CE→cloud browser-agent relay client. Present only in a CE deployment
+     * ({@code websearch.enabled=false}); null in cloud where the local
+     * {@link BrowserAgentModule} runs. Lets {@link com.apimarketplace.orchestrator.execution.v2.nodes.BrowserAgentNode}
+     * relay a browse when the local module is absent but the install is cloud-linked.
+     */
+    public com.apimarketplace.orchestrator.tools.websearch.CloudBrowserAgentRelayClient getCloudBrowserAgentRelayClient() {
+        return cloudBrowserAgentRelayClient;
+    }
+
+    /**
+     * Resolves the effective CE LLM source + cloud-link credentials for a tenant.
+     * Present only where the CE cloud-link wiring exists (marketplace.mode=remote);
+     * null otherwise. Used with {@link #getCloudBrowserAgentRelayClient()} to gate the
+     * browser-agent relay per tenant at runtime.
+     */
+    public com.apimarketplace.agent.cloud.CloudLlmRuntimeAccess getCloudLlmRuntimeAccess() {
+        return cloudLlmRuntimeAccess;
+    }
+
     /** F2.2 - used by SubWorkflowNode to register parent→child run links so a parent
      *  cancel cascades down to in-flight sub-runs. May be {@code null} in unit tests. */
     public com.apimarketplace.orchestrator.services.streaming.redis.WorkflowRedisPublisher getWorkflowRedisPublisher() {
@@ -293,6 +317,8 @@ public class ServiceRegistry {
         private com.apimarketplace.orchestrator.services.streaming.redis.WorkflowRedisPublisher workflowRedisPublisher;
         private InterfaceScreenshotService interfaceScreenshotService;
         private InterfaceRenderService interfaceRenderService;
+        private com.apimarketplace.orchestrator.tools.websearch.CloudBrowserAgentRelayClient cloudBrowserAgentRelayClient;
+        private com.apimarketplace.agent.cloud.CloudLlmRuntimeAccess cloudLlmRuntimeAccess;
 
         public Builder toolsGateway(ToolsGateway toolsGateway) {
             this.toolsGateway = toolsGateway;
@@ -457,6 +483,18 @@ public class ServiceRegistry {
 
         public Builder interfaceRenderService(InterfaceRenderService service) {
             this.interfaceRenderService = service;
+            return this;
+        }
+
+        public Builder cloudBrowserAgentRelayClient(
+                com.apimarketplace.orchestrator.tools.websearch.CloudBrowserAgentRelayClient client) {
+            this.cloudBrowserAgentRelayClient = client;
+            return this;
+        }
+
+        public Builder cloudLlmRuntimeAccess(
+                com.apimarketplace.agent.cloud.CloudLlmRuntimeAccess runtimeAccess) {
+            this.cloudLlmRuntimeAccess = runtimeAccess;
             return this;
         }
 

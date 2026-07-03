@@ -145,9 +145,15 @@ describe('OrganizationSettingsPage - categorized tabs', () => {
   it('centers the category toggle row (matches the account overview tabs)', async () => {
     renderPage();
     const membersBtn = await screen.findByRole('button', { name: 'Members' });
-    const toggleRow = membersBtn.closest('div.overflow-x-auto');
-    expect(toggleRow).not.toBeNull();
-    expect(toggleRow?.className).toContain('justify-center');
+    // Responsive centering (matches settings/overview): the pill group is centered
+    // via `mx-auto` on its own container, which sits inside a horizontal-scroll
+    // wrapper so narrow screens scroll instead of clipping tabs. `justify-center`
+    // on the outer wrapper was removed by the responsive pill-bar fix (it clipped
+    // tabs on narrow screens), so assert the mechanism that actually centers now.
+    const scrollWrapper = membersBtn.closest('div.overflow-x-auto');
+    expect(scrollWrapper).not.toBeNull();
+    const pillGroup = membersBtn.parentElement;
+    expect(pillGroup?.className).toContain('mx-auto');
   });
 
   it('defaults to the Members tab (members table visible, other tabs unmounted)', async () => {

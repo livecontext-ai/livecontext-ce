@@ -61,6 +61,18 @@ public class BrowserAgentTakeoverController {
      *  {@code workflow_runs} row. Null in the test-only constructors. */
     private final StringRedisTemplate redisTemplate;
 
+    /** Aborts a live browser-agent session for the {@code /abort} endpoint (the
+     *  live-view red "stop" button). Field-injected (optional) so the existing
+     *  constructor chain the tests use stays unchanged; tests set it via
+     *  {@link #setRunAborter}. Absent = the endpoint no-ops with 200. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.apimarketplace.orchestrator.tools.websearch.BrowserAgentRunAborter runAborter;
+
+    /** Visible for tests: inject the aborter without the constructor chain. */
+    void setRunAborter(com.apimarketplace.orchestrator.tools.websearch.BrowserAgentRunAborter aborter) {
+        this.runAborter = aborter;
+    }
+
     @Autowired
     public BrowserAgentTakeoverController(
             UnifiedSignalService signalService,
@@ -201,6 +213,50 @@ public class BrowserAgentTakeoverController {
      *         200 with {@code {status: "already_resolved"}} if the signal
      *         was already terminal (idempotent - frontend can retry).
      */
+    /**
+     * Abort the live browser-agent session for (runId, nodeId) - the live-view
+     * red "stop" button. Kills Chromium NOW (as opposed to {@code takeover-resume},
+     * which hands control back to the agent, or closing the tab, which only ends
+     * the viewer). Same run-ownership gate as the other endpoints.
+     *
+     * <p>Body optionally carries {@code session_id} (the panel holds it); the
+     * controller otherwise resolves it from the {@code agent:browse:meta} hash.
+     * Delegates to {@link com.apimarketplace.orchestrator.tools.websearch.BrowserAgentRunAborter}
+     * (POST runner abort + control-queue ABORT). Idempotent and best-effort: a
+     * session that already ended returns 200 all the same.</p>
+     *
+     * @return 200 {@code {status:"aborting"}} once the abort is issued;
+     *         404 when the caller is out of scope for the run.
+     */
+    @PostMapping("/abort")
+    public ResponseEntity<Map<String, Object>> abort(
+            @PathVariable String runId,
+            @PathVariable String nodeId,
+            @RequestBody(required = false) Map<String, Object> body,
+            @RequestHeader(value = "X-User-ID", required = false) String userId,
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+
+        logger.info("[BrowserTakeover] abort request: runId={}, nodeId={}, userId={}",
+                runId, nodeId, userId);
+
+        if (!callerOwnsRun(runId, nodeId, userId, orgId)) {
+            logger.warn("[BrowserTakeover] abort DENIED: caller {} (org {}) out of scope for run {} - 404",
+                    userId, orgId, runId);
+            return ResponseEntity.notFound().build();
+        }
+
+        String sessionId = body != null && body.get("session_id") instanceof String s && !s.isBlank()
+                ? s : metaSessionId(runId, nodeId);
+        if (runAborter != null) {
+            runAborter.abortSession(runId, nodeId, sessionId);
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("status", "aborting");
+        result.put("runId", runId);
+        result.put("nodeId", nodeId);
+        return ResponseEntity.ok(result);
+    }
+
     @PostMapping("/takeover-resume")
     public ResponseEntity<Map<String, Object>> resume(
             @PathVariable String runId,

@@ -2,6 +2,8 @@ package com.apimarketplace.orchestrator.execution.v2.nodes;
 
 import com.apimarketplace.agent.client.AgentClient;
 import com.apimarketplace.agent.client.dto.AgentObservabilityRequest;
+import com.apimarketplace.agent.cloud.CloudLlmRuntimeAccess;
+import com.apimarketplace.agent.cloud.CloudLlmRuntimeCredentials;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionContext;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
 import com.apimarketplace.orchestrator.domain.execution.SignalConfig;
@@ -10,6 +12,8 @@ import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
 import com.apimarketplace.orchestrator.execution.v2.engine.ServiceRegistry;
 import com.apimarketplace.orchestrator.execution.v2.services.UnifiedSignalService;
 import com.apimarketplace.orchestrator.tools.websearch.BrowserAgentModule;
+import com.apimarketplace.orchestrator.tools.websearch.CeBrowseRelayRequest;
+import com.apimarketplace.orchestrator.tools.websearch.CloudBrowserAgentRelayClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -67,6 +71,15 @@ public class BrowserAgentNode extends BaseNode {
     private BrowserAgentModule browserAgentModule;
     private AgentClient agentClient;
     /**
+     * CE→cloud browser-agent relay. Present only in a cloud-linked CE
+     * ({@code websearch.enabled=false}) - when the local {@link BrowserAgentModule}
+     * is absent but the install is cloud-linked, the node relays the browse to the
+     * cloud (which owns the browser stack) instead of erroring. Null in cloud.
+     */
+    private CloudBrowserAgentRelayClient cloudBrowserRelayClient;
+    /** Resolves the tenant's cloud-link source + credentials for the relay branch. Null in cloud. */
+    private CloudLlmRuntimeAccess cloudRuntimeAccess;
+    /**
      * UnifiedSignalService - used to raise a {@link SignalType#BROWSER_USER_TAKEOVER}
      * signal when the runner reports {@code stop_reason='USER_TAKEOVER'}. Optional:
      * when null (e.g. tests) we fall back to a regular failure result instead of
@@ -96,6 +109,14 @@ public class BrowserAgentNode extends BaseNode {
         this.signalService = signalService;
     }
 
+    public void setCloudBrowserRelayClient(CloudBrowserAgentRelayClient cloudBrowserRelayClient) {
+        this.cloudBrowserRelayClient = cloudBrowserRelayClient;
+    }
+
+    public void setCloudRuntimeAccess(CloudLlmRuntimeAccess cloudRuntimeAccess) {
+        this.cloudRuntimeAccess = cloudRuntimeAccess;
+    }
+
     /**
      * Pulls the BrowserAgentModule + AgentClient from the registry.
      *
@@ -119,14 +140,25 @@ public class BrowserAgentNode extends BaseNode {
         this.browserAgentModule = registry.getBrowserAgentModule();
         this.agentClient = registry.getAgentClient();
         this.signalService = registry.getSignalService();
+        this.cloudBrowserRelayClient = registry.getCloudBrowserAgentRelayClient();
+        this.cloudRuntimeAccess = registry.getCloudLlmRuntimeAccess();
 
-        if (this.browserAgentModule == null) {
+        // Two supported wirings:
+        //  - cloud / self-hosted with the browser stack: local BrowserAgentModule present.
+        //  - cloud-linked CE (websearch.enabled=false): no local module, but the relay
+        //    client + runtime access let the node forward the browse to the linked cloud.
+        boolean relayWired = this.cloudBrowserRelayClient != null && this.cloudRuntimeAccess != null;
+        if (this.browserAgentModule == null && !relayWired) {
             throw new IllegalStateException(
                 "BrowserAgentNode '" + nodeId + "' cannot be wired: BrowserAgentModule "
-                + "missing from ServiceRegistry. Enable 'websearch.enabled=true' or "
-                + "remove the BROWSER_AGENT node from the workflow plan.");
+                + "missing from ServiceRegistry. Enable 'websearch.enabled=true', link this "
+                + "install to a cloud deployment with the Cloud LLM source, or remove the "
+                + "BROWSER_AGENT node from the workflow plan.");
         }
-        if (this.agentClient == null) {
+        // AgentClient is only required for the LOCAL path (it records the browser-agent
+        // observability row). The relay path bills + records on the cloud account, so a
+        // missing AgentClient there is not a misconfiguration.
+        if (this.browserAgentModule != null && this.agentClient == null) {
             throw new IllegalStateException(
                 "BrowserAgentNode '" + nodeId + "' cannot be wired: AgentClient "
                 + "missing from ServiceRegistry. Observability recording requires "
@@ -154,11 +186,11 @@ public class BrowserAgentNode extends BaseNode {
         Map<String, Object> resolvedParams = resolveParams(context);
 
         if (browserAgentModule == null) {
-            long duration = System.currentTimeMillis() - startTime;
-            String err = "BrowserAgentModule not injected - set websearch.enabled=true";
-            logger.error("Browser agent node misconfigured: nodeId={}, error={}", nodeId, err);
-            return NodeExecutionResult.failureWithOutput(nodeId, err,
-                buildFailureOutput(context, resolvedParams, err, null), duration);
+            // Cloud-linked CE path: relay the browse to the linked cloud (which owns
+            // the browser stack, bills the cloud account, and mints the cloud-hosted
+            // CDP live-view URL). Falls back to the actionable error when the relay is
+            // unavailable (unlinked / BYOK tenant).
+            return executeViaRelay(context, resolvedParams, startTime);
         }
 
         // The module's execute() is identical to what the LLM would invoke as
@@ -242,6 +274,110 @@ public class BrowserAgentNode extends BaseNode {
         }
 
         return NodeExecutionResult.success(nodeId, enrichedOutput, duration);
+    }
+
+    /** Pass-through optional params the cloud runner honours (mirrors BrowserAgentModule.buildJobParameters). */
+    private static final List<String> RELAY_OPTION_KEYS = List.of(
+        "expected_output_schema", "interaction_mode", "domain_allowlist",
+        "domain_denylist", "screenshot_policy", "session");
+
+    /**
+     * Cloud-linked CE relay branch: forward the browse to the linked cloud when the
+     * local {@link BrowserAgentModule} is absent. The cloud runs the browser session,
+     * bills the linked cloud account (so the CE side records NO local observability -
+     * no double charge), and returns a cloud-hosted CDP live-view URL/token that flows
+     * back verbatim in the node output so the run/live panel connect directly to the
+     * cloud. When the relay is unavailable (unlinked / BYOK tenant) the node keeps the
+     * same actionable failure the local path emits when the module is missing.
+     */
+    private NodeExecutionResult executeViaRelay(ExecutionContext context,
+                                                Map<String, Object> resolvedParams,
+                                                long startTime) {
+        String tenantId = context.tenantId();
+        Optional<CloudLlmRuntimeCredentials> credentials = resolveRelayCredentials(tenantId);
+        if (credentials.isEmpty()) {
+            long duration = System.currentTimeMillis() - startTime;
+            String err = "Browser automation is not available: this workspace has no local "
+                + "browser stack (websearch.enabled=false) and no active cloud link with the "
+                + "Cloud LLM source to relay the session to. Only the user can set up the cloud link.";
+            logger.warn("Browser agent node relay unavailable: nodeId={}, tenant={}", nodeId, tenantId);
+            return NodeExecutionResult.failureWithOutput(nodeId, err,
+                buildFailureOutput(context, resolvedParams, err, null), duration);
+        }
+
+        CeBrowseRelayRequest request = buildRelayRequest(context, resolvedParams);
+        Map<String, Object> rawOutput;
+        try {
+            rawOutput = cloudBrowserRelayClient.agentBrowse(credentials.get(), request);
+        } catch (Exception e) {
+            long duration = System.currentTimeMillis() - startTime;
+            String err = "Browser session failed: " + e.getMessage();
+            logger.warn("Browser agent relay failed: nodeId={}, error={}", nodeId, e.getMessage());
+            return NodeExecutionResult.failureWithOutput(nodeId, err,
+                buildFailureOutput(context, resolvedParams, err, null), duration);
+        }
+
+        long duration = System.currentTimeMillis() - startTime;
+        if (rawOutput == null) {
+            String err = "Browser session failed: empty cloud relay response";
+            return NodeExecutionResult.failureWithOutput(nodeId, err,
+                buildFailureOutput(context, resolvedParams, err, null), duration);
+        }
+        // The cloud collapses a non-COMPLETED session to an HTTP error (relay throws
+        // above), so a returned body is a successful browse. Preserve the output
+        // contract (result + cdp_ws_url/cdp_token + steps) exactly like the local path.
+        Map<String, Object> enrichedOutput = buildSuccessOutput(context, resolvedParams, rawOutput);
+        return NodeExecutionResult.success(nodeId, enrichedOutput, duration);
+    }
+
+    private Optional<CloudLlmRuntimeCredentials> resolveRelayCredentials(String tenantId) {
+        if (cloudBrowserRelayClient == null || cloudRuntimeAccess == null
+            || tenantId == null || tenantId.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            if (!cloudRuntimeAccess.isCloudSelected(tenantId)) {
+                return Optional.empty();
+            }
+            return cloudRuntimeAccess.resolveCloudRuntime(tenantId);
+        } catch (RuntimeException e) {
+            logger.warn("Browser agent relay: could not resolve cloud-link state for tenant {}: {}",
+                tenantId, e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    private CeBrowseRelayRequest buildRelayRequest(ExecutionContext context,
+                                                   Map<String, Object> resolvedParams) {
+        Map<String, Object> options = new LinkedHashMap<>();
+        for (String key : RELAY_OPTION_KEYS) {
+            Object value = resolvedParams.get(key);
+            if (value != null) {
+                options.put(key, value);
+            }
+        }
+        Integer maxSteps = null;
+        Object maxStepsObj = resolvedParams.get("max_steps");
+        if (maxStepsObj instanceof Number n) {
+            maxSteps = n.intValue();
+        } else if (maxStepsObj instanceof String s && !s.isBlank()) {
+            try {
+                maxSteps = Integer.parseInt(s.trim());
+            } catch (NumberFormatException ignored) {
+                maxSteps = null;
+            }
+        }
+        @SuppressWarnings("unchecked")
+        Map<String, Object> llm = resolvedParams.get("llm") instanceof Map<?, ?> m
+            ? (Map<String, Object>) m : null;
+        return new CeBrowseRelayRequest(
+            stringField(resolvedParams, "task"),
+            stringField(resolvedParams, "start_url"),
+            llm,
+            maxSteps,
+            options.isEmpty() ? null : options,
+            context.runId(),
+            nodeId);
     }
 
     /**

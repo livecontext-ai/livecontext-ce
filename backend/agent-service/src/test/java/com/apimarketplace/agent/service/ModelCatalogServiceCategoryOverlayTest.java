@@ -673,6 +673,44 @@ class ModelCatalogServiceCategoryOverlayTest {
         verify(categoryRepository, never()).save(any());
     }
 
+    @Test
+    @DisplayName("CE (embedded): admin getEffectiveModelList DROPS a custom openrouter/cohere override (agrees with the picker); cloud KEEPS it")
+    void adminPanelCeModeDropsBlockedCustomProvider() {
+        // A CE admin saved a custom (is_custom=true) override under the
+        // openrouter aggregator. It is NOT in the YAML base (the factory gate
+        // keeps openrouter out in CE), so it only reaches the flat admin list
+        // via the standalone-injection path (category != null). On a self-hosted
+        // install the admin Models panel must drop it, exactly like the picker -
+        // no openrouter/cohere anywhere. Cloud (empty auth.mode) keeps it.
+        ModelConfigOverrideEntity blocked = entity(50L, "openrouter", "anthropic/claude-sonnet-4", 100, true);
+        blocked.setMode("image");
+        blocked.setCustom(true);
+        ModelConfigOverrideEntity keep = entity(51L, "google", "gemini-2.5-flash-image", 101, true);
+        keep.setMode("image");
+        when(repository.findAllByOrderByRankingAsc()).thenReturn(List.of(blocked, keep));
+
+        // Base has only the google shell (openrouter is gated out in CE).
+        Map<String, Object> googleProvider = new LinkedHashMap<>();
+        googleProvider.put("name", "google");
+        googleProvider.put("configured", true);
+        googleProvider.put("models", new java.util.ArrayList<>(List.of(model("gemini-2.5-pro", 2))));
+        Map<String, Object> base = new LinkedHashMap<>();
+        base.put("providers", new java.util.ArrayList<>(List.of(googleProvider)));
+        when(llmProviderFactory.getAllModelsInfoAdmin()).thenReturn(base);
+        lenient().when(credentialRepository.hasDbKey(any())).thenReturn(true);
+
+        // CE: openrouter row dropped, google image row survives.
+        ReflectionTestUtils.setField(service, "authMode", "embedded");
+        List<Map<String, Object>> ceRows = service.getEffectiveModelList("image_generation");
+        assertThat(ceRows).extracting(r -> r.get("provider")).doesNotContain("openrouter");
+        assertThat(ceRows).extracting(r -> r.get("id")).contains("gemini-2.5-flash-image");
+
+        // Cloud: the openrouter custom row is kept (relay fallback territory).
+        ReflectionTestUtils.setField(service, "authMode", "");
+        List<Map<String, Object>> cloudRows = service.getEffectiveModelList("image_generation");
+        assertThat(cloudRows).extracting(r -> r.get("provider")).contains("openrouter");
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────
 
     private void stubBaseCatalog(ModelConfigOverrideEntity... entities) {

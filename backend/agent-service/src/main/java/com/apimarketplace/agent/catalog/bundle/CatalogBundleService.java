@@ -81,6 +81,24 @@ public class CatalogBundleService {
                     "model_config_overrides is empty - refusing to publish an empty catalog bundle");
         }
 
+        // The model-catalog bundle is a CE-only distribution artifact. Exclude the
+        // CE-blocked providers (openrouter aggregator, cohere) from the snapshot so
+        // a self-hosted install never receives them via the signed catalog - cloud
+        // keeps them in its own catalog + relay fallback, only the CE-bound bundle
+        // drops them. CE also strips them defensively on apply
+        // (CatalogBundleApplier); filtering at the source means every CE (linked or
+        // not) gets a clean bundle, and CE's deprecate-missing merge self-heals any
+        // openrouter/cohere row a prior bundle already applied.
+        int ceBlockedFiltered = models.size();
+        models = models.stream()
+                .filter(m -> !com.apimarketplace.agent.cloud.CeBlockedProviders.isBlocked(m.getProvider()))
+                .toList();
+        ceBlockedFiltered -= models.size();
+        if (ceBlockedFiltered > 0) {
+            log.info("Catalog bundle: excluded {} CE-blocked model row(s) (openrouter/cohere) from the CE artifact",
+                    ceBlockedFiltered);
+        }
+
         // Load the V156 sidecar in the same logical snapshot. findAll() returns
         // every category row; canonicalBytes() filters orphans by joining on
         // model_config_id at serialisation time.

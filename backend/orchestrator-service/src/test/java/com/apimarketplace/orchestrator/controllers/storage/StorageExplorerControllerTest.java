@@ -77,6 +77,9 @@ class StorageExplorerControllerTest {
         e.setFileName("img.jpg");
         e.setMimeType("image/jpeg");
         e.setSizeBytes(2048);
+        // Owner tenant: the controller presigns/downloads under the KEY-OWNER tenant
+        // (owner-aware presign), so the fixture must carry one for those calls to match.
+        e.setTenantId("1");
         return e;
     }
 
@@ -149,7 +152,7 @@ class StorageExplorerControllerTest {
     void previewDegradesWhenPresignThrows() {
         UUID id = UUID.randomUUID();
         when(storageService.getEntityByIdForScope(eq(id), any(), any())).thenReturn(Optional.of(s3File(id)));
-        when(fileStorageService.generateDownloadUrl(anyString()))
+        when(fileStorageService.generateDownloadUrl(anyString(), anyString()))
                 .thenThrow(new RuntimeException("403 on POST .../api/internal/storage/presign: not owned by tenantId='null'"));
 
         ResponseEntity<Map<String, Object>> resp = controller.preview("1", "org-1", "MEMBER", id);
@@ -166,7 +169,7 @@ class StorageExplorerControllerTest {
     void previewIncludesDownloadUrlWhenPresignSucceeds() {
         UUID id = UUID.randomUUID();
         when(storageService.getEntityByIdForScope(eq(id), any(), any())).thenReturn(Optional.of(s3File(id)));
-        when(fileStorageService.generateDownloadUrl(anyString())).thenReturn("https://minio/signed");
+        when(fileStorageService.generateDownloadUrl(anyString(), anyString())).thenReturn("https://minio/signed");
 
         ResponseEntity<Map<String, Object>> resp = controller.preview("1", "org-1", "MEMBER", id);
 
@@ -512,7 +515,7 @@ class StorageExplorerControllerTest {
     void readOnlyFileIsPreviewableButNotDeletable() {
         UUID id = UUID.randomUUID();
         when(storageService.getEntityByIdForScope(eq(id), any(), any())).thenReturn(Optional.of(s3File(id)));
-        when(fileStorageService.generateDownloadUrl(anyString())).thenReturn("https://minio/signed");
+        when(fileStorageService.generateDownloadUrl(anyString(), anyString())).thenReturn("https://minio/signed");
         // READ-only = readable (canAccess true) but not writable (canWrite false).
         when(orgAccessGuard.canAccess("org-1", "1", "file", id.toString(), "MEMBER")).thenReturn(true);
         when(orgAccessGuard.canWrite("org-1", "1", "file", id.toString(), "MEMBER")).thenReturn(false);

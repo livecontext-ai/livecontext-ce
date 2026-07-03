@@ -19,6 +19,13 @@
 # BACKEND_PORT you must rebuild the frontend image (see docker/README-CE.md).
 #
 # No Keycloak required: CE uses embedded auth (email/password).
+#
+# Optional features (OPT-IN - a default `up` starts NEITHER, keeping the stack light):
+#   renderer       interface-node screenshot (PNG) + PDF rendering (~1 GB Playwright/Chromium)
+#                    docker compose --env-file docker/.env.ce.renderer up -d
+#   browser-agent  agent_browse + web_search (heavy Chromium + SearXNG, ~2 GB, needs a Google/Gemini key)
+#                    docker compose --env-file docker/.env.ce.browser-agent up -d
+# See README.md ("Optional features") and docker/README-CE.md for details.
 
 name: livecontext-ce
 
@@ -97,7 +104,7 @@ services:
     restart: "no"
 
   bridge:
-    image: ghcr.io/livecontext-ai/livecontext-ce-bridge:v0.1.7
+    image: ghcr.io/livecontext-ai/livecontext-ce-bridge:v0.1.8
     container_name: livecontext-bridge
     restart: unless-stopped
     depends_on:
@@ -125,7 +132,7 @@ services:
           memory: 512M
 
   livecontext:
-    image: ghcr.io/livecontext-ai/livecontext-ce:v0.1.7
+    image: ghcr.io/livecontext-ai/livecontext-ce:v0.1.8
     container_name: livecontext-app
     restart: unless-stopped
     depends_on:
@@ -162,6 +169,12 @@ services:
       # Bridge (CLI adapters + MCP tools)
       BRIDGE_ENABLED: "true"
       BRIDGE_SERVICE_URL: "http://bridge:8093"
+      # Interface-node PDF / screenshot rendering sidecar (opt-in). Empty by default = feature
+      # OFF (best-effort: the interface node emits no pdf/screenshot output, workflow still runs).
+      # Set to the renderer service DNS (http://screenshot-renderer:8094) to enable; the `renderer`
+      # Docker profile starts that container. docker/.env.ce.renderer sets both in one shot.
+      # Maps to services.screenshot-renderer-url via Spring relaxed binding.
+      SERVICES_SCREENSHOT_RENDERER_URL: ${SCREENSHOT_RENDERER_URL:-}
       # Browser agent (agent_browse) - OFF by default. Opt in with the
       # `browser-agent` profile + WEBSEARCH_ENABLED=true (both set by
       # docker/.env.ce.browser-agent). When enabled, the orchestrator talks to
@@ -247,6 +260,10 @@ services:
       # captured last-page screenshot.
       WEBSEARCH_GATEWAY_SECRET: ${WEBSEARCH_GATEWAY_SECRET:-}
       WEBSEARCH_CDP_JWT_SECRET: ${WEBSEARCH_CDP_JWT_SECRET:-}
+      # web_search (the app's WebSearchModule -> websearch /search) is served by the
+      # SearXNG metasearch sidecar below, on the same `browser-agent` profile. Without
+      # it, web_search returns nothing (the default 127.0.0.1:8086 is unreachable here).
+      WEBSEARCH_SEARXNG_URL: http://searxng:8080
       BROWSER_HEADLESS: "true"
     # Chromium needs a large /dev/shm + relaxed seccomp for its sandbox.
     security_opt:
@@ -263,8 +280,67 @@ services:
         limits:
           memory: 2048M
 
+  # ── SearXNG metasearch for web_search - part of the OPT-IN browser-agent profile ──
+  # The browser agent's web_search action calls the app's WebSearchModule, which asks the
+  # `websearch` container, which queries this SearXNG instance for JSON results. NOT started
+  # by a default `up` (same `browser-agent` profile as websearch). No secrets, no persistence -
+  # reached only by the websearch container over the compose network. Settings (engines +
+  # JSON output format) are mounted from ./searxng/settings.yml; edit its server.secret_key.
+  searxng:
+    profiles: ["browser-agent"]
+    image: searxng/searxng:latest
+    container_name: livecontext-searxng
+    restart: unless-stopped
+    environment:
+      SEARXNG_SETTINGS_PATH: /etc/searxng/settings.yml
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # ── Interface-node PDF / screenshot renderer (opt-in, heavy: Playwright + Chromium) ──
+  # Headless Chromium sidecar that turns interface HTML into a PDF (generatePdf) or a
+  # PNG/JPEG (generateScreenshot). NOT started by a default `up` (adds a ~1 GB Playwright
+  # image). Enable it AND point the app at it in one shot:
+  #   docker compose --env-file docker/.env.ce.renderer up -d
+  # which sets COMPOSE_PROFILES=renderer (starts this) + SCREENSHOT_RENDERER_URL
+  # (=http://screenshot-renderer:8094, turns the feature on in the app). No DB, no
+  # secrets - HTML in, bytes out; reached only by the app over the compose network.
+  screenshot-renderer:
+    profiles: ["renderer"]
+    image: ghcr.io/livecontext-ai/livecontext-ce-screenshot-renderer:v0.1.8
+    container_name: livecontext-screenshot-renderer
+    restart: unless-stopped
+    environment:
+      PORT: "8094"
+      # Non-root Chromium user has no home; point ~/.cache (fontconfig) at a writable dir.
+      HOME: /tmp
+    # Chromium is launched with --no-sandbox --disable-dev-shm-usage; the relaxed seccomp +
+    # larger /dev/shm keep it stable under load (mirrors the websearch browser container).
+    security_opt:
+      - seccomp:unconfined
+    shm_size: "1gb"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8094/internal/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 1024M
+
   frontend:
-    image: ghcr.io/livecontext-ai/livecontext-ce-frontend:v0.1.7
+    image: ghcr.io/livecontext-ai/livecontext-ce-frontend:v0.1.8
     container_name: livecontext-frontend
     restart: unless-stopped
     depends_on:

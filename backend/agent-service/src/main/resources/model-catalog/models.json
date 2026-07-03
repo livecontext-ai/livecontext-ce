@@ -473,6 +473,46 @@
       "enabled": true,
       "priceInput": "1.25",
       "priceOutput": "10.00"
+    },
+    {
+      "provider": "qwen",
+      "modelId": "qwen-max",
+      "displayName": "Qwen Max",
+      "enabled": true,
+      "priceInput": "1.60",
+      "priceOutput": "6.40"
+    },
+    {
+      "provider": "qwen",
+      "modelId": "qwen-plus",
+      "displayName": "Qwen Plus",
+      "enabled": true,
+      "priceInput": "0.40",
+      "priceOutput": "1.20"
+    },
+    {
+      "provider": "qwen",
+      "modelId": "qwen-turbo",
+      "displayName": "Qwen Turbo",
+      "enabled": true,
+      "priceInput": "0.05",
+      "priceOutput": "0.20"
+    },
+    {
+      "provider": "moonshot",
+      "modelId": "kimi-k2.6",
+      "displayName": "Kimi K2.6",
+      "enabled": true,
+      "priceInput": "0.95",
+      "priceOutput": "4.00"
+    },
+    {
+      "provider": "moonshot",
+      "modelId": "kimi-k2.5",
+      "displayName": "Kimi K2.5",
+      "enabled": true,
+      "priceInput": "0.60",
+      "priceOutput": "3.00"
     }
   ]
 }

@@ -18,6 +18,7 @@ import ModelExecutionLinksPanel from "./components/ModelExecutionLinksPanel";
 import { ModelBundleSyncButton } from "./components/ModelBundleSyncButton";
 import type { LlmProviderStatus, LlmProviderDefinition } from "@/lib/api/orchestrator/types";
 import { IS_CE, IS_CLOUD } from "@/lib/edition";
+import { isProviderHiddenInCe } from "@/lib/ai-providers/providerIcons";
 
 const PROVIDER_DEFINITIONS: LlmProviderDefinition[] = [
   {
@@ -89,6 +90,20 @@ const PROVIDER_DEFINITIONS: LlmProviderDefinition[] = [
     displayName: "OpenRouter (Multi-provider)",
     docsUrl: "https://openrouter.ai/settings/keys",
     placeholder: "sk-or-...",
+  },
+  {
+    providerName: "qwen",
+    integrationName: "llm_qwen",
+    displayName: "Qwen (Alibaba)",
+    docsUrl: "https://bailian.console.alibabacloud.com/",
+    placeholder: "sk-...",
+  },
+  {
+    providerName: "moonshot",
+    integrationName: "llm_moonshot",
+    displayName: "Moonshot (Kimi)",
+    docsUrl: "https://platform.moonshot.ai/console/api-keys",
+    placeholder: "sk-...",
   },
 ];
 
@@ -428,6 +443,12 @@ export default function AiProvidersPage() {
             */}
             {PROVIDER_DEFINITIONS
               .filter((def) => statuses.some((s) => s.providerName === def.providerName))
+              // CE boundary: never surface the multi-provider aggregator
+              // (openrouter) or the curated-out cohere provider on a self-hosted
+              // install. The backend /status already omits them in CE (see
+              // CeBlockedProviders); this is defence in depth so a stray status
+              // row can't re-expose them. Cloud shows every provider.
+              .filter((def) => !(IS_CE && isProviderHiddenInCe(def.providerName)))
               .map((def) => (
                 <ProviderCard
                   key={def.providerName}

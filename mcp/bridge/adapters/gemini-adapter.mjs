@@ -96,11 +96,22 @@ export class GeminiAdapter {
     ];
 
     if (restrictedToolset) {
-      // CLOUD model-execution-link API mode: read-only approval mode (no mutating native
-      // tools / shell writes) and restrict MCP to the platform server only. With an empty
-      // cwd + no project files (server.mjs), the linked model behaves like a plain API.
-      // Gemini exposes no hard native-tool allowlist, so plan/read-only is the floor.
-      args.push('--approval-mode', 'plan',
+      // CLOUD model-execution-link API mode: expose ONLY the platform MCP tools, mirroring the
+      // claude-code adapter (auto-approve MCP + strip the native tools). This REPLACED an
+      // earlier `--approval-mode plan` lockdown that silently broke EVERYTHING: `plan` is a
+      // read-only planning mode that NEVER executes a tool, so every platform MCP call was
+      // blocked and a linked model could use no tool at all (same failure class proven live on
+      // codex; gemini shares it by design). `yolo` auto-approves tool calls (the analog of
+      // claude's --dangerously-skip-permissions) so MCP actually runs headless, while the
+      // native built-in tools are stripped in settings.json (an explicit excludeTools denylist,
+      // see writeMcpConfig) and MCP is pinned to the platform server only. (A `coreTools: []`
+      // allowlist would be strictly more robust than a denylist, but gemini-cli's empty-allowlist
+      // semantics need live confirmation - validate that when the binary is provisioned.)
+      // Bound further by an empty cwd + no repo/project files (server.mjs).
+      // NOTE: gemini-cli is not installed on the current bridge host, so this path cannot be
+      // exercised live yet - the flag choice follows gemini-cli's documented approval modes;
+      // verify end-to-end once the binary is provisioned (lane-2).
+      args.push('--approval-mode', 'yolo',
         '--allowed-mcp-server-names', mcpServerName || 'agent-cli');
     }
 
@@ -123,7 +134,7 @@ export class GeminiAdapter {
    * @param {object} mcpServerConfig - { serverName, command, args, env }
    * @returns {string} path to the config file
    */
-  writeMcpConfig(tmpDir, mcpServerConfig) {
+  writeMcpConfig(tmpDir, mcpServerConfig, restrictedToolset = false) {
     const configPath = resolve(tmpDir, 'settings.json');
 
     const config = {
@@ -135,6 +146,21 @@ export class GeminiAdapter {
         },
       },
     };
+
+    if (restrictedToolset) {
+      // API mode: strip the built-in gemini tools so only the platform MCP tools remain
+      // (the settings-side analog of claude's --tools ""), via an explicit excludeTools denylist
+      // of gemini-cli's core tool names. Needed because --approval-mode yolo
+      // (set in buildArgs so MCP actually executes) would otherwise also auto-run the native
+      // shell/file/web tools. excludeTools is an explicit denylist of gemini-cli's core tool
+      // names; MCP tools are not core tools, so they are unaffected. (Unverified until the
+      // gemini binary is installed on the bridge - see buildArgs note.)
+      config.excludeTools = [
+        'run_shell_command', 'write_file', 'replace', 'read_file', 'read_many_files',
+        'web_fetch', 'google_web_search', 'glob', 'search_file_content',
+        'list_directory', 'save_memory',
+      ];
+    }
 
     writeFileSync(configPath, JSON.stringify(config, null, 2));
     return configPath;

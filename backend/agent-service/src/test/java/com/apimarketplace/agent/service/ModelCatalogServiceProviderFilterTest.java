@@ -432,6 +432,54 @@ class ModelCatalogServiceProviderFilterTest {
     }
 
     @Test
+    @DisplayName("CE (auth.mode=embedded) HIDES the openrouter aggregator and cohere; keeps every other provider")
+    void ceEmbeddedModeHidesOpenRouterAndCohere() {
+        // A self-hosted install must not surface the multi-provider aggregator
+        // (openrouter) or the curated-out cohere, even though their rows are
+        // present (V112 seeded them / a key is configured). Everything else -
+        // including the newly-added qwen - stays. Cloud is unaffected (see the
+        // companion test with the default empty auth.mode).
+        ReflectionTestUtils.setField(service, "authMode", "embedded");
+        lenient().when(credentialRepository.hasDbKey(anyString())).thenReturn(false);
+        when(llmProviderFactory.getAllModelsInfoAdmin()).thenReturn(adminBase(
+                provider("openai", true),
+                provider("openrouter", true),
+                provider("cohere", true),
+                provider("qwen", true)));
+        when(repository.findAllByOrderByRankingAsc()).thenReturn(List.of());
+
+        Map<String, Object> result = service.getModelsForCategory(null, "tenant-byok");
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> providers = (List<Map<String, Object>>) result.get("providers");
+        assertThat(providers).extracting(p -> p.get("name"))
+                .containsExactlyInAnyOrder("openai", "qwen")
+                .doesNotContain("openrouter", "cohere");
+    }
+
+    @Test
+    @DisplayName("Cloud (default empty auth.mode) KEEPS openrouter and cohere - the CE block never fires")
+    void cloudModeKeepsOpenRouterAndCohere() {
+        // The service built in setUp() has the default empty authMode (Spring
+        // @Value not processed in a unit test), i.e. cloud. filterCeBlockedProviders
+        // must be a no-op so the aggregator stays available (relay fallback).
+        lenient().when(credentialRepository.hasDbKey(anyString())).thenReturn(false);
+        when(llmProviderFactory.getAllModelsInfoAdmin()).thenReturn(adminBase(
+                provider("openai", true),
+                provider("openrouter", true),
+                provider("cohere", true),
+                provider("qwen", true)));
+        when(repository.findAllByOrderByRankingAsc()).thenReturn(List.of());
+
+        Map<String, Object> result = service.getModelsForCategory(null, "tenant-byok");
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> providers = (List<Map<String, Object>>) result.get("providers");
+        assertThat(providers).extracting(p -> p.get("name"))
+                .containsExactlyInAnyOrder("openai", "openrouter", "cohere", "qwen");
+    }
+
+    @Test
     @DisplayName("empty provider list returns empty result")
     void emptyProviderList() {
         Map<String, Object> base = new LinkedHashMap<>();

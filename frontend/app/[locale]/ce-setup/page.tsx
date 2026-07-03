@@ -42,6 +42,7 @@ import {
   type CredentialFieldDef,
 } from '@/lib/api/services/catalog-visibility.service';
 import { cn } from '@/lib/utils';
+import { isProviderHiddenInCe } from '@/lib/ai-providers/providerIcons';
 import { ServiceIcon } from '@/components/ui/service-icon';
 import { CredentialWizard, type CredentialRequirement } from '@/components/credentials/CredentialWizard';
 import { useAuth } from '@/lib/providers/smart-providers';
@@ -79,7 +80,7 @@ const CLI_BRIDGE_PROVIDER: Record<'claudeCode' | 'codex' | 'geminiCli' | 'mistra
 // 1: cloud connection (default), 2: AI providers (API keys), 3: CLI providers, 4: platform credentials, 5: done
 const TOTAL_STEPS = 5;
 
-const PROVIDER_DEFINITIONS: LlmProviderDefinition[] = [
+const ALL_PROVIDER_DEFINITIONS: LlmProviderDefinition[] = [
   {
     providerName: 'anthropic',
     integrationName: 'llm_anthropic',
@@ -150,7 +151,29 @@ const PROVIDER_DEFINITIONS: LlmProviderDefinition[] = [
     docsUrl: 'https://openrouter.ai/settings/keys',
     placeholder: 'sk-or-...',
   },
+  {
+    providerName: 'qwen',
+    integrationName: 'llm_qwen',
+    displayName: 'Qwen (Alibaba)',
+    docsUrl: 'https://bailian.console.alibabacloud.com/',
+    placeholder: 'sk-...',
+  },
+  {
+    providerName: 'moonshot',
+    integrationName: 'llm_moonshot',
+    displayName: 'Moonshot (Kimi)',
+    docsUrl: 'https://platform.moonshot.ai/console/api-keys',
+    placeholder: 'sk-...',
+  },
 ];
+
+// This wizard is the CE (self-hosted) onboarding, so it NEVER offers the
+// multi-provider aggregator (openrouter) or the curated-out cohere provider:
+// multi-provider aggregation is the hosted product's value. Mirrors the backend
+// CeBlockedProviders boundary (which also stops their keys being registered).
+const PROVIDER_DEFINITIONS: LlmProviderDefinition[] = ALL_PROVIDER_DEFINITIONS.filter(
+  (d) => !isProviderHiddenInCe(d.providerName),
+);
 
 // --- Merged integration type for step 2 ---
 

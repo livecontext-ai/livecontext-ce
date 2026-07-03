@@ -87,6 +87,28 @@ class CatalogBundleServiceTest {
     }
 
     @Test
+    @DisplayName("buildBundle EXCLUDES CE-blocked providers (openrouter, cohere) from the CE artifact; keeps the rest")
+    void buildBundleExcludesCeBlockedProviders() {
+        // The bundle is a CE-only distribution artifact, so the openrouter
+        // aggregator and cohere must never ride it to a self-hosted install -
+        // even though cloud keeps them in its own catalog. modelCount reflects
+        // the filtered snapshot (openai + qwen), not the raw 4.
+        when(modelRepo.findAllByOrderByRankingAsc()).thenReturn(List.of(
+                m("openai",     "gpt-5",                     "GPT-5"),
+                m("openrouter", "anthropic/claude-sonnet-4", "OR Sonnet"),
+                m("cohere",     "command-r-plus-08-2024",    "Command R+"),
+                m("qwen",       "qwen-max",                  "Qwen Max")));
+        when(bundleRepo.findTopByOrderByVersionDesc()).thenReturn(Optional.empty());
+        when(bundleRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        CatalogBundleEntity saved = service.buildBundle();
+
+        assertThat(saved.getModelCount())
+                .as("openrouter + cohere excluded from the CE bundle, openai + qwen kept")
+                .isEqualTo(2);
+    }
+
+    @Test
     @DisplayName("buildBundle rejects empty catalog - refuses to publish")
     void buildBundleRejectsEmptyCatalog() {
         when(modelRepo.findAllByOrderByRankingAsc()).thenReturn(List.of());

@@ -79,6 +79,28 @@ Then open **http://localhost:3000** and create the first account (the first user
 Configuration (LLM keys, SMTP, ports) is documented in [docker/README-CE.md](docker/README-CE.md).
 Copy `docker/.env.ce.example` to set your own values, and never commit it.
 
+## Optional features
+
+Two heavy features are **opt-in** and start with no container by default, keeping the base stack
+light. Each is enabled by a bundled env file (it turns on both the Docker profile and the matching
+app setting in one shot):
+
+- **Interface screenshots and PDFs** (`renderer` profile). Adds a headless Playwright/Chromium
+  sidecar (~1 GB image) so interface nodes can render a PNG screenshot or a PDF. Enable it with:
+  ```bash
+  docker compose --env-file docker/.env.ce.renderer up -d
+  ```
+- **Browser agent and web search** (`browser-agent` profile). Adds a Chromium browser-use container
+  plus a SearXNG metasearch sidecar (~2 GB) so agents can browse pages (`agent_browse`) and run
+  `web_search`. Needs a Google/Gemini key on the install (default model gemini 3.1 flash). Enable it
+  with:
+  ```bash
+  docker compose --env-file docker/.env.ce.browser-agent up -d
+  ```
+
+Run both by passing both env files (repeat `--env-file`). See [docker/README-CE.md](docker/README-CE.md)
+for details and tuning.
+
 ## What's in the box
 
 - **Workflow engine.** Visual builder and execution engine with parallel branches, loops, signals,

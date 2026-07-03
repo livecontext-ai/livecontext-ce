@@ -6,6 +6,9 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { resolve } from 'node:path';
 import { ClaudeAdapter } from '../adapters/claude-adapter.mjs';
 import { CodexAdapter } from '../adapters/codex-adapter.mjs';
 import { GeminiAdapter } from '../adapters/gemini-adapter.mjs';
@@ -47,29 +50,67 @@ test('claude: restricted EMPTIES the built-in tool set via --tools "" (+ --disal
   assert.doesNotMatch(free, /\bBash\b/);
 });
 
-test('codex: restricted keeps a read-only sandbox instead of the full bypass', () => {
+test('codex: restricted runs full-access (so MCP executes headless) with the native tools disabled', () => {
   const a = new CodexAdapter();
-  const restricted = join({ ...base, restrictedToolset: true }, a);
-  assert.doesNotMatch(restricted, /--dangerously-bypass-approvals-and-sandbox/);
-  assert.match(restricted, /sandbox_mode="read-only"/);
-  assert.match(restricted, /approval_policy="never"/);
+  const restrictedArgs = a.buildArgs({ ...base, restrictedToolset: true }).args;
+  const restricted = restrictedArgs.join(' ');
+
+  // ROOT-CAUSE FIX: codex-cli 0.142 CANCELS every MCP tool call ("user cancelled MCP tool call")
+  // under any sandbox except danger-full-access in headless `exec` (verified live 2026-07-03).
+  // A read-only/workspace-write sandbox therefore made the platform MCP tools 100% unusable for
+  // every codex-linked model. So restricted mode uses full-access (MCP works) and instead
+  // REMOVES codex's native tools with --disable, mirroring claude's --tools "".
+  assert.match(restricted, /sandbox_mode="danger-full-access"/);
+  assert.doesNotMatch(restricted, /sandbox_mode="read-only"/);
+  // The load-bearing shell escape vector must be disabled.
+  for (const feat of ['shell_tool', 'unified_exec', 'browser_use', 'computer_use', 'apps', 'image_generation']) {
+    const di = restrictedArgs.indexOf(feat);
+    assert.ok(di > 0 && restrictedArgs[di - 1] === '--disable', `restricted must --disable ${feat}`);
+  }
   // codex exec aborts in a non-git cwd without this; restricted runs use an empty temp cwd.
   assert.match(restricted, /--skip-git-repo-check/);
 
   const free = join({ ...base, restrictedToolset: false }, a);
   assert.match(free, /--dangerously-bypass-approvals-and-sandbox/);
+  assert.doesNotMatch(free, /--disable shell_tool/);
   assert.match(free, /--skip-git-repo-check/);
 });
 
-test('gemini: restricted runs read-only (plan) and only the platform MCP server', () => {
+test('gemini: restricted auto-approves MCP (yolo) + strips native tools, pinned to the platform MCP server', () => {
   const a = new GeminiAdapter();
   const restricted = join({ ...base, restrictedToolset: true }, a);
-  assert.match(restricted, /--approval-mode plan/);
+  // FIX: `plan` never executes any tool (blocked MCP entirely, same failure class as codex).
+  // `yolo` auto-approves so MCP runs; natives are stripped in settings.json (excludeTools).
+  assert.match(restricted, /--approval-mode yolo/);
+  assert.doesNotMatch(restricted, /--approval-mode plan/);
   assert.match(restricted, /--allowed-mcp-server-names agent-cli/);
 
   const free = join({ ...base, restrictedToolset: false }, a);
-  assert.doesNotMatch(free, /--approval-mode plan/);
+  assert.doesNotMatch(free, /--approval-mode/);
   assert.doesNotMatch(free, /--allowed-mcp-server-names/);
+});
+
+test('gemini: restricted settings.json excludes the native built-in tools; free does not', () => {
+  const a = new GeminiAdapter();
+  const tmp = mkdtempSync(resolve(tmpdir(), 'gemtest-'));
+  try {
+    const server = { serverName: 'agent-cli', command: 'node', args: ['/x/server.mjs'], env: {} };
+
+    const restrictedPath = a.writeMcpConfig(tmp, server, true);
+    const restrictedCfg = JSON.parse(readFileSync(restrictedPath, 'utf8'));
+    assert.ok(Array.isArray(restrictedCfg.excludeTools), 'restricted must set excludeTools');
+    for (const t of ['run_shell_command', 'write_file', 'web_fetch', 'read_file']) {
+      assert.ok(restrictedCfg.excludeTools.includes(t), `restricted must exclude native tool ${t}`);
+    }
+    // The platform MCP server is still wired.
+    assert.ok(restrictedCfg.mcpServers['agent-cli'], 'restricted must keep the platform MCP server');
+
+    const freePath = a.writeMcpConfig(tmp, server, false);
+    const freeCfg = JSON.parse(readFileSync(freePath, 'utf8'));
+    assert.equal(freeCfg.excludeTools, undefined, 'free mode keeps all native tools');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test('mistral-vibe: restricted enables ONLY the MCP tools (disables all others in -p mode)', () => {

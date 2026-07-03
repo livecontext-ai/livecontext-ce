@@ -17,7 +17,7 @@
  */
 
 import * as React from 'react';
-import { X, Lock, ExternalLink, Hand, Play } from 'lucide-react';
+import { X, Lock, ExternalLink, Hand, Play, ArrowLeft, ArrowRight, RotateCw } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { apiClient } from '@/lib/api/api-client';
 
@@ -707,6 +707,56 @@ export function BrowserLiveCdpPanel({
     }
   }, [runId, nodeId, sessionId]);
 
+  // Component-level CDP sender (the one inside the takeover effect is scoped to
+  // that effect). Used by the browser-chrome nav buttons, which drive the live
+  // page whether or not takeover is active - back/forward/refresh are not
+  // Input.* so they don't trip the pause-on-first-input, they just execute.
+  const sendCdpCommand = React.useCallback((method: string, params: Record<string, unknown>): void => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    try {
+      ws.send(JSON.stringify({ id: cmdIdRef.current++, method, params }));
+    } catch {
+      /* WS closing - drop silently */
+    }
+  }, []);
+
+  // Browser-chrome nav: reload / history back / history forward on the live
+  // Chromium. Page.reload is native; back/forward go through Runtime.evaluate
+  // (CDP has no direct goBack) - fire-and-forget, we never read the reply.
+  const handleRefresh = React.useCallback(() => {
+    sendCdpCommand('Page.reload', { ignoreCache: false });
+  }, [sendCdpCommand]);
+  const handleBack = React.useCallback(() => {
+    sendCdpCommand('Runtime.evaluate', { expression: 'history.back()' });
+  }, [sendCdpCommand]);
+  const handleForward = React.useCallback(() => {
+    sendCdpCommand('Runtime.evaluate', { expression: 'history.forward()' });
+  }, [sendCdpCommand]);
+
+  // Red "stop" button (Apple traffic-light red): abort the session NOW - kills
+  // Chromium via the run-ownership-gated /abort endpoint. Distinct from closing
+  // the tab (ends only the viewer, keeps the hold) and from Resume (hands
+  // control back to the agent). Optimistic: flip to the ended state locally so
+  // the UI reacts instantly; the WS close (4404) confirms teardown.
+  const [aborting, setAborting] = React.useState(false);
+  const handleStop = React.useCallback(async () => {
+    if (!runId || aborting) return;
+    setAborting(true);
+    try {
+      await apiClient.post(
+        `/internal/browser-agent/runs/${encodeURIComponent(runId)}`
+          + `/nodes/${encodeURIComponent(nodeId)}/abort`,
+        sessionId ? { session_id: sessionId } : {},
+      );
+    } catch {
+      /* best-effort: the runner's own teardown is the backstop */
+    } finally {
+      setSessionEnded(true);
+      setTakeoverActive(false);
+    }
+  }, [runId, nodeId, sessionId, aborting]);
+
   const isRunning = status === 'running';
   // The live screencast canvas is meaningful ONLY when the backend
   // confirmed `bridge_mode === 'live'`. In `stub` mode the WS is up
@@ -793,11 +843,57 @@ export function BrowserLiveCdpPanel({
           across the whole product. The address bar shows the live URL
           the agent is currently on (polled from session.last_url). */}
       <header className="flex items-center gap-2 px-3 py-2 bg-theme-secondary border-b border-theme min-w-0">
-        {/* Traffic-light dots - purely cosmetic browser-chrome cue */}
+        {/* Traffic-light dots - the RED one is a real STOP button (aborts the
+            session / kills Chromium at any moment); yellow + green stay
+            cosmetic browser-chrome cues. */}
         <div className="flex items-center gap-1.5 shrink-0">
-          <span className="w-2.5 h-2.5 rounded-full bg-red-400/70" />
-          <span className="w-2.5 h-2.5 rounded-full bg-yellow-400/70" />
-          <span className="w-2.5 h-2.5 rounded-full bg-green-400/70" />
+          <button
+            type="button"
+            onClick={handleStop}
+            disabled={aborting || sessionEnded || !sessionId}
+            className="group relative w-3 h-3 rounded-full bg-red-500 hover:bg-red-600 disabled:bg-red-400/40 disabled:cursor-not-allowed transition-colors flex items-center justify-center"
+            title={t('chrome.stop')}
+            aria-label={t('chrome.stop')}
+          >
+            <X className="w-2 h-2 text-red-900/0 group-hover:text-red-900/80" strokeWidth={3} />
+          </button>
+          <span className="w-3 h-3 rounded-full bg-yellow-400/70" />
+          <span className="w-3 h-3 rounded-full bg-green-400/70" />
+        </div>
+        {/* Navigation - back / forward / refresh, like a real browser. Drive
+            the live Chromium via CDP; enabled only while the live bridge is
+            connected (in stub / ended states there's nothing to navigate). */}
+        <div className="flex items-center gap-0.5 shrink-0">
+          <button
+            type="button"
+            onClick={handleBack}
+            disabled={!liveAvailable}
+            className="p-1 rounded hover:bg-theme-tertiary transition-colors text-theme-muted disabled:opacity-40 disabled:cursor-not-allowed"
+            title={t('chrome.back')}
+            aria-label={t('chrome.back')}
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={handleForward}
+            disabled={!liveAvailable}
+            className="p-1 rounded hover:bg-theme-tertiary transition-colors text-theme-muted disabled:opacity-40 disabled:cursor-not-allowed"
+            title={t('chrome.forward')}
+            aria-label={t('chrome.forward')}
+          >
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={handleRefresh}
+            disabled={!liveAvailable}
+            className="p-1 rounded hover:bg-theme-tertiary transition-colors text-theme-muted disabled:opacity-40 disabled:cursor-not-allowed"
+            title={t('chrome.refresh')}
+            aria-label={t('chrome.refresh')}
+          >
+            <RotateCw className="w-3.5 h-3.5" />
+          </button>
         </div>
         {/* Address bar - full URL on hover via title; selectable so the
             user can copy it even when truncate hides the tail. */}

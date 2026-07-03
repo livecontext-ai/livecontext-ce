@@ -167,6 +167,32 @@ function createAgentNode(
     }
   }
 
+  // Restore data.params for browser_agent so the inspector's read source
+  // survives a reload. The importer otherwise rebuilds ONLY paramExpressions
+  // and leaves data.params undefined - which reverts every params.llm
+  // sub-field (max_steps, session, expected_output_schema, not just
+  // provider/model) to its default on reload, and makes handleModelPick spread
+  // `...llm` over `{}` (dropping those sub-fields) on the next pick. Parse the
+  // object-shaped params back from their JSON-string plan form; scalars pass
+  // through unchanged. Only browser_agent reads data.params (classify/guardrail
+  // store their model in the top-level fields), so this stays scoped.
+  let browserParams: Record<string, unknown> | undefined;
+  if (agentType === 'browser_agent' && agent.params && typeof agent.params === 'object') {
+    const OBJECT_PARAM_KEYS = ['llm', 'session', 'expected_output_schema'];
+    browserParams = {};
+    for (const [key, value] of Object.entries(agent.params as Record<string, unknown>)) {
+      if (OBJECT_PARAM_KEYS.includes(key) && typeof value === 'string') {
+        try {
+          browserParams[key] = JSON.parse(value);
+        } catch {
+          browserParams[key] = value;
+        }
+      } else {
+        browserParams[key] = value;
+      }
+    }
+  }
+
   // Build paramExpressions including classify/guardrail params
   const paramExpressions = inputToParamExpressions(agent.params);
   if (agent.classifyParams) {
@@ -206,6 +232,12 @@ function createAgentNode(
       maxTools: agent.maxTools,
       autoDiscoverTools: !agent.tools || agent.tools.length === 0,
       paramExpressions,
+      // browser_agent: restore the structured params so llm sub-fields
+      // (max_steps, session, schema) and the ModelPicker display round-trip.
+      // `params` is typed `string` on BuilderNodeData for legacy reasons but
+      // the runtime shape is the structured Record the inspector reads (same
+      // cast the form uses in updateParam) - hence the double cast.
+      ...(browserParams && { params: browserParams as unknown as BuilderNodeData['params'] }),
       // Classify-specific properties (support both canonical and legacy names)
       ...((agent.classifyCategories || agent.categories) && {
         classifyCategories: (agent.classifyCategories || agent.categories)?.map((cat, idx) => ({

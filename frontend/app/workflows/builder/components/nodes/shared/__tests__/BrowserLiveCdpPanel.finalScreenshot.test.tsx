@@ -47,6 +47,7 @@ const messages = {
           clickToTakeControl: 'Click to take control',
           taskFinishedLive: 'Agent finished - page stays live',
         },
+        chrome: { stop: 'Stop browser', back: 'Back', forward: 'Forward', refresh: 'Refresh' },
         takeover: { title: 't', description: 'd', cancel: 'c', confirm: 'ok', resume: 'Resume agent', banner: 'You have control' },
       },
     },
@@ -482,6 +483,82 @@ describe('BrowserLiveCdpPanel - task finished but page still live (detached hold
     await act(async () => { pushStep({ type: 'error', step_index: 1 }); });
     // sessionEnded → liveAvailable false → canvas gone.
     expect(screen.queryByTitle('Browser agent screencast')).toBeNull();
+  });
+});
+
+/**
+ * Browser-chrome controls: the Apple-red STOP button aborts the session (POST
+ * /abort), and back/forward/refresh drive the live Chromium via CDP over the WS.
+ */
+describe('BrowserLiveCdpPanel - browser chrome (stop / back / forward / refresh)', () => {
+  const realWS = (globalThis as any).WebSocket;
+  const realRO = (globalThis as any).ResizeObserver;
+
+  beforeEach(() => {
+    getMock.mockReset();
+    getMock.mockRejectedValue({ status: 404 }); // keep the live path
+    postMock.mockReset();
+    postMock.mockResolvedValue({ status: 'aborting' });
+    wsSent = [];
+    wsLast = null;
+    (globalThis as any).WebSocket = FakeWebSocket as any;
+    (globalThis as any).ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+  });
+  afterEach(() => {
+    (globalThis as any).WebSocket = realWS;
+    (globalThis as any).ResizeObserver = realRO;
+  });
+
+  function renderLive() {
+    return render(
+      <NextIntlClientProvider locale="en" messages={messages as any} onError={() => {}}>
+        <BrowserLiveCdpPanel
+          nodeId="node_c" runId="run_c" sessionId="ses_c"
+          cdpWsUrl="ws://internal/cdp/ses_c" cdpToken="tok"
+          status="running" embedded onClose={() => {}}
+        />
+      </NextIntlClientProvider>,
+    );
+  }
+
+  it('red STOP button POSTs the (runId,nodeId)-keyed /abort with the session id', async () => {
+    renderLive();
+    await screen.findByTitle('Browser agent screencast'); // live bridge up
+    fireEvent.click(screen.getByLabelText('Stop browser'));
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith(
+      '/internal/browser-agent/runs/run_c/nodes/node_c/abort', { session_id: 'ses_c' },
+    ));
+  });
+
+  it('refresh sends CDP Page.reload over the WS', async () => {
+    renderLive();
+    await screen.findByTitle('Browser agent screencast');
+    wsSent = [];
+    fireEvent.click(screen.getByLabelText('Refresh'));
+    expect(wsSent.map(m => JSON.parse(m)).some(m => m.method === 'Page.reload')).toBe(true);
+  });
+
+  it('back / forward send history navigation via CDP Runtime.evaluate', async () => {
+    renderLive();
+    await screen.findByTitle('Browser agent screencast');
+    wsSent = [];
+    fireEvent.click(screen.getByLabelText('Back'));
+    fireEvent.click(screen.getByLabelText('Forward'));
+    const evals = wsSent.map(m => JSON.parse(m)).filter(m => m.method === 'Runtime.evaluate');
+    expect(evals.some(m => m.params.expression === 'history.back()')).toBe(true);
+    expect(evals.some(m => m.params.expression === 'history.forward()')).toBe(true);
+  });
+
+  it('nav buttons are disabled until the live bridge connects', async () => {
+    // No WS: render with the fake that never greets live by removing cdp props.
+    render(
+      <NextIntlClientProvider locale="en" messages={messages as any} onError={() => {}}>
+        <BrowserLiveCdpPanel nodeId="node_x" runId="run_x" sessionId="ses_x"
+          status="running" embedded onClose={() => {}} />
+      </NextIntlClientProvider>,
+    );
+    expect((screen.getByLabelText('Refresh') as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByLabelText('Back') as HTMLButtonElement).disabled).toBe(true);
   });
 });
 

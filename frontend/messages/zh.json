@@ -3892,7 +3892,7 @@
   },
   "mcpServer": {
     "title": "MCP 服务器",
-    "subtitle": "将 Claude Code、Cursor 等 MCP 客户端连接到您的 LiveContext 工具",
+    "subtitle": "将 Claude Code、Cursor、Codex 等 MCP 客户端连接到您的 LiveContext 工具",
     "copy": "复制",
     "errors": {
       "fetchFailed": "无法加载 MCP 服务器信息"
@@ -3924,6 +3924,7 @@
       "description": "将以下任一配置复制到您的 MCP 客户端。JSON 块放入 mcpServers 配置文件;命令用于将服务器添加到 Claude Code。",
       "claudeCode": "Claude Code(命令)",
       "jsonConfig": "JSON 配置(Cursor、Claude Desktop 等)",
+      "codex": "Codex(~/.codex/config.toml)",
       "keyPlaceholder": "YOUR_API_KEY",
       "placeholderHint": "请将 YOUR_API_KEY 替换为您的 API 密钥(在上方生成)。"
     }
@@ -6635,7 +6636,13 @@
           "title": "接管控制？"
         },
         "viewLiveTrace": "查看实时浏览器",
-        "tabLabel": "浏览器代理"
+        "tabLabel": "浏览器代理",
+        "chrome": {
+          "stop": "停止浏览器",
+          "back": "后退",
+          "forward": "前进",
+          "refresh": "刷新"
+        }
       }
     },
     "forms": {

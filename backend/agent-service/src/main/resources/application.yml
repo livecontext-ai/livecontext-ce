@@ -227,6 +227,18 @@ ai:
         api-key: ${OPENROUTER_API_KEY:}
         api-url: https://openrouter.ai/api/v1/chat/completions
         models: anthropic/claude-sonnet-4-20250514,openai/gpt-5.4,google/gemini-3-pro-preview
+      # Qwen (Alibaba) - OpenAI-compatible via DashScope International endpoint.
+      qwen:
+        display-order: 15
+        api-key: ${QWEN_API_KEY:}
+        api-url: https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions
+        models: qwen-max,qwen-plus,qwen-turbo
+      # Moonshot AI (Kimi) - OpenAI-compatible via the international endpoint.
+      moonshot:
+        display-order: 16
+        api-key: ${MOONSHOT_API_KEY:}
+        api-url: https://api.moonshot.ai/v1/chat/completions
+        models: kimi-k2.6,kimi-k2.5
 
     # Model pricing configuration (USD per 1M tokens).
     #

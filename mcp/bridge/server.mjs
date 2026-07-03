@@ -698,8 +698,10 @@ async function executeViaCli({ prompt, systemPrompt, model, maxTurns, spawnTimeo
     },
   };
 
-  // Write CLI-specific MCP config
-  const mcpConfigPath = adapter.writeMcpConfig(tmpDir, mcpServerConfig);
+  // Write CLI-specific MCP config. restrictedToolset is passed so adapters that strip native
+  // built-in tools via the MCP settings file (gemini's excludeTools) can do so; adapters that
+  // don't need it ignore the extra arg.
+  const mcpConfigPath = adapter.writeMcpConfig(tmpDir, mcpServerConfig, restrictedToolset);
 
   // Process attachments: inline genuine text into the prompt, write everything
   // else (images, PDFs, any binary) to disk for the agent to Read. The agent has

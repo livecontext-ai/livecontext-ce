@@ -77,13 +77,38 @@ export class CodexAdapter {
     ];
 
     if (restrictedToolset) {
-      // CLOUD model-execution-link API mode: keep Codex's sandbox ON (read-only) instead of
-      // the full bypass, so the agent's native shell can neither mutate the host nor write
-      // anything; approvals are never escalated so a headless run cannot hang. Combined with
-      // an empty cwd + no project files (server.mjs) this is the strongest lockdown Codex
-      // exposes - it has no native-tool allowlist, so read-only is the floor (the agent's
-      // shell can still read, but not the project tree and not write/exfiltrate).
-      args.push('-c', 'sandbox_mode="read-only"', '-c', 'approval_policy="never"');
+      // CLOUD model-execution-link API mode: expose ONLY the platform MCP tools, mirroring the
+      // claude-code adapter (auto-approve MCP + strip the native tools). This REPLACED an
+      // earlier read-only-sandbox lockdown that silently broke EVERYTHING: in headless
+      // `codex exec` (no human approver), ANY sandbox except danger-full-access makes codex
+      // require approval for each MCP tool call and then auto-cancel it - every call returned
+      // "user cancelled MCP tool call", so a linked model could use NO tool at all (verified
+      // live on codex-cli 0.142.2 across read-only/workspace-write + never/on-request/on-failure;
+      // MCP only executes under danger-full-access).
+      //
+      // So we run full-access (MCP works) and instead REMOVE codex's own native tools with
+      // --disable, the way claude uses --tools "": shell_tool/unified_exec is the shell escape
+      // vector (verified: with it disabled the agent reports it has no local tools and cannot
+      // read a host file), and browser/apps(image) close the other first-party surfaces. Bound
+      // further by an empty cwd + no repo/project files + AGENT_REPO_PATH='' (server.mjs).
+      //
+      // LIMITATION (codex-specific, unlike claude): a couple of codex/account-side tools
+      // (apply_patch, web.run) are NOT strippable by flags and stay reachable under full-access.
+      // The empty throwaway cwd bounds their blast radius; a hard OS-level sandbox around the
+      // codex process is the only way to fully contain them (tracked for lane-2 infra).
+      args.push('-c', 'sandbox_mode="danger-full-access"',
+        // full-access already bypasses approvals; set never explicitly so no headless run can
+        // ever stall on an approval prompt (proven safe: with full-access there is nothing to
+        // cancel, MCP calls execute - verified live 2026-07-03).
+        '-c', 'approval_policy="never"',
+        '--disable', 'shell_tool',
+        '--disable', 'unified_exec',
+        '--disable', 'browser_use',
+        '--disable', 'browser_use_external',
+        '--disable', 'computer_use',
+        '--disable', 'in_app_browser',
+        '--disable', 'apps',
+        '--disable', 'image_generation');
     } else {
       args.push('--dangerously-bypass-approvals-and-sandbox');
     }

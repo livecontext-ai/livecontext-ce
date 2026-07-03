@@ -17,7 +17,9 @@ public final class CloudRelaySupport {
             "perplexity",
             "cohere",
             "zai",
-            "openrouter"
+            "openrouter",
+            "qwen",
+            "moonshot"
     );
 
     private CloudRelaySupport() {

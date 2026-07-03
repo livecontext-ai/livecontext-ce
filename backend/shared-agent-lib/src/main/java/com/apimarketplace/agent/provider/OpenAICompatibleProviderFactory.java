@@ -15,8 +15,11 @@ import java.util.*;
  * and the nested properties ({@code api-key}, {@code api-url}, {@code models},
  * {@code display-order}) are read via Spring's {@link Environment}.
  *
- * <p>All providers are always registered regardless of whether an API key is set.
- * Callers check {@link OpenAICompatibleProvider#isConfigured()} to determine availability.
+ * <p>Providers are registered regardless of whether an API key is set; callers
+ * check {@link OpenAICompatibleProvider#isConfigured()} to determine availability.
+ * The one exception is CE ({@code auth.mode=embedded}): the CE-blocked providers
+ * ({@link com.apimarketplace.agent.cloud.CeBlockedProviders}) are NOT registered
+ * there, so a self-hosted install can neither configure nor run them.
  *
  * <p>Intended usage: inject the list returned by {@link #createProviders()} into
  * {@link LLMProviderFactory}.
@@ -35,8 +38,8 @@ public class OpenAICompatibleProviderFactory {
 
     /**
      * Create provider instances from {@code ai.agent.providers.<name>.*}.
-     * All providers are always registered; availability is determined by
-     * {@link OpenAICompatibleProvider#isConfigured()}.
+     * Availability is determined by {@link OpenAICompatibleProvider#isConfigured()};
+     * CE-blocked providers are skipped entirely when {@code auth.mode=embedded}.
      */
     public List<OpenAICompatibleProvider> createProviders() {
         List<OpenAICompatibleProvider> providers = new ArrayList<>();
@@ -68,9 +71,28 @@ public class OpenAICompatibleProviderFactory {
             "anthropic/claude-sonnet-4-20250514,openai/gpt-5.4,google/gemini-3-pro-preview",
             14
         ));
+        knownProviders.put("qwen", new ProviderDefaults(
+            "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
+            "qwen-max,qwen-plus,qwen-turbo",
+            15
+        ));
+        knownProviders.put("moonshot", new ProviderDefaults(
+            "https://api.moonshot.ai/v1/chat/completions",
+            "kimi-k2.6,kimi-k2.5",
+            16
+        ));
 
+        // CE boundary: a self-hosted (auth.mode=embedded) install must not be able
+        // to register a multi-provider aggregator (openrouter) or the curated-out
+        // cohere provider - not even by setting an env/DB key. Cloud (non-embedded)
+        // registers every provider unchanged. See CeBlockedProviders.
+        String authMode = env.getProperty("auth.mode", "");
         for (var entry : knownProviders.entrySet()) {
             String name = entry.getKey();
+            if (com.apimarketplace.agent.cloud.CeBlockedProviders.isBlockedInMode(authMode, name)) {
+                log.info("Skipping CE-blocked provider '{}' (auth.mode=embedded)", name);
+                continue;
+            }
             ProviderDefaults defaults = entry.getValue();
             String prefix = BASE_PREFIX + name + ".";
 

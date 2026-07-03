@@ -21,6 +21,8 @@ export const PROVIDER_ICON_MAP: Record<string, string> = {
   cohere: 'cohere',
   openrouter: 'openrouter',
   zai: 'zai',
+  qwen: 'qwen',
+  moonshot: 'moonshot',
   'claude-code': 'claude-code',
   codex: 'codex',
   'gemini-cli': 'gemini-cli',
@@ -65,6 +67,8 @@ export const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   cohere: 'Cohere',
   openrouter: 'OpenRouter',
   zai: 'z.ai',
+  qwen: 'Qwen',
+  moonshot: 'Moonshot',
   'claude-code': 'Claude Code',
   codex: 'Codex',
   'gemini-cli': 'Gemini CLI',
@@ -78,4 +82,18 @@ export const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
 export function getProviderDisplayName(provider: string | null | undefined): string {
   if (!provider) return '';
   return PROVIDER_DISPLAY_NAMES[provider] ?? provider;
+}
+
+/**
+ * Providers hidden on a CE (self-hosted) install. Multi-provider aggregation is
+ * the hosted product's value: a CE user configuring their own aggregator
+ * (openrouter) on top would bypass it. cohere is dropped as well (curated
+ * catalog). Cloud shows every provider. Mirrors the backend `CeBlockedProviders`
+ * boundary - keep the two lists in lockstep.
+ */
+export const CE_HIDDEN_PROVIDERS: ReadonlySet<string> = new Set(['openrouter', 'cohere']);
+
+/** True iff `provider` must be hidden on a CE install. */
+export function isProviderHiddenInCe(provider: string | null | undefined): boolean {
+  return !!provider && CE_HIDDEN_PROVIDERS.has(provider.toLowerCase());
 }

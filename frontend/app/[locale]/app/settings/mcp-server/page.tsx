@@ -4,7 +4,8 @@ import React, { useCallback, useEffect, useState } from "react";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
 import { useAuth } from "@/lib/providers/smart-providers";
 import { useTranslations, useLocale } from "next-intl";
-import { AlertTriangle, Check, Copy, KeyRound, RefreshCw, Server, User } from "lucide-react";
+import { AlertTriangle, Check, Copy, KeyRound, RefreshCw, User } from "lucide-react";
+import { McpIcon } from "@/components/icons/McpIcon";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/settings";
 import Toast, { useToast } from "@/components/Toast";
@@ -118,6 +119,11 @@ export default function McpServerPage() {
 }`;
   const claudeCodeSnippet =
     `claude mcp add --transport http livecontext ${mcpUrl} --header "X-API-Key: ${keyForSnippet}"`;
+  const codexSnippet = `[mcp_servers.livecontext]
+url = "${mcpUrl}"
+
+[mcp_servers.livecontext.http_headers]
+"X-API-Key" = "${keyForSnippet}"`;
 
   if (isAuthChecking || (isAuthenticated && loading)) {
     return (
@@ -148,7 +154,7 @@ export default function McpServerPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader icon={Server} title={t("title")} subtitle={t("subtitle")} />
+      <PageHeader icon={McpIcon} title={t("title")} subtitle={t("subtitle")} />
 
       {error && (
         <div className="rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-4 text-sm text-red-700 dark:text-red-300">
@@ -262,6 +268,16 @@ export default function McpServerPage() {
           </div>
           <pre className="overflow-x-auto rounded-lg bg-theme-tertiary p-3 text-xs font-mono text-theme-primary">
             {jsonSnippet}
+          </pre>
+        </div>
+
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-theme-muted">{t("snippet.codex")}</span>
+            {renderCopyButton("codex", codexSnippet)}
+          </div>
+          <pre className="overflow-x-auto rounded-lg bg-theme-tertiary p-3 text-xs font-mono text-theme-primary">
+            {codexSnippet}
           </pre>
         </div>
 

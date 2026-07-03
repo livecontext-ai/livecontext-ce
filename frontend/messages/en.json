@@ -4109,7 +4109,7 @@
   },
   "mcpServer": {
     "title": "MCP Server",
-    "subtitle": "Connect MCP clients like Claude Code or Cursor to your LiveContext tools",
+    "subtitle": "Connect MCP clients like Claude Code, Cursor, or Codex to your LiveContext tools",
     "copy": "Copy",
     "errors": {
       "fetchFailed": "Failed to load MCP server information"
@@ -4141,6 +4141,7 @@
       "description": "Copy one of these into your MCP client. The JSON block goes into an mcpServers configuration file; the command adds the server to Claude Code.",
       "claudeCode": "Claude Code (command)",
       "jsonConfig": "JSON configuration (Cursor, Claude Desktop, ...)",
+      "codex": "Codex (~/.codex/config.toml)",
       "keyPlaceholder": "YOUR_API_KEY",
       "placeholderHint": "Replace YOUR_API_KEY with your API key (generate one above)."
     }
@@ -6857,7 +6858,13 @@
           "ready": "Ready",
           "pending": "Pending"
         },
-        "tabLabel": "Browser Agent"
+        "tabLabel": "Browser Agent",
+        "chrome": {
+          "stop": "Stop browser",
+          "back": "Back",
+          "forward": "Forward",
+          "refresh": "Refresh"
+        }
       }
     },
     "forms": {

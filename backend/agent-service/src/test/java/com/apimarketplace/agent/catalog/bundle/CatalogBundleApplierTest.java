@@ -15,6 +15,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -110,6 +111,51 @@ class CatalogBundleApplierTest {
         verify(bundleRepo).deactivateAll();
         verify(bundleRepo).save(any(CatalogBundleEntity.class));
         verify(syncStatusRepo).save(any(CatalogBundleSyncStatusEntity.class));
+    }
+
+    @Test
+    @DisplayName("CE (embedded): apply STRIPS openrouter + cohere bundle rows before merge - the signed cloud catalog never lands them in CE")
+    void ceApplyFiltersBlockedProviders() throws Exception {
+        ReflectionTestUtils.setField(applier, "authMode", "embedded");
+        byte[] bytes = payloadBytes(List.of(
+                bundleModel("openai",     "gpt-5",                    "GPT-5",      "1.25"),
+                bundleModel("openrouter", "anthropic/claude-sonnet-4", "OR Sonnet", "3.00"),
+                bundleModel("cohere",     "command-r-plus-08-2024",   "Command R+", "2.50"),
+                bundleModel("qwen",       "qwen-max",                 "Qwen Max",   "1.60")));
+        when(modelRepo.findByProviderAndModelId(any(), any())).thenReturn(Optional.empty());
+        when(modelRepo.findAllByOrderByRankingAsc()).thenReturn(List.of());
+        when(bundleRepo.findByVersion(42L)).thenReturn(Optional.empty());
+        when(syncStatusRepo.findById((short) 1)).thenReturn(Optional.empty());
+
+        CatalogBundleApplier.ApplyResult r = applier.apply(sbV42(), bytes, "https://cloud/x");
+
+        assertThat(r.status()).isEqualTo(CatalogBundleApplier.Status.APPLIED);
+        // openrouter + cohere dropped before merge; only openai + qwen inserted.
+        assertThat(r.inserted()).isEqualTo(2);
+        ArgumentCaptor<ModelConfigOverrideEntity> saves = ArgumentCaptor.forClass(ModelConfigOverrideEntity.class);
+        verify(modelRepo, times(2)).save(saves.capture());
+        assertThat(saves.getAllValues()).extracting(ModelConfigOverrideEntity::getProvider)
+                .containsExactlyInAnyOrder("openai", "qwen")
+                .doesNotContain("openrouter", "cohere");
+    }
+
+    @Test
+    @DisplayName("Cloud (default auth.mode): apply KEEPS openrouter + cohere - the CE filter never fires")
+    void cloudApplyKeepsBlockedProviders() throws Exception {
+        // applier built in setUp() has the default empty authMode = cloud.
+        byte[] bytes = payloadBytes(List.of(
+                bundleModel("openai",     "gpt-5",                    "GPT-5",      "1.25"),
+                bundleModel("openrouter", "anthropic/claude-sonnet-4", "OR Sonnet", "3.00"),
+                bundleModel("cohere",     "command-r-plus-08-2024",   "Command R+", "2.50")));
+        when(modelRepo.findByProviderAndModelId(any(), any())).thenReturn(Optional.empty());
+        when(modelRepo.findAllByOrderByRankingAsc()).thenReturn(List.of());
+        when(bundleRepo.findByVersion(42L)).thenReturn(Optional.empty());
+        when(syncStatusRepo.findById((short) 1)).thenReturn(Optional.empty());
+
+        CatalogBundleApplier.ApplyResult r = applier.apply(sbV42(), bytes, "https://cloud/x");
+
+        assertThat(r.inserted()).isEqualTo(3);
+        verify(modelRepo, times(3)).save(any());
     }
 
     @Test

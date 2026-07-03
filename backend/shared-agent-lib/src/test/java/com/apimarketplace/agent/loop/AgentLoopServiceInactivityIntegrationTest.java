@@ -85,10 +85,17 @@ class AgentLoopServiceInactivityIntegrationTest {
 
     @Test
     @Timeout(20)
-    @DisplayName("the per-agent credential (__inactivityTimeoutSeconds__), not the context field, drives the watchdog through the real loop")
-    void perAgentCredentialDrivesWatchdogThroughRealLoop() {
+    @DisplayName("an out-of-contract per-agent credential window (1-9s) is IGNORED through the real loop - a stray small value cannot arm a seconds-scale watchdog that false-kills a healthy agent")
+    void outOfContractCredentialWindowIgnoredThroughRealLoop() {
         setUpProvider();
-        // Silent agent: emits nothing and stalls past the credential-configured 1s window.
+        // Agent stalls 1.5s then completes. The credential carries an out-of-contract
+        // window (1s, in the rejected 1-9 band): resolveInactivityWindowMs falls back to
+        // the 5-min default (the credential channel validates 10-7200 to stop a stray raw
+        // producer value from arming a seconds-scale watchdog - see
+        // AgentLoopServiceInactivityWiringTest.belowContractOverrideIgnored), so the
+        // watchdog does NOT trip and the healthy agent completes normally. This differs by
+        // design from the context field (.inactivityTimeout, set by trusted internal code),
+        // which accepts a 1s window - see silentAgentStoppedWithInactivityTimeout.
         doAnswer(inv -> {
             StreamingCallback cb = inv.getArgument(1);
             sleep(1500);
@@ -99,8 +106,8 @@ class AgentLoopServiceInactivityIntegrationTest {
         AgentLoopResult result = svc.executeStreaming(ctxWithCredential(1), userCallback);
 
         assertThat(result.stopReason())
-            .as("the credential override must drive the in-process watchdog exactly like the context field")
-            .isEqualTo(AgentStopReason.INACTIVITY_TIMEOUT);
+            .as("a below-contract credential window must NOT arm a seconds-scale watchdog through the real loop")
+            .isEqualTo(AgentStopReason.COMPLETED);
     }
 
     // ── A stalled agent IS stopped at the window ──────────────────────────────

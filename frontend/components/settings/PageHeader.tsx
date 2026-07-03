@@ -1,10 +1,12 @@
 'use client';
 
-import React from 'react';
-import type { LucideIcon } from 'lucide-react';
+import React, { type ComponentType, type SVGProps } from 'react';
 
 interface PageHeaderProps {
-  icon: LucideIcon;
+  // Any SVG icon component that accepts a className (lucide icons + our own
+  // inline icons like McpIcon). Only `className` is used below, so the prop
+  // must not be artificially narrowed to LucideIcon.
+  icon: ComponentType<SVGProps<SVGSVGElement>>;
   // ReactNode so settings pages can decorate the title with status pills
   // (PR19: workspace-scope badge alongside the page title). Strings still
   // work - React renders them as text nodes.

@@ -41,6 +41,16 @@ public class ModelCatalogService {
     private CloudLlmRuntimeAccess cloudLlmRuntimeAccess;
 
     /**
+     * {@code auth.mode}: {@code "embedded"} ⇒ CE (self-hosted) install ⇒ the
+     * catalog HIDES {@link com.apimarketplace.agent.cloud.CeBlockedProviders}
+     * (openrouter/cohere) even if seeded rows exist in {@code model_config_overrides}.
+     * Empty (cloud / tests) ⇒ no CE filtering. Field injection so neither
+     * constructor signature changes; tests keep the default "".
+     */
+    @Value("${auth.mode:}")
+    private String authMode = "";
+
+    /**
      * Shared filter (lives in shared-agent-lib so the CE monolith stub can
      * reuse the same code path). Lazily-initialised on first use because
      * `bridgeUrl` is read from config - we capture the value at construction.
@@ -284,6 +294,15 @@ public class ModelCatalogService {
             providers.add(newProvider);
         }
 
+        // CE boundary: on a self-hosted (auth.mode=embedded) install, drop the
+        // multi-provider aggregator (openrouter) and the curated-out cohere
+        // provider from the catalog - even if V112 seeded their rows into
+        // model_config_overrides (the DB-inject loop above would otherwise
+        // surface them). Cloud (non-embedded) keeps every provider, openrouter
+        // included, as a relay fallback. Applied here so it covers YAML-derived
+        // AND DB-injected provider entries in one place.
+        filterCeBlockedProviders(providers);
+
         // Tag bridge providers (provider-LEVEL only - see markBridgeProviders
         // javadoc) so consumers (BrowserAgentModule, frontend model picker, …)
         // don't need to know the bridge name list. BridgeAvailabilityFilter
@@ -367,6 +386,33 @@ public class ModelCatalogService {
                 }
             }
         }
+    }
+
+    /**
+     * True iff this install is CE ({@code auth.mode=embedded}) AND {@code provider}
+     * is one of the CE-blocked providers (openrouter, cohere). No-op in cloud
+     * (empty/keycloak {@code authMode}). Single choke point reused by both the
+     * picker path ({@link #filterCeBlockedProviders}) and the admin path
+     * ({@link #getEffectiveModelList}) so they never disagree in CE.
+     */
+    private boolean isCeBlockedProvider(String provider) {
+        return com.apimarketplace.agent.cloud.CeBlockedProviders.isBlockedInMode(authMode, provider);
+    }
+
+    /**
+     * Remove CE-blocked providers (openrouter, cohere) from the catalog when this
+     * install runs in CE mode ({@code auth.mode=embedded}). No-op in cloud, where
+     * {@code authMode} is empty. Mutates {@code providers} in place.
+     */
+    void filterCeBlockedProviders(List<Map<String, Object>> providers) {
+        if (providers == null || providers.isEmpty()) return;
+        providers.removeIf(p -> {
+            boolean blocked = p.get("name") instanceof String name && isCeBlockedProvider(name);
+            if (blocked) {
+                log.debug("CE catalog: hiding blocked provider '{}'", p.get("name"));
+            }
+            return blocked;
+        });
     }
 
     static void markCloudProviders(List<Map<String, Object>> providers) {
@@ -992,6 +1038,13 @@ public class ModelCatalogService {
                 }
             }
         }
+
+        // CE boundary: the admin Models panel must agree with the picker - never
+        // list the openrouter aggregator or cohere on a self-hosted install, even
+        // if an admin saved a custom (is_custom=true) override under those
+        // providers (which the injection loop above would otherwise surface).
+        // Mirrors filterCeBlockedProviders on the picker path. No-op in cloud.
+        result.removeIf(m -> m.get("provider") instanceof String p && isCeBlockedProvider(p));
 
         // Sort by displayOrder
         result.sort(Comparator.comparingInt(m -> (int) ((Map<String, Object>) m).getOrDefault("displayOrder", 999)));

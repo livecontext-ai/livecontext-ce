@@ -1,0 +1,59 @@
+# SearXNG settings for the LiveContext CE web_search sidecar (opt-in browser-agent profile).
+# Mounted read-only into the searxng container at /etc/searxng/settings.yml by docker-compose.yml.
+#
+# The websearch service queries {searxng}/search?format=json, so the `json` output format MUST
+# stay enabled. Only a handful of general-web engines are kept (bing/duckduckgo/wikipedia/brave)
+# to keep results clean and fast for agent research.
+#
+# CHANGE server.secret_key below to a unique random value for your install (SearXNG does not
+# expand ${...} in this file - set the literal value here). The key is internal-only (CSRF /
+# rate-limit tokens); with limiter disabled and the instance reachable only over the compose
+# network, a fixed value is acceptable but a unique one is recommended.
+use_default_settings:
+  engines:
+    keep_only:
+      - bing
+      - duckduckgo
+      - wikipedia
+      - brave
+
+general:
+  instance_name: "LiveContext SearXNG"
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  formats:
+    - html
+    - json
+
+server:
+  secret_key: "changeme-searxng"
+  limiter: false
+  image_proxy: false
+  port: 8080
+  bind_address: "0.0.0.0"
+
+ui:
+  static_use_hash: true
+
+engines:
+  - name: bing
+    engine: bing
+    shortcut: b
+    disabled: false
+
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    disabled: false
+
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: wp
+    disabled: false
+
+  - name: brave
+    engine: brave
+    shortcut: br
+    disabled: false

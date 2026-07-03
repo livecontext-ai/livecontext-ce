@@ -113,6 +113,15 @@ public class WorkflowResumeService {
     private ApplicationEventPublisher eventPublisher;
 
     /**
+     * Aborts in-flight browser-agent sessions so Stop/Cancel actually kills
+     * Chromium (the runner keeps browsing otherwise - the node is BLPOP-blocked
+     * on the result and never sees the cancel). Optional: absent when the web
+     * stack is off, in which case the abort calls are simply skipped.
+     */
+    @Autowired(required = false)
+    private com.apimarketplace.orchestrator.tools.websearch.BrowserAgentRunAborter browserAgentRunAborter;
+
+    /**
      * Keeps the run.planVersion ↔ workflow_plan_versions content parity invariant
      * on every {@code run.plan} write in this class: an accepted plan must exist in
      * the version history before the run is stamped with its version number.
@@ -600,6 +609,14 @@ public class WorkflowResumeService {
         //     resolutions are gated even if a few sneak through here).
         if (unifiedSignalService != null) {
             unifiedSignalService.cancelByRun(runId);
+        }
+
+        // 2b-bis. Abort any in-flight browser-agent session for this run. Without
+        //     this the websearch runner keeps driving Chromium to completion even
+        //     though the run is cancelled - the "Stop button did nothing" symptom.
+        //     Best-effort (never throws): a websearch hiccup must not block cancel.
+        if (browserAgentRunAborter != null) {
+            browserAgentRunAborter.abortAllForRun(runId);
         }
 
         // 2c. Remove pending async agent entries - prevents late-arriving results from
@@ -1255,6 +1272,18 @@ public class WorkflowResumeService {
                 unifiedSignalService.cancelByRun(runId);
             } catch (Exception e) {
                 logger.warn("[stopWorkflow] Failed to cancel signals for runId={}: {}", runId, e.getMessage());
+            }
+        }
+
+        // Abort any in-flight browser-agent session for this run - otherwise the
+        // websearch runner keeps driving Chromium after Stop (the node is
+        // BLPOP-blocked on the result and never sees the cancel). Best-effort.
+        if (browserAgentRunAborter != null) {
+            try {
+                browserAgentRunAborter.abortAllForRun(runId);
+            } catch (Exception e) {
+                logger.warn("[stopWorkflow] Failed to abort browser sessions for runId={}: {}",
+                        runId, e.getMessage());
             }
         }
 
