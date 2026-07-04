@@ -36,6 +36,10 @@ class CatalogBundleControllerTest {
     @Mock private ObjectProvider<CatalogBundleSyncScheduler> schedulerProvider;
     @Mock private CatalogBundleSyncScheduler scheduler;
     @Mock private AuthClient authClient;
+    // Real instance (lightweight, single-thread daemon executor): the controller
+    // now runs the manual tick asynchronously through it and reads its RUNNING
+    // state into the status view. A mock would NPE in toSyncStatusView.
+    private final BundleSyncRunner syncRunner = new BundleSyncRunner();
 
     private CatalogBundleController controller;
 
@@ -45,7 +49,7 @@ class CatalogBundleControllerTest {
 
     @BeforeEach
     void setUp() {
-        controller = new CatalogBundleController(service, signer, syncStatusRepo, schedulerProvider, authClient);
+        controller = new CatalogBundleController(service, signer, syncStatusRepo, schedulerProvider, authClient, syncRunner);
     }
 
     @Test
@@ -79,6 +83,38 @@ class CatalogBundleControllerTest {
         assertThat(body).containsEntry("version", 1000L);
         assertThat(body).containsEntry("modelCount", 50);
         assertThat(body).containsEntry("isActive", false);
+    }
+
+    @Test
+    @DisplayName("seedExport as non-admin -> 403 Forbidden")
+    void seedExportForbiddenForNonAdmin() {
+        ResponseEntity<?> resp = controller.seedExport("USER", 5L);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        verify(service, never()).buildSeedExport(anyLong());
+    }
+
+    @Test
+    @DisplayName("seedExport as admin returns the seed doc for the requested version")
+    void seedExportReturnsSeedDoc() {
+        Map<String, Object> seed = Map.of("version", 5L, "issuer", "model-catalog-seed",
+                "models", List.of(Map.of("provider", "openai", "modelId", "gpt-5")));
+        when(service.buildSeedExport(5L)).thenReturn(seed);
+
+        ResponseEntity<?> resp = controller.seedExport("ADMIN", 5L);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resp.getBody()).isEqualTo(seed);
+    }
+
+    @Test
+    @DisplayName("seedExport returns 400 when the catalog would export empty / bad version")
+    void seedExportPropagatesRejection() {
+        when(service.buildSeedExport(anyLong()))
+                .thenThrow(new IllegalStateException("No curated models to export"));
+
+        ResponseEntity<?> resp = controller.seedExport("ADMIN", 5L);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
     }
 
     @Test
@@ -332,11 +368,14 @@ class CatalogBundleControllerTest {
 
         ResponseEntity<?> resp = controller.syncNow("ADMIN");
 
-        verify(scheduler).tick();
+        // tick() now runs off the request thread → verify with a timeout.
+        verify(scheduler, timeout(2000)).tick();
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         @SuppressWarnings("unchecked")
         Map<String, Object> body = (Map<String, Object>) resp.getBody();
         assertThat(body).containsEntry("lastAppliedVersion", 7L);
+        // The status view now carries the in-flight RUNNING state.
+        assertThat(body).containsKey("running");
     }
 
     @Test
@@ -351,10 +390,38 @@ class CatalogBundleControllerTest {
 
         ResponseEntity<?> resp = controller.syncNow("ADMIN");
 
+        // The tick throws on the worker thread; the runner swallows it and the
+        // controller has already returned 200. Wait for the async call so the
+        // doThrow stub is exercised (strict-stubbing) and the swallow is proven.
+        verify(scheduler, timeout(2000)).tick();
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         @SuppressWarnings("unchecked")
         Map<String, Object> body = (Map<String, Object>) resp.getBody();
         assertThat(body).containsEntry("lastFetchStatus", "NETWORK_ERROR");
+    }
+
+    @Test
+    @DisplayName("syncCancel as non-admin → 403")
+    void syncCancelForbidden() {
+        ResponseEntity<?> resp = controller.syncCancel("USER");
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        verifyNoInteractions(syncStatusRepo);
+    }
+
+    @Test
+    @DisplayName("syncCancel as admin → 200 with the status row (idempotent when nothing runs)")
+    void syncCancelReturnsStatus() {
+        CatalogBundleSyncStatusEntity row = new CatalogBundleSyncStatusEntity();
+        row.setLastFetchStatus("OK");
+        when(syncStatusRepo.findById(CatalogBundleSyncStatusEntity.SINGLETON_ID))
+                .thenReturn(Optional.of(row));
+
+        ResponseEntity<?> resp = controller.syncCancel("ADMIN");
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) resp.getBody();
+        assertThat(body).containsEntry("running", false);
     }
 
     private CatalogBundleEntity bundle(Long id, long version) {

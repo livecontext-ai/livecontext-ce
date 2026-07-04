@@ -2165,14 +2165,10 @@ def _extract_token_usage(agent: Any) -> dict[str, Any]:
     }
 
     tcs = _safe_get(agent, "token_cost_service")
-    if tcs is None:
-        return out
-    history = _safe_get(tcs, "usage_history")
-    if not history:
-        return out
+    history = _safe_get(tcs, "usage_history") if tcs is not None else None
 
     by_model: dict[str, dict[str, int]] = {}
-    for entry in history:
+    for entry in (history or []):
         model = str(_safe_get(entry, "model") or "unknown")
         usage = _safe_get(entry, "usage")
         if usage is None:
@@ -2206,7 +2202,49 @@ def _extract_token_usage(agent: Any) -> dict[str, Any]:
         stats["invocations"] += 1
 
     out["by_model"] = by_model
+    # Cloud-relay path: browser-use's TokenCost does not track the custom BridgeChatClient
+    # (and calculate_cost=False disables its accounting), so usage_history is empty and the
+    # tokens would be lost. Fold in the usage the BridgeChatClient accumulated from the CE shim
+    # (sourced from the cloud relay) so the browser agent records the same tokens/cost a chat
+    # agent does - "everything written".
+    if out["tokens_in"] == 0 and out["tokens_out"] == 0:
+        _apply_bridge_relay_usage(agent, out)
     return out
+
+
+def _apply_bridge_relay_usage(agent: Any, out: dict[str, Any]) -> None:
+    """Populate ``out`` from the BridgeChatClient's own usage accumulators (cloud-relay path).
+
+    On ``provider_kind='bridge'`` the browser agent's LLM is a ``BridgeChatClient`` whose
+    per-call usage (returned by the CE shim, sourced from the cloud relay) browser-use does not
+    track. The client accumulates ``relay_prompt_tokens`` / ``relay_completion_tokens`` /
+    ``relay_calls`` itself; we read them here so token/cost observability is complete on the
+    relay path.
+    """
+    llm = _safe_get(agent, "llm")
+    if llm is None:
+        return
+    prompt = int(_safe_get(llm, "relay_prompt_tokens") or 0)
+    completion = int(_safe_get(llm, "relay_completion_tokens") or 0)
+    calls = int(_safe_get(llm, "relay_calls") or 0)
+    if prompt == 0 and completion == 0:
+        return
+    out["tokens_in"] = prompt
+    out["tokens_out"] = completion
+    out["llm_calls"] = calls or out["llm_calls"]
+    # The client's model is already clean (BrowserAgentModule keeps it unqualified; the provider
+    # travels in the X-LLM-Provider header), so the Java pricing layer resolves a rate on it.
+    model = str(_safe_get(llm, "model") or "unknown")
+    out["by_model"] = {
+        model: {
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "cache_read_tokens": 0,
+            "cache_creation_tokens": 0,
+            "image_input_tokens": 0,
+            "invocations": calls or 1,
+        }
+    }
 
 
 async def _extract_last_history_error(history: Any) -> str | None:

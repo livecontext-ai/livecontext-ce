@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "issuer": "model-catalog-seed",
   "models": [
     {
@@ -411,22 +411,6 @@
       "priceOutput": "8.00"
     },
     {
-      "provider": "cohere",
-      "modelId": "command-r-plus-08-2024",
-      "displayName": "command-r-plus-08-2024",
-      "enabled": true,
-      "priceInput": "2.50",
-      "priceOutput": "10.00"
-    },
-    {
-      "provider": "cohere",
-      "modelId": "command-r-08-2024",
-      "displayName": "command-r-08-2024",
-      "enabled": true,
-      "priceInput": "0.15",
-      "priceOutput": "0.60"
-    },
-    {
       "provider": "zai",
       "modelId": "glm-5.1",
       "displayName": "glm-5.1",
@@ -449,30 +433,6 @@
       "enabled": true,
       "priceInput": "1.20",
       "priceOutput": "4.00"
-    },
-    {
-      "provider": "openrouter",
-      "modelId": "anthropic/claude-sonnet-4-20250514",
-      "displayName": "anthropic/claude-sonnet-4-20250514",
-      "enabled": true,
-      "priceInput": "3.00",
-      "priceOutput": "15.00"
-    },
-    {
-      "provider": "openrouter",
-      "modelId": "openai/gpt-5.4",
-      "displayName": "openai/gpt-5.4",
-      "enabled": true,
-      "priceInput": "2.50",
-      "priceOutput": "15.00"
-    },
-    {
-      "provider": "openrouter",
-      "modelId": "google/gemini-3-pro-preview",
-      "displayName": "google/gemini-3-pro-preview",
-      "enabled": true,
-      "priceInput": "1.25",
-      "priceOutput": "10.00"
     },
     {
       "provider": "qwen",
@@ -513,6 +473,14 @@
       "enabled": true,
       "priceInput": "0.60",
       "priceOutput": "3.00"
+    },
+    {
+      "provider": "anthropic",
+      "modelId": "claude-opus-4-8",
+      "displayName": "Claude Opus 4.8",
+      "enabled": true,
+      "priceInput": "5.00",
+      "priceOutput": "25.00"
     }
   ]
 }

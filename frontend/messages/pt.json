@@ -2893,6 +2893,7 @@
         "step3Title": "Iniciar o bridge",
         "step3Command": "node mcp/bridge/server.mjs"
       },
+      "startBridgeNote": "Abra um terminal na pasta raiz do projeto (a que contém a pasta mcp) antes de executar este comando. O caminho é relativo, então ele só funciona a partir dali.",
       "verifyConnection": "Verificar conexão",
       "checking": "Verificando...",
       "connected": "Conectado",
@@ -2971,8 +2972,6 @@
       "bundleShipOn": "CE: ativo",
       "bundleShipOff": "CE: inativo",
       "bundleShipTooltip": "O que o bundle CE distribui para este modelo, independentemente do interruptor de ativação: auto o segue, ativo distribui o modelo habilitado para instalações auto-hospedadas mesmo desabilitado aqui, inativo o distribui desabilitado.",
-      "visionOnly": "Somente visão",
-      "visionOnlyTooltip": "Mostrar apenas modelos com suporte a visão (multimodais). Agentes de navegador precisam ver a página, por isso vem ativado por padrão. Desative para mostrar todos os modelos.",
       "notConfigured": "Não configurado",
       "notConfiguredTooltip": "Listado para você poder ordenar e precificar, mas ainda não utilizável: sem chave de API para este provedor (ou o relay na nuvem não consegue executá-lo). Adicione uma chave para usá-lo.",
       "custom": "personalizado",
@@ -3004,7 +3003,7 @@
         },
         "browser_agent": {
           "label": "Agente de navegador",
-          "hint": "Modelos oferecidos ao LLM por web_search(action='help_models'). Desativar aqui = o agente nunca proporá este modelo para browser_agent."
+          "hint": "Modelos disponíveis para o Browser Agent. A classificação define a ordem padrão; desativar remove o modelo das execuções do Browser Agent."
         },
         "image_generation": {
           "label": "Geração de imagens",
@@ -3030,6 +3029,8 @@
       "update": "Atualizar pacote",
       "synced": "Pacote atualizado",
       "failed": "Falha na atualização",
+      "syncing": "Sincronizando",
+      "stop": "Parar",
       "manage": "Gerenciar pacotes"
     },
     "bundles": {

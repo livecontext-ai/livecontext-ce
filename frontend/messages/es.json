@@ -2893,6 +2893,7 @@
         "step3Title": "Iniciar el bridge",
         "step3Command": "node mcp/bridge/server.mjs"
       },
+      "startBridgeNote": "Abre una terminal en la carpeta raíz del proyecto (la que contiene la carpeta mcp) antes de ejecutar este comando. La ruta es relativa, así que solo funciona desde ahí.",
       "verifyConnection": "Verificar conexión",
       "checking": "Verificando...",
       "connected": "Conectado",
@@ -2971,8 +2972,6 @@
       "bundleShipOn": "CE: activo",
       "bundleShipOff": "CE: inactivo",
       "bundleShipTooltip": "Lo que el bundle CE distribuye para este modelo, independientemente del interruptor de activación: auto lo sigue, activo distribuye el modelo habilitado a instalaciones autoalojadas aunque esté deshabilitado aquí, inactivo lo distribuye deshabilitado.",
-      "visionOnly": "Solo visión",
-      "visionOnlyTooltip": "Mostrar solo modelos con soporte de visión (multimodales). Los agentes de navegador necesitan ver la página, por eso está activado por defecto. Desactívalo para mostrar todos los modelos.",
       "notConfigured": "Sin configurar",
       "notConfiguredTooltip": "Se muestra para poder ordenarlo y tarifarlo, pero aún no es utilizable: no hay clave de API para este proveedor (o el relé en la nube no puede ejecutarlo). Añade una clave para usarlo.",
       "custom": "personalizado",
@@ -3004,7 +3003,7 @@
         },
         "browser_agent": {
           "label": "Agente de navegador",
-          "hint": "Modelos ofrecidos al LLM por web_search(action='help_models'). Desactivar aquí = el agente nunca propondrá este modelo para browser_agent."
+          "hint": "Modelos disponibles para el Browser Agent. El rango define el orden predeterminado; desactivar quita el modelo de las ejecuciones del Browser Agent."
         },
         "image_generation": {
           "label": "Generación de imágenes",
@@ -3030,6 +3029,8 @@
       "update": "Actualizar paquete",
       "synced": "Paquete actualizado",
       "failed": "Error al actualizar",
+      "syncing": "Sincronizando",
+      "stop": "Detener",
       "manage": "Gestionar paquetes"
     },
     "bundles": {

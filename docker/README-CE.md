@@ -185,9 +185,14 @@ browser-agent module in the app):
 docker compose --env-file docker/.env.ce.browser-agent up -d
 ```
 
-- **Model:** the agent node picks the model (default **gemini 3.1 flash**). The
-  app injects the install's Google/Gemini key into each browse job, so set
-  `GEMINI_API_KEY` (or add a Google credential in the app) for it to run.
+- **Model:** the agent node picks the model per AI provider
+  (google/anthropic/openai/deepseek/mistral/...). When the install is
+  **cloud-linked**, the browser agent relays its per-step LLM calls through your
+  cloud connection and bills the cloud account, exactly like the chat / workflow
+  agents and `web_search` (no local key needed). **Not linked?** Add that
+  provider's API key in the app (Settings > AI providers), or set the matching
+  env key (e.g. `GEMINI_API_KEY` for Google); otherwise the run fails with the
+  provider's "No API key" error.
 - **web_search:** the same `browser-agent` profile also starts a **SearXNG**
   metasearch sidecar, wired via `WEBSEARCH_SEARXNG_URL`, so `web_search` returns
   results. Its config (kept engines + JSON output) is mounted read-only from

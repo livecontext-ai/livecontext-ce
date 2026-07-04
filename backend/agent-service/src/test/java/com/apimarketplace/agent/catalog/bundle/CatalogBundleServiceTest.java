@@ -119,6 +119,65 @@ class CatalogBundleServiceTest {
     }
 
     @Test
+    @DisplayName("buildSeedExport returns the models.json shape (version/issuer/models), stamping the release version, no categories")
+    void buildSeedExportShape() {
+        when(modelRepo.findAllByOrderByRankingAsc()).thenReturn(List.of(
+                m("openai", "gpt-5", "GPT-5"), m("anthropic", "claude-sonnet-4-6", "Sonnet")));
+
+        java.util.Map<String, Object> seed = service.buildSeedExport(42L);
+
+        assertThat(seed.get("version")).isEqualTo(42L);
+        assertThat(seed.get("issuer")).isEqualTo("model-catalog-seed");
+        @SuppressWarnings("unchecked")
+        List<java.util.Map<String, Object>> models = (List<java.util.Map<String, Object>>) seed.get("models");
+        assertThat(models).hasSize(2);
+        assertThat(models).allSatisfy(row -> assertThat(row).doesNotContainKey("categories"));
+    }
+
+    @Test
+    @DisplayName("buildSeedExport drops CE-blocked providers (openrouter/cohere), is_custom rows, and deprecated rows")
+    void buildSeedExportFiltersProvidersCustomAndDeprecated() {
+        ModelConfigOverrideEntity custom = m("openai", "my-private", "Private");
+        custom.setCustom(true);
+        ModelConfigOverrideEntity deprecated = m("openai", "gpt-old", "Old");
+        deprecated.setDeprecatedAt(java.time.Instant.now());
+
+        when(modelRepo.findAllByOrderByRankingAsc()).thenReturn(List.of(
+                m("openai", "gpt-5", "GPT-5"),
+                m("cohere", "command-r", "Command R"),
+                m("openrouter", "openai/gpt-5", "OR"),
+                custom, deprecated));
+
+        java.util.Map<String, Object> seed = service.buildSeedExport(7L);
+
+        @SuppressWarnings("unchecked")
+        List<java.util.Map<String, Object>> models = (List<java.util.Map<String, Object>>) seed.get("models");
+        assertThat(models).as("only the plain openai/gpt-5 survives").hasSize(1);
+        assertThat(models.get(0).get("modelId")).isEqualTo("gpt-5");
+    }
+
+    @Test
+    @DisplayName("buildSeedExport refuses an empty result (all rows filtered out)")
+    void buildSeedExportRejectsEmpty() {
+        when(modelRepo.findAllByOrderByRankingAsc()).thenReturn(List.of(
+                m("cohere", "command-r", "Command R"),
+                m("openrouter", "openai/gpt-5", "OR")));
+
+        assertThatThrownBy(() -> service.buildSeedExport(1L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("empty");
+    }
+
+    @Test
+    @DisplayName("buildSeedExport rejects a non-positive version (CE would treat it as unversioned)")
+    void buildSeedExportRejectsNonPositiveVersion() {
+        assertThatThrownBy(() -> service.buildSeedExport(0L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("positive");
+        verifyNoInteractions(modelRepo);
+    }
+
+    @Test
     @DisplayName("buildBundle throws if signing key not configured")
     void buildBundleRequiresKey() {
         CatalogBundleSigner noKey = new CatalogBundleSigner("", "", "k", "i");

@@ -92,8 +92,9 @@ app setting in one shot):
   ```
 - **Browser agent and web search** (`browser-agent` profile). Adds a Chromium browser-use container
   plus a SearXNG metasearch sidecar (~2 GB) so agents can browse pages (`agent_browse`) and run
-  `web_search`. Needs a Google/Gemini key on the install (default model gemini 3.1 flash). Enable it
-  with:
+  `web_search`. The browser agent uses whichever model you pick per AI provider, relayed through
+  your cloud connection when the install is cloud-linked (like the other agents), or a direct
+  provider key added in the app otherwise. Enable it with:
   ```bash
   docker compose --env-file docker/.env.ce.browser-agent up -d
   ```

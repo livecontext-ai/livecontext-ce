@@ -3,8 +3,8 @@ import {
   LayoutDashboard,
   CreditCard,
   Wrench,
-  Key,
   KeyRound,
+  BotMessageSquare,
   HardDrive,
   Code,
   Shield,
@@ -68,7 +68,7 @@ export const settingsNavItems: SettingsNavItem[] = [
   { href: '/app/settings/custom-apis', label: 'Custom APIs', icon: Plug },
   { href: '/app/settings/mcp-server', label: 'MCP Server', icon: McpIcon },
   { href: '/app/settings/platform-credentials', label: 'Platform Keys', icon: Shield, adminOnly: true },
-  { href: '/app/settings/ai-providers', label: 'AI Providers', icon: Key, adminOnly: true },
+  { href: '/app/settings/ai-providers', label: 'AI Providers', icon: BotMessageSquare, adminOnly: true },
   // NOTE: signed catalog bundles (model + API) are no longer a standalone page -
   // they live as the "Bundles" sub-tab of the Cloud section (cloud-account) since
   // they are the cloud→CE distribution channel.

@@ -37,7 +37,21 @@ package com.apimarketplace.agent.catalog.bundle;
  */
 public record MergeOptions(String source, String label,
                            Long bundleVersion, boolean deprecateMissing,
-                           boolean honorEnabledOnInsert) {
+                           boolean honorEnabledOnInsert, boolean partialUpdate,
+                           boolean assignDefaultCategoriesOnInsert) {
+
+    /*
+     * @param partialUpdate true → PATCH semantics: on an UPDATE only fields the
+     *                      payload actually carries (present keys) are written;
+     *                      fields the payload omits are LEFT untouched on the
+     *                      local row. false → full overwrite (a payload that
+     *                      omits a field nulls it). The seed uses partial=true:
+     *                      it is a curated baseline, often a minimal payload
+     *                      (provider/modelId/displayName/enabled/price), and
+     *                      must NOT null the enrichment (tier, contextWindow,
+     *                      capability flags…) a bundle/feed/admin set on a row.
+     *                      The bundle/feed use false (authoritative snapshot).
+     */
 
     /**
      * Bundle apply: authoritative snapshot, version stamped, absent rows
@@ -52,8 +66,11 @@ public record MergeOptions(String source, String label,
      * itself - a provider without keys/bridge stays unreachable in the picker.
      */
     public static MergeOptions forBundle(long bundleVersion) {
+        // assignDefaultCategoriesOnInsert=false: a bundle payload always carries
+        // its own `categories` sidecar (V156+), so the parent snapshot is the
+        // authority on which categories a model gets. Never synthesise defaults.
         return new MergeOptions("bundle", "bundle v" + bundleVersion,
-                bundleVersion, true, true);
+                bundleVersion, true, true, false, false);
     }
 
     /**
@@ -66,7 +83,7 @@ public record MergeOptions(String source, String label,
         // 'manual' is the catch-all allowed by model_config_overrides_source_check;
         // individual rows will almost always override this with their feed's
         // own source ("litellm" / "openrouter") stamped by the parser.
-        return new MergeOptions("manual", "sync-feed", null, false, false);
+        return new MergeOptions("manual", "sync-feed", null, false, false, false, false);
     }
 
     /**
@@ -79,16 +96,26 @@ public record MergeOptions(String source, String label,
      * payload's {@code enabled} (default true) via
      * {@code honorEnabledOnInsert=true}, so a fresh CE has the curated catalog
      * usable out of the box instead of review-gated off.
+     *
+     * <p>{@code assignDefaultCategoriesOnInsert=true}: the seed doc
+     * ({@code {version, issuer, models[]}}, from buildSeedExport) omits the
+     * {@code categories} sidecar, so a NEWLY inserted seed model would otherwise
+     * land with zero category rows and be invisible to every category-scoped
+     * selector (chat / browser_agent picker). The merge synthesises mode-aware
+     * defaults for such inserts so a seed-shipped model is selectable out of the
+     * box. Inserts only - an existing row an admin curated is never touched.
      */
     public static MergeOptions forSeed() {
-        return new MergeOptions("curated", "model-seed", null, false, true);
+        return new MergeOptions("curated", "model-seed", null, false, true, true, true);
     }
 
     public MergeOptions withDeprecateMissing(boolean deprecate) {
-        return new MergeOptions(source, label, bundleVersion, deprecate, honorEnabledOnInsert);
+        return new MergeOptions(source, label, bundleVersion, deprecate, honorEnabledOnInsert,
+                partialUpdate, assignDefaultCategoriesOnInsert);
     }
 
     public MergeOptions withLabel(String newLabel) {
-        return new MergeOptions(source, newLabel, bundleVersion, deprecateMissing, honorEnabledOnInsert);
+        return new MergeOptions(source, newLabel, bundleVersion, deprecateMissing, honorEnabledOnInsert,
+                partialUpdate, assignDefaultCategoriesOnInsert);
     }
 }

@@ -27,7 +27,6 @@ import {
   Plus,
   AlertTriangle,
   Gauge,
-  Eye,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -694,10 +693,6 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [providerFilter, setProviderFilter] = useState<string>("all");
-  // Browser agents read screenshots, so the Browser Agent tab defaults to
-  // showing only vision-capable models. The toggle reveals the rest (e.g. a
-  // model whose vision flag isn't populated yet). Only affects that tab.
-  const [visionOnly, setVisionOnly] = useState(true);
   /**
    * Active category tab. {@code 'chat'} mirrors the legacy global view -
    * writes go to the parent {@code model_config_overrides.ranking} column
@@ -757,14 +752,8 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
     if (category === 'browser_agent' || category === 'image_generation') {
       filtered = filtered.filter(m => m.providerKind !== 'bridge');
     }
-    // Browser Agent tab: default to vision-capable models only (a browser agent
-    // must SEE the page). supportsVision is the backend-normalized flag (set from
-    // the model's modalities by the catalog sync / bundle).
-    if (category === 'browser_agent' && visionOnly) {
-      filtered = filtered.filter(m => m.supportsVision === true);
-    }
     return filtered;
-  }, [models, providerFilter, category, visionOnly]);
+  }, [models, providerFilter, category]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -1090,30 +1079,12 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
         </p>
         <div className="flex items-center gap-2">
           {saving && <LoadingSpinner size="xs" />}
-          {category === 'browser_agent' && (
-            <button
-              type="button"
-              onClick={() => setVisionOnly(v => !v)}
-              aria-pressed={visionOnly}
-              data-testid="browser-agent-vision-only"
-              title={t("modelConfig.visionOnlyTooltip")}
-              className={cn(
-                "flex items-center gap-1.5 h-8 px-3 rounded-full text-sm font-medium border transition-colors",
-                visionOnly
-                  ? "border-indigo-300 text-indigo-700 bg-indigo-50 dark:border-indigo-700 dark:text-indigo-300 dark:bg-indigo-900/20"
-                  : "border-theme text-theme-secondary bg-theme-tertiary"
-              )}
-            >
-              <Eye className="w-3.5 h-3.5" />
-              {t("modelConfig.visionOnly")}
-            </button>
-          )}
           <Select value={providerFilter} onValueChange={setProviderFilter}>
-            {/* min-h-0 cancels SelectTrigger's default min-h-[44px] and
-                rounded-full matches the action buttons, so the filter and the
-                buttons share one height + pill shape. */}
+            {/* min-h-0 cancels SelectTrigger's default min-h-[44px]; rounded-lg
+                keeps a softly-squared edge (less pill-like than the action
+                buttons) while matching their height. */}
             <SelectTrigger
-              className="min-h-0 h-8 rounded-full px-3 text-sm min-w-[160px]"
+              className="min-h-0 h-8 rounded-lg px-3 text-sm min-w-[160px]"
               aria-label={t("modelConfig.filterByProvider")}
               title={t("modelConfig.filterByProvider")}
             >

@@ -105,6 +105,16 @@ public class CatalogMergeService {
         // Track (provider, modelId) → categories map taken verbatim from the
         // payload. Applied in a second pass once all model rows are persisted.
         Map<String, Map<String, Map<String, Object>>> categoriesByKey = new HashMap<>();
+        // Track NEWLY INSERTED rows whose payload carried NO `categories` sidecar
+        // (the model-catalog SEED shape: {version, issuer, models[]} - buildSeedExport
+        // omits the categories sidecar). Without a category row a model is invisible
+        // to every category-scoped selector (chat / browser_agent picker) even though
+        // it lives in model_config_overrides. Step 4 backfills mode-aware defaults for
+        // these so a seed-shipped model is selectable out of the box. Value = the
+        // row's `mode` (null/'chat' → chat+browser_agent ; 'image' → image_generation),
+        // mirroring ModelCategory.acceptsMode. The bundle path never lands here (its
+        // payload always declares categories), so this is a no-op for bundle applies.
+        Map<String, String> insertedNoCategoryMode = new HashMap<>();
 
         // 1. Upsert incoming rows.
         for (Map<String, Object> m : modelMaps) {
@@ -135,7 +145,7 @@ public class CatalogMergeService {
                 // default (bundle-path sets 'bundle').
                 String rowSource = str(m.get("source"));
                 row.setSource(rowSource != null ? rowSource : opts.source());
-                applyFields(row, m, Collections.emptySet());
+                applyFields(row, m, Collections.emptySet(), opts.partialUpdate());
                 // Insert-time `enabled` policy, per caller intent
                 // (opts.honorEnabledOnInsert - see MergeOptions):
                 //   • Feed sync (LiteLLM/OpenRouter, forSync=false): new models
@@ -183,6 +193,13 @@ public class CatalogMergeService {
                 // FK target exists for it anyway.
                 if (savedRow != null && savedRow.getId() != null) {
                     idByKey.put(keyOf(provider, modelId), savedRow.getId());
+                    // Seed-path insert with no categories sidecar → schedule a
+                    // mode-aware default-category backfill (step 4) so the model
+                    // is selectable. Bundle inserts carry categories, so they
+                    // populated categoriesByKey above and skip this.
+                    if (rowCategories == null || rowCategories.isEmpty()) {
+                        insertedNoCategoryMode.put(keyOf(provider, modelId), str(m.get("mode")));
+                    }
                 }
                 inserted++;
                 if (row.getPriceInput() != null || row.getPriceOutput() != null) {
@@ -217,7 +234,7 @@ public class CatalogMergeService {
                     ? new String[0] : row.getUserModifiedFields());
             BigDecimal prevInput  = row.getPriceInput();
             BigDecimal prevOutput = row.getPriceOutput();
-            applyFields(row, m, protect);
+            applyFields(row, m, protect, opts.partialUpdate());
             if (opts.bundleVersion() != null) row.setBundleVersion(opts.bundleVersion());
             row.setLastSyncedAt(now);
             // Un-deprecate: the incoming set still includes the model.
@@ -272,10 +289,54 @@ public class CatalogMergeService {
                 if (modelConfigId == null) continue;
                 applyRowCategories(modelConfigId, rowCategories);
             }
+            // 4b. SEED-path backfill: a newly inserted model that carried no
+            // categories sidecar gets mode-aware DEFAULT categories so it is
+            // selectable in the chat / browser_agent / image_generation pickers.
+            // Only fresh inserts are touched (never an update), so an admin who
+            // deliberately unassigned a category on an existing model is never
+            // overridden. Gated on the option so the bundle path (authoritative
+            // categories sidecar) stays a strict no-op here.
+            if (opts.assignDefaultCategoriesOnInsert()) {
+                for (Map.Entry<String, String> e : insertedNoCategoryMode.entrySet()) {
+                    Long modelConfigId = idByKey.get(e.getKey());
+                    if (modelConfigId == null) continue;
+                    assignDefaultCategories(modelConfigId, e.getValue());
+                }
+            }
         }
 
         return new MergeResult(inserted, updated, deprecated,
                 skippedCustom, skippedUserModified, pricingChanges.size());
+    }
+
+    /**
+     * Backfill mode-aware DEFAULT category rows for a freshly inserted model
+     * whose payload declared no {@code categories} sidecar (the model-catalog
+     * SEED shape). A model with zero category rows is invisible to every
+     * category-scoped selector, so a seed-shipped model would land in
+     * {@code model_config_overrides} yet never appear in the chat / browser_agent
+     * picker - this closes that gap.
+     *
+     * <p>Defaults mirror {@link ModelCategory#acceptsMode}: a chat-capable model
+     * ({@code mode} null or {@code "chat"}) is enabled under {@code chat} AND
+     * {@code browser_agent}; an image model ({@code mode = "image"}) under
+     * {@code image_generation}. Idempotent: an existing sidecar row for the
+     * category is left untouched (so a re-applied seed never resurrects a
+     * category an admin later disabled on an existing row - this path only runs
+     * for inserts anyway).
+     */
+    private void assignDefaultCategories(Long modelConfigId, String mode) {
+        for (String category : ModelCategory.defaultKeys()) {
+            if (!ModelCategory.acceptsMode(category, mode)) continue;
+            ModelCategorySettingsId id = new ModelCategorySettingsId(modelConfigId, category);
+            if (categoryRepo.findById(id).isPresent()) continue;
+            ModelCategorySettingsEntity setting = new ModelCategorySettingsEntity();
+            setting.setModelConfigId(modelConfigId);
+            setting.setCategory(category);
+            setting.setEnabled(Boolean.TRUE);
+            setting.setRank(null);
+            categoryRepo.save(setting);
+        }
     }
 
     /**
@@ -391,14 +452,42 @@ public class CatalogMergeService {
 
     // ── Field application ────────────────────────────────────────────────────
 
+    /** Every field name applyFields can write - used to build the partial-update skip set. */
+    private static final Set<String> APPLIED_FIELD_NAMES = Set.of(
+            "displayName", "description", "tier", "ranking", "recommended", "enabled",
+            "priceInput", "priceOutput", "rateLimitTpm", "rateLimitRpm",
+            "rateLimitTpmPerTenant", "rateLimitRpmPerTenant", "contextWindow",
+            "maxOutputTokens", "supportsTools", "supportsVision", "canonicalId",
+            "deprecationDate", "releaseDate", "supportsPromptCaching", "supportsReasoning",
+            "supportsComputerUse", "supportsResponseSchema", "supportsWebSearch", "mode",
+            "priceInputBatch", "priceOutputBatch", "priceCacheRead", "priceCacheWrite",
+            "priceFloorInput", "priceFloorOutput", "supportedEndpoints", "supportedModalities",
+            "supportedOutputModalities", "feedMetadata", "modalities");
+
     /**
      * Copy fields from {@code m} onto {@code row}, skipping any name present in
      * {@code protectedFields}. The incoming map follows
      * {@link CatalogBundlePayload#toCanonicalMap} conventions; sync feeds
      * (LiteLLM, OpenRouter) normalise into the same shape.
+     *
+     * <p>{@code partial=true} (seed path) adds PATCH semantics: any field the
+     * payload does NOT carry (key absent from {@code m}) is treated as protected,
+     * so a minimal curated seed only refreshes what it ships and never nulls the
+     * enrichment (tier, contextWindow, capability flags…) a bundle/feed/admin set
+     * on the row. {@code partial=false} (bundle/feed) keeps the authoritative
+     * behaviour: a field absent from the payload overwrites the row to null.
      */
     private static void applyFields(ModelConfigOverrideEntity row, Map<String, Object> m,
-                                    Set<String> protectedFields) {
+                                    Set<String> protectedFields, boolean partial) {
+        if (partial) {
+            // Protect every field the payload doesn't carry, on top of the
+            // caller's protected set. Union so user_modified_fields still apply.
+            Set<String> effective = new java.util.HashSet<>(protectedFields);
+            for (String f : APPLIED_FIELD_NAMES) {
+                if (!m.containsKey(f)) effective.add(f);
+            }
+            protectedFields = effective;
+        }
         setIfUnprotected(protectedFields, "displayName", () -> row.setDisplayName(str(m.get("displayName"))));
         setIfUnprotected(protectedFields, "description", () -> row.setDescription(str(m.get("description"))));
         setIfUnprotected(protectedFields, "tier",         () -> row.setTier(str(m.get("tier"))));

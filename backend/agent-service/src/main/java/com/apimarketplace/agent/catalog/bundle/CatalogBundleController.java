@@ -50,18 +50,22 @@ public class CatalogBundleController {
     private final ObjectProvider<CatalogBundleSyncScheduler> schedulerProvider;
     /** Cloud-link entitlement check (shared with the LLM relay). */
     private final AuthClient authClient;
+    /** In-memory RUNNING state so a manual sync survives a UI page navigation. */
+    private final BundleSyncRunner syncRunner;
 
     public CatalogBundleController(
             CatalogBundleService bundleService,
             CatalogBundleSigner signer,
             CatalogBundleSyncStatusRepository syncStatusRepo,
             ObjectProvider<CatalogBundleSyncScheduler> schedulerProvider,
-            AuthClient authClient) {
+            AuthClient authClient,
+            BundleSyncRunner syncRunner) {
         this.bundleService = bundleService;
         this.signer = signer;
         this.syncStatusRepo = syncStatusRepo;
         this.schedulerProvider = schedulerProvider;
         this.authClient = authClient;
+        this.syncRunner = syncRunner;
     }
 
     /**
@@ -96,6 +100,27 @@ public class CatalogBundleController {
             return ResponseEntity.ok(toAdminView(saved));
         } catch (IllegalStateException e) {
             log.warn("Bundle build rejected: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * Admin: export the current cloud catalog as the model-catalog SEED document
+     * ({@code {version, issuer, models[]}}, the {@code models.json} shape), for a
+     * release to bake into the CE image. Excludes the {@code categories} sidecar,
+     * {@code is_custom}/deprecated rows, and the CE-blocked providers
+     * (openrouter, cohere). {@code version} is the monotonic seed version the
+     * release stamps (a CE re-applies the refreshed seed once per upgrade).
+     */
+    @GetMapping("/api/model-config/bundles/seed-export")
+    public ResponseEntity<?> seedExport(
+            @RequestHeader(value = "X-User-Roles", defaultValue = "USER") String roles,
+            @RequestParam long version) {
+        var denied = AdminRoleGuard.denyIfNotAdmin(roles);
+        if (denied != null) return denied;
+        try {
+            return ResponseEntity.ok(bundleService.buildSeedExport(version));
+        } catch (IllegalStateException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
     }
@@ -204,9 +229,13 @@ public class CatalogBundleController {
 
     /**
      * CE admin: force a sync tick immediately (instead of waiting for the next
-     * cron firing). Returns the updated sync-status row. 503 on cloud
-     * instances where the scheduler bean was not created (i.e. {@code
-     * catalog.bundle.sync.enabled} is false).
+     * cron firing). Runs the tick ASYNCHRONOUSLY and returns right away with the
+     * status row carrying {@code running=true}, so the request does not block for
+     * the whole fetch+apply and the UI can poll {@code sync-status} to resume its
+     * loading indicator after a page navigation. A trigger while a sync is
+     * already in flight is a harmless no-op (still returns {@code running=true}).
+     * 503 on cloud instances where the scheduler bean was not created (i.e.
+     * {@code catalog.bundle.sync.enabled} is false).
      */
     @PostMapping("/api/model-config/bundles/sync-now")
     public ResponseEntity<?> syncNow(
@@ -219,20 +248,34 @@ public class CatalogBundleController {
             return ResponseEntity.status(503).body(Map.of(
                     "error", "catalog.bundle.sync.enabled=false on this instance"));
         }
-        try {
-            // Call tick() via the injected proxy bean reference so the
-            // @SchedulerLock annotation actually fires (AOP does not intercept
-            // self-invocation). This shares the lock with the scheduled tick,
-            // preventing a concurrent click + cron firing from racing on
-            // bundleRepo.deactivateAll() + save(active=true) against the
-            // partial unique index idx_catalog_bundles_one_active.
-            scheduler.tick();
-        } catch (Exception e) {
-            // Same belt-and-braces guarantee as the scheduled tick: the
-            // endpoint must not 500 because downstream apply failed. The
-            // failure is already persisted on the sync-status row.
-            log.warn("syncNow() caught exception (already persisted): {}", e.getMessage());
-        }
+        // Fire the tick off the request thread. tick() is invoked via the proxy
+        // bean reference so the @SchedulerLock annotation still fires (AOP does
+        // not intercept self-invocation) and a manual run shares the lock with
+        // the cron tick, preventing a race on the one-active partial unique index.
+        // tick() persists its own failure on the sync-status row, so the worker
+        // swallows exceptions (see BundleSyncRunner).
+        syncRunner.startAsync(scheduler::tick);
+
+        CatalogBundleSyncStatusEntity row = syncStatusRepo
+                .findById(CatalogBundleSyncStatusEntity.SINGLETON_ID)
+                .orElseGet(CatalogBundleSyncStatusEntity::new);
+        return ResponseEntity.ok(toSyncStatusView(row));
+    }
+
+    /**
+     * CE admin: stop waiting on an in-flight manual sync. Best-effort - it flips
+     * the RUNNING flag off immediately so the UI stops spinning and interrupts
+     * the worker; an already-committing apply still finishes atomically and the
+     * next {@code sync-status} poll reflects the true outcome. Idempotent: a
+     * no-op when nothing is running. Returns the current status row.
+     */
+    @PostMapping("/api/model-config/bundles/sync-cancel")
+    public ResponseEntity<?> syncCancel(
+            @RequestHeader(value = "X-User-Roles", defaultValue = "USER") String roles) {
+        var denied = AdminRoleGuard.denyIfNotAdmin(roles);
+        if (denied != null) return denied;
+
+        syncRunner.cancel();
         CatalogBundleSyncStatusEntity row = syncStatusRepo
                 .findById(CatalogBundleSyncStatusEntity.SINGLETON_ID)
                 .orElseGet(CatalogBundleSyncStatusEntity::new);
@@ -302,6 +345,11 @@ public class CatalogBundleController {
         out.put("consecutiveFailures", row.getConsecutiveFailures());
         out.put("updatedAt", row.getUpdatedAt());
         out.put("schedulerEnabled", schedulerProvider.getIfAvailable() != null);
+        // In-flight state so the UI resumes its loading indicator after a page
+        // navigation (the button's local React state is lost on unmount).
+        BundleSyncRunner.RunState run = syncRunner.state();
+        out.put("running", run.running());
+        out.put("startedAt", run.startedAt());
         return out;
     }
 

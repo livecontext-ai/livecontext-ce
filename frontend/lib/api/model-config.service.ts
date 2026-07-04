@@ -88,6 +88,10 @@ export interface CatalogBundleSyncStatus {
   consecutiveFailures: number;
   updatedAt: string | null;
   schedulerEnabled: boolean;
+  /** True while a manual sync tick is in flight (survives a page navigation). */
+  running?: boolean;
+  /** When the in-flight sync started (ISO), null when idle. */
+  startedAt?: string | null;
 }
 
 export interface ModelConfigOverrideInput {
@@ -210,6 +214,11 @@ class ModelConfigService {
 
   async syncNow(): Promise<CatalogBundleSyncStatus> {
     return apiClient.post<CatalogBundleSyncStatus>('/model-config/bundles/sync-now', {});
+  }
+
+  /** Best-effort stop of an in-flight manual sync; returns the current status. */
+  async syncCancel(): Promise<CatalogBundleSyncStatus> {
+    return apiClient.post<CatalogBundleSyncStatus>('/model-config/bundles/sync-cancel', {});
   }
 
   async deleteBundle(id: number): Promise<void> {

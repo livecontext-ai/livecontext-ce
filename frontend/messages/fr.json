@@ -3040,6 +3040,8 @@
       "update": "Mettre à jour le bundle",
       "synced": "Bundle mis à jour",
       "failed": "Échec de la mise à jour",
+      "syncing": "Synchronisation",
+      "stop": "Arrêter",
       "manage": "Gérer les bundles"
     },
     "bundles": {
@@ -3152,6 +3154,7 @@
         "step3Title": "Démarrer le bridge",
         "step3Command": "node mcp/bridge/server.mjs"
       },
+      "startBridgeNote": "Ouvrez un terminal dans le dossier racine du projet (celui qui contient le dossier mcp) avant de lancer cette commande. Le chemin est relatif, elle ne fonctionne que depuis cet endroit.",
       "verifyConnection": "Vérifier la connexion",
       "checking": "Vérification...",
       "connected": "Connecté",
@@ -3210,8 +3213,6 @@
       "bundleShipOn": "CE : actif",
       "bundleShipOff": "CE : inactif",
       "bundleShipTooltip": "Ce que le bundle CE livre pour ce modèle, indépendamment de l'interrupteur activé : auto le suit, actif livre le modèle activé aux installations auto-hébergées même s'il est désactivé ici, inactif le livre désactivé.",
-      "visionOnly": "Vision uniquement",
-      "visionOnlyTooltip": "N'afficher que les modèles compatibles vision (multimodaux). Un agent navigateur doit voir la page, c'est donc activé par défaut. Désactivez pour afficher tous les modèles.",
       "notConfigured": "Non configuré",
       "notConfiguredTooltip": "Affiché pour pouvoir le classer et le tarifer, mais pas encore utilisable : aucune clef API pour ce fournisseur (ou le relais cloud ne peut pas l'exécuter). Ajoutez une clef pour l'utiliser.",
       "custom": "personnalisé",
@@ -3254,7 +3255,7 @@
         },
         "browser_agent": {
           "label": "Browser Agent",
-          "hint": "Modèles proposés au LLM par web_search(action='help_models'). Désactiver ici = l'agent ne proposera jamais ce modèle pour browser_agent."
+          "hint": "Modèles disponibles pour le Browser Agent. Le rang définit l'ordre par défaut ; désactiver retire le modèle des exécutions du Browser Agent."
         },
         "image_generation": {
           "label": "Génération d'image",

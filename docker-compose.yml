@@ -23,7 +23,7 @@
 # Optional features (OPT-IN - a default `up` starts NEITHER, keeping the stack light):
 #   renderer       interface-node screenshot (PNG) + PDF rendering (~1 GB Playwright/Chromium)
 #                    docker compose --env-file docker/.env.ce.renderer up -d
-#   browser-agent  agent_browse + web_search (heavy Chromium + SearXNG, ~2 GB, needs a Google/Gemini key)
+#   browser-agent  agent_browse + web_search (heavy Chromium + SearXNG, ~2 GB; model picked per AI provider)
 #                    docker compose --env-file docker/.env.ce.browser-agent up -d
 # See README.md ("Optional features") and docker/README-CE.md for details.
 
@@ -104,7 +104,7 @@ services:
     restart: "no"
 
   bridge:
-    image: ghcr.io/livecontext-ai/livecontext-ce-bridge:v0.1.8
+    image: ghcr.io/livecontext-ai/livecontext-ce-bridge:v0.1.9
     container_name: livecontext-bridge
     restart: unless-stopped
     depends_on:
@@ -132,7 +132,7 @@ services:
           memory: 512M
 
   livecontext:
-    image: ghcr.io/livecontext-ai/livecontext-ce:v0.1.8
+    image: ghcr.io/livecontext-ai/livecontext-ce:v0.1.9
     container_name: livecontext-app
     restart: unless-stopped
     depends_on:
@@ -179,8 +179,7 @@ services:
       # `browser-agent` profile + WEBSEARCH_ENABLED=true (both set by
       # docker/.env.ce.browser-agent). When enabled, the orchestrator talks to
       # the `websearch` container below; the model is whatever the agent node
-      # picks (default gemini 3.1 flash), with the install's Google/Gemini key
-      # injected per browse job.
+      # picks per AI provider, with that provider's key injected per browse job.
       WEBSEARCH_ENABLED: ${WEBSEARCH_ENABLED:-false}
       WEBSEARCH_SERVICE_URL: "http://websearch:8085"
       WEBSEARCH_CALLBACK_BASE_URL: "http://livecontext:8080"
@@ -233,8 +232,9 @@ services:
   # the orchestrator module in one shot:
   #   docker compose --env-file docker/.env.ce.browser-agent up -d
   # which sets COMPOSE_PROFILES=browser-agent (starts this) + WEBSEARCH_ENABLED=true
-  # (loads BrowserAgentModule in the app). Needs a Google/Gemini key on the install
-  # for the default gemini 3.1 flash model. Shares the CE Redis + MinIO.
+  # (loads BrowserAgentModule in the app). The model is whatever the agent node
+  # picks per AI provider (that provider's key is injected per-job). Shares the
+  # CE Redis + MinIO.
   websearch:
     profiles: ["browser-agent"]
     build:
@@ -316,7 +316,7 @@ services:
   # secrets - HTML in, bytes out; reached only by the app over the compose network.
   screenshot-renderer:
     profiles: ["renderer"]
-    image: ghcr.io/livecontext-ai/livecontext-ce-screenshot-renderer:v0.1.8
+    image: ghcr.io/livecontext-ai/livecontext-ce-screenshot-renderer:v0.1.9
     container_name: livecontext-screenshot-renderer
     restart: unless-stopped
     environment:
@@ -340,7 +340,7 @@ services:
           memory: 1024M
 
   frontend:
-    image: ghcr.io/livecontext-ai/livecontext-ce-frontend:v0.1.8
+    image: ghcr.io/livecontext-ai/livecontext-ce-frontend:v0.1.9
     container_name: livecontext-frontend
     restart: unless-stopped
     depends_on:

@@ -238,9 +238,46 @@ class CatalogMergeServiceNewModelInactiveDefaultTest {
     }
 
     @Test
-    @DisplayName("forSeed at the MERGE layer DOES update a present row (nulling minimal-payload-omitted enrichment) - proving insert-only is the BOOTSTRAP's contract, not merge's")
-    void forSeedMergeUpdatesPresentRow_insertOnlyIsBootstrapContract() {
-        // An existing row a bundle/admin enriched with tier='top'.
+    @DisplayName("forSeed UPDATE is a PATCH: a minimal seed refreshes the fields it carries but PRESERVES enrichment it omits (no clobber on a version bump)")
+    void forSeedMergeUpdatesPresentRow_patchPreservesOmittedEnrichment() {
+        // An existing row a bundle/admin enriched with tier='top' + a context
+        // window, never manually edited (empty user_modified_fields).
+        ModelConfigOverrideEntity existing = new ModelConfigOverrideEntity();
+        existing.setId(9L);
+        existing.setProvider("openai");
+        existing.setModelId("gpt-5.4");
+        existing.setDisplayName("gpt-5.4 (old)");
+        existing.setTier("top");
+        existing.setContextWindow(400_000);
+        existing.setEnabled(true);
+        existing.setUserModifiedFields(new String[0]);
+        when(modelRepo.findByProviderAndModelId("openai", "gpt-5.4")).thenReturn(Optional.of(existing));
+
+        // A MINIMAL seed row: carries displayName (changed) but NOT tier / contextWindow.
+        Map<String, Object> seed = seedRow("openai", "gpt-5.4");
+        seed.put("displayName", "gpt-5.4 (new)");
+        merge.merge(List.of(seed), MergeOptions.forSeed());
+
+        // PATCH semantics (partialUpdate=true): fields the seed CARRIES are
+        // refreshed; fields it OMITS are left untouched, so bundle/feed enrichment
+        // survives a seed version bump. (Admin edits are additionally protected via
+        // user_modified_fields.) This is what lets the shipped models.json stay a
+        // minimal curated payload without erasing enrichment.
+        assertThat(existing.getDisplayName())
+                .as("a field present in the seed is refreshed")
+                .isEqualTo("gpt-5.4 (new)");
+        assertThat(existing.getTier())
+                .as("tier is omitted by the minimal seed -> PRESERVED (not nulled)")
+                .isEqualTo("top");
+        assertThat(existing.getContextWindow())
+                .as("contextWindow is omitted -> PRESERVED")
+                .isEqualTo(400_000);
+        verify(modelRepo).save(existing);
+    }
+
+    @Test
+    @DisplayName("A BUNDLE (partialUpdate=false) still nulls a field it omits - authoritative snapshot, unchanged behaviour")
+    void forBundleMergeStillNullsOmittedField() {
         ModelConfigOverrideEntity existing = new ModelConfigOverrideEntity();
         existing.setId(9L);
         existing.setProvider("openai");
@@ -251,18 +288,11 @@ class CatalogMergeServiceNewModelInactiveDefaultTest {
         existing.setUserModifiedFields(new String[0]);
         when(modelRepo.findByProviderAndModelId("openai", "gpt-5.4")).thenReturn(Optional.of(existing));
 
-        // A minimal seed row (no 'tier') sent straight through merge with forSeed.
-        merge.merge(List.of(seedRow("openai", "gpt-5.4")), MergeOptions.forSeed());
+        merge.merge(List.of(seedRow("openai", "gpt-5.4")), MergeOptions.forBundle(1L));
 
-        // The update branch ran and the minimal payload NULLED the enrichment tier.
-        // This is exactly why ModelSeedBootstrapService filters present rows out
-        // BEFORE calling merge - the insert-only / no-clobber guarantee lives in
-        // the bootstrap, NOT in merge+forSeed.
         assertThat(existing.getTier())
-                .as("merge+forSeed on a present row applies the minimal payload and clobbers enrichment - "
-                        + "so the bootstrap MUST never pass a present row to merge")
+                .as("bundle is authoritative: an omitted field overwrites to null")
                 .isNull();
-        verify(modelRepo).save(existing);
     }
 
     /** A real seed payload: no 'source'/'mode' (the seed JSON omits them), so forSeed()'s source stands. */

@@ -2,6 +2,7 @@ package com.apimarketplace.orchestrator.tools.websearch;
 
 import com.apimarketplace.agent.client.AgentClient;
 import com.apimarketplace.agent.client.dto.AgentObservabilityRequest;
+import com.apimarketplace.agent.cloud.CloudLlmRuntimeAccess;
 import com.apimarketplace.agent.registry.AgentToolDefinition;
 import com.apimarketplace.agent.resolver.LlmCredentialResolver;
 import com.apimarketplace.agent.tools.ToolErrorCode;
@@ -94,6 +95,15 @@ public class BrowserAgentModule extends WebJobModule {
     private static final String STEP_CALLBACK_PATH = "/api/internal/websearch/callback/step";
 
     /**
+     * Default internal URL of the CE OpenAI shim the runner's per-step LLM calls hit when the
+     * install is cloud-linked (see {@code BrowserAgentLlmShimController}). browser-use's
+     * {@code BridgeChatClient} appends {@code /v1/chat/completions}. The websearch container reaches
+     * the CE app on the compose network as {@code http://livecontext:8080}. Override with
+     * {@code browser-agent.llm-relay.internal-url}.
+     */
+    private static final String DEFAULT_LLM_SHIM_URL = "http://livecontext:8080/api/browser-agent/llm";
+
+    /**
      * Per-user budget gate (concurrent sessions + daily steps). Optional so
      * tests that don't care about the gate don't have to wire it; production
      * always has it (same {@code @ConditionalOnProperty} as this module).
@@ -179,6 +189,20 @@ public class BrowserAgentModule extends WebJobModule {
      * used by {@code BrowserAgentNode}).
      */
     private final AgentClient agentClient;
+
+    /**
+     * When an install is cloud-linked, the browser agent relays its per-step LLM calls through the
+     * cloud (like the chat / workflow agents and web_search) instead of requiring a direct provider
+     * key. Optional: absent (null) in non-CE builds and in tests, in which case the browser agent
+     * keeps the direct-key path. Set via {@link #setCloudRuntimeAccess} so the existing constructors
+     * (and their tests) are untouched.
+     */
+    private CloudLlmRuntimeAccess cloudRuntimeAccess;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setCloudRuntimeAccess(CloudLlmRuntimeAccess cloudRuntimeAccess) {
+        this.cloudRuntimeAccess = cloudRuntimeAccess;
+    }
 
     @org.springframework.beans.factory.annotation.Autowired
     public BrowserAgentModule(
@@ -435,6 +459,12 @@ public class BrowserAgentModule extends WebJobModule {
             // ToolExecutionContext, and the chat-tool dispatcher forwards the
             // gateway-injected X-User-ID header into the same field.
             String userId = (context != null) ? context.tenantId() : null;
+            // Cloud-linked installs relay the browser agent's LLM through the cloud (same as
+            // chat/workflow agents + web_search) rather than a direct provider key. This mutates
+            // llmCopy to a bridge route pointing at the CE OpenAI shim; injectLlmApiKey then skips
+            // the direct-key lookup (its provider_kind=="bridge" early return). When not linked
+            // this is a no-op and the direct-key path below runs unchanged.
+            maybeRouteLlmToCloudRelay(llmCopy);
             injectLlmApiKey(llmCopy, userId);
             jobParams.put("llm", llmCopy);
         } else if (llmObj != null) {
@@ -1143,6 +1173,57 @@ public class BrowserAgentModule extends WebJobModule {
      *       the LLM agent than a swallowed Optional.empty() here.</li>
      * </ul>
      */
+    /**
+     * When the install is cloud-linked, reroute the browser agent's LLM to the cloud relay by
+     * turning the {@code llm} block into a bridge route targeting the CE OpenAI shim
+     * ({@code /api/browser-agent/llm}), which forwards to {@code /api/ce-llm/complete} and bills the
+     * linked cloud account - the same relay the chat/workflow agents and web_search use. The model
+     * stays clean; the provider travels in {@code llm.provider}, which BridgeChatClient forwards to
+     * the shim as the {@code X-LLM-Provider} header, so pricing/observability keep the real model.
+     *
+     * <p>No-op (leaving the direct-key path in {@link #injectLlmApiKey}) when: the runtime-access
+     * bean is absent (non-CE / tests), the install is not linked, an explicit bridge route or direct
+     * {@code api_key} was already provided, or provider/model are missing.
+     */
+    void maybeRouteLlmToCloudRelay(Map<String, Object> llm) {
+        if (cloudRuntimeAccess == null) {
+            return;
+        }
+        Object kind = llm.get("provider_kind");
+        if (kind != null && "bridge".equalsIgnoreCase(String.valueOf(kind).trim())) {
+            return; // caller explicitly chose a bridge - respect it
+        }
+        if (llm.get("api_key") instanceof String key && !key.isBlank()) {
+            return; // explicit direct key wins
+        }
+        String provider = llm.get("provider") == null ? "" : String.valueOf(llm.get("provider")).trim();
+        String model = llm.get("model") == null ? "" : String.valueOf(llm.get("model")).trim();
+        if (provider.isEmpty() || model.isEmpty()) {
+            return; // let applyDefaultLlmIfNeeded / the direct-key path handle incomplete blocks
+        }
+        if (cloudRuntimeAccess.resolveActiveCloudRuntime().isEmpty()) {
+            return; // not linked - keep the direct-key path
+        }
+        String shimUrl = environment != null
+                ? environment.getProperty("browser-agent.llm-relay.internal-url", DEFAULT_LLM_SHIM_URL)
+                : DEFAULT_LLM_SHIM_URL;
+        String secret = environment != null ? environment.getProperty("websearch.gateway-secret", "") : "";
+        llm.put("provider_kind", "bridge");
+        llm.put("bridge_url", shimUrl);
+        // Leave llm.model CLEAN (unqualified) so browser-use, pricing and observability all see the
+        // real model. The provider stays in llm.provider; the runner's BridgeChatClient forwards it
+        // to the shim as the X-LLM-Provider header, so the shim can bill the right provider without
+        // a provider-qualified model name.
+        if (secret != null && !secret.isBlank()) {
+            // Forwarded by BridgeChatClient as the X-Browser-Agent-Relay-Secret header (a non-
+            // Authorization header, so the CE monolith security filter passes it through to the
+            // shim). Blank secret (CE default) => open internal, cloud-link-gated endpoint.
+            llm.put("relay_secret", secret);
+        }
+        log.info("BrowserAgentModule: cloud-linked - routing browser agent LLM via cloud relay "
+                + "(provider={}, model={})", provider, model);
+    }
+
     private void injectLlmApiKey(Map<String, Object> llm, String userId) {
         // Bridge check FIRST: a bridge session must never trigger a direct
         // upstream credential lookup, regardless of what api_key (if any) is

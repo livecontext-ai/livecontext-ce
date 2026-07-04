@@ -10,8 +10,8 @@ import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/re
  * consequences:
  *   1. a model the runtime can't yet serve (available=false, non-bridge) is
  *      still shown, with a "not configured" badge so it isn't confusing;
- *   2. the Browser Agent tab defaults to vision-only (a browser agent must SEE
- *      the page), and the toggle reveals the non-vision models.
+ *   2. the Browser Agent tab lists every model (no vision-only filter), and
+ *      exposes no "vision only" toggle.
  */
 
 const mocks = vi.hoisted(() => ({
@@ -87,8 +87,8 @@ describe('ModelManagementPanel - full-catalog visibility + not-configured badge'
   });
 });
 
-describe('ModelManagementPanel - Browser Agent vision-only filter', () => {
-  it('defaults to vision-only on the Browser Agent tab, and the toggle reveals non-vision models', async () => {
+describe('ModelManagementPanel - Browser Agent tab has no vision-only filter', () => {
+  it('lists every model on the Browser Agent tab regardless of vision support, with no vision toggle', async () => {
     const chat = [buildModel({ id: 'gpt-5', provider: 'openai', supportsVision: true })];
     const browser = [
       buildModel({ id: 'gpt-5', provider: 'openai', supportsVision: true }),
@@ -104,23 +104,17 @@ describe('ModelManagementPanel - Browser Agent vision-only filter', () => {
     fireEvent.click(screen.getByText('modelConfig.category.browser_agent.label'));
     await waitFor(() => expect(mocks.getEffectiveModels).toHaveBeenCalledWith('browser_agent'));
 
-    // Default: vision-only ON -> the non-vision model is hidden.
+    // Both the vision and the non-vision model render - the filter is gone.
     await screen.findByTestId('model-toggle-openai-gpt-5');
-    expect(screen.queryByTestId('model-toggle-openai-o3-mini')).not.toBeInTheDocument();
-    expect(screen.getByTestId('browser-agent-vision-only')).toHaveAttribute('aria-pressed', 'true');
-
-    // Toggle OFF -> the non-vision model appears.
-    fireEvent.click(screen.getByTestId('browser-agent-vision-only'));
-    await waitFor(() =>
-      expect(screen.getByTestId('model-toggle-openai-o3-mini')).toBeInTheDocument());
-    expect(screen.getByTestId('browser-agent-vision-only')).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByTestId('model-toggle-openai-o3-mini')).toBeInTheDocument();
+    // And there is no "vision only" toggle to hide them.
+    expect(screen.queryByTestId('browser-agent-vision-only')).not.toBeInTheDocument();
   });
 
-  it('has no vision toggle on the Chat tab', async () => {
+  it('has no vision toggle on the Chat tab either', async () => {
     mocks.getEffectiveModels.mockResolvedValue([buildModel({ supportsVision: false })]);
     render(<ModelManagementPanel t={t} />);
     await screen.findByTestId('model-toggle-openai-gpt-5');
-    // Chat tab: no vision filter, and a non-vision model is shown normally.
     expect(screen.queryByTestId('browser-agent-vision-only')).not.toBeInTheDocument();
   });
 });

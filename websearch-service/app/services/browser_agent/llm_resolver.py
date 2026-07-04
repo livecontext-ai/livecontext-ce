@@ -178,7 +178,7 @@ class BridgeChatClient:
     """
 
     def __init__(self, *, model: str, bridge_url: str, api_key: str | None,
-                 provider: str | None):
+                 provider: str | None, relay_secret: str | None = None):
         self.model = model
         # The bridge IS the upstream - never substitute direct provider
         # endpoints here under any circumstance.
@@ -187,6 +187,18 @@ class BridgeChatClient:
         # Recorded for observability; the bridge resolves the actual
         # upstream from `model` itself.
         self.provider = provider
+        # Optional shared secret for the CE browser-agent LLM shim. Sent as the
+        # X-Browser-Agent-Relay-Secret header (NOT Authorization, which the CE monolith security
+        # filter would reject as a non-JWT bearer). Blank/None => the shim is open on the internal
+        # network (cloud-link gated).
+        self.relay_secret = relay_secret
+        # Cumulative token usage across every ainvoke on this client. browser-use's
+        # TokenCost does not track a custom bridge client (and calculate_cost=False disables
+        # it), so the runner reads these accumulators to keep the browser agent's token/cost
+        # observability complete on the cloud-relay path (see runner._apply_bridge_relay_usage).
+        self.relay_prompt_tokens = 0
+        self.relay_completion_tokens = 0
+        self.relay_calls = 0
 
     # browser-use's Agent reads `llm.model_name` (and sometimes `llm.name`)
     # for logging, cost-by-model attribution, and the per-step trace. The
@@ -263,6 +275,14 @@ class BridgeChatClient:
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
+        # Forward the provider so the CE cloud-relay shim can bill/route the right provider while
+        # keeping `model` clean (unqualified) for pricing + observability on the Java side.
+        if self.provider:
+            headers["X-LLM-Provider"] = str(self.provider)
+        # Shared secret for the CE shim, as a non-Authorization header so the monolith security
+        # filter passes it through (an Authorization bearer would be 401'd as a non-JWT).
+        if self.relay_secret:
+            headers["X-Browser-Agent-Relay-Secret"] = str(self.relay_secret)
         body: dict[str, Any] = {"model": self.model, "messages": wire_messages}
 
         # Structured output: if browser-use passed a pydantic model class,
@@ -312,6 +332,11 @@ class BridgeChatClient:
                 ) from e
 
         usage_raw = data.get("usage") or {}
+        # Accumulate real usage for the runner's observability fallback (browser-use does not
+        # track this custom client). The CE shim reports the cloud relay's token counts.
+        self.relay_prompt_tokens += int(usage_raw.get("prompt_tokens") or 0)
+        self.relay_completion_tokens += int(usage_raw.get("completion_tokens") or 0)
+        self.relay_calls += 1
         usage = ChatInvokeUsage(
             prompt_tokens=usage_raw.get("prompt_tokens", 0),
             prompt_cached_tokens=usage_raw.get("prompt_cached_tokens"),
@@ -373,6 +398,7 @@ def _resolve_llm(llm_cfg: dict[str, Any]) -> Any:
             bridge_url=bridge_url,
             api_key=api_key,
             provider=provider,
+            relay_secret=llm_cfg.get("relay_secret"),
         )
 
     # ── Direct path ───────────────────────────────────────────────────

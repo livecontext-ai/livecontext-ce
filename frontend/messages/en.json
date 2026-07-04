@@ -3040,6 +3040,8 @@
       "update": "Update bundle",
       "synced": "Bundle updated",
       "failed": "Update failed",
+      "syncing": "Syncing",
+      "stop": "Stop",
       "manage": "Manage bundles"
     },
     "bundles": {
@@ -3152,6 +3154,7 @@
         "step3Title": "Start the bridge",
         "step3Command": "node mcp/bridge/server.mjs"
       },
+      "startBridgeNote": "Open a terminal in the project's root folder (the one that contains the mcp folder) before running this. The path is relative, so the command only works from there.",
       "verifyConnection": "Verify Connection",
       "checking": "Checking...",
       "connected": "Connected",
@@ -3210,8 +3213,6 @@
       "bundleShipOn": "CE: on",
       "bundleShipOff": "CE: off",
       "bundleShipTooltip": "What the CE bundle ships for this model, independent of the enabled toggle: auto follows it, on ships the model enabled to self-hosted installs even when disabled here, off ships it disabled.",
-      "visionOnly": "Vision only",
-      "visionOnlyTooltip": "Show only models that support vision (multimodal). Browser agents need to see the page, so this is on by default. Turn it off to show every model.",
       "notConfigured": "Not configured",
       "notConfiguredTooltip": "Listed so you can rank and price it, but not usable yet: no API key for this provider (or the cloud relay cannot run it). Add a key to use it.",
       "custom": "custom",
@@ -3254,7 +3255,7 @@
         },
         "browser_agent": {
           "label": "Browser Agent",
-          "hint": "Models offered to the LLM by web_search(action='help_models'). Disable here = the agent will never propose this model for browser_agent."
+          "hint": "Models available to the Browser Agent. Rank sets the default order; disable removes the model from Browser Agent runs."
         },
         "image_generation": {
           "label": "Image Generation",

@@ -12,10 +12,14 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.apimarketplace.agent.cloud.CeBlockedProviders;
+
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -200,6 +204,67 @@ public class CatalogBundleService {
     @Transactional(readOnly = true)
     public Optional<SignedBundle> getSignedBundleByVersion(long version) {
         return bundleRepository.findByVersion(version).map(this::toSignedBundle);
+    }
+
+    /** Issuer stamped on the exported seed doc (matches the shipped models.json). */
+    static final String SEED_ISSUER = "model-catalog-seed";
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper SEED_MAPPER =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
+    /**
+     * Build the model-catalog SEED document (the {@code models.json} shape:
+     * {@code {version, issuer, models[]}}) from the CURRENT cloud catalog, for a
+     * release to bake into the CE image. Reuses the exact canonical model
+     * serialisation the signed bundle uses (so seed rows == bundle rows), minus:
+     * <ul>
+     *   <li>the {@code categories} sidecar (per-category curation stays the
+     *       signed bundle's job; the seed must never wipe an admin's per-category
+     *       toggles, which are cloud-authoritative in merge);</li>
+     *   <li>{@code is_custom} rows (cloud-local additions, not a CE baseline);</li>
+     *   <li>deprecated rows (retired models);</li>
+     *   <li>{@link CeBlockedProviders} (openrouter, cohere) - the CE seed must
+     *       never carry a provider a CE install hides at runtime.</li>
+     * </ul>
+     *
+     * @param version monotonic seed version to stamp (the release supplies it, so
+     *                a CE re-applies the refreshed seed exactly once on upgrade)
+     * @throws IllegalStateException if version is non-positive or the catalog is empty
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> buildSeedExport(long version) {
+        if (version <= 0) {
+            throw new IllegalStateException(
+                    "seed version must be a positive integer (got " + version +
+                    ") - CE treats a non-positive version as unversioned");
+        }
+        List<ModelConfigOverrideEntity> models = modelRepository.findAllByOrderByRankingAsc().stream()
+                .filter(m -> !m.isCustom())
+                .filter(m -> m.getDeprecatedAt() == null)
+                .filter(m -> !CeBlockedProviders.isBlocked(m.getProvider()))
+                .toList();
+        if (models.isEmpty()) {
+            throw new IllegalStateException(
+                    "No curated models to export - refusing to write an empty seed");
+        }
+
+        // 5-arg overload => NO categories field (seed omits per-category data).
+        byte[] canonical = CatalogBundlePayload.canonicalBytes(
+                version, 1, SEED_ISSUER, Instant.now(), models);
+
+        try {
+            Map<String, Object> doc = SEED_MAPPER.readValue(canonical,
+                    new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+            // Keep only the seed keys; the bundle metadata (schemaVersion,
+            // snapshotAt) is irrelevant to the boot-time seed reader.
+            Map<String, Object> seed = new LinkedHashMap<>();
+            seed.put("version", version);
+            seed.put("issuer", SEED_ISSUER);
+            seed.put("models", doc.get("models"));
+            return seed;
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("Failed to build seed export", e);
+        }
     }
 
     @Transactional(readOnly = true)

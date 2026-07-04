@@ -2893,6 +2893,7 @@
         "step3Title": "启动 Bridge",
         "step3Command": "node mcp/bridge/server.mjs"
       },
+      "startBridgeNote": "运行此命令前，请在项目根目录（包含 mcp 文件夹的目录）中打开终端。该路径是相对路径，只能在此目录下运行。",
       "verifyConnection": "验证连接",
       "checking": "检查中...",
       "connected": "已连接",
@@ -2971,8 +2972,6 @@
       "bundleShipOn": "CE：启用",
       "bundleShipOff": "CE：停用",
       "bundleShipTooltip": "CE 捆绑包为此模型分发的状态，独立于启用开关：自动跟随开关，启用即使此处停用也向自托管安装分发启用状态，停用则分发停用状态。",
-      "visionOnly": "仅视觉",
-      "visionOnlyTooltip": "仅显示支持视觉（多模态）的模型。浏览器智能体需要看到页面，因此默认开启。关闭可显示所有模型。",
       "notConfigured": "未配置",
       "notConfiguredTooltip": "已列出以便排序和定价，但尚不可用：此提供商没有 API 密钥（或云中继无法运行它）。添加密钥后即可使用。",
       "custom": "自定义",
@@ -3004,7 +3003,7 @@
         },
         "browser_agent": {
           "label": "浏览器代理",
-          "hint": "由 web_search(action='help_models') 提供给 LLM 的模型。在此禁用 = 代理不会为 browser_agent 推荐此模型。"
+          "hint": "可用于浏览器代理的模型。排名决定默认顺序；停用后该模型将从浏览器代理运行中移除。"
         },
         "image_generation": {
           "label": "图像生成",
@@ -3030,6 +3029,8 @@
       "update": "更新包",
       "synced": "包已更新",
       "failed": "更新失败",
+      "syncing": "同步中",
+      "stop": "停止",
       "manage": "管理目录包"
     },
     "bundles": {

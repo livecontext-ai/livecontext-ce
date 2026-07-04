@@ -108,6 +108,9 @@ export default function BridgeSetupPanel({ cli, t }: BridgeSetupPanelProps) {
             </div>
             <div className="ml-8">
               <CopyableCommand command={step.command} t={t} />
+              {index === steps.length - 1 && (
+                <p className="mt-2 text-xs text-theme-secondary">{t("bridge.startBridgeNote")}</p>
+              )}
             </div>
           </div>
         ))}

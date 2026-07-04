@@ -59,3 +59,16 @@ describe('BridgeSetupPanel status badge', () => {
     await waitFor(() => expect(screen.getByText(/Not connected/i)).toBeTruthy());
   });
 });
+
+describe('BridgeSetupPanel start-bridge note', () => {
+  afterEach(() => cleanup());
+
+  it('explains the project-root working directory under the bridge-start step (once)', () => {
+    renderPanel();
+    // The relative `node mcp/bridge/server.mjs` command only works from the
+    // project root, so the panel spells that out for the user under step 3.
+    const notes = screen.getAllByText(/project's root folder/i);
+    expect(notes).toHaveLength(1);
+    expect(notes[0].textContent).toContain('mcp');
+  });
+});

@@ -239,6 +239,130 @@ class CatalogMergeServiceCategoryApplyTest {
         verify(categoryRepo, never()).save(any());
     }
 
+    // ── SEED path: default-category backfill (buildSeedExport omits the sidecar) ──
+
+    @Test
+    @DisplayName("SEED insert without categories → mode-aware defaults (chat + browser_agent), enabled, rank null")
+    void seedInsertWithoutCategoriesGetsChatDefaults() {
+        when(modelRepo.findByProviderAndModelId("anthropic", "claude-opus-4-8"))
+                .thenReturn(Optional.empty());
+        when(modelRepo.save(any())).thenAnswer(inv -> {
+            ModelConfigOverrideEntity e = inv.getArgument(0);
+            e.setId(42L);
+            return e;
+        });
+        when(categoryRepo.findById(any())).thenReturn(Optional.empty());
+
+        // Seed shape: no "categories" key, no "mode" → chat-capable.
+        merge.merge(List.of(seedModelMap("anthropic", "claude-opus-4-8", null)),
+                MergeOptions.forSeed());
+
+        ArgumentCaptor<ModelCategorySettingsEntity> captor =
+                ArgumentCaptor.forClass(ModelCategorySettingsEntity.class);
+        verify(categoryRepo, times(2)).save(captor.capture());
+        assertThat(captor.getAllValues())
+                .extracting(ModelCategorySettingsEntity::getModelConfigId)
+                .containsOnly(42L);
+        assertThat(captor.getAllValues())
+                .extracting(ModelCategorySettingsEntity::getCategory,
+                            ModelCategorySettingsEntity::getEnabled,
+                            ModelCategorySettingsEntity::getRank)
+                .containsExactlyInAnyOrder(
+                        org.assertj.core.groups.Tuple.tuple("chat", true, null),
+                        org.assertj.core.groups.Tuple.tuple("browser_agent", true, null));
+    }
+
+    @Test
+    @DisplayName("SEED insert with mode=image → default image_generation only (no chat/browser_agent)")
+    void seedInsertImageModeGetsImageGenerationOnly() {
+        when(modelRepo.findByProviderAndModelId("openai", "gpt-image-1"))
+                .thenReturn(Optional.empty());
+        when(modelRepo.save(any())).thenAnswer(inv -> {
+            ModelConfigOverrideEntity e = inv.getArgument(0);
+            e.setId(7L);
+            return e;
+        });
+        when(categoryRepo.findById(any())).thenReturn(Optional.empty());
+
+        merge.merge(List.of(seedModelMap("openai", "gpt-image-1", "image")),
+                MergeOptions.forSeed());
+
+        ArgumentCaptor<ModelCategorySettingsEntity> captor =
+                ArgumentCaptor.forClass(ModelCategorySettingsEntity.class);
+        verify(categoryRepo, times(1)).save(captor.capture());
+        assertThat(captor.getValue().getCategory()).isEqualTo("image_generation");
+        assertThat(captor.getValue().getEnabled()).isTrue();
+    }
+
+    @Test
+    @DisplayName("SEED insert: an already-present category row is left untouched (idempotent re-apply)")
+    void seedInsertIsIdempotentForExistingCategory() {
+        when(modelRepo.findByProviderAndModelId("anthropic", "claude-opus-4-8"))
+                .thenReturn(Optional.empty());
+        when(modelRepo.save(any())).thenAnswer(inv -> {
+            ModelConfigOverrideEntity e = inv.getArgument(0);
+            e.setId(42L);
+            return e;
+        });
+        // chat already exists → skip; browser_agent absent → create.
+        when(categoryRepo.findById(new ModelCategorySettingsId(42L, "chat")))
+                .thenReturn(Optional.of(sidecar(42L, "chat", 3, true)));
+        when(categoryRepo.findById(new ModelCategorySettingsId(42L, "browser_agent")))
+                .thenReturn(Optional.empty());
+
+        merge.merge(List.of(seedModelMap("anthropic", "claude-opus-4-8", null)),
+                MergeOptions.forSeed());
+
+        ArgumentCaptor<ModelCategorySettingsEntity> captor =
+                ArgumentCaptor.forClass(ModelCategorySettingsEntity.class);
+        verify(categoryRepo, times(1)).save(captor.capture());
+        assertThat(captor.getValue().getCategory()).isEqualTo("browser_agent");
+    }
+
+    @Test
+    @DisplayName("SEED UPDATE (existing model) → NO default categories synthesised (only inserts are backfilled)")
+    void seedUpdateDoesNotSynthesiseDefaults() {
+        ModelConfigOverrideEntity existing = new ModelConfigOverrideEntity();
+        existing.setId(7L);
+        existing.setProvider("anthropic");
+        existing.setModelId("claude-opus-4-6");
+        when(modelRepo.findByProviderAndModelId("anthropic", "claude-opus-4-6"))
+                .thenReturn(Optional.of(existing));
+
+        merge.merge(List.of(seedModelMap("anthropic", "claude-opus-4-6", null)),
+                MergeOptions.forSeed());
+
+        // Update path: the row already exists, so no default-category insert.
+        verify(categoryRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("BUNDLE insert without categories → NO default synthesis (bundle is authoritative for its sidecar)")
+    void bundleInsertWithoutCategoriesNoDefaultSynthesis() {
+        when(modelRepo.findByProviderAndModelId("openai", "gpt-5")).thenReturn(Optional.empty());
+        when(modelRepo.save(any())).thenAnswer(inv -> {
+            ModelConfigOverrideEntity e = inv.getArgument(0);
+            e.setId(42L);
+            return e;
+        });
+
+        // Bundle path, no categories → must stay a no-op (guards the seed-only gate).
+        merge.merge(List.of(seedModelMap("openai", "gpt-5", null)),
+                MergeOptions.forBundle(99L));
+
+        verify(categoryRepo, never()).save(any());
+    }
+
+    /** Seed-shaped model map: provider/modelId/displayName, optional mode, NO categories. */
+    private static Map<String, Object> seedModelMap(String provider, String modelId, String mode) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("provider", provider);
+        m.put("modelId", modelId);
+        m.put("displayName", modelId);
+        if (mode != null) m.put("mode", mode);
+        return m;
+    }
+
     private static Map<String, Object> modelMap(String provider, String modelId,
                                                 Map<String, Object> categories) {
         Map<String, Object> m = new LinkedHashMap<>();
