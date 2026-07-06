@@ -8,6 +8,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuthGuard } from '@/hooks/useAuthGuard';
 import { unifiedApiService } from '../api/unified-api-service';
 import { queryKeys } from '../api/query-keys';
+import { IS_CE } from '@/lib/edition';
 
 // ========== REMPLACEMENT COMPLET DES ANCIENS HOOKS ==========
 
@@ -367,7 +368,12 @@ export function usePaygTiers(options: { enabled?: boolean } = {}) {
   const { data, isLoading, error } = useQuery({
     queryKey: queryKeys.billing.paygTiers(),
     queryFn: () => unifiedApiService.getPaygTiers(),
-    enabled: !!(enabled && isAuthenticated && isReady),
+    // CE never fires this: the CE monolith has no billing service and
+    // ce-contracts pins /billing/payg-tiers to 404. The modal that mounts this
+    // hook app-wide (InsufficientCreditsModal) otherwise spams a 404 + console
+    // error on EVERY page navigation of a CE install. `configured` stays false,
+    // which is exactly the cloud "PAYG not wired" state the callers handle.
+    enabled: !!(enabled && isAuthenticated && isReady && !IS_CE),
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     retry: 1,

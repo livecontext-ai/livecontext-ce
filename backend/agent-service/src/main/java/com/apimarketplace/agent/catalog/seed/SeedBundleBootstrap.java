@@ -72,7 +72,12 @@ public class SeedBundleBootstrap {
         try {
             Path path = Path.of(bundlePath);
             if (!Files.isRegularFile(path)) {
-                log.debug("No model seed bundle at {} - skipping (normal on cloud/source checkouts)", bundlePath);
+                // WARN, not debug: on a packaged CE install this file is expected (baked by
+                // publish-ce). Its silent absence hid the v0.1.9/v0.1.10 export regression
+                // where fresh installs booted with the stale classpath seed only.
+                log.warn("No model seed bundle at {} - skipping. Expected on source checkouts; on a " +
+                        "packaged CE install this means the release shipped without its model refresh " +
+                        "(the install keeps the classpath seed until it is cloud-linked).", bundlePath);
                 return;
             }
 

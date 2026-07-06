@@ -19,7 +19,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>A link maps a BILLED {@code (provider, model)} pair to an EXECUTION target -
  * a CLI bridge (claude-code, ...) OR a regular API provider (e.g. openrouter). At
- * execution time {@link #resolve(String, String)} answers "is this billed pair
+ * execution time {@link #resolve(String, String, String)} answers "is this billed pair
  * linked, and if so which provider/model runs it?". Callers run the agent on the
  * execution target, then re-stamp the BILLED identity onto the response so credit
  * consumption stays on the billed price. The billed identity is NEVER changed by
@@ -107,16 +107,16 @@ public class ModelExecutionLinkService {
     /**
      * Resolve the execution target for a bare single completion (the
      * {@code json-completion} path: COLD-summary generation, single-turn JSON
-     * extraction). This is the third consumer of the link system, alongside the
-     * full agent execution ({@code AgentRemoteExecutionService}) and the CE relay
-     * ({@code CloudLlmRelayController}).
+     * extraction). This is the second consumer of the link system, alongside the
+     * full agent execution ({@code AgentRemoteExecutionService}). The CE LLM relay
+     * ({@code CloudLlmRelayController}) deliberately does NOT consult links: a
+     * linked CE install always executes the billed pair on that provider's real API.
      *
      * <p>Only {@link ModelExecutionLinkScope#ALL} links apply: a single completion
      * carries no activity source, so no surface-scoped row can match.
      *
      * <p>A link that targets a CLI bridge is NOT executable here - a bridge owns its
-     * own agent loop and cannot serve a bare completion (same constraint as the CE
-     * relay's {@code BRIDGE_EXECUTION_NOT_RELAYABLE}). Falling through to the billed
+     * own agent loop and cannot serve a bare completion. Falling through to the billed
      * provider would silently execute on the key the admin linked AWAY from (the
      * misleading "credit balance too low" failure shape), so it throws instead.
      *

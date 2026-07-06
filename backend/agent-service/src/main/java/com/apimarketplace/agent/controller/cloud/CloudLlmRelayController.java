@@ -15,7 +15,6 @@ import com.apimarketplace.agent.factory.BridgeAvailabilityFilter;
 import com.apimarketplace.agent.factory.LLMProviderFactory;
 import com.apimarketplace.agent.provider.LLMProvider;
 import com.apimarketplace.agent.repository.ModelConfigOverrideRepository;
-import com.apimarketplace.agent.service.ModelExecutionLinkService;
 import com.apimarketplace.agent.service.cloud.CeRelayAccrualStore;
 import com.apimarketplace.agent.service.cloud.CeRelaySettlementService;
 import com.apimarketplace.agent.streaming.StreamingCallback;
@@ -23,7 +22,6 @@ import com.apimarketplace.auth.client.AuthClient;
 import com.apimarketplace.common.credit.CreditConsumptionClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -85,17 +83,6 @@ public class CloudLlmRelayController {
      */
     private final boolean centralizedBillingEnabled;
 
-    /**
-     * Model execution link resolver (CLOUD only - {@code @ConditionalOnProperty
-     * model-catalog.execution-links.enabled}). Absent in CE, so this is inert there.
-     * When present, a relayed billed (provider, model) may EXECUTE on a different target while
-     * the billed identity is kept for billing - mirroring {@code AgentRemoteExecutionService}.
-     * A link to a CLI BRIDGE is NOT relayable (the relay forwards single completions; a CLI owns
-     * its own agent loop) and is rejected rather than dispatched to the wrong (billed) provider.
-     */
-    @Autowired(required = false)
-    private ModelExecutionLinkService executionLinkService;
-
     public CloudLlmRelayController(AuthClient authClient,
                                    CreditConsumptionClient creditClient,
                                    LLMProviderFactory providerFactory,
@@ -114,38 +101,6 @@ public class CloudLlmRelayController {
         this.centralizedBillingEnabled = centralizedBillingEnabled;
     }
 
-    /** Where a relayed billed pair actually EXECUTES: the {@code provider}/{@code model} to
-     *  dispatch, or {@code bridgeTarget=true} when the link points at a non-relayable CLI bridge. */
-    private record RelayRoute(LLMProvider provider, String model, boolean bridgeTarget) {}
-
-    /**
-     * Resolve the model-execution link for a relayed billed pair. No link (or the resolver bean is
-     * absent in CE) -> execute the billed pair verbatim. A link to a regular API provider -> that
-     * provider + model (billing still records the BILLED pair). A link to a CLI bridge -> a
-     * bridgeTarget marker: the caller must reject it (a CLI bridge owns its own agent loop and
-     * cannot run over the relay's single-completion forwarding), never fall through to the direct
-     * billed provider (which produced the misleading "credit balance too low" from the platform key).
-     */
-    private RelayRoute resolveRelayRoute(LLMProvider billedProvider, String billedModel) {
-        ModelExecutionLinkService.ExecutionRoute route = executionLinkService != null
-                ? executionLinkService.resolve(billedProvider.getProviderName(), billedModel, SOURCE_TYPE).orElse(null)
-                : null;
-        if (route == null) {
-            return new RelayRoute(billedProvider, billedModel, false);
-        }
-        if (isBridgeProvider(route.executionProvider())) {
-            return new RelayRoute(null, null, true);
-        }
-        String execModel = route.executionModel() != null && !route.executionModel().isBlank()
-                ? route.executionModel() : billedModel;
-        return new RelayRoute(providerFactory.getProvider(route.executionProvider()), execModel, false);
-    }
-
-    private static boolean isBridgeProvider(String provider) {
-        return provider != null
-                && BridgeAvailabilityFilter.BRIDGE_PROVIDER_TO_CLI_ID.containsKey(provider.toLowerCase());
-    }
-
     @PostMapping("/complete")
     public ResponseEntity<?> complete(
             @RequestHeader("X-User-ID") Long cloudUserId,
@@ -162,21 +117,14 @@ public class CloudLlmRelayController {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                     .body(Map.of("error", "MODEL_NOT_SUPPORTED"));
         }
-        // Model execution link: the billed pair may EXECUTE on a different API target; a CLI-bridge
-        // target is not relayable, so reject it rather than dispatch to the wrong (billed) provider.
-        RelayRoute route = resolveRelayRoute(billedProvider, billedModel);
-        if (route.bridgeTarget()) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                    .body(Map.of("error", "BRIDGE_EXECUTION_NOT_RELAYABLE"));
-        }
-        LLMProvider execProvider = route.provider();
-        String execModel = route.model();
+        // Model execution links deliberately do NOT apply to CE relay traffic: a linked CE install
+        // asked for the billed pair and must get exactly that provider's real API. Links (including
+        // bridge targets) only reroute in-cloud executions.
         String userId = String.valueOf(cloudUserId);
         boolean centralized = isCentralized(relayRequest);
         CompletionRequest request = withCloudTenant(
-                relayRequest.completionRequest(), userId, execModel, false);
+                relayRequest.completionRequest(), userId, billedModel, false);
         BudgetEstimate estimate = estimateBudget(request);
-        // Billing stays on the BILLED pair (kept-price contract); execution runs on the resolved target.
         if (!gate(userId, billedProvider.getProviderName(), billedModel, estimate, centralized, relayRequest.executionId())) {
             return ResponseEntity.status(HttpStatus.PAYMENT_REQUIRED)
                     .body(Map.of("error", "INSUFFICIENT_CREDITS"));
@@ -184,7 +132,7 @@ public class CloudLlmRelayController {
 
         BillingTarget target = new BillingTarget(centralized, userId, relayRequest.executionId(),
                 "ce-llm-" + UUID.randomUUID(), billedProvider.getProviderName(), billedModel);
-        CompletionResponse response = execProvider.complete(request);
+        CompletionResponse response = billedProvider.complete(request);
         TokenUsage usage = usageFrom(response, estimate, response != null ? response.content() : null);
         recordUsageOnce(new AtomicBoolean(false), target, usage);
         return ResponseEntity.ok(response);
@@ -211,23 +159,14 @@ public class CloudLlmRelayController {
                     .body(outputStream -> writeEvent(outputStream,
                             CloudLlmStreamEvent.error("MODEL_NOT_SUPPORTED")));
         }
-        // Model execution link: the billed pair may EXECUTE on a different API target; a CLI-bridge
-        // target is not relayable, so reject it rather than dispatch to the wrong (billed) provider.
-        RelayRoute route = resolveRelayRoute(billedProvider, billedModel);
-        if (route.bridgeTarget()) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(outputStream -> writeEvent(outputStream,
-                            CloudLlmStreamEvent.error("BRIDGE_EXECUTION_NOT_RELAYABLE")));
-        }
-        LLMProvider execProvider = route.provider();
-        String execModel = route.model();
+        // Model execution links deliberately do NOT apply to CE relay traffic: a linked CE install
+        // asked for the billed pair and must get exactly that provider's real API. Links (including
+        // bridge targets) only reroute in-cloud executions.
         String userId = String.valueOf(cloudUserId);
         boolean centralized = isCentralized(relayRequest);
         CompletionRequest request = withCloudTenant(
-                relayRequest.completionRequest(), userId, execModel, true);
+                relayRequest.completionRequest(), userId, billedModel, true);
         BudgetEstimate estimate = estimateBudget(request);
-        // Billing stays on the BILLED pair (kept-price contract); execution runs on the resolved target.
         if (!gate(userId, billedProvider.getProviderName(), billedModel, estimate, centralized, relayRequest.executionId())) {
             return ResponseEntity.status(HttpStatus.PAYMENT_REQUIRED)
                     .contentType(MediaType.APPLICATION_JSON)
@@ -242,7 +181,7 @@ public class CloudLlmRelayController {
             AtomicBoolean recorded = new AtomicBoolean(false);
             AtomicBoolean streamClosed = new AtomicBoolean(false);
             try {
-                execProvider.completeStreaming(request, new StreamingCallback() {
+                billedProvider.completeStreaming(request, new StreamingCallback() {
                     @Override
                     public void onChunk(String chunk) {
                         if (streamClosed.get()) {
@@ -290,9 +229,9 @@ public class CloudLlmRelayController {
                     }
                 });
             } catch (Exception e) {
-                log.warn("CE LLM relay stream failed for cloudUser={} installId={} billed={}/{} exec={}/{}: {}",
+                log.warn("CE LLM relay stream failed for cloudUser={} installId={} billed={}/{}: {}",
                         cloudUserId, installId, billedProvider.getProviderName(), billedModel,
-                        execProvider.getProviderName(), execModel, e.getMessage());
+                        e.getMessage());
                 if (!streamClosed.get()) {
                     writeQuietly(outputStream, CloudLlmStreamEvent.error(e.getMessage()), streamClosed);
                 }

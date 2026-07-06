@@ -13,7 +13,6 @@ import com.apimarketplace.agent.domain.UsageInfo;
 import com.apimarketplace.agent.factory.LLMProviderFactory;
 import com.apimarketplace.agent.provider.LLMProvider;
 import com.apimarketplace.agent.repository.ModelConfigOverrideRepository;
-import com.apimarketplace.agent.service.ModelExecutionLinkService;
 import com.apimarketplace.agent.service.cloud.CeRelayAccrualStore;
 import com.apimarketplace.agent.service.cloud.CeRelaySettlementService;
 import com.apimarketplace.agent.streaming.StreamingCallback;
@@ -30,7 +29,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 import java.io.ByteArrayOutputStream;
@@ -71,8 +69,6 @@ class CloudLlmRelayControllerTest {
     @Mock private CeRelayAccrualStore accrualStore;
     @Mock private CeRelaySettlementService settlementService;
     @Mock private ModelConfigOverrideRepository modelConfigRepository;
-    @Mock private ModelExecutionLinkService executionLinkService;
-    @Mock private LLMProvider execProvider;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private CloudLlmRelayController controller;
@@ -124,56 +120,21 @@ class CloudLlmRelayControllerTest {
     }
 
     @Test
-    @DisplayName("execution link to a CLI BRIDGE is rejected as not relayable - never dispatches the billed provider (the misleading-credit-error fix)")
-    void bridgeTargetExecutionLinkIsRejectedNotRelayed() {
-        ReflectionTestUtils.setField(controller, "executionLinkService", executionLinkService);
-        when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
-        when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
-        when(provider.getProviderName()).thenReturn(PROVIDER);
-        // Admin linked billed deepseek/deepseek-chat -> the claude-code CLI bridge ("All surfaces").
-        when(executionLinkService.resolve(PROVIDER, MODEL, "CE_LLM_RELAY"))
-                .thenReturn(Optional.of(new ModelExecutionLinkService.ExecutionRoute("claude-code", "claude-opus-4-6")));
-
-        ResponseEntity<?> response = controller.complete(
-                CLOUD_USER_ID, INSTALL_ID, new CloudLlmRelayRequest(PROVIDER, request(false)));
-
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-        assertThat(response.getBody()).isEqualTo(Map.of("error", "BRIDGE_EXECUTION_NOT_RELAYABLE"));
-        // Pre-fix bug: the relay ignored the link and fell through to provider.complete() on the
-        // empty-credit platform key -> the misleading "credit balance too low". Post-fix: the billed
-        // provider is never dispatched (a CLI bridge cannot run over the single-completion relay).
-        verify(provider, never()).complete(any());
-    }
-
-    @Test
-    @DisplayName("execution link to an API provider redirects the dispatch (openrouter) while billing stays on the billed pair")
-    void apiTargetExecutionLinkRedirectsDispatchButBillsBilled() {
-        ReflectionTestUtils.setField(controller, "executionLinkService", executionLinkService);
-        CompletionResponse llmResponse = response("done", 11, 7);
-        when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
-        when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
-        when(provider.getProviderName()).thenReturn(PROVIDER);
-        // Link redirects EXECUTION to a regular API provider (not a bridge).
-        when(executionLinkService.resolve(PROVIDER, MODEL, "CE_LLM_RELAY"))
-                .thenReturn(Optional.of(new ModelExecutionLinkService.ExecutionRoute("openrouter", "or/some-model")));
-        when(providerFactory.getProvider("openrouter")).thenReturn(execProvider);
-        when(execProvider.complete(any())).thenReturn(llmResponse);
-        when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), anyInt())).thenReturn(true);
-        when(creditClient.consumeCredits(eq("42"), eq("CE_LLM_RELAY"), any(), eq(PROVIDER), eq(MODEL),
-                anyInt(), anyInt(), any(LlmCacheTokens.class))).thenReturn(Map.of("success", true));
-
-        ResponseEntity<?> response = controller.complete(
-                CLOUD_USER_ID, INSTALL_ID, new CloudLlmRelayRequest(PROVIDER, request(false)));
-
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-        // Dispatch ran on the EXECUTION provider (openrouter) with the execution model, NOT the billed one.
-        ArgumentCaptor<CompletionRequest> cap = ArgumentCaptor.forClass(CompletionRequest.class);
-        verify(execProvider).complete(cap.capture());
-        assertThat(cap.getValue().model()).isEqualTo("or/some-model");
-        verify(provider, never()).complete(any());
-        // Billing recorded the BILLED pair (kept-price contract), not openrouter.
-        verify(creditClient).consumeCredits(eq("42"), eq("CE_LLM_RELAY"), any(), eq(PROVIDER), eq(MODEL),
-                anyInt(), anyInt(), any(LlmCacheTokens.class));
+    @DisplayName("relay ignores model execution links entirely: no ModelExecutionLinkService dependency, the billed pair executes on its real API provider")
+    void relayIgnoresModelExecutionLinks() {
+        // Regression for the CE-side 400 BRIDGE_EXECUTION_NOT_RELAYABLE: an admin execution link
+        // (e.g. anthropic/claude-sonnet-5 -> claude-code, scope ALL) used to reroute or reject
+        // relayed CE traffic. Links reroute IN-CLOUD executions only; a linked CE install must
+        // always get the real API of the billed pair it asked for. The relay therefore has no
+        // dependency on ModelExecutionLinkService at all - neither a field (the pre-fix
+        // @Autowired(required=false) hook) nor a constructor parameter.
+        assertThat(Arrays.stream(CloudLlmRelayController.class.getDeclaredFields())
+                .map(field -> field.getType().getSimpleName()))
+                .doesNotContain("ModelExecutionLinkService");
+        assertThat(Arrays.stream(CloudLlmRelayController.class.getDeclaredConstructors())
+                .flatMap(ctor -> Arrays.stream(ctor.getParameterTypes()))
+                .map(Class::getSimpleName))
+                .doesNotContain("ModelExecutionLinkService");
     }
 
     @Test
@@ -424,76 +385,6 @@ class CloudLlmRelayControllerTest {
         assertThat(requestCaptor.getValue().stream()).isTrue();
         verify(creditClient).consumeCredits(eq("42"), eq("CE_LLM_RELAY"), any(),
                 eq(PROVIDER), eq(MODEL), eq(13), eq(5), any(com.apimarketplace.common.credit.LlmCacheTokens.class));
-    }
-
-    @Test
-    @DisplayName("stream: execution link to a CLI BRIDGE emits a BRIDGE_EXECUTION_NOT_RELAYABLE error event (400), never dispatches the billed provider")
-    void streamBridgeTargetExecutionLinkIsRejectedNotRelayed() throws Exception {
-        ReflectionTestUtils.setField(controller, "executionLinkService", executionLinkService);
-        when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
-        when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
-        when(provider.getProviderName()).thenReturn(PROVIDER);
-        when(executionLinkService.resolve(PROVIDER, MODEL, "CE_LLM_RELAY"))
-                .thenReturn(Optional.of(new ModelExecutionLinkService.ExecutionRoute("claude-code", "claude-opus-4-6")));
-
-        ResponseEntity<StreamingResponseBody> response = controller.stream(
-                CLOUD_USER_ID, INSTALL_ID, new CloudLlmRelayRequest(PROVIDER, request(true)));
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
-        response.getBody().writeTo(output);
-
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-        List<CloudLlmStreamEvent> events = Arrays.stream(output.toString(StandardCharsets.UTF_8).split("\\R"))
-                .filter(line -> !line.isBlank())
-                .map(this::readEvent)
-                .toList();
-        assertThat(events).hasSize(1);
-        assertThat(events.get(0).type()).isEqualTo(CloudLlmStreamEvent.Type.ERROR);
-        assertThat(events.get(0).error()).isEqualTo("BRIDGE_EXECUTION_NOT_RELAYABLE");
-        // The billed provider is never dispatched, and the budget gate is never reached.
-        verify(provider, never()).completeStreaming(any(), any());
-        verify(creditClient, never()).checkChatBudget(any(), any(), any(), anyInt(), anyInt());
-    }
-
-    @Test
-    @DisplayName("stream: execution link to an API provider dispatches on the target (openrouter) while billing stays on the billed pair")
-    void streamApiTargetExecutionLinkRedirectsDispatchButBillsBilled() throws Exception {
-        ReflectionTestUtils.setField(controller, "executionLinkService", executionLinkService);
-        CompletionResponse finalResponse = CompletionResponse.builder()
-                .content("final")
-                .finishReason("stop")
-                .model("or/some-model")
-                .usage(UsageInfo.builder().promptTokens(13).completionTokens(5).totalTokens(18).build())
-                .build();
-        when(authClient.userOwnsActiveCeLink("42", INSTALL_ID)).thenReturn(true);
-        when(providerFactory.getProvider(PROVIDER)).thenReturn(provider);
-        when(provider.getProviderName()).thenReturn(PROVIDER);
-        when(executionLinkService.resolve(PROVIDER, MODEL, "CE_LLM_RELAY"))
-                .thenReturn(Optional.of(new ModelExecutionLinkService.ExecutionRoute("openrouter", "or/some-model")));
-        when(providerFactory.getProvider("openrouter")).thenReturn(execProvider);
-        when(creditClient.checkChatBudget(eq("42"), eq(PROVIDER), eq(MODEL), anyInt(), anyInt())).thenReturn(true);
-        when(creditClient.consumeCredits(eq("42"), eq("CE_LLM_RELAY"), any(), eq(PROVIDER), eq(MODEL),
-                eq(13), eq(5), any(LlmCacheTokens.class))).thenReturn(Map.of("success", true));
-        doAnswer(invocation -> {
-            StreamingCallback callback = invocation.getArgument(1);
-            callback.onChunk("hel");
-            callback.onComplete(finalResponse);
-            return null;
-        }).when(execProvider).completeStreaming(any(), any());
-
-        ResponseEntity<StreamingResponseBody> response = controller.stream(
-                CLOUD_USER_ID, INSTALL_ID, new CloudLlmRelayRequest(PROVIDER, request(true)));
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
-        response.getBody().writeTo(output);
-
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-        // Dispatch ran on the EXECUTION provider (openrouter) with the execution model, NOT the billed one.
-        ArgumentCaptor<CompletionRequest> reqCap = ArgumentCaptor.forClass(CompletionRequest.class);
-        verify(execProvider).completeStreaming(reqCap.capture(), any());
-        assertThat(reqCap.getValue().model()).isEqualTo("or/some-model");
-        verify(provider, never()).completeStreaming(any(), any());
-        // Billing recorded the BILLED pair (kept-price contract), not openrouter.
-        verify(creditClient).consumeCredits(eq("42"), eq("CE_LLM_RELAY"), any(), eq(PROVIDER), eq(MODEL),
-                eq(13), eq(5), any(LlmCacheTokens.class));
     }
 
     @Test

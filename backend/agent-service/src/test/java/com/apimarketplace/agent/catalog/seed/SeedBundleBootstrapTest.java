@@ -54,11 +54,35 @@ class SeedBundleBootstrapTest {
     }
 
     @Test
-    @DisplayName("missing file: silent no-op (normal on cloud and source checkouts)")
+    @DisplayName("missing file: no-op (WARN-logged so a packaged CE missing its release refresh is visible)")
     void missingFileIsNoOp() {
         bootstrap(tmp.resolve("absent.json").toString()).applySeedBundle();
 
         verifyNoInteractions(verifier, applier);
+    }
+
+    @Test
+    @DisplayName("missing file: logged at WARN, not debug (a silent skip hid the v0.1.9/v0.1.10 export regression)")
+    void missingFileLogsWarn() {
+        ch.qos.logback.classic.Logger logger =
+                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(SeedBundleBootstrap.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            bootstrap(tmp.resolve("absent.json").toString()).applySeedBundle();
+
+            org.assertj.core.api.Assertions.assertThat(appender.list)
+                    .anySatisfy(event -> {
+                        org.assertj.core.api.Assertions.assertThat(event.getLevel())
+                                .isEqualTo(ch.qos.logback.classic.Level.WARN);
+                        org.assertj.core.api.Assertions.assertThat(event.getFormattedMessage())
+                                .contains("No model seed bundle");
+                    });
+        } finally {
+            logger.detachAppender(appender);
+        }
     }
 
     @Test
