@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 
 import com.apimarketplace.orchestrator.utils.EdgeRefParser;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedList;
@@ -48,8 +49,23 @@ public class SplitMergeHandler {
 
     private final SplitContextManager contextManager;
 
+    /**
+     * Optional durable per-item output store. Backfills {@link #aggregateResults} when the in-memory
+     * {@link SplitContext#resultsByNode} is missing a node's per-item slots - the same cross-pod async/
+     * signal resume, restart, or read-before-async-seal gap that {@code SplitAggregateHandler} and
+     * {@code SplitAwareNodeExecutor.injectPredecessorPerItemOutputs} guard against. Null in unit tests
+     * that don't exercise the fallback → warm-path behavior is unchanged.
+     */
+    private com.apimarketplace.orchestrator.services.StepOutputService stepOutputService;
+
     public SplitMergeHandler(SplitContextManager contextManager) {
         this.contextManager = contextManager;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setStepOutputService(
+            com.apimarketplace.orchestrator.services.StepOutputService stepOutputService) {
+        this.stepOutputService = stepOutputService;
     }
 
     /**
@@ -246,8 +262,8 @@ public class SplitMergeHandler {
         logger.info("[SplitMerge] Handling split merge: nodeId={}, split={}, contextKey={}, workflowItem={}, itemCount={}",
             nodeId, splitNodeId, contextKey, workflowItemIndex, splitContext.itemCount());
 
-        // Aggregate all results from the split context
-        Map<String, Object> aggregatedData = aggregateResults(splitContext);
+        // Aggregate all results from the split context (durable-backfilled per item).
+        Map<String, Object> aggregatedData = aggregateResults(splitContext, context, nodeId, nodeMap);
 
         // Mark the context as closed by removing it (scoped to workflow item)
         // This ensures downstream nodes don't see the split context
@@ -285,12 +301,14 @@ public class SplitMergeHandler {
     }
 
     /**
-     * Aggregates results from all nodes in the SplitContext.
+     * Aggregates results from all nodes in the SplitContext, backfilling any per-item slot the
+     * in-memory {@link SplitContext#resultsByNode} is missing from the durable step-output store.
      */
-    private Map<String, Object> aggregateResults(SplitContext splitContext) {
+    private Map<String, Object> aggregateResults(SplitContext splitContext, ExecutionContext context,
+                                                 String mergeNodeId, Map<String, ExecutionNode> nodeMap) {
         Map<String, Object> aggregated = new HashMap<>();
 
-        Map<String, List<Object>> allResults = splitContext.getAllResults();
+        Map<String, List<Object>> allResults = mergeDurablePerItem(splitContext, context, mergeNodeId, nodeMap);
 
         for (Map.Entry<String, List<Object>> entry : allResults.entrySet()) {
             String nodeId = entry.getKey();
@@ -308,6 +326,132 @@ public class SplitMergeHandler {
         aggregated.put("nodes_executed", allResults.size());
 
         return aggregated;
+    }
+
+    /**
+     * Per-node per-item results starting from the in-memory {@link SplitContext} and backfilling any
+     * missing node/slot from the durable step-output store. Recovers the branch-rejoin / aggregation
+     * merge from the cross-pod async/signal resume ({@code restoreContext} rebuilds items only), a
+     * restart, or a read before an async barrier sealed - the same class the {@code core:aggregate}
+     * node and {@code SplitAwareNodeExecutor.injectPredecessorPerItemOutputs} are already guarded for.
+     *
+     * <p>Skips the split node's own key. No-op (returns the in-memory view, no DB read) when no durable
+     * source is wired - so existing unit tests and the warm path are byte-identical.
+     */
+    private Map<String, List<Object>> mergeDurablePerItem(SplitContext splitContext, ExecutionContext context,
+                                                          String mergeNodeId, Map<String, ExecutionNode> nodeMap) {
+        int itemCount = splitContext.itemCount();
+
+        // Mutable item-indexed copy of the in-memory per-node results (padded to itemCount).
+        Map<String, List<Object>> merged = new HashMap<>();
+        for (Map.Entry<String, List<Object>> e : splitContext.getAllResults().entrySet()) {
+            List<Object> padded = new ArrayList<>(e.getValue() != null ? e.getValue() : List.of());
+            while (padded.size() < itemCount) padded.add(null);
+            merged.put(e.getKey(), padded);
+        }
+
+        if (stepOutputService == null || context == null || itemCount <= 0 || nodeMap == null) {
+            return merged;
+        }
+
+        String baseSplitKey = SplitContextManager.extractBaseSplitNodeId(splitContext.splitNodeId());
+
+        // Backfill ONLY the merge's split-SUBGRAPH ancestors (nodes strictly between the split and
+        // this merge), unioned with whatever is already in memory. This deliberately excludes the
+        // split node, its own ancestors (trigger / pre-split), and unrelated sibling/post-merge epoch
+        // nodes, so a durable epoch row for e.g. trigger:manual never pollutes aggregated_results or
+        // inflates nodes_executed. Same intent as SplitAggregateHandler.resolvePerItemResults (bound the
+        // durable fold to the split's own subgraph), reached by a different mechanism: that path scopes
+        // by the node ids referenced in the aggregate's expressions, this one by topological
+        // split-subgraph ancestry.
+        Set<String> eligible = new HashSet<>(merged.keySet());
+        eligible.addAll(splitSubgraphAncestors(mergeNodeId, baseSplitKey, nodeMap));
+        eligible.remove(baseSplitKey);
+        if (eligible.isEmpty()) {
+            return merged;
+        }
+
+        // Warm path: every eligible node already present with a non-null slot for every item → no DB read.
+        // (An entirely-absent node or a null slot is the cross-pod / restart / async-not-sealed gap we recover.)
+        boolean anyMissing = false;
+        for (String nid : eligible) {
+            List<Object> slots = merged.get(nid);
+            if (slots == null || slots.size() < itemCount) {
+                anyMissing = true;
+                break;
+            }
+            for (int i = 0; i < itemCount; i++) {
+                if (slots.get(i) == null) {
+                    anyMissing = true;
+                    break;
+                }
+            }
+            if (anyMissing) break;
+        }
+        if (!anyMissing) {
+            return merged; // warm - no durable read
+        }
+
+        Map<String, Map<Integer, Object>> durable;
+        try {
+            durable = stepOutputService.loadPerItemOutputsByStepKey(
+                context.runId(), context.epoch(), context.tenantId());
+        } catch (Exception ex) {
+            logger.warn("[SplitMerge] Durable per-item backfill failed (run={}, epoch={}): {} - using in-memory only",
+                context.runId(), context.epoch(), ex.getMessage());
+            return merged;
+        }
+        if (durable == null || durable.isEmpty()) {
+            return merged;
+        }
+
+        int recovered = 0;
+        for (String nid : eligible) {
+            Map<Integer, Object> byItem = durable.get(nid);
+            if (byItem == null || byItem.isEmpty()) {
+                continue;
+            }
+            List<Object> slots = merged.get(nid);
+            if (slots == null) {
+                slots = new ArrayList<>(itemCount);
+                for (int i = 0; i < itemCount; i++) slots.add(null);
+                merged.put(nid, slots);
+            }
+            while (slots.size() < itemCount) slots.add(null);
+            for (int i = 0; i < itemCount; i++) {
+                if (slots.get(i) == null) {
+                    Object durVal = byItem.get(i);
+                    if (durVal != null) {
+                        slots.set(i, durVal);
+                        recovered++;
+                    }
+                }
+            }
+        }
+        if (recovered > 0) {
+            logger.info("[SplitMerge] Recovered {} per-item slot(s) from the durable store for merge aggregation "
+                    + "(in-memory SplitContext incomplete): split={}, run={}, epoch={}",
+                recovered, baseSplitKey, context.runId(), context.epoch());
+        }
+        return merged;
+    }
+
+    /**
+     * The merge's split-SUBGRAPH ancestors: nodes that are transitive ancestors of the merge but NOT
+     * the split node nor any ancestor of the split (trigger / pre-split). Computed by subtracting the
+     * split's ancestor closure (plus the split itself) from the merge's, reusing the same audited BFS
+     * as {@link #isBranchRejoinMerge}. Empty when the nodeMap can't resolve the topology.
+     */
+    private Set<String> splitSubgraphAncestors(String mergeNodeId, String baseSplitKey,
+                                               Map<String, ExecutionNode> nodeMap) {
+        Set<String> mergeAncestors = collectTransitiveAncestors(mergeNodeId, nodeMap);
+        if (mergeAncestors.isEmpty()) {
+            return Set.of();
+        }
+        Set<String> splitAndAbove = collectTransitiveAncestors(baseSplitKey, nodeMap);
+        splitAndAbove.add(baseSplitKey);
+        mergeAncestors.removeAll(splitAndAbove);
+        return mergeAncestors;
     }
 
     /**

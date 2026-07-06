@@ -84,6 +84,35 @@ class HelpToolsProviderTest {
             );
         }
 
+        // Coherence guard: the list_all_tools `category` filter enum is what the agent
+        // is allowed to pass, and it is validated against ToolCategory.fromSlug at runtime
+        // (executeListAllTools returns INVALID_PARAMETER_VALUE for an unknown slug). Every
+        // advertised slug MUST resolve, and the enum MUST cover every real category so no
+        // category of tools is silently undiscoverable. Regression for the phantom `tasks`
+        // slug (rejected at runtime) and the missing `search`/`imagegeneration` slugs.
+        @Test
+        @DisplayName("list_all_tools category enum resolves to and covers every ToolCategory")
+        void categoryFilterEnumMatchesToolCategory() {
+            List<String> advertised = provider.getTools().stream()
+                    .filter(t -> t.name().equals("list_all_tools"))
+                    .flatMap(t -> t.parameters().stream())
+                    .filter(p -> p.name().equals("category"))
+                    .flatMap(p -> p.enumValues().stream())
+                    .toList();
+
+            // No phantom: every advertised slug resolves (would not 400 at runtime).
+            assertThat(advertised).allSatisfy(slug ->
+                    assertThat(ToolCategory.fromSlug(slug))
+                            .as("advertised category slug '%s' must resolve via ToolCategory.fromSlug", slug)
+                            .isNotNull());
+
+            // Complete: the enum covers every real category (none undiscoverable).
+            List<String> allSlugs = java.util.Arrays.stream(ToolCategory.values())
+                    .map(ToolCategory::getSlug)
+                    .toList();
+            assertThat(advertised).containsExactlyInAnyOrderElementsOf(allSlugs);
+        }
+
         @Test
         @DisplayName("tools should not require auth")
         void shouldNotRequireAuth() {

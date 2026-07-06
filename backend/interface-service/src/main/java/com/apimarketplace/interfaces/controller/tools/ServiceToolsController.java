@@ -50,6 +50,20 @@ public class ServiceToolsController {
     }
 
     /**
+     * List available tools in MCP {@code tools/list} format
+     * ({@code name} / {@code description} / {@code inputSchema}), so the cloud MCP
+     * server can aggregate this service's tools alongside its own.
+     * GET /api/agent-tools/mcp/tools
+     */
+    @GetMapping("/mcp/tools")
+    public ResponseEntity<Map<String, Object>> listMcpTools() {
+        var mcpTools = toolsProvider.getTools().stream()
+            .map(t -> t.toMcpFormat())
+            .toList();
+        return ResponseEntity.ok(Map.of("tools", mcpTools));
+    }
+
+    /**
      * Execute a tool.
      * POST /api/agent-tools/execute
      * Body: { "tool": "interface", "parameters": {...}, ... }

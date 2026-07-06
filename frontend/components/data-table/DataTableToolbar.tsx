@@ -7,7 +7,7 @@ import { SelectionActionBar, BulkBarButton } from '@/components/ui/SelectionActi
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Download, FileJson, FileSpreadsheet, FileText, Filter, Plus, Search, Sparkles, Trash2, X } from 'lucide-react';
+import { Download, FileJson, FileSpreadsheet, FileText, Filter, Plus, Search, Sparkles, Trash2 } from 'lucide-react';
 
 interface DataTableToolbarProps {
   controller: DataTableController;
@@ -15,10 +15,6 @@ interface DataTableToolbarProps {
   jsonPath?: string;
   onAddAnalyzeBadges?: DataTableProps['onAddAnalyzeBadges'];
   onAnalyzeClick?: DataTableProps['onAnalyzeClick'];
-  /** Embedded (side panel / modal / builder inspector) - keep selection actions
-   *  inline. Standalone (full table page) floats them in a bottom-center bar,
-   *  which is anchored to <main> and would be misplaced inside a side panel. */
-  embedded?: boolean;
 }
 
 export function DataTableToolbar({
@@ -27,7 +23,6 @@ export function DataTableToolbar({
   jsonPath,
   onAddAnalyzeBadges,
   onAnalyzeClick,
-  embedded = false,
 }: DataTableToolbarProps) {
   const t = useTranslations('dataTable');
   const tc = useTranslations('common');
@@ -155,80 +150,55 @@ export function DataTableToolbar({
         </div>
       </div>
 
-      {(selectedRows.size > 0 || selectedColumns.size > 0) && (() => {
-        const clearAll = () => {
-          clearSelection();
-          clearColumnSelection();
-        };
-        // Selection-contextual actions, shared between the inline (embedded) and the
-        // floating (standalone) layouts so the conditions never diverge.
-        const actions = (
-          <>
-            <BulkBarButton onClick={() => setShowCreateDataSourceModal(true)}>
-              <Plus className="h-3.5 w-3.5" />
-              {t('createTable')}
+      {/* Selection actions float in a bottom-center pill. Standalone (full table page)
+          anchors to <main>; embedded (side panel / modal / builder inspector) anchors to
+          the `relative` DataTable container, so the pill stays inside the panel. */}
+      {(selectedRows.size > 0 || selectedColumns.size > 0) && (
+        <SelectionActionBar
+          count={selectedRows.size + selectedColumns.size}
+          onClear={() => {
+            clearSelection();
+            clearColumnSelection();
+          }}
+        >
+          <BulkBarButton onClick={() => setShowCreateDataSourceModal(true)}>
+            <Plus className="h-3.5 w-3.5" />
+            {t('createTable')}
+          </BulkBarButton>
+
+          {selectedRows.size > 0 && onAddAnalyzeBadges && (
+            <BulkBarButton
+              onClick={() => {
+                const rowIds = Array.from(selectedRows)
+                  .map((key) => key.split('-')[0])
+                  .filter((id, index, self) => self.indexOf(id) === index);
+
+                onAddAnalyzeBadges?.(rowIds, 'data');
+                if (onAnalyzeClick) {
+                  onAnalyzeClick();
+                }
+              }}
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              {t('analyzeData')}
             </BulkBarButton>
+          )}
 
-            {selectedRows.size > 0 && onAddAnalyzeBadges && (
-              <BulkBarButton
-                onClick={() => {
-                  const rowIds = Array.from(selectedRows)
-                    .map((key) => key.split('-')[0])
-                    .filter((id, index, self) => self.indexOf(id) === index);
+          {selectedRows.size > 0 && !readOnly && (
+            <BulkBarButton variant="danger" onClick={() => setShowDeleteRowsModal(true)}>
+              <Trash2 className="h-3.5 w-3.5" />
+              {t('deleteRows')}
+            </BulkBarButton>
+          )}
 
-                  onAddAnalyzeBadges?.(rowIds, 'data');
-                  if (onAnalyzeClick) {
-                    onAnalyzeClick();
-                  }
-                }}
-              >
-                <Sparkles className="h-3.5 w-3.5" />
-                {t('analyzeData')}
-              </BulkBarButton>
-            )}
-
-            {selectedRows.size > 0 && !readOnly && (
-              <BulkBarButton variant="danger" onClick={() => setShowDeleteRowsModal(true)}>
-                <Trash2 className="h-3.5 w-3.5" />
-                {t('deleteRows')}
-              </BulkBarButton>
-            )}
-
-            {selectedColumns.size > 0 && !readOnly && (
-              <BulkBarButton variant="danger" onClick={deleteSelectedColumns}>
-                <Trash2 className="h-3.5 w-3.5" />
-                {t('deleteColumnsButton')}
-              </BulkBarButton>
-            )}
-          </>
-        );
-
-        // Embedded (side panel / modal / builder inspector): inline - a floating
-        // bar would anchor to <main> and float over the whole app, not the panel.
-        if (embedded) {
-          return (
-            <div className="flex flex-col gap-3">
-              <div className="flex items-center gap-2 flex-wrap">
-                <div className="w-px h-8 bg-theme-muted opacity-30" />
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  {actions}
-                  <BulkBarButton onClick={clearAll} title={tc('clearSelection')}>
-                    <X className="h-3.5 w-3.5" />
-                    {tc('cancel')}
-                  </BulkBarButton>
-                </div>
-              </div>
-            </div>
-          );
-        }
-
-        // Standalone full-page table: float the actions in a bottom-center bar.
-        return (
-          <SelectionActionBar count={selectedRows.size + selectedColumns.size} onClear={clearAll}>
-            {actions}
-          </SelectionActionBar>
-        );
-      })()}
+          {selectedColumns.size > 0 && !readOnly && (
+            <BulkBarButton variant="danger" onClick={deleteSelectedColumns}>
+              <Trash2 className="h-3.5 w-3.5" />
+              {t('deleteColumnsButton')}
+            </BulkBarButton>
+          )}
+        </SelectionActionBar>
+      )}
       <BulkDeleteModal
         isOpen={showDeleteRowsModal}
         title={t('deleteRows')}

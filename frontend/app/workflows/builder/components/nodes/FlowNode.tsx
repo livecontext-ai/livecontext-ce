@@ -56,7 +56,7 @@ const FLEET_RESOURCE_ICONS: Record<string, { icon: React.ComponentType<{ classNa
 export function FlowNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
   const visuals = getNodeVisual(data.kind);
   const { targetRef: nodeRef, isVisible: showActions, show } = useHoverVisibility<HTMLDivElement>();
-  const { isRunMode, isPreviewOnly, runId, viewingEpoch, setViewingEpoch, workflowId } = useWorkflowMode();
+  const { isRunMode, isPreviewOnly, isApplicationMode, runId, viewingEpoch, setViewingEpoch, workflowId } = useWorkflowMode();
   const hideHandles = isRunMode || isPreviewOnly;
   const isFleetMode = !!(data.fleetBottomHandles || data.fleetTopHandle);
   // The fleet AGENT node specifically (not chips, and never a workflow-builder node).
@@ -742,8 +742,11 @@ export function FlowNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
         />
       )}
 
-      {/* Interface bottom bar - run mode only */}
-      {isRunMode && isInterfaceNode && (
+      {/* Interface bottom bar - run mode only. Hidden in isApplicationMode:
+          inside an application the app is already the main view, so opening
+          the interface in the application panel would just duplicate it. Stays
+          visible in workflow surfaces where the panel is the destination. */}
+      {isRunMode && isInterfaceNode && !isApplicationMode && (
         <NodeBottomBar
           hover={{ isVisible: showActions, onHover: show }}
           borderColor={borderColor}

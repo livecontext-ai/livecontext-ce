@@ -1902,6 +1902,461 @@ class SplitAwareNodeExecutorTest {
     }
 
     @Nested
+    @DisplayName("per-item durable backfill (branch-rejoin merge / cross-item consumer collapse fix)")
+    class PerItemDurableBackfill {
+
+        private ExecutionContext freshContext() {
+            return ExecutionContext.create(
+                "run-durable", "wfr-durable", "tenant-durable", "item-0", 0,
+                new HashMap<>(), null);
+        }
+
+        /**
+         * A base context whose stepOutputs already carry classify = item 0's value - the single
+         * value a branch-rejoin merge falls back to (and every item collapses to) when the per-item
+         * override is missing. Mirrors the threaded/DB-loaded base context in production.
+         */
+        private ExecutionContext contextWithItem0Classify(String category) {
+            Map<String, Object> wrapper = new HashMap<>();
+            wrapper.put("output", Map.of("selected_category", category));
+            wrapper.put("httpstatus", 200);
+            return freshContext().withStepOutput("agent:classify", wrapper);
+        }
+
+        @SuppressWarnings("unchecked")
+        private Object aliasOutput(ExecutionContext ctx, String alias, String field) {
+            Object wrapper = ctx.getAllStepOutputs().get(alias);
+            if (!(wrapper instanceof Map<?, ?> m)) return null;
+            Object output = m.get("output");
+            if (!(output instanceof Map<?, ?> outMap)) return null;
+            return ((Map<String, Object>) outMap).get(field);
+        }
+
+        @Test
+        @DisplayName("Regression: classify ABSENT from resultsByNode collapses to item 0 WITHOUT durable, resolves per item WITH durable")
+        void durableBackfillResolvesAbsentPredecessorPerItem() {
+            // resultsByNode is EMPTY for classify: the exact cross-pod async-agent / signal resume
+            // (restoreContext rebuilds items only) or read-before-async-seal state. The base context
+            // carries item 0's classify value ("billing") - the collapse baseline.
+            SplitContext splitContext = SplitContext.create(
+                "core:triage:0", List.of("m0", "m1", "m2"));
+
+            // Durable store has the real per-item classify outputs (what SplitAggregateHandler already reads).
+            Map<String, Map<Integer, Object>> durable = Map.of(
+                "agent:classify", Map.of(
+                    0, Map.of("selected_category", "billing"),
+                    1, Map.of("selected_category", "bug"),
+                    2, Map.of("selected_category", "refund_clear")));
+
+            // WITHOUT durable (pre-fix behavior): the per-item classify override is ABSENT for item 2,
+            // so injectPredecessorPerItemOutputs leaves the base context's single "item 0" value in
+            // place and EVERY item collapses to it -> the exact reported symptom.
+            ExecutionContext collapsed = executor.enrichContextWithItem(
+                contextWithItem0Classify("billing"), "m2", 2, List.of("m0", "m1", "m2"), splitContext);
+            assertThat(aliasOutput(collapsed, "agent:classify", "selected_category"))
+                .as("reproduction: no durable source -> item 2 collapses to item 0's 'billing'")
+                .isEqualTo("billing");
+
+            // WITH durable (fix): item 2 resolves to its OWN classification.
+            ExecutionContext fixed = executor.enrichContextWithItem(
+                contextWithItem0Classify("billing"), "m2", 2, List.of("m0", "m1", "m2"), splitContext, durable);
+            assertThat(aliasOutput(fixed, "agent:classify", "selected_category"))
+                .as("fix: durable backfill resolves classify to THIS item's value")
+                .isEqualTo("refund_clear");
+            assertThat(aliasOutput(fixed, "classify", "selected_category"))
+                .as("bare alias must also carry the per-item value")
+                .isEqualTo("refund_clear");
+        }
+
+        @Test
+        @DisplayName("in-memory slot WINS over durable (warm path unchanged, no stale overwrite)")
+        void memoryWinsOverDurable() {
+            SplitContext splitContext = SplitContext.create("core:triage:0", List.of("m0", "m1", "m2"))
+                .withResults("agent:classify", java.util.Arrays.asList(
+                    Map.of("selected_category", "billing"),
+                    Map.of("selected_category", "bug"),
+                    Map.of("selected_category", "refund_clear")));
+            // Durable carries a STALE value that must never override a live in-memory slot.
+            Map<String, Map<Integer, Object>> durable = Map.of(
+                "agent:classify", Map.of(2, Map.of("selected_category", "STALE")));
+
+            ExecutionContext ctx = executor.enrichContextWithItem(
+                freshContext(), "m2", 2, List.of("m0", "m1", "m2"), splitContext, durable);
+            assertThat(aliasOutput(ctx, "agent:classify", "selected_category"))
+                .as("in-memory per-item value wins; durable is a fallback only")
+                .isEqualTo("refund_clear");
+        }
+
+        @Test
+        @DisplayName("NULL in-memory slot is backfilled from durable (async-partial: node recorded but this item's slot not yet landed)")
+        void nullSlotBackfilledFromDurable() {
+            SplitContext splitContext = SplitContext.create("core:triage:0", List.of("m0", "m1", "m2"))
+                .withResults("agent:classify", java.util.Arrays.asList(
+                    Map.of("selected_category", "billing"),
+                    Map.of("selected_category", "bug"),
+                    null)); // item 2's slot not yet populated in memory
+
+            Map<String, Map<Integer, Object>> durable = Map.of(
+                "agent:classify", Map.of(2, Map.of("selected_category", "refund_clear")));
+
+            ExecutionContext ctx = executor.enrichContextWithItem(
+                freshContext(), "m2", 2, List.of("m0", "m1", "m2"), splitContext, durable);
+            assertThat(aliasOutput(ctx, "agent:classify", "selected_category"))
+                .as("null in-memory slot must be backfilled from the durable store")
+                .isEqualTo("refund_clear");
+        }
+
+        @Test
+        @DisplayName("durable backfill NEVER clobbers the split node's own current_item")
+        void durableSkipsSplitNodeKey() {
+            Object item2 = Map.of("id", "m2");
+            SplitContext splitContext = SplitContext.create(
+                "core:triage:0", List.of(Map.of("id", "m0"), Map.of("id", "m1"), item2));
+            // A durable row keyed on the split node itself must be ignored so current_item survives.
+            Map<String, Map<Integer, Object>> durable = Map.of(
+                "core:triage", Map.of(2, Map.of("current_item", Map.of("id", "WRONG"))));
+
+            ExecutionContext ctx = executor.enrichContextWithItem(
+                freshContext(), item2, 2,
+                List.of(Map.of("id", "m0"), Map.of("id", "m1"), item2), splitContext, durable);
+            assertThat(aliasOutput(ctx, "core:triage", "current_item"))
+                .as("split node's current_item must not be overwritten by a durable backfill entry")
+                .isEqualTo(item2);
+        }
+
+        @Test
+        @DisplayName("null durable map is a no-op (behavior identical to pre-fix)")
+        void nullDurableIsNoOp() {
+            SplitContext splitContext = SplitContext.create("core:triage:0", List.of("m0", "m1", "m2"));
+            ExecutionContext ctx = executor.enrichContextWithItem(
+                contextWithItem0Classify("billing"), "m2", 2, List.of("m0", "m1", "m2"), splitContext, null);
+            assertThat(aliasOutput(ctx, "agent:classify", "selected_category")).isEqualTo("billing");
+        }
+
+        @Test
+        @DisplayName("gate: cross-item consumers (merge/loop/fork) are eligible for durable; a plain mcp/agent successor is not")
+        void crossItemConsumerGate() {
+            assertThat(executor.isCrossItemPerItemConsumer(new TestNode("core:m", NodeType.MERGE))).isTrue();
+            assertThat(executor.isCrossItemPerItemConsumer(new TestNode("core:l", NodeType.LOOP))).isTrue();
+            assertThat(executor.isCrossItemPerItemConsumer(new TestNode("core:f", NodeType.FORK))).isTrue();
+            assertThat(executor.isCrossItemPerItemConsumer(new TestNode("mcp:x", NodeType.MCP))).isFalse();
+            assertThat(executor.isCrossItemPerItemConsumer(new TestNode("agent:a", NodeType.AGENT))).isFalse();
+        }
+
+        @Test
+        @DisplayName("loadDurableEpochOutputs: null service -> null; wired -> per-epoch map; throwing service -> null (degrades, never propagates)")
+        void loadDurableEpochOutputsWiring() {
+            // No service wired on the shared executor -> null (warm behavior).
+            assertThat(executor.loadDurableEpochOutputs(freshContext())).isNull();
+
+            com.apimarketplace.orchestrator.services.StepOutputService svc =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.StepOutputService.class);
+            SplitAwareNodeExecutor local = new SplitAwareNodeExecutor(
+                contextManager, null, null, null, null, null, Executors.newFixedThreadPool(1));
+            local.setStepOutputService(svc);
+            Map<String, Map<Integer, Object>> map = Map.of("agent:classify", Map.of(0, Map.of("k", "v")));
+            when(svc.loadPerItemOutputsByStepKey("run-durable", 0, "tenant-durable")).thenReturn(map);
+            assertThat(local.loadDurableEpochOutputs(freshContext()))
+                .as("wired service returns the per-epoch map straight through")
+                .isSameAs(map);
+            local.shutdown();
+
+            com.apimarketplace.orchestrator.services.StepOutputService throwing =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.StepOutputService.class);
+            SplitAwareNodeExecutor local2 = new SplitAwareNodeExecutor(
+                contextManager, null, null, null, null, null, Executors.newFixedThreadPool(1));
+            local2.setStepOutputService(throwing);
+            when(throwing.loadPerItemOutputsByStepKey(anyString(), anyInt(), anyString()))
+                .thenThrow(new RuntimeException("db down"));
+            assertThat(local2.loadDurableEpochOutputs(freshContext()))
+                .as("a store failure degrades to no backfill, never propagates")
+                .isNull();
+            local2.shutdown();
+        }
+
+        @Test
+        @DisplayName("wiring: a plain direct-successor fan-out never issues a durable epoch query (warm path stays query-free)")
+        void plainSuccessorNeverQueriesDurable() {
+            com.apimarketplace.orchestrator.services.StepOutputService svc =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.StepOutputService.class);
+            SplitAwareNodeExecutor local = new SplitAwareNodeExecutor(
+                contextManager, null, null, null, null, null, Executors.newFixedThreadPool(2));
+            local.setStepOutputService(svc);
+
+            TestNode node = new TestNode("mcp:step1", NodeType.MCP);
+            node.setPredecessors(List.of("core:split1"));
+            node.setExecuteResult(NodeExecutionResult.success("mcp:step1", Map.of("ok", true)));
+            nodeMap.put("mcp:step1", node);
+            nodeMap.put("core:split1", new TestNode("core:split1", NodeType.SPLIT));
+            SplitContext splitContext = SplitContext.create("core:split1:0", List.of("a", "b", "c"));
+            when(contextManager.findActiveContext(eq("run1"), eq("mcp:step1"), eq(0), any()))
+                .thenReturn(Optional.of(splitContext));
+            when(context.withGlobalData(any(), any())).thenReturn(context);
+            when(context.withItemIndex(anyInt())).thenReturn(context);
+
+            local.execute(node, context, "run1", nodeMap);
+
+            org.mockito.Mockito.verify(svc, org.mockito.Mockito.never())
+                .loadPerItemOutputsByStepKey(anyString(), anyInt(), anyString());
+            local.shutdown();
+        }
+
+        @Test
+        @DisplayName("read path WARM: a cross-item consumer whose resultsByNode is fully dense issues ZERO durable epoch queries")
+        void readPathWarmMemorySkipsDurableQuery() {
+            WorkflowStepDataRepository repo = org.mockito.Mockito.mock(WorkflowStepDataRepository.class);
+            com.apimarketplace.orchestrator.services.StepOutputService svc =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.StepOutputService.class);
+            SplitAwareNodeExecutor local = new SplitAwareNodeExecutor(
+                contextManager, null, null, null, repo, null, Executors.newFixedThreadPool(2));
+            local.setStepOutputService(svc);
+
+            // A branch-rejoin merge (cross-item consumer -> passes isCrossItemPerItemConsumer).
+            TestNode merge = new TestNode("core:merge", NodeType.MERGE);
+            merge.setPredecessors(List.of("table:a", "table:b"));
+            merge.setDynamicResult(ctx -> NodeExecutionResult.success(
+                "core:merge", Map.of("i", ctx.itemIndex())));
+            nodeMap.put("core:merge", merge);
+            nodeMap.put("table:a", new TestNode("table:a", NodeType.MCP));
+            nodeMap.put("table:b", new TestNode("table:b", NodeType.MCP));
+
+            // DENSE in-memory results for every routed item -> inMemorySlotsComplete == true -> warm skip.
+            SplitContext splitContext = SplitContext.create("core:split:0", List.of("w", "x", "y", "z"))
+                .withResults("table:a", java.util.Arrays.asList(
+                    Map.of("v", 0), Map.of("v", 1), Map.of("v", 2), Map.of("v", 3)))
+                .withResults("table:b", java.util.Arrays.asList(
+                    Map.of("v", 0), Map.of("v", 1), Map.of("v", 2), Map.of("v", 3)));
+            when(contextManager.findActiveContext(eq("run1"), eq("core:merge"), eq(0), any()))
+                .thenReturn(Optional.of(splitContext));
+            when(repo.findCompletedItemIndicesByEpoch("run1", "table:a", 0)).thenReturn(List.of(0, 1));
+            when(repo.findCompletedItemIndicesByEpoch("run1", "table:b", 0)).thenReturn(List.of(2, 3));
+            when(context.withGlobalData(any(), any())).thenReturn(context);
+            when(context.withItemIndex(anyInt())).thenReturn(context);
+
+            local.execute(merge, context, "run1", nodeMap);
+
+            org.mockito.Mockito.verify(svc, org.mockito.Mockito.never())
+                .loadPerItemOutputsByStepKey(anyString(), anyInt(), anyString());
+            local.shutdown();
+        }
+
+        @Test
+        @DisplayName("read path COLD: a cross-item consumer whose resultsByNode is empty (cross-pod/restart) issues exactly one durable epoch query")
+        void readPathColdMemoryIssuesDurableQuery() {
+            WorkflowStepDataRepository repo = org.mockito.Mockito.mock(WorkflowStepDataRepository.class);
+            com.apimarketplace.orchestrator.services.StepOutputService svc =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.StepOutputService.class);
+            SplitAwareNodeExecutor local = new SplitAwareNodeExecutor(
+                contextManager, null, null, null, repo, null, Executors.newFixedThreadPool(2));
+            local.setStepOutputService(svc);
+
+            TestNode merge = new TestNode("core:merge", NodeType.MERGE);
+            merge.setPredecessors(List.of("table:a", "table:b"));
+            merge.setDynamicResult(ctx -> NodeExecutionResult.success(
+                "core:merge", Map.of("i", ctx.itemIndex())));
+            nodeMap.put("core:merge", merge);
+            nodeMap.put("table:a", new TestNode("table:a", NodeType.MCP));
+            nodeMap.put("table:b", new TestNode("table:b", NodeType.MCP));
+
+            // EMPTY resultsByNode -> the cross-pod/restart state restoreContext leaves behind
+            // (items rebuilt, per-node results not) -> inMemorySlotsComplete == false -> durable load fires.
+            SplitContext splitContext = SplitContext.create("core:split:0", List.of("w", "x", "y", "z"));
+            when(contextManager.findActiveContext(eq("run1"), eq("core:merge"), eq(0), any()))
+                .thenReturn(Optional.of(splitContext));
+            when(repo.findCompletedItemIndicesByEpoch("run1", "table:a", 0)).thenReturn(List.of(0, 1));
+            when(repo.findCompletedItemIndicesByEpoch("run1", "table:b", 0)).thenReturn(List.of(2, 3));
+            when(context.withGlobalData(any(), any())).thenReturn(context);
+            when(context.withItemIndex(anyInt())).thenReturn(context);
+            when(context.runId()).thenReturn("run1");
+            when(context.tenantId()).thenReturn("tenant1");
+            when(svc.loadPerItemOutputsByStepKey("run1", 0, "tenant1")).thenReturn(java.util.Map.of());
+
+            local.execute(merge, context, "run1", nodeMap);
+
+            org.mockito.Mockito.verify(svc, org.mockito.Mockito.times(1))
+                .loadPerItemOutputsByStepKey("run1", 0, "tenant1");
+            local.shutdown();
+        }
+
+        @Test
+        @DisplayName("inMemorySlotsComplete: empty cache / null slot / short list -> not warm (load); fully dense -> warm (skip)")
+        void inMemorySlotsCompleteBranches() {
+            java.util.Set<Integer> routed = java.util.Set.of(0, 1, 2);
+
+            // Empty resultsByNode (post-restore) -> not warm, must allow the durable backfill.
+            assertThat(executor.inMemorySlotsComplete(
+                SplitContext.create("core:s:0", List.of("a", "b", "c")), routed)).isFalse();
+
+            // Every present node dense for every routed item -> warm, skip the durable read.
+            SplitContext dense = SplitContext.create("core:s:0", List.of("a", "b", "c"))
+                .withResults("agent:classify", java.util.Arrays.asList(
+                    Map.of("c", "0"), Map.of("c", "1"), Map.of("c", "2")));
+            assertThat(executor.inMemorySlotsComplete(dense, routed)).isTrue();
+
+            // A null slot for a routed item -> not warm (async-partial gap).
+            SplitContext nullSlot = SplitContext.create("core:s:0", List.of("a", "b", "c"))
+                .withResults("agent:classify", java.util.Arrays.asList(
+                    Map.of("c", "0"), null, Map.of("c", "2")));
+            assertThat(executor.inMemorySlotsComplete(nullSlot, routed)).isFalse();
+
+            // A short list (routed item 2 absent) -> not warm.
+            SplitContext shortList = SplitContext.create("core:s:0", List.of("a", "b", "c"))
+                .withResults("agent:classify", java.util.Arrays.asList(
+                    Map.of("c", "0"), Map.of("c", "1")));
+            assertThat(executor.inMemorySlotsComplete(shortList, routed)).isFalse();
+
+            // Null split context -> not warm (defensive).
+            assertThat(executor.inMemorySlotsComplete(null, routed)).isFalse();
+        }
+
+        @Test
+        @DisplayName("readsNonSplitPredecessor: direct split successor -> false (no backfill); any other predecessor (bare or ported) -> true")
+        void readsNonSplitPredecessorPredicate() {
+            // Direct split successor: only predecessor is the split node itself -> false.
+            TestNode direct = new TestNode("core:tag", NodeType.TRANSFORM);
+            direct.setPredecessors(List.of("core:per_tag"));
+            assertThat(executor.readsNonSplitPredecessor(direct, "core:per_tag")).isFalse();
+
+            // Split id carries an item suffix (core:per_tag:0) - getNodeKey normalizes both sides.
+            assertThat(executor.readsNonSplitPredecessor(direct, "core:per_tag:0")).isFalse();
+
+            // Non-adjacent predecessor across an approval (ported id core:gate:approved) -> true.
+            TestNode observe = new TestNode("core:observe", NodeType.TRANSFORM);
+            observe.setPredecessors(List.of("core:gate:approved"));
+            assertThat(executor.readsNonSplitPredecessor(observe, "core:per_tag")).isTrue();
+
+            // Plain non-split predecessor (no port) -> true.
+            TestNode chained = new TestNode("mcp:send", NodeType.MCP);
+            chained.setPredecessors(List.of("core:tag"));
+            assertThat(executor.readsNonSplitPredecessor(chained, "core:per_tag")).isTrue();
+
+            // Mixed: one predecessor is the split, another is not -> true (reads a prior per-item node).
+            TestNode mixed = new TestNode("mcp:m", NodeType.MCP);
+            mixed.setPredecessors(java.util.Arrays.asList("core:per_tag", "core:tag"));
+            assertThat(executor.readsNonSplitPredecessor(mixed, "core:per_tag")).isTrue();
+
+            // No predecessors / null args -> false (defensive).
+            assertThat(executor.readsNonSplitPredecessor(new TestNode("mcp:x", NodeType.MCP), "core:per_tag")).isFalse();
+            assertThat(executor.readsNonSplitPredecessor(null, "core:per_tag")).isFalse();
+            assertThat(executor.readsNonSplitPredecessor(direct, null)).isFalse();
+        }
+
+        @Test
+        @DisplayName("read path COLD (plain successor, non-adjacent predecessor): empty resultsByNode issues the durable query that closes the restart-resume collapse")
+        void plainNonAdjacentSuccessorColdMemoryIssuesDurableQuery() {
+            WorkflowStepDataRepository repo = org.mockito.Mockito.mock(WorkflowStepDataRepository.class);
+            com.apimarketplace.orchestrator.services.StepOutputService svc =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.StepOutputService.class);
+            SplitAwareNodeExecutor local = new SplitAwareNodeExecutor(
+                contextManager, null, null, null, repo, null, Executors.newFixedThreadPool(2));
+            local.setStepOutputService(svc);
+
+            // A PLAIN transform (NOT a cross-item consumer) that reads a NON-adjacent predecessor
+            // (core:tag, across an approval) - the exact shape proven to collapse on a restart resume.
+            TestNode observe = new TestNode("core:observe", NodeType.TRANSFORM);
+            observe.setPredecessors(List.of("core:gate:approved"));
+            observe.setDynamicResult(ctx -> NodeExecutionResult.success(
+                "core:observe", Map.of("i", ctx.itemIndex())));
+            nodeMap.put("core:observe", observe);
+            nodeMap.put("core:gate", new TestNode("core:gate", NodeType.APPROVAL));
+
+            // EMPTY resultsByNode = the cross-pod/restart state (singleton wiped) -> not warm -> load fires.
+            SplitContext splitContext = SplitContext.create("core:per_tag", List.of("alpha", "beta", "gamma"));
+            when(contextManager.findActiveContext(eq("run1"), eq("core:observe"), eq(0), any()))
+                .thenReturn(Optional.of(splitContext));
+            // observe's predecessor carries the approval "approved" port, so routing resolves the
+            // approved item set from the branch table - all 3 items were approved (resolve-all).
+            when(repo.findItemIndicesBySelectedBranchAndEpoch("run1", "core:gate", "approved", 0))
+                .thenReturn(List.of(0, 1, 2));
+            when(context.withGlobalData(any(), any())).thenReturn(context);
+            when(context.withItemIndex(anyInt())).thenReturn(context);
+            when(context.runId()).thenReturn("run1");
+            when(context.tenantId()).thenReturn("tenant1");
+            when(svc.loadPerItemOutputsByStepKey("run1", 0, "tenant1")).thenReturn(java.util.Map.of());
+
+            local.execute(observe, context, "run1", nodeMap);
+
+            org.mockito.Mockito.verify(svc, org.mockito.Mockito.times(1))
+                .loadPerItemOutputsByStepKey("run1", 0, "tenant1");
+            local.shutdown();
+        }
+
+        @Test
+        @DisplayName("read path WARM (plain non-adjacent successor): a dense resultsByNode issues ZERO durable queries (linear B-reads-A chain stays query-free)")
+        void plainNonAdjacentSuccessorWarmMemorySkipsDurableQuery() {
+            WorkflowStepDataRepository repo = org.mockito.Mockito.mock(WorkflowStepDataRepository.class);
+            com.apimarketplace.orchestrator.services.StepOutputService svc =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.StepOutputService.class);
+            SplitAwareNodeExecutor local = new SplitAwareNodeExecutor(
+                contextManager, null, null, null, repo, null, Executors.newFixedThreadPool(2));
+            local.setStepOutputService(svc);
+
+            // Plain transform reading a NON-adjacent predecessor (core:tag) - same shape as the cold
+            // test, but here resultsByNode is DENSE for every routed item, the healthy single-pod state.
+            TestNode observe = new TestNode("core:observe", NodeType.TRANSFORM);
+            observe.setPredecessors(List.of("core:gate:approved"));
+            observe.setDynamicResult(ctx -> NodeExecutionResult.success(
+                "core:observe", Map.of("i", ctx.itemIndex())));
+            nodeMap.put("core:observe", observe);
+            nodeMap.put("core:gate", new TestNode("core:gate", NodeType.APPROVAL));
+
+            // DENSE resultsByNode for every routed item -> inMemorySlotsComplete == true -> warm skip,
+            // even though this plain node passes readsNonSplitPredecessor.
+            SplitContext splitContext = SplitContext.create("core:per_tag", List.of("alpha", "beta", "gamma"))
+                .withResults("core:tag", java.util.Arrays.asList(
+                    Map.of("v", "tag-alpha"), Map.of("v", "tag-beta"), Map.of("v", "tag-gamma")));
+            when(contextManager.findActiveContext(eq("run1"), eq("core:observe"), eq(0), any()))
+                .thenReturn(Optional.of(splitContext));
+            when(repo.findItemIndicesBySelectedBranchAndEpoch("run1", "core:gate", "approved", 0))
+                .thenReturn(List.of(0, 1, 2));
+            when(context.withGlobalData(any(), any())).thenReturn(context);
+            when(context.withItemIndex(anyInt())).thenReturn(context);
+            when(context.runId()).thenReturn("run1");
+            when(context.tenantId()).thenReturn("tenant1");
+
+            local.execute(observe, context, "run1", nodeMap);
+
+            org.mockito.Mockito.verify(svc, org.mockito.Mockito.never())
+                .loadPerItemOutputsByStepKey(anyString(), anyInt(), anyString());
+            local.shutdown();
+        }
+
+        @Test
+        @DisplayName("read path: a plain DIRECT split successor with empty resultsByNode still issues ZERO durable queries (first-node hot path stays query-free)")
+        void plainDirectSuccessorColdMemoryStillSkipsDurableQuery() {
+            WorkflowStepDataRepository repo = org.mockito.Mockito.mock(WorkflowStepDataRepository.class);
+            com.apimarketplace.orchestrator.services.StepOutputService svc =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.StepOutputService.class);
+            SplitAwareNodeExecutor local = new SplitAwareNodeExecutor(
+                contextManager, null, null, null, repo, null, Executors.newFixedThreadPool(2));
+            local.setStepOutputService(svc);
+
+            // FIRST node after the split: its only predecessor is the split node -> direct successor.
+            TestNode tag = new TestNode("core:tag", NodeType.TRANSFORM);
+            tag.setPredecessors(List.of("core:per_tag"));
+            tag.setDynamicResult(ctx -> NodeExecutionResult.success("core:tag", Map.of("i", ctx.itemIndex())));
+            nodeMap.put("core:tag", tag);
+            nodeMap.put("core:per_tag", new TestNode("core:per_tag", NodeType.SPLIT));
+
+            // Even with an EMPTY map (legitimately empty - nothing ran yet) the direct successor
+            // must NOT pay a durable read (there is no prior per-item predecessor to backfill).
+            SplitContext splitContext = SplitContext.create("core:per_tag", List.of("alpha", "beta", "gamma"));
+            when(contextManager.findActiveContext(eq("run1"), eq("core:tag"), eq(0), any()))
+                .thenReturn(Optional.of(splitContext));
+            when(context.withGlobalData(any(), any())).thenReturn(context);
+            when(context.withItemIndex(anyInt())).thenReturn(context);
+            when(context.runId()).thenReturn("run1");
+            when(context.tenantId()).thenReturn("tenant1");
+
+            local.execute(tag, context, "run1", nodeMap);
+
+            org.mockito.Mockito.verify(svc, org.mockito.Mockito.never())
+                .loadPerItemOutputsByStepKey(anyString(), anyInt(), anyString());
+            local.shutdown();
+        }
+    }
+
+    @Nested
     @DisplayName("async-coalesce barrier - per-epoch setRunningCount (P2.3.1)")
     class AsyncCoalesceBarrierEpochThreading {
 

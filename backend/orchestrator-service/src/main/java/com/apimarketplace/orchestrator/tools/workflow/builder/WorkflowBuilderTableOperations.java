@@ -259,6 +259,8 @@ public class WorkflowBuilderTableOperations {
                 }
                 Object limit = params.get("limit");
                 crud.put("limit", limit != null ? limit : 50);
+                Object offset = params.get("offset");
+                if (offset != null) crud.put("offset", offset);
             }
             case "update_row" -> {
                 Object where = params.get("where");
@@ -285,6 +287,8 @@ public class WorkflowBuilderTableOperations {
                 if (limit == null) limit = params.get("max_items");
                 if (limit == null) limit = params.get("maxItems");
                 crud.put("limit", limit != null ? limit : 100);
+                Object offset = params.get("offset");
+                if (offset != null) crud.put("offset", offset);
             }
         }
 
@@ -303,6 +307,7 @@ public class WorkflowBuilderTableOperations {
         stepParams.remove("where");
         stepParams.remove("set");
         stepParams.remove("limit");
+        stepParams.remove("offset");
         stepParams.remove("max_items");
         stepParams.remove("maxItems");
         stepParams.remove("action");

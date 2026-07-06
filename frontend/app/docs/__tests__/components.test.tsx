@@ -41,12 +41,15 @@ describe('DocsNav', () => {
     expect(screen.getByRole('link', { name: 'Workflows' })).not.toHaveAttribute('aria-current');
   });
 
-  it('renders roadmap stubs as non-link text with a badge', () => {
+  it('renders the pages added in the docs rebuild as real links', () => {
     nav.path = '/';
     render(<DocsNav />);
-    expect(screen.queryByRole('link', { name: /Access, roles/ })).toBeNull();
-    expect(screen.getByText('Access, roles & SSO')).toBeInTheDocument();
-    expect(screen.getAllByText('Soon').length).toBeGreaterThan(0);
+    // The former "Soon" roadmap stubs are now live pages, alongside the new
+    // subject pages, so each resolves to a navigable link (not muted stub text).
+    for (const name of ['Runs & execution', 'Models & providers', 'Skills', 'Files & storage', 'Organizations & roles', 'Plans & billing', 'Expressions & variables', 'REST API & webhooks']) {
+      expect(screen.getByRole('link', { name })).toBeInTheDocument();
+    }
+    expect(screen.queryByText('Soon')).toBeNull();
   });
 
   it('filters the visible pages as the user types', () => {

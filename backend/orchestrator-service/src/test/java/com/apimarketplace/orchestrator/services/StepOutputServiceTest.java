@@ -51,6 +51,88 @@ class StepOutputServiceTest {
         return row;
     }
 
+    /** A storage row mock carrying a step key + item index + JSONB payload. */
+    private StorageEntity rowWithKey(String stepKey, Integer itemIndex, String dataJson) {
+        StorageEntity row = row(itemIndex, dataJson);
+        lenient().when(row.getStepKey()).thenReturn(stepKey);
+        return row;
+    }
+
+    /** A storage row mock also carrying the ordering fields (createdAt, spawn, id). */
+    private StorageEntity rowFull(String stepKey, Integer itemIndex, String dataJson,
+            java.time.Instant createdAt, Integer spawn, java.util.UUID id) {
+        StorageEntity row = rowWithKey(stepKey, itemIndex, dataJson);
+        lenient().when(row.getCreatedAt()).thenReturn(createdAt);
+        lenient().when(row.getSpawn()).thenReturn(spawn);
+        lenient().when(row.getId()).thenReturn(id);
+        return row;
+    }
+
+    @Test
+    @DisplayName("loadPerItemOutputsByStepKey groups every node's per-item output by stepKey then item index")
+    void loadPerItemOutputsByStepKeyGroups() {
+        StorageEntity a0 = rowWithKey("core:parse_headers", 0, "{\"output\":{\"subject\":\"S0\"}}");
+        StorageEntity a1 = rowWithKey("core:parse_headers", 1, "{\"output\":{\"subject\":\"S1\"}}");
+        StorageEntity c0 = rowWithKey("agent:classify", 0, "{\"output\":{\"selected_category\":\"billing\"}}");
+        StorageEntity c2 = rowWithKey("agent:classify", 2, "{\"output\":{\"selected_category\":\"refund_clear\"}}");
+        StorageEntity blank = rowWithKey("core:noise", 0, "");
+        when(storageRepository.findByRunIdAndEpoch("run-1", 0, "tenant-1"))
+            .thenReturn(List.of(a0, a1, c0, c2, blank));
+
+        Map<String, Map<Integer, Object>> out = service.loadPerItemOutputsByStepKey("run-1", 0, "tenant-1");
+
+        assertEquals(Map.of("subject", "S0"), out.get("core:parse_headers").get(0));
+        assertEquals(Map.of("subject", "S1"), out.get("core:parse_headers").get(1));
+        assertEquals(Map.of("selected_category", "billing"), out.get("agent:classify").get(0));
+        assertEquals(Map.of("selected_category", "refund_clear"), out.get("agent:classify").get(2));
+        assertEquals(2, out.get("agent:classify").size(),
+            "only items with a durable row are present (unrouted item 1 absent)");
+        assertEquals(false, out.containsKey("core:noise"), "blank-payload rows are skipped");
+    }
+
+    @Test
+    @DisplayName("loadPerItemOutputsByStepKey: latest spawn/rerun wins for the same stepKey+item")
+    void loadPerItemOutputsByStepKeyLastWriteWins() {
+        // Rows arrive createdAt ASC, so the later one overwrites the earlier for the same item.
+        StorageEntity older = rowWithKey("agent:classify", 1, "{\"output\":{\"selected_category\":\"bug\"}}");
+        StorageEntity newer = rowWithKey("agent:classify", 1, "{\"output\":{\"selected_category\":\"billing\"}}");
+        when(storageRepository.findByRunIdAndEpoch("run-1", 0, "tenant-1"))
+            .thenReturn(List.of(older, newer));
+
+        Map<String, Map<Integer, Object>> out = service.loadPerItemOutputsByStepKey("run-1", 0, "tenant-1");
+
+        assertEquals(Map.of("selected_category", "billing"), out.get("agent:classify").get(1));
+    }
+
+    @Test
+    @DisplayName("loadPerItemOutputsByStepKey: latest write wins on a same-timestamp tie, independent of the query's id-DESC row order")
+    void loadPerItemOutputsByStepKeyLatestWinsAcrossTiebreak() {
+        // findByRunIdAndEpoch orders `createdAt, id DESC`, so a blind put()-last-wins over its raw
+        // output would pick the LOWER id (older write) on a same-millisecond tie. The method re-sorts
+        // ascending by (createdAt, spawn, id) so the later spawn/rerun wins - matching loadPerItemNodeOutputs.
+        java.time.Instant t = java.time.Instant.parse("2026-07-05T00:00:00Z");
+        StorageEntity older = rowFull("agent:classify", 1, "{\"output\":{\"selected_category\":\"OLD\"}}",
+            t, 0, java.util.UUID.fromString("00000000-0000-0000-0000-000000000001"));
+        StorageEntity newer = rowFull("agent:classify", 1, "{\"output\":{\"selected_category\":\"NEW\"}}",
+            t, 1, java.util.UUID.fromString("00000000-0000-0000-0000-0000000000ff"));
+        // Deliberately supply the rows in the query's `id DESC` order (newer id first, older id last)
+        // so a naive last-wins fold would wrongly pick OLD. The re-sort must still surface NEW.
+        when(storageRepository.findByRunIdAndEpoch("run-1", 0, "tenant-1"))
+            .thenReturn(List.of(newer, older));
+
+        Map<String, Map<Integer, Object>> out = service.loadPerItemOutputsByStepKey("run-1", 0, "tenant-1");
+
+        assertEquals(Map.of("selected_category", "NEW"), out.get("agent:classify").get(1),
+            "the latest write (greatest spawn/id at equal createdAt) must win, not the query's last row");
+    }
+
+    @Test
+    @DisplayName("loadPerItemOutputsByStepKey returns empty when the epoch has no durable rows")
+    void loadPerItemOutputsByStepKeyEmpty() {
+        when(storageRepository.findByRunIdAndEpoch("run-1", 3, "tenant-1")).thenReturn(List.of());
+        assertEquals(Map.of(), service.loadPerItemOutputsByStepKey("run-1", 3, "tenant-1"));
+    }
+
     @Test
     @DisplayName("unwraps the persisted `output` wrapper and keys by split item index")
     void unwrapsOutputAndKeysByItemIndex() {

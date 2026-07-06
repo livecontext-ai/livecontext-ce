@@ -10,10 +10,11 @@ import { DataTableToolbar } from '../DataTableToolbar';
 import type { DataTableController } from '../useDataTableController';
 
 /**
- * The table-detail (/app/tables/{id}) row/column selection actions float in the
- * bottom-center SelectionActionBar - but ONLY standalone. Embedded usages (side
- * panel / modal / builder inspector) keep the inline toolbar, because an
- * `absolute` bar anchored to <main> would float over the whole app, not the panel.
+ * Row/column selection actions float in the bottom-center SelectionActionBar in
+ * every context. Standalone (/app/tables/{id}) the `absolute` pill anchors to
+ * <main>; embedded (side panel / modal / builder inspector) it anchors to the
+ * `relative` DataTable container so it stays inside the panel. The toolbar renders
+ * the same bar either way - the anchoring is decided by the container, not here.
  */
 
 const baseController = (over: Partial<DataTableController> = {}): DataTableController => ({
@@ -44,10 +45,10 @@ const baseController = (over: Partial<DataTableController> = {}): DataTableContr
   ...over,
 } as unknown as DataTableController);
 
-function renderToolbar(controller: DataTableController, embedded?: boolean) {
+function renderToolbar(controller: DataTableController) {
   return render(
     <NextIntlClientProvider locale="en" messages={enMessages as Record<string, unknown>}>
-      <DataTableToolbar controller={controller} embedded={embedded} />
+      <DataTableToolbar controller={controller} />
     </NextIntlClientProvider>,
   );
 }
@@ -55,7 +56,7 @@ function renderToolbar(controller: DataTableController, embedded?: boolean) {
 afterEach(cleanup);
 
 describe('DataTableToolbar - selection actions placement', () => {
-  it('standalone: floats the actions in the SelectionActionBar with a "{count} selected" label', () => {
+  it('floats the actions in the SelectionActionBar with a "{count} selected" label', () => {
     renderToolbar(baseController());
     const bar = screen.getByTestId('selection-action-bar');
     expect(within(bar).getByText('1 selected')).toBeInTheDocument();
@@ -63,22 +64,13 @@ describe('DataTableToolbar - selection actions placement', () => {
     expect(within(bar).getByRole('button', { name: 'Delete Rows' })).toBeInTheDocument();
   });
 
-  it('standalone: the bar × clears BOTH row and column selection', () => {
+  it('the bar × clears BOTH row and column selection', () => {
     const clearSelection = vi.fn();
     const clearColumnSelection = vi.fn();
     renderToolbar(baseController({ clearSelection, clearColumnSelection }));
     fireEvent.click(within(screen.getByTestId('selection-action-bar')).getByTestId('selection-action-bar-clear'));
     expect(clearSelection).toHaveBeenCalledTimes(1);
     expect(clearColumnSelection).toHaveBeenCalledTimes(1);
-  });
-
-  it('embedded: keeps actions inline - no floating bar is rendered', () => {
-    renderToolbar(baseController(), true);
-    expect(screen.queryByTestId('selection-action-bar')).not.toBeInTheDocument();
-    // The same actions still render inline (Create Table button is present).
-    expect(screen.getByRole('button', { name: 'Create Table' })).toBeInTheDocument();
-    // …with an inline Cancel (clear) control instead of the bar's × icon.
-    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
   });
 
   it('hides the delete-rows action in read-only mode', () => {

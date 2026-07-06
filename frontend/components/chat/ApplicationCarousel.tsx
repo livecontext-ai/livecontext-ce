@@ -20,11 +20,12 @@ interface ApplicationCarouselProps {
   onTargetConsumed?: () => void;
   /**
    * Marketplace-preview mode. Forwards to {@link ApplicationTabContent} so it
-   * (a) hides the trigger Launch button - anonymous visitors must not be able
-   * to fire the workflow against the publisher's tenant, (b) hides the
-   * expand/collapse fullscreen toggle - preview pages are already full-bleed,
-   * and (c) portals the floating pill toolbar to {@code document.body} so it
-   * escapes the preview shell's {@code overflow-hidden}.
+   * (a) hides the trigger Launch + Continue buttons - anonymous visitors must
+   * not be able to fire the workflow against the publisher's tenant, and
+   * (b) portals the floating pill toolbar to {@code document.body} so it
+   * escapes the preview shell's {@code overflow-hidden}. The expand/collapse
+   * fullscreen toggle stays available (its expanded view is a full-viewport
+   * {@code document.body} portal, so it works inside the preview shell).
    */
   previewMode?: boolean;
 }

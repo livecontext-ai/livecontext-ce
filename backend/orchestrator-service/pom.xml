@@ -454,6 +454,12 @@
                                 <include>**/e2e/nodes/GuardrailAgentE2ETest.java</include>
                                 <include>**/e2e/nodes/XmlE2ETest.java</include>
                                 <include>**/e2e/nodes/SkipCascadeMergeE2ETest.java</include>
+                                <!-- Guards the all-epochs cumulative status overlay: a branch
+                                     completed in an earlier epoch but skipped/deactivated in the
+                                     latest one must colour COMPLETED on the all-epochs canvas
+                                     (success/failure win over skipped), while never-taken branches
+                                     stay SKIPPED. -->
+                                <include>**/e2e/nodes/AllEpochAggregateStatusE2ETest.java</include>
                                 <!-- ComplexPatterns + CombinationStress carry the richest nestings
                                      (loop-in-fork, fork-in-split, nested forks, split→agg→split→agg,
                                      fork→agents→merge, switch×fork×merge, decision-in-loop). They used to

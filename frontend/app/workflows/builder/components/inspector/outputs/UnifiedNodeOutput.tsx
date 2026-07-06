@@ -30,6 +30,12 @@ export interface OutputSchema {
   type: string;
   description?: string;
   children?: OutputSchema[];
+  /**
+   * Runtime-only field: injected into the execution context at run time (e.g. a Split's
+   * current_item / current_index, resolvable only inside the split body) and NOT part of the
+   * persisted node output. Rendered with a "runtime" badge so authors know it is body-scoped.
+   */
+  runtimeOnly?: boolean;
 }
 
 export interface UnifiedNodeOutputProps {
@@ -161,16 +167,29 @@ function SchemaNode({ item }: SchemaNodeProps) {
   const hasChildren = item.children && item.children.length > 0;
   const isExpandable = hasChildren || item.type === 'object' || item.type === 'array';
 
+  // Runtime-only fields (e.g. a Split's current_item / current_index) resolve only inside the
+  // node's body at run time and are not persisted. Flag them so authors don't expect them in the
+  // stored output. Shown in both OutputColumn and the InputColumn ancestor variable picker.
+  const runtimeBadge = item.runtimeOnly ? (
+    <span
+      className="text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wider font-mono flex-shrink-0 bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
+      title="Runtime value: resolvable only inside this node's body (e.g. {{item}} / current_item), not part of the persisted output"
+    >
+      runtime
+    </span>
+  ) : null;
+
   // Leaf node (no children, not object/array)
   if (!isExpandable) {
     return (
       <div
-        className="flex items-center justify-between text-sm font-normal text-[var(--text-primary)] w-full transition-colors rounded-sm px-1 py-1 cursor-default"
+        className="flex items-center justify-between gap-2 text-sm font-normal text-[var(--text-primary)] w-full transition-colors rounded-sm px-1 py-1 cursor-default"
         title={item.description || item.key}
       >
         <span className="truncate flex-1 min-w-0 text-sm" title={item.key}>
           {item.key}
         </span>
+        {runtimeBadge}
         <span
           className={clsx(
             "text-xs px-1.5 py-0.5 rounded uppercase tracking-wider font-mono flex-shrink-0",
@@ -202,6 +221,7 @@ function SchemaNode({ item }: SchemaNodeProps) {
             )}
           />
         </div>
+        {runtimeBadge}
         <span
           className={clsx(
             "text-xs px-1.5 py-0.5 rounded uppercase tracking-wider font-mono flex-shrink-0",

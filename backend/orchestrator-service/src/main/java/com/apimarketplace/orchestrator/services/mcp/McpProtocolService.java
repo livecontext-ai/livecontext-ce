@@ -10,8 +10,11 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -32,16 +35,44 @@ public class McpProtocolService {
     private final ToolsRegistrationService registrationService;
     private final ObjectMapper objectMapper;
 
+    /**
+     * Cloud tool aggregation (agent/datasource/interface/catalog siblings). Present
+     * only in microservice mode; absent (empty) in the CE monolith, where every
+     * provider is already in the local registry. See {@code RemoteToolAggregationConfig}.
+     */
+    private final ObjectProvider<AggregatedToolCatalog> aggregatedCatalogProvider;
+    private final ObjectProvider<RemoteToolGateway> remoteToolGatewayProvider;
+
     public boolean hasTool(String toolName) {
-        return registry.hasTool(toolName);
+        if (registry.hasTool(toolName)) {
+            return true;
+        }
+        AggregatedToolCatalog aggregated = aggregatedCatalogProvider.getIfAvailable();
+        return aggregated != null && aggregated.knows(toolName);
     }
 
     /**
-     * All registered tools in MCP {@code tools/list} format
-     * ({@code name} / {@code description} / {@code inputSchema}).
+     * All available tools in MCP {@code tools/list} format
+     * ({@code name} / {@code description} / {@code inputSchema}): the local registry
+     * UNION the aggregated sibling-service tools (cloud only). Local wins on a name
+     * clash; the merged list is name-sorted for a stable ordering.
      */
     public List<Map<String, Object>> listTools() {
-        return registry.getToolsInMcpFormat();
+        List<Map<String, Object>> local = registry.getToolsInMcpFormat();
+        AggregatedToolCatalog aggregated = aggregatedCatalogProvider.getIfAvailable();
+        if (aggregated == null) {
+            return local; // monolith: every provider is already local
+        }
+        Map<String, Map<String, Object>> byName = new LinkedHashMap<>();
+        for (Map<String, Object> tool : local) {
+            byName.putIfAbsent(String.valueOf(tool.get("name")), tool);
+        }
+        for (Map<String, Object> tool : aggregated.mcpTools()) {
+            byName.putIfAbsent(String.valueOf(tool.get("name")), tool);
+        }
+        return byName.values().stream()
+                .sorted(Comparator.comparing(t -> String.valueOf(t.get("name"))))
+                .toList();
     }
 
     /**
@@ -55,20 +86,31 @@ public class McpProtocolService {
                                         String tenantId,
                                         String orgId,
                                         String orgRole) throws JsonProcessingException {
-        ToolsProvider.ToolExecutionContext context = new ToolsProvider.ToolExecutionContext(
-                tenantId,
-                Map.of(),
-                Map.of(),
-                Set.of(),  // No approved services for MCP calls
-                null,      // viewingWorkflowId
-                null,      // viewingWorkflowName
-                orgId,
-                orgRole
-        );
-
-        ToolsProvider.ToolExecutionResult result = registrationService.executeTool(
-                toolName, arguments, context
-        );
+        ToolsProvider.ToolExecutionResult result;
+        if (registry.hasTool(toolName)) {
+            // Local tool: execute in-process (fast path, also the only path in the monolith).
+            ToolsProvider.ToolExecutionContext context = new ToolsProvider.ToolExecutionContext(
+                    tenantId,
+                    Map.of(),
+                    Map.of(),
+                    Set.of(),  // No approved services for MCP calls
+                    null,      // viewingWorkflowId
+                    null,      // viewingWorkflowName
+                    orgId,
+                    orgRole
+            );
+            result = registrationService.executeTool(toolName, arguments, context);
+        } else {
+            // Aggregated sibling tool (cloud only): route to the owning service.
+            RemoteToolGateway gateway = remoteToolGatewayProvider.getIfAvailable();
+            if (gateway == null) {
+                result = ToolsProvider.ToolExecutionResult.failure(
+                        com.apimarketplace.agent.tools.ToolErrorCode.TOOL_NOT_FOUND,
+                        "Unknown tool: " + toolName);
+            } else {
+                result = gateway.execute(toolName, arguments, tenantId, orgId, orgRole);
+            }
+        }
 
         if (result.success()) {
             String textContent;

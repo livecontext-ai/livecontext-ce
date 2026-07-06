@@ -32,7 +32,7 @@ export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNod
   const t = useTranslations('workflowBuilder.nodes');
   // "Item X / Y" semantic label for the spawn-item pager (run-mode context).
   const tRun = useTranslations('runMode');
-  const { isRunMode, isPreviewOnly, runId, viewingEpoch } = useWorkflowMode();
+  const { isRunMode, isPreviewOnly, isApplicationMode, runId, viewingEpoch } = useWorkflowMode();
   const { targetRef: nodeRef, isVisible: showActions, show } = useHoverVisibility<HTMLDivElement>();
 
   // Step-by-step execution status - pass node data for accurate backend ID mapping
@@ -331,11 +331,14 @@ export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNod
         />
 
         {/* Centralized bottom bar: interface button + play/rerun.
-            Hidden in isPreviewOnly (marketplace preview): the 'interface'
-            button opens the application carousel tab via a window event
-            that is meaningless outside the owner's /app/applications shell,
-            and no play/rerun is relevant on a frozen showcase clone. */}
-        {isRunMode && !isPreviewOnly && (
+            Hidden in isPreviewOnly (marketplace preview): no play/rerun is
+            relevant on a frozen showcase clone.
+            Hidden in isApplicationMode too: inside an application the app is
+            ALREADY the main view, so the 'interface' button (which opens the
+            same app in the application panel) would just duplicate it left +
+            right. It stays visible in workflow surfaces, where opening the app
+            in the panel is the useful affordance. */}
+        {isRunMode && !isPreviewOnly && !isApplicationMode && (
           <NodeBottomBar
             hover={{ isVisible: showActions, onHover: show }}
             borderColor={borderColor}
@@ -535,8 +538,9 @@ export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNod
       />
 
       {/* Centralized bottom bar: interface button + play/rerun (isShowingHtml path).
-          Hidden in isPreviewOnly - same reasoning as the non-showing-html branch above. */}
-      {isRunMode && !isPreviewOnly && (
+          Hidden in isPreviewOnly / isApplicationMode - same reasoning as the
+          non-showing-html branch above. */}
+      {isRunMode && !isPreviewOnly && !isApplicationMode && (
         <NodeBottomBar
           hover={{ isVisible: showActions, onHover: show }}
           borderColor={borderColor}

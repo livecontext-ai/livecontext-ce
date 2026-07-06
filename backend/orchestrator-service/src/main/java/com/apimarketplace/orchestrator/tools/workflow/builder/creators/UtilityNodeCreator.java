@@ -1030,6 +1030,11 @@ public class UtilityNodeCreator extends CreatorBase {
         Integer offset = getInt(parameters, "offset", "skip");
         if (offset == null) offset = 0;
 
+        // input: the collection to trim. LimitNode requires it at runtime (fails with
+        // "Input expression is required" when absent), so a limit node built without it
+        // would always fail. Mirrors the sibling remove_duplicates node.
+        String input = getString(parameters, "input", "inputExpression", "items", "list");
+
         // 3. Build node
         String normalizedLabel = WorkflowBuilderSession.normalizeLabel(label);
         String nodeId = NodeType.LIMIT.buildNodeId(normalizedLabel);
@@ -1044,6 +1049,7 @@ public class UtilityNodeCreator extends CreatorBase {
         limitConfig.put("count", count);
         limitConfig.put("from", from);
         limitConfig.put("offset", offset);
+        if (input != null && !input.isBlank()) limitConfig.put("input", input);
 
         Map<String, Object> node = new LinkedHashMap<>();
         node.put("id", nodeId);
@@ -2314,6 +2320,12 @@ public class UtilityNodeCreator extends CreatorBase {
         config.put("statusCode", statusCode);
         if (body != null) config.put("body", body);
         config.put("contentType", contentType);
+        // headers: RespondToWebhookNode applies these custom response headers; forward them
+        // so the documented `headers` param is not silently dropped by the builder.
+        Object headers = parameters.get("headers");
+        if (headers instanceof Map<?, ?> headerMap && !headerMap.isEmpty()) {
+            config.put("headers", headerMap);
+        }
 
         Map<String, Object> node = new LinkedHashMap<>();
         node.put("id", nodeId);

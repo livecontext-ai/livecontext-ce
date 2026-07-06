@@ -6,10 +6,37 @@ describe('docs IA - DOCS_NAV / DOCS_PAGES', () => {
     const linkedItems = DOCS_NAV.flatMap((s) => s.items).filter((i) => i.href);
     const stubItems = DOCS_NAV.flatMap((s) => s.items).filter((i) => !i.href);
     expect(DOCS_PAGES).toHaveLength(linkedItems.length);
-    // Roadmap stubs (badge, no href) must never leak into the live/sitemap set.
-    expect(stubItems.length).toBeGreaterThan(0);
+    // Every subject now has a live page, so there are no roadmap stubs; if one is
+    // ever added back (badge, no href), it must never leak into the live/sitemap set.
     for (const stub of stubItems) {
       expect(DOCS_PAGES.find((p) => p.title === stub.title)).toBeUndefined();
+    }
+  });
+
+  it('exposes all 22 live pages across the six sections', () => {
+    expect(DOCS_NAV.map((s) => s.title)).toEqual([
+      'Get started',
+      'Build',
+      'AI',
+      'Data',
+      'Share & host',
+      'Reference',
+    ]);
+    expect(DOCS_PAGES).toHaveLength(22);
+    // The nine subjects added in the docs rebuild all resolve to a live href.
+    const hrefs = new Set(DOCS_PAGES.map((p) => p.href));
+    for (const href of [
+      '/runs',
+      '/models',
+      '/browser-agent',
+      '/skills',
+      '/files',
+      '/organizations',
+      '/billing',
+      '/expressions',
+      '/rest-api',
+    ]) {
+      expect(hrefs.has(href)).toBe(true);
     }
   });
 

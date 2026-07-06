@@ -1,11 +1,10 @@
 package com.apimarketplace.conversation.service.ai;
 
+import com.apimarketplace.agent.tools.remote.ToolServiceTopology;
+import com.apimarketplace.agent.tools.remote.ToolServiceTopology.ServiceKey;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-
-import java.util.Map;
-import java.util.Set;
 
 /**
  * Routes tool execution requests to the correct microservice.
@@ -18,16 +17,13 @@ import java.util.Set;
  *   - catalog → catalog-service
  *   - workflow, application, web_search, ... → orchestrator-service
  *
+ * The name→owner rules come from the shared {@link ToolServiceTopology} (single
+ * source of truth); this router only maps the owner to its configured base URL.
  * All services expose the same /api/agent-tools/execute endpoint format.
  */
 @Slf4j
 @Component
 public class ToolServiceRouter {
-
-    private static final Set<String> AGENT_SERVICE_TOOLS = Set.of("agent", "skill");
-    private static final Set<String> DATASOURCE_SERVICE_TOOLS = Set.of("table");
-    private static final Set<String> INTERFACE_SERVICE_TOOLS = Set.of("interface");
-    private static final Set<String> CATALOG_SERVICE_TOOLS = Set.of("catalog");
 
     private final String orchestratorUrl;
     private final String agentServiceUrl;
@@ -58,19 +54,13 @@ public class ToolServiceRouter {
      * @return the base service URL (e.g., "http://localhost:8088")
      */
     public String getServiceUrl(String toolName) {
-        if (AGENT_SERVICE_TOOLS.contains(toolName)) {
-            return agentServiceUrl;
-        }
-        if (DATASOURCE_SERVICE_TOOLS.contains(toolName)) {
-            return datasourceServiceUrl;
-        }
-        if (INTERFACE_SERVICE_TOOLS.contains(toolName)) {
-            return interfaceServiceUrl;
-        }
-        if (CATALOG_SERVICE_TOOLS.contains(toolName)) {
-            return catalogServiceUrl;
-        }
-        return orchestratorUrl;
+        return switch (ToolServiceTopology.serviceFor(toolName)) {
+            case AGENT -> agentServiceUrl;
+            case DATASOURCE -> datasourceServiceUrl;
+            case INTERFACE -> interfaceServiceUrl;
+            case CATALOG -> catalogServiceUrl;
+            case ORCHESTRATOR -> orchestratorUrl;
+        };
     }
 
     /**
@@ -87,10 +77,12 @@ public class ToolServiceRouter {
      * Get the service name for logging/debugging.
      */
     public String getServiceName(String toolName) {
-        if (AGENT_SERVICE_TOOLS.contains(toolName)) return "agent-service";
-        if (DATASOURCE_SERVICE_TOOLS.contains(toolName)) return "datasource-service";
-        if (INTERFACE_SERVICE_TOOLS.contains(toolName)) return "interface-service";
-        if (CATALOG_SERVICE_TOOLS.contains(toolName)) return "catalog-service";
-        return "orchestrator-service";
+        return switch (ToolServiceTopology.serviceFor(toolName)) {
+            case AGENT -> "agent-service";
+            case DATASOURCE -> "datasource-service";
+            case INTERFACE -> "interface-service";
+            case CATALOG -> "catalog-service";
+            case ORCHESTRATOR -> "orchestrator-service";
+        };
     }
 }

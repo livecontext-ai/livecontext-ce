@@ -124,6 +124,18 @@ public record WorkflowRunState(
             this(stepId, stepAlias, toolId, status, inputData, output, itemIndex, iteration,
                  httpStatus, errorMessage, startTime, endTime, executionTimeMs, dependencies, canExecute, null, null);
         }
+
+        /**
+         * Returns a copy of this step with a different {@code status}, preserving every
+         * other field. Used by the multi-epoch aggregate-status overlay in
+         * {@code StateReconstructor} to upgrade a display status without mutating the record.
+         */
+        public StepState withStatus(RunStatus newStatus) {
+            if (newStatus == this.status) return this;
+            return new StepState(stepId, stepAlias, toolId, newStatus, inputData, output, itemIndex,
+                iteration, httpStatus, errorMessage, startTime, endTime, executionTimeMs,
+                dependencies, canExecute, statusCounts, totalExecutionTimeMs);
+        }
     }
 
     /**

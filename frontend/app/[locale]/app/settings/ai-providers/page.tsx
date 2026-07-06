@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { Cloud, Key, Terminal, SlidersHorizontal, User, Shield, Info, Route } from "lucide-react";
+import { BotMessageSquare, Cloud, Key, Terminal, SlidersHorizontal, User, Shield, Info, Route } from "lucide-react";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
 import { useAuth } from "@/lib/providers/smart-providers";
 import { credentialService } from "@/lib/api/orchestrator/credential.service";
@@ -313,7 +313,7 @@ export default function AiProvidersPage() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 bg-theme-tertiary rounded-full flex items-center justify-center">
-            <Key className="w-5 h-5 text-theme-primary" />
+            <BotMessageSquare className="w-5 h-5 text-theme-primary" />
           </div>
           <div>
             <div className="flex items-center gap-1.5">

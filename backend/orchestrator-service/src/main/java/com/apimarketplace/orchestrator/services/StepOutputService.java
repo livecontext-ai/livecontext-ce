@@ -158,6 +158,71 @@ public class StepOutputService {
     }
 
     /**
+     * Durable per-item outputs for EVERY node that produced storage rows in one epoch,
+     * keyed by {@code stepKey → (itemIndex → node output)}. The epoch-scoped superset of
+     * {@link #loadPerItemNodeOutputs}: one query for the whole epoch instead of one per node.
+     *
+     * <p>Used by the split per-item read sites ({@code SplitAwareNodeExecutor.injectPredecessorPerItemOutputs}
+     * and {@code SplitMergeHandler.aggregateResults}) to backfill per-item predecessor outputs the
+     * in-memory {@code SplitContext.resultsByNode} is missing. The in-memory cache is per-pod RAM and
+     * is emptied by a cross-pod async-agent/signal resume ({@code restoreContext} rebuilds items only),
+     * a restart, or read before an async barrier seals - in all those cases a branch-rejoin merge (or
+     * any cross-item consumer) silently collapses each item to a single "item 0" value. This is the same
+     * durable fallback {@code SplitAggregateHandler.resolvePerItemResults} already applies for the
+     * {@code core:aggregate} node, generalised to every per-item read site.
+     *
+     * <p>Same unwrap + latest-spawn/rerun-wins semantics as {@link #loadPerItemNodeOutputs}: for a
+     * given {@code stepKey}+{@code itemIndex} the most recent write (greatest {@code createdAt}, then
+     * {@code spawn}, then {@code id}) wins. This method does NOT rely on the row order returned by the
+     * query: {@code findByRunIdAndEpoch} orders {@code createdAt ASC, id DESC} (its {@code id DESC}
+     * tiebreak is for {@code RunContextService.buildPerItemContext}, a different consumer), whereas the
+     * per-key sibling orders {@code id ASC}. Folding those raw orders with last-wins would pick opposite
+     * rows on a same-millisecond tie, so we re-sort ascending by {@code (createdAt, spawn, id)} here and
+     * let the last write win - keeping both durable read sites consistent. Returns an empty map when
+     * nothing durable exists.
+     *
+     * @param runId    the workflow run ID
+     * @param epoch    the epoch to scope to
+     * @param tenantId the tenant that owns the output storage rows
+     * @return {@code stepKey → (itemIndex → node output)}; never {@code null}
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Map<Integer, Object>> loadPerItemOutputsByStepKey(String runId, int epoch, String tenantId) {
+        List<StorageEntity> rows = storageRepository.findByRunIdAndEpoch(runId, epoch, tenantId);
+        if (rows.isEmpty()) {
+            return Map.of();
+        }
+        // Normalise to ascending (createdAt, spawn, id) so a blind put() lets the LATEST write win per
+        // stepKey+itemIndex, independent of the query's id-DESC tiebreak (see javadoc). nullsFirst keeps
+        // any row with a null sort field from throwing and orders it as "oldest".
+        List<StorageEntity> ordered = new ArrayList<>(rows);
+        ordered.sort(Comparator
+            .comparing(StorageEntity::getCreatedAt, Comparator.nullsFirst(Comparator.naturalOrder()))
+            .thenComparing(StorageEntity::getSpawn, Comparator.nullsFirst(Comparator.naturalOrder()))
+            .thenComparing(StorageEntity::getId, Comparator.nullsFirst(Comparator.naturalOrder())));
+        Map<String, Map<Integer, Object>> byStepKey = new HashMap<>();
+        for (StorageEntity row : ordered) {
+            String stepKey = row.getStepKey();
+            String dataJson = row.getData();
+            if (stepKey == null || stepKey.isBlank() || dataJson == null || dataJson.isBlank()) {
+                continue;
+            }
+            Map<String, Object> data;
+            try {
+                data = objectMapper.readValue(dataJson, new TypeReference<Map<String, Object>>() {});
+            } catch (Exception e) {
+                logger.warn("Failed to parse durable per-item output (run={}, step={}, epoch={}): {}",
+                    runId, stepKey, epoch, e.getMessage());
+                continue;
+            }
+            int itemIndex = row.getItemIndex() != null ? row.getItemIndex() : 0;
+            Object nodeOutput = (data.get("output") instanceof Map) ? data.get("output") : data;
+            byStepKey.computeIfAbsent(stepKey, k -> new HashMap<>()).put(itemIndex, nodeOutput);
+        }
+        return byStepKey;
+    }
+
+    /**
      * Get merged outputs for all steps with a given alias.
      * <p>BATCH-B (2026-05-20) - delegates to the strict-org overload when
      * {@code orgId} is provided. The legacy tenant-only path remains for

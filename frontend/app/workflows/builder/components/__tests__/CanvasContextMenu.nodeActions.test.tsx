@@ -15,6 +15,7 @@ import type { BuilderNodeData } from '../../types';
 let mockExec: { canExecute: boolean; canRerun: boolean; pendingSignalCount: number; executeStep: () => void; rerunStep: () => void; resolveApproval: () => void };
 let mockFlags: Record<string, unknown>;
 let mockWorkflowId: string | undefined;
+let mockIsApplicationMode: boolean;
 let mockPinDisplay: { shouldRender: boolean; isAlreadyPinned: boolean; buttonTitle: string };
 const mockRequestTriggerPin = vi.fn();
 
@@ -25,7 +26,7 @@ vi.mock('../../hooks/useNodeContextualButtons', () => ({
   useNodeContextualButtons: () => [],
 }));
 vi.mock('../../nodes/nodeClasses', () => ({ findNodeClassById: () => null }));
-vi.mock('@/contexts/WorkflowModeContext', () => ({ useWorkflowMode: () => ({ workflowId: mockWorkflowId }) }));
+vi.mock('@/contexts/WorkflowModeContext', () => ({ useWorkflowMode: () => ({ workflowId: mockWorkflowId, isApplicationMode: mockIsApplicationMode }) }));
 vi.mock('../../hooks/useTriggerPin', () => ({
   useTriggerPinDisplay: () => mockPinDisplay,
   requestTriggerPin: (...args: unknown[]) => mockRequestTriggerPin(...args),
@@ -67,6 +68,7 @@ beforeEach(() => {
   mockExec = { canExecute: false, canRerun: false, pendingSignalCount: 0, executeStep: vi.fn(), rerunStep: vi.fn(), resolveApproval: vi.fn() };
   mockFlags = {};
   mockWorkflowId = 'wf1';
+  mockIsApplicationMode = false;
   mockPinDisplay = { shouldRender: false, isAlreadyPinned: false, buttonTitle: 'Set as production v3' };
   mockRequestTriggerPin.mockClear();
 });
@@ -157,6 +159,20 @@ describe('NodeContextMenu - view interface', () => {
     fireEvent.click(item);
     expect(open.detail()).toEqual({ interfaceId: 'iface1' });
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('hides View interface inside an application (the app is already the main view, so opening it in the panel would duplicate it)', () => {
+    mockFlags = { isInterfaceNode: true };
+    mockIsApplicationMode = true;
+    render(
+      <NodeContextMenu
+        node={makeNode({ id: 'interface-x', interfaceData: { interfaceId: 'iface1' } } as Partial<BuilderNodeData>)}
+        x={10} y={10} isRunMode isPreviewOnly={false}
+        hasDownstream={false} hasConnections={false}
+        actions={nodeActions()} onClose={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText('viewInterface')).toBeNull();
   });
 
   it('does not show View interface in edit mode', () => {

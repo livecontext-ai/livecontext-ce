@@ -193,6 +193,23 @@ public class SplitAwareNodeExecutor {
     }
 
     /**
+     * Optional: durable per-item output store used to backfill {@link #injectPredecessorPerItemOutputs}
+     * when the in-memory {@link SplitContext#resultsByNode} is missing a predecessor slot for the current
+     * item (cross-pod async/signal resume where {@code restoreContext} rebuilt items only, a restart that
+     * emptied the cache, or a read before an async barrier sealed). Mirrors the durable fallback
+     * {@code SplitAggregateHandler.resolvePerItemResults} already uses for the {@code core:aggregate} node,
+     * generalised to the branch-rejoin merge / decision / switch / fork / loop per-item read path. Null in
+     * unit tests that don't exercise the fallback → warm-path behavior is byte-identical.
+     */
+    private com.apimarketplace.orchestrator.services.StepOutputService stepOutputService;
+
+    @Autowired(required = false)
+    public void setStepOutputService(
+            com.apimarketplace.orchestrator.services.StepOutputService stepOutputService) {
+        this.stepOutputService = stepOutputService;
+    }
+
+    /**
      * Per-item skip reason for {@code nodePolicy.executeOnce}: in a split context the
      * node executes for item index 0 only; every other item is marked SKIPPED with
      * this reason through the SAME per-item skip pipeline as branch-unrouted items
@@ -569,6 +586,40 @@ public class SplitAwareNodeExecutor {
         boolean canPersist = execution != null && nodeCompletionService != null;
         boolean canTraverseSuccessors = successorTraverser != null;
 
+        // Durable per-item backfill source for the read path (injectPredecessorPerItemOutputs).
+        // Loaded ONCE here (reused for every item) for any node that re-resolves a PRIOR per-item
+        // predecessor and would therefore silently collapse to a single "item 0" value when the
+        // in-memory SplitContext.resultsByNode is missing a slot (cross-pod async/signal resume,
+        // restart, or read-before-async-seal). Two independent shapes qualify:
+        //   1. a cross-item consumer - branch-rejoin merge, aggregate, decision, switch, fork or
+        //      loop that folds/re-resolves every predecessor per item; AND
+        //   2. a PLAIN per-item successor (mcp/agent/code/transform/interface) that reads a
+        //      NON-adjacent predecessor - i.e. one whose in-split predecessor is not the split node
+        //      itself (readsNonSplitPredecessor). A DIRECT split successor is excluded: its per-item
+        //      values come from {{item}} / the split's current_item, never a prior per-item node, so
+        //      its legitimately-empty map needs no backfill and must stay query-free (loading durable
+        //      for every split's FIRST node would tax the hot path for nothing).
+        // Shape 2 closes the residual proven on a restart resume: a plain transform reading a
+        // non-adjacent predecessor across an approval collapsed all rows to item 0's value once the
+        // resultsByNode singleton was wiped (JVM restart / cross-pod).
+        //
+        // WARM-PATH SKIP (mirrors SplitMergeHandler.mergeDurablePerItem): when the in-memory
+        // resultsByNode is already dense for every routed item, memory can serve every slot, so the
+        // durable read would be pure waste (a healthy single-pod run must stay query-free). The
+        // collapse cases this fix targets all leave resultsByNode empty or sparse: restoreContext
+        // rebuilds items only (cross-pod/restart), and an unsealed async barrier leaves gaps -
+        // inMemorySlotsComplete returns false for exactly those, so the durable read fires only when
+        // it can actually help. Memory always wins over the backfill (injectPredecessorPerItemOutputs
+        // only fills nodes ABSENT from memory), so an over-eager load can never corrupt a good value.
+        // Null-tolerant: unset stepOutputService (unit tests) → no backfill, behavior unchanged.
+        final Map<String, Map<Integer, Object>> durableEpochOutputs =
+            (stepOutputService != null
+                    && !inMemorySlotsComplete(splitContext, routedItemIndices)
+                    && (isCrossItemPerItemConsumer(node)
+                        || readsNonSplitPredecessor(node, splitContext.splitNodeId())))
+                ? loadDurableEpochOutputs(context)
+                : null;
+
         // Execute for each routed item in parallel (execution only, no persistence)
         List<CompletableFuture<ItemExecutionResult>> futures = new ArrayList<>();
 
@@ -599,7 +650,7 @@ public class SplitAwareNodeExecutor {
                     try {
                         // Create context enriched with item data
                         ExecutionContext itemContext = enrichContextWithItem(
-                            context, item, subItemIndex, items, splitContext);
+                            context, item, subItemIndex, items, splitContext, durableEpochOutputs);
 
                         // Execute the node under its per-node policy - applied PER ITEM.
                         // Default policy is a pure passthrough (node.execute, exceptions
@@ -1115,6 +1166,17 @@ public class SplitAwareNodeExecutor {
             int subItemIndex,
             List<Object> items,
             SplitContext splitContext) {
+        // Back-compat overload (used by unit tests): no durable backfill source.
+        return enrichContextWithItem(context, item, subItemIndex, items, splitContext, null);
+    }
+
+    ExecutionContext enrichContextWithItem(  // package-private for tests
+            ExecutionContext context,
+            Object item,
+            int subItemIndex,
+            List<Object> items,
+            SplitContext splitContext,
+            Map<String, Map<Integer, Object>> durableEpochOutputs) {
 
         String scopedKey = splitContext.splitNodeId(); // e.g., "core:processmessages:0"
 
@@ -1140,7 +1202,8 @@ public class SplitAwareNodeExecutor {
         // CRITICAL for step-by-step mode: Inject predecessor's per-item outputs
         // This enables templates like {{mcp:getemaildetail.output.snippet}} to resolve
         // to the correct item's output (not just the last item's summary)
-        enriched = injectPredecessorPerItemOutputs(enriched, splitContext, subItemIndex);
+        enriched = injectPredecessorPerItemOutputs(enriched, splitContext, subItemIndex,
+            durableEpochOutputs, baseSplitKey);
 
         // CRITICAL for split×loop topology: Re-apply BackEdgeHandler loop core overrides
         // AFTER injectPredecessorPerItemOutputs.
@@ -1209,15 +1272,21 @@ public class SplitAwareNodeExecutor {
     private ExecutionContext injectPredecessorPerItemOutputs(
             ExecutionContext context,
             SplitContext splitContext,
-            int subItemIndex) {
+            int subItemIndex,
+            Map<String, Map<Integer, Object>> durableEpochOutputs,
+            String baseSplitKey) {
 
         Map<String, List<Object>> allResults = splitContext.getAllResults();
-        if (allResults.isEmpty()) {
+        boolean hasDurable = durableEpochOutputs != null && !durableEpochOutputs.isEmpty();
+        if (allResults.isEmpty() && !hasDurable) {
             return context;
         }
 
         Map<String, Object> newOutputs = new HashMap<>(context.getAllStepOutputs());
         boolean modified = false;
+        // Node keys served from the in-memory SplitContext for THIS item. The durable backfill
+        // below only fills what the warm cache is missing, so a live in-memory value always wins.
+        Set<String> injectedFromMemory = new HashSet<>();
 
         for (Map.Entry<String, List<Object>> entry : allResults.entrySet()) {
             String nodeId = entry.getKey();
@@ -1226,20 +1295,37 @@ public class SplitAwareNodeExecutor {
             if (results != null && subItemIndex < results.size()) {
                 Object itemResult = results.get(subItemIndex);
                 if (itemResult != null) {
-                    // Wrap in {output: ..., httpstatus: 200} format for template resolution
-                    Map<String, Object> wrapper = new HashMap<>();
-                    wrapper.put("output", itemResult);
-                    wrapper.put("httpstatus", 200);
-                    // writeWithAlias mirrors RunContextService.buildPerItemContext alias semantics
-                    // (full key + bare alias atomically), preventing the Daily Email Digest bug
-                    // where every per-item invocation saw item 0's alias entry (prod run
-                    // 6c67cb76 epoch 3, 2026-05-08). See StepOutputsWriter for the bug class.
-                    com.apimarketplace.orchestrator.services.context.StepOutputsWriter.writeWithAlias(
-                        newOutputs, nodeId, wrapper);
+                    injectPerItemStepOutput(newOutputs, nodeId, itemResult);
+                    injectedFromMemory.add(nodeId);
                     modified = true;
 
                     logger.debug("[SplitAware] Injected predecessor result: nodeId={}, subItem={}, outputKeys={}",
                         nodeId, subItemIndex, itemResult instanceof Map ? ((Map<?, ?>) itemResult).keySet() : "non-map");
+                }
+            }
+        }
+
+        // Durable backfill: for any node with a persisted per-item output for THIS item whose
+        // in-memory slot was missing/null (cross-pod async/signal resume where restoreContext
+        // rebuilt items only, a restart that emptied the cache, or a read before the async barrier
+        // sealed), inject the durable value so the reader resolves per item instead of collapsing
+        // to the base context's single "item 0" value. Skips the split node's own key (its
+        // current_item was already injected and must not be clobbered) and any node already served
+        // from memory. Same durable source as SplitAggregateHandler.resolvePerItemResults - now
+        // generalised to the branch-rejoin merge / decision / switch / fork / loop read path.
+        if (hasDurable) {
+            for (Map.Entry<String, Map<Integer, Object>> durEntry : durableEpochOutputs.entrySet()) {
+                String nodeId = durEntry.getKey();
+                if (injectedFromMemory.contains(nodeId) || nodeId.equals(baseSplitKey)) {
+                    continue;
+                }
+                Map<Integer, Object> byItem = durEntry.getValue();
+                Object itemResult = byItem != null ? byItem.get(subItemIndex) : null;
+                if (itemResult != null) {
+                    injectPerItemStepOutput(newOutputs, nodeId, itemResult);
+                    modified = true;
+                    logger.info("[SplitAware] Recovered per-item predecessor output from the durable store "
+                            + "(in-memory SplitContext slot absent): nodeId={}, subItem={}", nodeId, subItemIndex);
                 }
             }
         }
@@ -1267,6 +1353,141 @@ public class SplitAwareNodeExecutor {
             context.organizationId(),
             context.organizationRole()
         );
+    }
+
+    /**
+     * Wraps a per-item node output in the {@code {output, httpstatus:200}} envelope and writes it
+     * under both the full node key and its bare alias. Shared by the in-memory and durable-backfill
+     * branches of {@link #injectPredecessorPerItemOutputs} so both produce identical stepOutput shapes.
+     *
+     * <p>writeWithAlias mirrors RunContextService.buildPerItemContext alias semantics (full key + bare
+     * alias atomically), preventing the Daily Email Digest bug where every per-item invocation saw
+     * item 0's alias entry (prod run 6c67cb76 epoch 3, 2026-05-08). See StepOutputsWriter for the bug class.
+     */
+    private void injectPerItemStepOutput(Map<String, Object> newOutputs, String nodeId, Object itemResult) {
+        Map<String, Object> wrapper = new HashMap<>();
+        wrapper.put("output", itemResult);
+        wrapper.put("httpstatus", 200);
+        com.apimarketplace.orchestrator.services.context.StepOutputsWriter.writeWithAlias(
+            newOutputs, nodeId, wrapper);
+    }
+
+    /**
+     * True for the split-scope node types that re-resolve EACH predecessor per item and therefore
+     * silently collapse to a single "item 0" value when the in-memory {@link SplitContext#resultsByNode}
+     * is missing a slot: branch-rejoin / implicit merges, aggregates, and the routing/control nodes
+     * ({@code decision}/{@code switch}/{@code fork}/{@code loop}) that run {@code forcePerItem}. Only
+     * these pay the one durable-store read per fan-out; the common direct-successor / plain chained
+     * fan-out keeps its warm, query-free path.
+     *
+     * <p>This is only ONE of the two shapes that trigger the durable backfill. A PLAIN per-item
+     * successor (mcp/agent/code/transform/interface) that reads a NON-adjacent predecessor is the
+     * other, gated by {@link #readsNonSplitPredecessor} - it collapses the same way but is not a
+     * "cross-item consumer" by type. Keep this predicate strictly type-based; the plain-successor
+     * case is deliberately handled by the separate graph-shape predicate so the FIRST node after a
+     * split (a direct successor, legitimately empty map) never pays a durable read.
+     */
+    boolean isCrossItemPerItemConsumer(ExecutionNode node) {  // package-private for tests
+        return node.isMergeNode()
+            || node.isImplicitMerge()
+            || node.isAggregateNode()
+            || node.isDecisionNode()
+            || node.isSwitchNode()
+            || node.isForkNode()
+            || node.isLoopNode();
+    }
+
+    /**
+     * True when {@code node} reads at least one predecessor that is NOT the split node itself, i.e.
+     * it is not a DIRECT split successor. This is the gate for the plain-successor collapse residual:
+     * a mcp/agent/code/transform/interface node whose per-item output re-resolves a PRIOR per-item
+     * predecessor (anything other than the split) silently collapses to the base "item 0" value when
+     * the in-memory {@link SplitContext#resultsByNode} is missing that predecessor's slot after a
+     * cross-pod / restart resume (proven: a plain transform reading a non-adjacent predecessor across
+     * an approval returned item 0's value for every row once the resultsByNode singleton was wiped).
+     *
+     * <p>A DIRECT split successor is excluded: its only in-split predecessor is the split node, and
+     * its per-item values come from {@code {{item}}} / the split's current_item, never a prior
+     * per-item node - so its legitimately-empty map has nothing to backfill and must stay query-free.
+     * The split id is reduced to its base node key with {@link #extractBaseSplitKey} (the same helper
+     * the routing/aggregate paths use, so a scoped {@code core:per_tag:0} normalizes identically);
+     * each predecessor id, which may carry an edge port ({@code core:gate:approved}), is reduced with
+     * {@link EdgeRefParser#getNodeKey}. Null-tolerant.
+     */
+    boolean readsNonSplitPredecessor(ExecutionNode node, String splitNodeId) {  // package-private for tests
+        if (node == null || splitNodeId == null) {
+            return false;
+        }
+        String splitKey = extractBaseSplitKey(splitNodeId);
+        if (splitKey == null) {
+            splitKey = splitNodeId;
+        }
+        for (String predId : node.getPredecessorIds()) {
+            if (predId == null) {
+                continue;
+            }
+            String predKey = EdgeRefParser.getNodeKey(predId);
+            if (predKey == null) {
+                predKey = predId;
+            }
+            if (!splitKey.equals(predKey)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * True when the in-memory {@link SplitContext#resultsByNode} can already serve every routed item
+     * from RAM, so a durable read would be wasted work. "Complete" means the cache is non-empty AND
+     * every node currently in it has a non-null slot for every routed item index. An empty cache
+     * (restoreContext rebuilt items only after a cross-pod/restart) or any missing/short/null slot
+     * (unsealed async barrier) returns {@code false} - exactly the states where the durable backfill
+     * recovers a real per-item value instead of the collapsed "item 0" value.
+     *
+     * <p>Deliberate residual: a node that ran entirely on another pod is absent from the map rather
+     * than present-with-null. When the rest of the map is dense this returns {@code true} and skips
+     * the read; in practice the absent-node case coincides with an empty/sparse map (a resumed pod
+     * starts from a rebuilt-items-only context), so the observed collapse still triggers a load. The
+     * merge path ({@link SplitMergeHandler#mergeDurablePerItem}) closes even that residual by scoping
+     * against the split-subgraph ancestors, which this executor path lacks the node map to compute.
+     */
+    boolean inMemorySlotsComplete(SplitContext splitContext, Set<Integer> routedItemIndices) {  // package-private for tests
+        if (splitContext == null) {
+            return false;
+        }
+        Map<String, List<Object>> allResults = splitContext.getAllResults();
+        if (allResults.isEmpty()) {
+            return false; // nothing cached → let the durable backfill try
+        }
+        for (List<Object> results : allResults.values()) {
+            for (Integer i : routedItemIndices) {
+                if (results == null || i == null || i >= results.size() || results.get(i) == null) {
+                    return false; // a gap for a routed item → not warm
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Loads the durable per-item outputs for the whole epoch ({@code stepKey → itemIndex → output}),
+     * used to backfill {@link #injectPredecessorPerItemOutputs}. Null-tolerant and best-effort: a
+     * missing service or a store failure degrades to "no backfill" (warm behavior), never a throw
+     * that would abort the split fan-out.
+     */
+    Map<String, Map<Integer, Object>> loadDurableEpochOutputs(ExecutionContext context) {  // package-private for tests
+        if (stepOutputService == null || context == null) {
+            return null;
+        }
+        try {
+            return stepOutputService.loadPerItemOutputsByStepKey(
+                context.runId(), context.epoch(), context.tenantId());
+        } catch (Exception e) {
+            logger.warn("[SplitAware] Durable per-item epoch load failed (run={}, epoch={}): {} - continuing without backfill",
+                context.runId(), context.epoch(), e.getMessage());
+            return null;
+        }
     }
 
     /**

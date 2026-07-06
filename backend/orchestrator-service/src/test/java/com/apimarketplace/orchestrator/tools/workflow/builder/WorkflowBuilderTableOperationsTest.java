@@ -180,6 +180,57 @@ class WorkflowBuilderTableOperationsTest {
         assertThat(where.get("column")).isEqualTo("message_id");
     }
 
+    // The `offset` pagination param is documented on find_rows/get_rows and fully supported
+    // downstream (CrudToolExecutor, FindNode, GetRowsNodeSpec, LimitNode), but the simplified
+    // builder used to drop it before it reached the crud block - so a documented param silently
+    // did nothing. transformToStep must forward it into crud (and not leak it to top-level).
+    @Test
+    @DisplayName("transformToStep forwards 'offset' into crud for find_rows")
+    @SuppressWarnings("unchecked")
+    void transformToStepForwardsOffsetForFindRows() {
+        Map<String, Object> params = new HashMap<>();
+        params.put("table_id", 42L);
+        params.put("label", "Page 2");
+        params.put("limit", 50);
+        params.put("offset", 100);
+
+        Map<String, Object> stepParams = ops.transformToStep(params, "find_rows", 42L);
+
+        Map<String, Object> crud = (Map<String, Object>) stepParams.get("crud");
+        assertThat(crud).containsEntry("offset", 100).containsEntry("limit", 50);
+        assertThat(stepParams).doesNotContainKey("offset"); // stripped from top-level
+    }
+
+    @Test
+    @DisplayName("transformToStep forwards 'offset' into crud for read_rows")
+    @SuppressWarnings("unchecked")
+    void transformToStepForwardsOffsetForReadRows() {
+        Map<String, Object> params = new HashMap<>();
+        params.put("table_id", 7L);
+        params.put("label", "Fetch Page");
+        params.put("offset", 25);
+
+        Map<String, Object> stepParams = ops.transformToStep(params, "read_rows", 7L);
+
+        Map<String, Object> crud = (Map<String, Object>) stepParams.get("crud");
+        assertThat(crud).containsEntry("offset", 25);
+        assertThat(stepParams).doesNotContainKey("offset");
+    }
+
+    @Test
+    @DisplayName("transformToStep omits 'offset' from crud when not provided (no spurious default)")
+    @SuppressWarnings("unchecked")
+    void transformToStepOmitsOffsetWhenAbsent() {
+        Map<String, Object> params = new HashMap<>();
+        params.put("table_id", 7L);
+        params.put("label", "No Offset");
+
+        Map<String, Object> stepParams = ops.transformToStep(params, "find_rows", 7L);
+
+        Map<String, Object> crud = (Map<String, Object>) stepParams.get("crud");
+        assertThat(crud).doesNotContainKey("offset");
+    }
+
     @Test
     @DisplayName("transformToStep overwrites LLM-provided dataSourceId with authoritative canonical value")
     void transformToStepOverwritesConflictingDataSourceId() {

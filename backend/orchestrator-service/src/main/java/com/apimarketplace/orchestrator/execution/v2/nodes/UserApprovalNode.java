@@ -118,6 +118,14 @@ public class UserApprovalNode extends BaseNode {
             output.put("approver_roles", approverRoles);
             output.put("required_approvals", requiredApprovals);
             output.put("expires_at", expiresAt);
+            // Carry the resolved approval context (contextTemplate rendered at yield) on the
+            // awaiting-signal result too, so the yield-time output is consistent with the COMPLETED
+            // output written at resolution (SignalResumeService.buildSignalResolutionOutput) - the
+            // resolved value is authoritatively persisted from the signal at resolution.
+            // Omitted when the template is blank or did not resolve (matches resolveApprovalContext).
+            if (approvalContext != null && !approvalContext.isBlank()) {
+                output.put("approval_context", approvalContext);
+            }
 
             return NodeExecutionResult.awaitingSignal(nodeId, SignalType.USER_APPROVAL, output);
 

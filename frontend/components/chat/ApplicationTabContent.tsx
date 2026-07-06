@@ -55,16 +55,12 @@ interface ApplicationTabContentProps {
    * Marketplace-preview mode. Anonymous visitors and authenticated browsing
    * users hitting `/app/marketplace/{publicationId}/preview` MUST NOT be
    * able to fire any workflow action against the publisher's tenant. When
-   * true, four behavior gates fire:
+   * true, three behavior gates fire:
    *
    *   1. The Launch (trigger) button is hidden from the floating toolbar.
    *   2. The Continue button (which routes through useWorkflowEventBridge
    *      to an authed interfaceService.fireInterfaceAction) is hidden too.
-   *   3. The Maximize / Minimize (fullscreen toggle) button is hidden, both
-   *      in the normal-mode toolbar and (defensively) in the fullscreen-mode
-   *      toolbar. The preview page is full-bleed already, and removing the
-   *      entry button makes the fullscreen branch effectively unreachable.
-   *   4. The floating pill toolbar is portalled to document.body so it
+   *   3. The floating pill toolbar is portalled to document.body so it
    *      escapes the preview shell's `overflow-hidden` clipping (root
    *      cause of the original user-reported bug - clicking the grip
    *      3-dots opened a wide toolbar that was visually hidden by the
@@ -1250,7 +1246,7 @@ export function ApplicationTabContent({ config, runId, workflowId, onAction, car
                 pageBadge={reExecutionBadge}
                 onPrevious={handlePrevious}
                 onNext={handleNext}
-                onFullscreen={previewMode ? undefined : handleToggleExpanded}
+                onFullscreen={handleToggleExpanded}
                 isFullscreen
                 variant="light"
                 leadingControls={carouselControls}
@@ -1356,10 +1352,10 @@ export function ApplicationTabContent({ config, runId, workflowId, onAction, car
           Non-preview surfaces (workflow side-panel) keep the in-
           container `absolute bottom-4` positioning that respects the
           side-panel layout.
-          onFullscreen is suppressed in preview because the preview page
-          is already full-bleed - there's no useful larger size to expand
-          to, and the carousel state hosting `isExpanded` lives on the
-          parent so we can't simply toggle without a portal wrapper. */}
+          Fullscreen (onFullscreen) IS available in preview: the expanded
+          view is its own `fixed inset-0` portal to document.body, so it
+          overlays the whole viewport (escaping the marketplace shell) and
+          `isExpanded` toggles through the carousel-lifted state. */}
       {(hasActions || carouselControls) && (() => {
         const toolbarBlock = toolbarOpen ? (
           <InterfaceToolbar
@@ -1369,7 +1365,7 @@ export function ApplicationTabContent({ config, runId, workflowId, onAction, car
             pageBadge={reExecutionBadge}
             onPrevious={handlePrevious}
             onNext={handleNext}
-            onFullscreen={previewMode ? undefined : (htmlTemplate ? handleToggleExpanded : undefined)}
+            onFullscreen={htmlTemplate ? handleToggleExpanded : undefined}
             variant="light"
             leadingControls={carouselControls}
             extraControls={toolbarExtraControls}

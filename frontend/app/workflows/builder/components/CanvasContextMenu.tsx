@@ -213,7 +213,7 @@ export function NodeContextMenu({
   const nodeId = node.id;
   const editable = !isRunMode && !isPreviewOnly;
   const mod = isMacPlatform() ? '⌘' : 'Ctrl';
-  const { workflowId } = useWorkflowMode();
+  const { workflowId, isApplicationMode } = useWorkflowMode();
 
   const exec = useNodeExecutionStatus(nodeId, {
     label: data.label,
@@ -261,7 +261,10 @@ export function NodeContextMenu({
   const hasRunActions = exec.canExecute || exec.canRerun || exec.pendingSignalCount > 0;
   const showLauncher = editable && flags.isTriggerNode && canMutate;
   const showPin = !isPreviewOnly && flags.isTriggerNode && !!workflowId && pinDisplay.shouldRender;
-  const showViewInterface = isRunMode && flags.isInterfaceNode && !!interfaceId;
+  // Hidden in isApplicationMode: inside an application the app is already the
+  // main view, so "View interface" (which opens it in the application panel)
+  // would just duplicate it. Stays available in workflow surfaces.
+  const showViewInterface = isRunMode && flags.isInterfaceNode && !!interfaceId && !isApplicationMode;
   const hasTopGroup = hasRunActions || showLauncher || showPin;
 
   return (

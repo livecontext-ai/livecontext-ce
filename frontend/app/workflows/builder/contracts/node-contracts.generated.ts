@@ -505,6 +505,8 @@ export interface LoopOutputs {
   enter_body?: boolean;
   /** body or exit */
   selected_path?: string;
+  /** Exit reason, present only once terminated: condition_false or max_iterations_reached */
+  reason?: string;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -527,18 +529,16 @@ export interface SplitParameters {
 export interface SplitOutputs {
   current_item?: any;
   current_index?: number;
+  /** The collection being split (persisted by SplitNodeExecutor for inspection) */
+  items?: any[];
   /** Number of items being split */
   item_count?: number;
   /** Node ID of the split */
   split_id?: string;
-  /** The strategy used */
-  split_strategy?: string;
-  /** Configured max items */
-  max_items?: number;
-  /** Whether split has terminated */
+  /** items_spawned or empty_list */
+  spawn_reason?: string;
+  /** Always true: split completes immediately after spawning */
   terminated?: boolean;
-  /** empty_list, all_items_processed, or items_spawned */
-  exit_reason?: string;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1186,6 +1186,8 @@ export interface UserApprovalOutputs {
   expires_at?: string;
   /** approved, rejected, or timeout - set after signal resolution */
   selected_port?: string;
+  /** Resolved contextTemplate shown to the approver, carried into the resolved output (present only when a context template resolved to non-blank text) */
+  approval_context?: string;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1390,7 +1392,7 @@ export interface CreateColumnOutputs {
 
 /**
  * Parameters for Find Row
- * Queries a data source and executes successor nodes in parallel for each found row. Combines CRUD read with split-like parallel execution.
+ * Queries a data source and returns matching rows as a collection (does not spawn parallel per-row contexts; use a Split node on the items for that).
  */
 export interface FindRowParameters {
   tableId: number;
@@ -1402,8 +1404,6 @@ export interface FindRowParameters {
  * Outputs produced by Find Row
  */
 export interface FindRowOutputs {
-  current_item?: Record<string, any>;
-  current_index?: number;
   /** All found rows (after limit applied) */
   items?: Record<string, any>[];
   /** Number of items found */
@@ -1414,14 +1414,10 @@ export interface FindRowOutputs {
   has_more?: boolean;
   /** items_found or empty_result */
   exit_reason?: string;
-  /** Node ID of the find node (used for split context) */
+  /** Node ID of the find node */
   find_id?: string;
   /** Configured max items cap */
   max_items?: number;
-  /** Execution strategy for parallel items */
-  split_strategy?: string;
-  /** Whether find has terminated (all items processed or empty) */
-  terminated?: boolean;
 }
 
 // ═══════════════════════════════════════════════════════════════

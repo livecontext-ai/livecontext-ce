@@ -386,7 +386,7 @@ public final class WorkflowPlanParser {
                     crudBlock = new HashMap<>(crudBlock); // mutable copy
                 }
                 // Merge top-level and params fields into crud block (similarity often in params)
-                for (String key : List.of("where", "limit", "set", "rows", "columns", "similarity")) {
+                for (String key : List.of("where", "limit", "offset", "set", "rows", "columns", "similarity")) {
                     if (!crudBlock.containsKey(key)) {
                         if (data.containsKey(key)) {
                             crudBlock.put(key, data.get(key));

@@ -209,6 +209,51 @@ class UserApprovalNodeTest {
         }
 
         @Test
+        @DisplayName("the resolved approval context is surfaced in the node output too (visible in awaiting params, referenceable downstream)")
+        void includesResolvedApprovalContextInAwaitingOutput() {
+            UserApprovalNode node = UserApprovalNode.builder()
+                .nodeId("core:manager_approval")
+                .approverRoles(List.of("manager"))
+                .requiredApprovals(1)
+                .timeoutMs(86400000L)
+                .contextTemplate("Approve refund of {{amount}}?")
+                .build();
+            node.setSignalService(signalService);
+            node.setClock(FIXED_CLOCK);
+            node.setTemplateAdapter(templateAdapter);
+
+            when(context.runId()).thenReturn("run-1");
+            when(context.itemId()).thenReturn("0");
+            when(templateAdapter.evaluateTemplate("Approve refund of {{amount}}?", context))
+                .thenReturn("Approve refund of 120 EUR?");
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertEquals("Approve refund of 120 EUR?", result.output().get("approval_context"));
+        }
+
+        @Test
+        @DisplayName("no resolved context -> the node output omits approval_context (soft-required, never a blank key)")
+        void omitsApprovalContextInOutputWhenUnresolved() {
+            UserApprovalNode node = UserApprovalNode.builder()
+                .nodeId("core:manager_approval")
+                .requiredApprovals(1)
+                .timeoutMs(0)
+                .contextTemplate("Approve {{x}}?")
+                .build();
+            node.setSignalService(signalService);
+            node.setClock(FIXED_CLOCK);
+            // intentionally no setTemplateAdapter -> approvalContext resolves to null
+
+            when(context.runId()).thenReturn("run-1");
+            when(context.itemId()).thenReturn("0");
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertFalse(result.output().containsKey("approval_context"));
+        }
+
+        @Test
         @DisplayName("Should return failure when signalService is null")
         void shouldFailWhenNoSignalService() {
             // Do NOT set signal service

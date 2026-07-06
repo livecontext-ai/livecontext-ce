@@ -38,13 +38,19 @@ describe('Node definition schema coherence', () => {
     ]);
   });
 
-  it('filters runtime-only backend output keys from the build-mode inspector schema', () => {
+  it('keeps runtime-only backend output keys and carries the runtimeOnly flag (surfaced with a badge)', () => {
     const fields = [
       { key: 'current_item', type: 'object', description: 'Runtime item', runtimeOnly: true },
+      { key: 'current_index', type: 'number', description: 'Runtime index', runtimeOnly: true },
       { key: 'items', type: 'array', description: 'Persisted items' },
     ];
 
+    // Runtime-only fields are no longer filtered out: they must appear in BOTH the OutputColumn
+    // and the InputColumn ancestor variable picker (both read this schema), flagged so the UI can
+    // badge them as body-only. Persisted fields carry no runtimeOnly flag.
     expect(toOutputSchema(fields)).toEqual([
+      { key: 'current_item', type: 'object', description: 'Runtime item', runtimeOnly: true },
+      { key: 'current_index', type: 'number', description: 'Runtime index', runtimeOnly: true },
       { key: 'items', type: 'array', description: 'Persisted items' },
     ]);
   });

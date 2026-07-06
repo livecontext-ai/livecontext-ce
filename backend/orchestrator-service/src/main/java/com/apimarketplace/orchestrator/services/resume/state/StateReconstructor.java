@@ -9,6 +9,7 @@ import com.apimarketplace.orchestrator.domain.execution.StateSnapshot;
 import com.apimarketplace.orchestrator.domain.execution.StatusCounts;
 import com.apimarketplace.orchestrator.domain.workflow.*;
 import com.apimarketplace.orchestrator.persistence.WorkflowStepDataRepository;
+import com.apimarketplace.orchestrator.services.StepAggregationService;
 import com.apimarketplace.orchestrator.services.WorkflowRunStatusService;
 import com.apimarketplace.orchestrator.services.resume.WorkflowRunState;
 import com.apimarketplace.orchestrator.services.resume.cache.WorkflowCacheManager;
@@ -65,6 +66,7 @@ public class StateReconstructor {
     private final StateSnapshotService stateSnapshotService;
     private final RunningNodeTracker runningNodeTracker;
     private final UnifiedSignalService unifiedSignalService;
+    private final StepAggregationService stepAggregationService;
 
     // Lazy-initialized builders (only those still needed after refactoring)
     private volatile StateDataLoader dataLoader;
@@ -81,7 +83,8 @@ public class StateReconstructor {
             WorkflowCacheManager cacheManager,
             StateSnapshotService stateSnapshotService,
             RunningNodeTracker runningNodeTracker,
-            UnifiedSignalService unifiedSignalService) {
+            UnifiedSignalService unifiedSignalService,
+            StepAggregationService stepAggregationService) {
         this.stepDataRepository = stepDataRepository;
         this.storageService = storageService;
         this.workflowRunStatusService = workflowRunStatusService;
@@ -90,6 +93,7 @@ public class StateReconstructor {
         this.stateSnapshotService = stateSnapshotService;
         this.runningNodeTracker = runningNodeTracker;
         this.unifiedSignalService = unifiedSignalService;
+        this.stepAggregationService = stepAggregationService;
     }
 
     // ========================================================================
@@ -409,6 +413,22 @@ public class StateReconstructor {
             awaitingSignalNodeIds, awaitingSignalCounts, stateSnapshot.getNodes(), pureRunningNodeIds, mode,
             stateSnapshot.getPartialFailedNodeIds());
 
+        // DISPLAY-path only: reconcile the all-epochs node colour with the spawn-aware
+        // multi-epoch aggregate. A node with no terminal result in the CURRENT epoch reconstructs
+        // as SKIPPED (current epoch skipped it, last epoch retained) or PENDING (a reusable-trigger
+        // run at WAITING_TRIGGER prunes closed epochs, so the flat sets are empty) even though it
+        // COMPLETED/FAILED in an earlier epoch - the flat node sets only cover retained epochs and
+        // accumulated NodeCounts can't tell a genuine prior-epoch success from a superseded rerun
+        // spawn. StepAggregationService can (latest spawn per coordinate), so reconcile a current
+        // PENDING/SKIPPED to the cumulative aggregate (COMPLETED/FAILED/PARTIAL_SUCCESS/SKIPPED) -
+        // making the canvas match the StepTable. Applied for reconstructStateForApi only (authed
+        // /state full=false AND marketplace showcase); engine paths (FULL) keep current-epoch
+        // semantics untouched (and read the flat sets, never step status). See
+        // StepStateBuilder.deriveStatusFromCounts (the rerun guard).
+        if (mode == OutputLoadMode.AGENT_AND_INTERFACE_ONLY) {
+            stepStates = applyMultiEpochAggregateStatus(runId, stepStates);
+        }
+
         // Build edge states from StateSnapshot edge counts
         List<WorkflowRunState.EdgeState> edgeStates = getEdgeStateBuilder().buildEdgeStates(
             runId, plan, completedStepIds, failedStepIds, skippedStepIds, stepStatusCounts);
@@ -447,6 +467,68 @@ public class StateReconstructor {
             loops,
             interfaces
         );
+    }
+
+    /**
+     * Reconcile each step whose current-epoch status carries no terminal result (PENDING or
+     * SKIPPED) with the spawn-aware multi-epoch aggregate, so the all-epochs canvas shows the
+     * cumulative outcome (matching the StepTable) instead of the last/retained epoch's view.
+     *
+     * <p>Only queried when at least one step is PENDING or SKIPPED (most single-epoch or
+     * in-flight runs skip the query entirely). The reconciliation is per-alias and only touches
+     * PENDING/SKIPPED steps: a current COMPLETED/FAILED/PARTIAL_SUCCESS/RUNNING/AWAITING_SIGNAL
+     * stands. A rerun-deactivated branch (aggregate also SKIPPED) is untouched; a node that never
+     * ran in any epoch has no aggregate entry and stays PENDING.
+     */
+    private List<WorkflowRunState.StepState> applyMultiEpochAggregateStatus(
+            String runId, List<WorkflowRunState.StepState> stepStates) {
+        boolean anyPendingOrSkipped = false;
+        for (WorkflowRunState.StepState s : stepStates) {
+            if (s.status() == RunStatus.PENDING || s.status() == RunStatus.SKIPPED) {
+                anyPendingOrSkipped = true;
+                break;
+            }
+        }
+        if (!anyPendingOrSkipped) {
+            return stepStates;
+        }
+
+        Map<String, RunStatus> aggByAlias = stepAggregationService.getAggregatedStatusByAlias(runId);
+        if (aggByAlias.isEmpty()) {
+            return stepStates;
+        }
+
+        List<WorkflowRunState.StepState> result = new ArrayList<>(stepStates.size());
+        for (WorkflowRunState.StepState s : stepStates) {
+            RunStatus reconciled = aggregateDisplayStatus(s.status(), aggByAlias.get(s.stepAlias()));
+            if (reconciled != s.status()) {
+                logger.info("[ReconstructState] multi-epoch overlay: {} {} -> {} (aggregate)",
+                    s.stepAlias(), s.status(), reconciled);
+                result.add(s.withStatus(reconciled));
+            } else {
+                result.add(s);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Resolve the all-epochs DISPLAY status for a step from its current-epoch status and the
+     * spawn-aware multi-epoch aggregate. Only a current PENDING or SKIPPED (no terminal result
+     * this epoch) is reconciled, and only to a terminal aggregate
+     * (COMPLETED/FAILED/PARTIAL_SUCCESS/SKIPPED); every other case returns the current status,
+     * so live states (RUNNING/AWAITING_SIGNAL) and current-epoch terminals are preserved and a
+     * never-run node (null aggregate) stays PENDING. Package-private + static for DB-free unit tests.
+     */
+    static RunStatus aggregateDisplayStatus(RunStatus current, RunStatus aggregate) {
+        if (aggregate == null
+                || (current != RunStatus.PENDING && current != RunStatus.SKIPPED)) {
+            return current;
+        }
+        return switch (aggregate) {
+            case COMPLETED, FAILED, PARTIAL_SUCCESS, SKIPPED -> aggregate;
+            default -> current;
+        };
     }
 
     /**

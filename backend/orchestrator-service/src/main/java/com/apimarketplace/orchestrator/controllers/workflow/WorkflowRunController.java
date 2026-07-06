@@ -428,7 +428,21 @@ public class WorkflowRunController {
             response.put("completedStepIds", state.completedStepIds());
             response.put("failedStepIds", state.failedStepIds());
             response.put("skippedStepIds", state.skippedStepIds());
-            response.put("runningStepIds", state.runningStepIds());
+            // Awaiting-signal nodes (approval / wait / interface) are folded INTO
+            // runningStepIds by StateReconstructor. On their own that makes the
+            // frontend paint them blue "running" instead of amber "awaiting", because
+            // it keys the amber set off a SEPARATE awaitingSignalStepIds field it never
+            // receives on this REST path. Mirror the WS snapshot (SnapshotService): send
+            // a CLEAN running set (awaiting excluded) plus the awaiting set separately.
+            Set<String> awaitingSignalStepIds = dbSnapshot.getAwaitingSignalNodeIds() != null
+                    ? new HashSet<>(dbSnapshot.getAwaitingSignalNodeIds())
+                    : new HashSet<>();
+            Set<String> runningStepIds = state.runningStepIds() != null
+                    ? new HashSet<>(state.runningStepIds())
+                    : new HashSet<>();
+            runningStepIds.removeAll(awaitingSignalStepIds);
+            response.put("runningStepIds", runningStepIds);
+            response.put("awaitingSignalStepIds", awaitingSignalStepIds);
             response.put("loops", state.loops());
             response.put("interfaces", state.interfaces());
             response.put("seq", seq);

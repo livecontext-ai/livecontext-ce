@@ -11,6 +11,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.beans.factory.ObjectProvider;
 
 import java.util.List;
 import java.util.Map;
@@ -19,6 +20,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -38,13 +41,21 @@ class McpProtocolServiceTest {
     private McpProtocolService service;
 
     @BeforeEach
+    @SuppressWarnings("unchecked")
     void setUp() {
-        service = new McpProtocolService(registry, registrationService, new ObjectMapper());
+        // No aggregation beans wired (monolith / local-only): the providers yield null.
+        ObjectProvider<AggregatedToolCatalog> aggProvider = mock(ObjectProvider.class);
+        ObjectProvider<RemoteToolGateway> gatewayProvider = mock(ObjectProvider.class);
+        lenient().when(aggProvider.getIfAvailable()).thenReturn(null);
+        lenient().when(gatewayProvider.getIfAvailable()).thenReturn(null);
+        service = new McpProtocolService(registry, registrationService, new ObjectMapper(),
+                aggProvider, gatewayProvider);
     }
 
     @Test
     @DisplayName("a successful tool result with structured data is serialized as JSON text content")
     void successfulStructuredResultIsSerializedAsJsonText() throws Exception {
+        when(registry.hasTool("workflow")).thenReturn(true);
         when(registrationService.executeTool(eq("workflow"), anyMap(), any()))
                 .thenReturn(ToolsProvider.ToolExecutionResult.success(Map.of("count", 2)));
 
@@ -60,6 +71,7 @@ class McpProtocolServiceTest {
     @Test
     @DisplayName("a failed tool result is reported in-band with isError true")
     void failedResultIsReportedInBand() throws Exception {
+        when(registry.hasTool("workflow")).thenReturn(true);
         when(registrationService.executeTool(eq("workflow"), anyMap(), any()))
                 .thenReturn(new ToolsProvider.ToolExecutionResult(false, null, "workflow not found", null, Map.of()));
 
@@ -74,6 +86,7 @@ class McpProtocolServiceTest {
     @Test
     @DisplayName("a failed result without an error message falls back to a generic one")
     void failedResultWithoutMessageFallsBack() throws Exception {
+        when(registry.hasTool("workflow")).thenReturn(true);
         when(registrationService.executeTool(eq("workflow"), anyMap(), any()))
                 .thenReturn(new ToolsProvider.ToolExecutionResult(false, null, null, null, Map.of()));
 
@@ -87,6 +100,7 @@ class McpProtocolServiceTest {
     @Test
     @DisplayName("the execution context carries tenant and org scope, with no approved services")
     void executionContextCarriesTenantAndOrgScope() throws Exception {
+        when(registry.hasTool("workflow")).thenReturn(true);
         when(registrationService.executeTool(eq("workflow"), anyMap(), any()))
                 .thenReturn(ToolsProvider.ToolExecutionResult.success("ok"));
         ArgumentCaptor<ToolsProvider.ToolExecutionContext> captor =

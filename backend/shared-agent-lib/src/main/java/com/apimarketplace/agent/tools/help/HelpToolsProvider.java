@@ -67,7 +67,7 @@ public class HelpToolsProvider implements ToolsProvider {
     private AgentToolDefinition buildListAllToolsTool() {
         List<ToolParameter> params = List.of(
             enumParam("category", "Filter by category (optional)", false,
-                List.of("workflow", "agent", "interface", "datasource", "catalog", "visualization", "tasks", "utility", "application", "websearch", "help"))
+                List.of("search", "workflow", "agent", "interface", "datasource", "visualization", "catalog", "help", "utility", "application", "websearch", "imagegeneration"))
         );
 
         return AgentToolDefinition.builder()
@@ -96,17 +96,18 @@ public class HelpToolsProvider implements ToolsProvider {
                 You can filter by category to see only tools for a specific domain.
 
                 Categories:
+                - search: API tool discovery (use the catalog tool, action='search')
                 - workflow: Create and manage workflows
-                - agent: Configure AI agents and skills
+                - agent: Configure AI agents, skills, and task planning
                 - interface: Create visual interfaces (display data or interactive apps)
                 - datasource: Manage data sources and tables
-                - catalog: Discover API tools and their schemas
                 - visualization: Display workflows, datasources, and interfaces in chat
-                - tasks: Plan and track tasks
+                - catalog: Discover API tools and their schemas
+                - help: Get documentation and examples
                 - utility: File operations and data transformation
                 - application: Browse and acquire marketplace applications
                 - websearch: Web search and page content extraction
-                - help: Get documentation and examples
+                - imagegeneration: Generate images from text prompts
                 """)
             .requiresAuth(false)
             .tags(List.of("discovery", "documentation"))
@@ -137,7 +138,7 @@ public class HelpToolsProvider implements ToolsProvider {
                 )
             ))
             .examples(List.of(
-                "{\"tool\": \"get_tool_help\", \"parameters\": {\"tool_name\": \"workflow_create\"}}",
+                "{\"tool\": \"get_tool_help\", \"parameters\": {\"tool_name\": \"workflow\"}}",
                 "{\"tool\": \"get_tool_help\", \"parameters\": {\"tool_name\": \"table\"}}"
             ))
             .helpText("""
@@ -448,13 +449,13 @@ public class HelpToolsProvider implements ToolsProvider {
             Map.of("name", "startswith(value, prefix)", "description", "Check if string starts with prefix", "example", "{{startswith(url, 'https')}}"),
             Map.of("name", "endswith(value, suffix)", "description", "Check if string ends with suffix", "example", "{{endswith(file, '.pdf')}}"),
             Map.of("name", "matches(value, regex)", "description", "Check if value matches regex pattern", "example", "{{matches(email, '.*@.*\\\\.com')}}"),
-            Map.of("name", "length(value)", "description", "Get string length", "example", "{{length(name)}}")
+            Map.of("name", "length(value)", "description", "String character count; for a collection/map/array returns element count (same as size()/len())", "example", "{{length(name)}}")
         ));
 
         result.put("dateFunctions", List.of(
             Map.of("name", "formatdate(value, pattern)", "description", "Format date (patterns auto-converted: DD→dd, YYYY→yyyy)", "example", "{{formatdate(created_at, 'DD/MM/YYYY')}}"),
-            Map.of("name", "now()", "description", "Current server timestamp as ISO string (e.g. '2026-03-25T15:30:45')", "example", "{{now()}}"),
-            Map.of("name", "today()", "description", "Today's date as ISO string (e.g. '2026-03-25'), server timezone", "example", "{{today()}}")
+            Map.of("name", "now()", "description", "Current UTC timestamp as ISO string (e.g. '2026-03-25T15:30:45')", "example", "{{now()}}"),
+            Map.of("name", "today()", "description", "Today's date as ISO string (e.g. '2026-03-25'), UTC", "example", "{{today()}}")
         ));
 
         result.put("datePatterns", List.of("DD/MM/YYYY", "YYYY-MM-DD", "YYYY-MM-DD HH:mm:ss", "DD MMM YYYY", "HH:mm:ss"));
@@ -470,7 +471,7 @@ public class HelpToolsProvider implements ToolsProvider {
             Map.of("name", "tojson(value)", "description", "Serialize Map/List/scalar to a compact JSON string. Inverse of json(): json(tojson(map)) round-trips.", "example", "{{tojson(mcp:list.output.items)}}")
         ));
 
-        result.put("nullBehavior", "Type-cast functions on null return ZERO values: int(null)→0, long(null)→0, float(null)→0.0, double(null)→0.0, bool(null)→false, string(null)→''. String functions on null return empty string. size(null)→0, len(null)→0. default(null, x)→x, default('', x)→x, default(emptyList, x)→x. ifempty(null, x)→x, ifempty('', x)→x but ifempty(emptyList, x)→emptyList (only checks null/empty-string). json(null)→null, json('')→null, json('   ')→null (blank treated as null); json(mapOrList)→same Map/List (idempotent). now() returns ISO string like '2026-03-25T15:30:45', today() returns '2026-03-25' (both server timezone).");
+        result.put("nullBehavior", "Type-cast functions on null return ZERO values: int(null)→0, long(null)→0, float(null)→0.0, double(null)→0.0, bool(null)→false, string(null)→''. String functions on null return empty string. size(null)→0, len(null)→0. default(null, x)→x, default('', x)→x, default(emptyList, x)→x. ifempty(null, x)→x, ifempty('', x)→x but ifempty(emptyList, x)→emptyList (only checks null/empty-string). json(null)→null, json('')→null, json('   ')→null (blank treated as null); json(mapOrList)→same Map/List (idempotent). now() returns ISO string like '2026-03-25T15:30:45', today() returns '2026-03-25' (both UTC).");
 
         result.put("compositeExamples", List.of(
             "{{formatcurrency(round(price * int(quantity), 2), 'EUR')}} - chain math + formatting",
@@ -526,8 +527,7 @@ public class HelpToolsProvider implements ToolsProvider {
             Map.of("wrong", "${#formatdate(date, 'DD')}", "correct", "{{formatdate(date, 'DD')}} - all expressions use {{...}}, no # prefix needed"),
             Map.of("wrong", "{{#default(val, 'x')}}", "correct", "{{default(val, 'x')}} - no # prefix needed"),
             Map.of("wrong", "${items.?[active]}", "correct", "{{items.?[active]}} - collection operations also use {{...}} syntax"),
-            Map.of("wrong", "{{isnull(x) ? 'empty' : x}}", "correct", "{{ifempty(x, 'empty')}} - isnull checks null only; isempty checks null/empty; ifempty returns fallback"),
-            Map.of("wrong", "{{length(items)}}", "correct", "{{size(items)}} or {{len(items)}} - length() converts to string first and returns character count; use size()/len() for collection element count")
+            Map.of("wrong", "{{isnull(x) ? 'empty' : x}}", "correct", "{{ifempty(x, 'empty')}} - isnull checks null only; isempty checks null/empty; ifempty returns fallback")
         ));
 
         // Apply category filter if specified
@@ -659,7 +659,7 @@ public class HelpToolsProvider implements ToolsProvider {
                     "name", "Assistant Agent",
                     "systemPrompt", "You are a helpful assistant. Answer questions clearly and concisely.",
                     "provider", "openai",
-                    "model", "gpt-4",
+                    "model", "gpt-4o",
                     "temperature", 0.7,
                     "maxTokens", 1000
                 )
@@ -672,10 +672,10 @@ public class HelpToolsProvider implements ToolsProvider {
                     "name", "Tool Agent",
                     "systemPrompt", "You are an assistant with access to tools. Use them when needed.",
                     "provider", "openai",
-                    "model", "gpt-4",
+                    "model", "gpt-4o",
                     "temperature", 0.3,
                     "maxIterations", 5,
-                    "tools", List.of("search_tools", "workflow")
+                    "tools", List.of("catalog", "workflow")
                 )
             )
         );

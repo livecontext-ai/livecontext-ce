@@ -1296,6 +1296,18 @@ public class SignalResumeService {
             }
         }
 
+        // Carry the resolved approval context into the COMPLETED node output so it survives the
+        // awaiting -> resolved transition. During awaiting it is only on the pending signal
+        // (banner); at resolution SignalResumeService writes a NEW step whose output is built here,
+        // so without this the resolved context vanished from the node's params and could not be
+        // referenced downstream as {{core:<label>.output.approval_context}}. Read from the already
+        // persisted signal value (no re-resolution). Omitted when blank / no template configured.
+        if (resolvedSignal.getSignalType() == SignalType.USER_APPROVAL
+                && resolvedSignal.getApprovalContext() != null
+                && !resolvedSignal.getApprovalContext().isBlank()) {
+            output.put("approval_context", resolvedSignal.getApprovalContext());
+        }
+
         // Wrap in "output" key to match the expected storage format
         // that ReadyNodeCalculator's OutputUnwrapper can handle
         Map<String, Object> payload = new HashMap<>();

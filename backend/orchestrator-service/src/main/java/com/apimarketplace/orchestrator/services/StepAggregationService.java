@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.services;
 
+import com.apimarketplace.orchestrator.domain.workflow.RunStatus;
 import com.apimarketplace.orchestrator.persistence.WorkflowStepDataRepository;
 import com.apimarketplace.orchestrator.repository.AggregatedStepProjection;
 import com.apimarketplace.orchestrator.repository.WorkflowRunRepository;
@@ -222,6 +223,78 @@ public class StepAggregationService {
             statusCounts,
             totalExecMs
         );
+    }
+
+    /**
+     * Spawn-aware terminal status per step alias for a whole run, across all epochs.
+     *
+     * <p>This is the single authoritative "what did this node end up as, counting every
+     * trigger fire but only the latest rerun spawn per coordinate" view. It is the same
+     * data feeding the aggregated-steps table, exposed here as a lean
+     * {@code alias -> RunStatus} map (no per-row logging, no output blobs) so the
+     * {@code /state} reconstruction can align the all-epochs canvas node colour with it.
+     *
+     * <p>Precedence is centralized in {@link #deriveAggregatedStatus}: success/failure win
+     * over skipped. Because the underlying query keeps only the latest spawn per coordinate
+     * (see {@code WorkflowStepDataRepository#getAggregatedStepsByRunId}), a rerun-deactivated
+     * branch reports SKIPPED while a genuine multi-epoch success reports COMPLETED - the exact
+     * distinction the current-epoch StateSnapshot flat view cannot make.
+     *
+     * @param runId the public run id
+     * @return map of stepAlias -> aggregated {@link RunStatus}; empty when the run has no steps
+     */
+    public Map<String, RunStatus> getAggregatedStatusByAlias(String runId) {
+        List<AggregatedStepProjection> projections = workflowStepDataRepository.getAggregatedStepsByRunId(runId);
+        if (projections.isEmpty()) {
+            return Map.of();
+        }
+
+        // alias -> [completed, failed, skipped, running, awaitingSignal]
+        Map<String, int[]> byAlias = new HashMap<>();
+        for (AggregatedStepProjection row : projections) {
+            String alias = row.getStepAlias();
+            if (alias == null) continue;
+            long count = row.getCount() != null ? row.getCount() : 0;
+            int[] c = byAlias.computeIfAbsent(alias, k -> new int[5]);
+            String status = row.getStatus();
+            if (status != null) {
+                switch (status.toUpperCase()) {
+                    case "COMPLETED", "SUCCESS" -> c[0] += (int) count;
+                    case "FAILED", "ERROR", "FAILURE" -> c[1] += (int) count;
+                    case "SKIPPED", "SKIP" -> c[2] += (int) count;
+                    case "RUNNING", "PENDING" -> c[3] += (int) count;
+                    case "AWAITING_SIGNAL" -> c[4] += (int) count;
+                    default -> { }
+                }
+            }
+        }
+
+        Map<String, RunStatus> result = new HashMap<>(byAlias.size());
+        for (Map.Entry<String, int[]> e : byAlias.entrySet()) {
+            int[] c = e.getValue();
+            result.put(e.getKey(), toRunStatus(deriveAggregatedStatus(c[0], c[1], c[2], c[3], c[4])));
+        }
+        return result;
+    }
+
+    /**
+     * Maps a {@link #deriveAggregatedStatus} string status to a {@link RunStatus}.
+     * Mirrors {@code ShowcaseSnapshotBuilder.runStatusFromAggregatedStatus} (kept there because
+     * that module scrubs before this service is reachable) - keep both aligned.
+     */
+    public static RunStatus toRunStatus(String aggregatedStatus) {
+        if (aggregatedStatus == null || aggregatedStatus.isBlank()) {
+            return RunStatus.PENDING;
+        }
+        return switch (aggregatedStatus.toLowerCase().trim()) {
+            case "completed", "success" -> RunStatus.COMPLETED;
+            case "error", "failed", "failure" -> RunStatus.FAILED;
+            case "partial_success" -> RunStatus.PARTIAL_SUCCESS;
+            case "skipped" -> RunStatus.SKIPPED;
+            case "running" -> RunStatus.RUNNING;
+            case "awaiting_signal" -> RunStatus.AWAITING_SIGNAL;
+            default -> RunStatus.PENDING;
+        };
     }
 
     /**

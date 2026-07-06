@@ -108,6 +108,198 @@ class SplitMergeHandlerTest {
         }
 
         @Test
+        @DisplayName("Regression: recovers a predecessor ABSENT from in-memory resultsByNode from the durable store (cross-pod / restart collapse fix)")
+        @SuppressWarnings("unchecked")
+        void durableBackfillRecoversAbsentPredecessorPerItem() {
+            // resultsByNode is EMPTY (cross-pod async/signal resume rebuilt items only, or a restart
+            // emptied the cache). Pre-fix the aggregation merge would drop agent:classify entirely.
+            SplitContext splitContext = SplitContext.create("core:split1:0", List.of("a", "b", "c"));
+
+            // Topology: split1 -> classify -> merge1 (classify is the merge's split-subgraph ancestor).
+            BaseNode split = new TestNode("core:split1", NodeType.SPLIT);
+            BaseNode classify = new TestNode("agent:classify", NodeType.MCP);
+            classify.addPredecessor("core:split1");
+            BaseNode merge = new TestNode("core:merge1", NodeType.MERGE);
+            merge.addPredecessor("agent:classify");
+            nodeMap.put("core:split1", split);
+            nodeMap.put("agent:classify", classify);
+            nodeMap.put("core:merge1", merge);
+
+            com.apimarketplace.orchestrator.services.StepOutputService stepOutputService =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.StepOutputService.class);
+            SplitMergeHandler handlerWithDurable = new SplitMergeHandler(contextManager);
+            handlerWithDurable.setStepOutputService(stepOutputService);
+
+            when(contextManager.findActiveContext(eq("run1"), eq("core:merge1"), eq(WORKFLOW_ITEM_INDEX), any()))
+                .thenReturn(Optional.of(splitContext));
+            when(context.itemIndex()).thenReturn(0);
+            when(context.itemId()).thenReturn("item1");
+            when(context.runId()).thenReturn("run1");
+            when(context.epoch()).thenReturn(0);
+            when(context.tenantId()).thenReturn("tenant1");
+
+            Map<String, Map<Integer, Object>> durable = Map.of(
+                "agent:classify", Map.of(
+                    0, Map.of("selected_category", "billing"),
+                    1, Map.of("selected_category", "bug"),
+                    2, Map.of("selected_category", "refund_clear")));
+            when(stepOutputService.loadPerItemOutputsByStepKey("run1", 0, "tenant1")).thenReturn(durable);
+
+            NodeExecutionResult result =
+                handlerWithDurable.handleMerge("run1", "core:merge1", WORKFLOW_ITEM_INDEX, context, nodeMap);
+
+            Map<String, Object> aggregated = (Map<String, Object>) result.output().get("aggregated_results");
+            assertThat(aggregated)
+                .as("classify absent in memory must be recovered from the durable store")
+                .containsKey("agent:classify");
+            assertThat((List<Object>) aggregated.get("agent:classify"))
+                .as("each item keeps its OWN classification, not item 0's")
+                .containsExactly(
+                    Map.of("selected_category", "billing"),
+                    Map.of("selected_category", "bug"),
+                    Map.of("selected_category", "refund_clear"));
+        }
+
+        @Test
+        @DisplayName("durable is NOT read when the whole subgraph is warm in memory (no unnecessary query)")
+        @SuppressWarnings("unchecked")
+        void noDurableReadWhenWarm() {
+            // Topology split1 -> step1 -> merge1; step1 fully present in memory (all slots non-null).
+            SplitContext splitContext = SplitContext.create("core:split1:0", List.of("a", "b"))
+                .withResults("mcp:step1", List.of(Map.of("v", "mem-0"), Map.of("v", "mem-1")));
+            BaseNode split = new TestNode("core:split1", NodeType.SPLIT);
+            BaseNode step1 = new TestNode("mcp:step1", NodeType.MCP);
+            step1.addPredecessor("core:split1");
+            BaseNode merge = new TestNode("core:merge1", NodeType.MERGE);
+            merge.addPredecessor("mcp:step1");
+            nodeMap.put("core:split1", split);
+            nodeMap.put("mcp:step1", step1);
+            nodeMap.put("core:merge1", merge);
+
+            com.apimarketplace.orchestrator.services.StepOutputService stepOutputService =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.StepOutputService.class);
+            SplitMergeHandler handlerWithDurable = new SplitMergeHandler(contextManager);
+            handlerWithDurable.setStepOutputService(stepOutputService);
+
+            when(contextManager.findActiveContext(eq("run1"), eq("core:merge1"), eq(WORKFLOW_ITEM_INDEX), any()))
+                .thenReturn(Optional.of(splitContext));
+            when(context.itemIndex()).thenReturn(0);
+            when(context.itemId()).thenReturn("item1");
+
+            NodeExecutionResult result =
+                handlerWithDurable.handleMerge("run1", "core:merge1", WORKFLOW_ITEM_INDEX, context, nodeMap);
+
+            org.mockito.Mockito.verify(stepOutputService, org.mockito.Mockito.never())
+                .loadPerItemOutputsByStepKey(org.mockito.ArgumentMatchers.anyString(),
+                    org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyString());
+            Map<String, Object> aggregated = (Map<String, Object>) result.output().get("aggregated_results");
+            assertThat((List<Object>) aggregated.get("mcp:step1"))
+                .containsExactly(Map.of("v", "mem-0"), Map.of("v", "mem-1"));
+        }
+
+        @Test
+        @DisplayName("durable backfills an absent node yet NEVER overrides a present in-memory slot")
+        @SuppressWarnings("unchecked")
+        void backfillsAbsentButKeepsMemory() {
+            // split1 -> [step1 (in memory), classify (absent -> forces durable read)] -> merge1
+            SplitContext splitContext = SplitContext.create("core:split1:0", List.of("a", "b"))
+                .withResults("mcp:step1", List.of(Map.of("v", "mem-0"), Map.of("v", "mem-1")));
+            BaseNode split = new TestNode("core:split1", NodeType.SPLIT);
+            BaseNode step1 = new TestNode("mcp:step1", NodeType.MCP);
+            step1.addPredecessor("core:split1");
+            BaseNode classify = new TestNode("agent:classify", NodeType.MCP);
+            classify.addPredecessor("core:split1");
+            BaseNode merge = new TestNode("core:merge1", NodeType.MERGE);
+            merge.addPredecessor("mcp:step1");
+            merge.addPredecessor("agent:classify");
+            nodeMap.put("core:split1", split);
+            nodeMap.put("mcp:step1", step1);
+            nodeMap.put("agent:classify", classify);
+            nodeMap.put("core:merge1", merge);
+
+            com.apimarketplace.orchestrator.services.StepOutputService stepOutputService =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.StepOutputService.class);
+            SplitMergeHandler handlerWithDurable = new SplitMergeHandler(contextManager);
+            handlerWithDurable.setStepOutputService(stepOutputService);
+
+            when(contextManager.findActiveContext(eq("run1"), eq("core:merge1"), eq(WORKFLOW_ITEM_INDEX), any()))
+                .thenReturn(Optional.of(splitContext));
+            when(context.itemIndex()).thenReturn(0);
+            when(context.itemId()).thenReturn("item1");
+            when(context.runId()).thenReturn("run1");
+            when(context.epoch()).thenReturn(0);
+            when(context.tenantId()).thenReturn("tenant1");
+            // Durable carries a STALE step1 (must NOT override memory) and the real absent classify.
+            when(stepOutputService.loadPerItemOutputsByStepKey("run1", 0, "tenant1")).thenReturn(Map.of(
+                "mcp:step1", Map.of(0, Map.of("v", "STALE"), 1, Map.of("v", "STALE")),
+                "agent:classify", Map.of(0, Map.of("cat", "a"), 1, Map.of("cat", "b"))));
+
+            NodeExecutionResult result =
+                handlerWithDurable.handleMerge("run1", "core:merge1", WORKFLOW_ITEM_INDEX, context, nodeMap);
+
+            Map<String, Object> aggregated = (Map<String, Object>) result.output().get("aggregated_results");
+            assertThat((List<Object>) aggregated.get("mcp:step1"))
+                .as("live in-memory slots must not be overwritten by durable rows")
+                .containsExactly(Map.of("v", "mem-0"), Map.of("v", "mem-1"));
+            assertThat((List<Object>) aggregated.get("agent:classify"))
+                .as("absent node recovered from durable")
+                .containsExactly(Map.of("cat", "a"), Map.of("cat", "b"));
+        }
+
+        @Test
+        @DisplayName("durable fold EXCLUDES unrelated epoch nodes (trigger / pre-split), only split-subgraph ancestors")
+        @SuppressWarnings("unchecked")
+        void durableFoldExcludesUnrelatedEpochNodes() {
+            SplitContext splitContext = SplitContext.create("core:split1:0", List.of("a", "b", "c"));
+            // trigger:manual -> pre:fetch -> split1 -> classify -> merge1
+            BaseNode trigger = new TestNode("trigger:manual", NodeType.MCP);
+            BaseNode preFetch = new TestNode("mcp:pre_fetch", NodeType.MCP);
+            preFetch.addPredecessor("trigger:manual");
+            BaseNode split = new TestNode("core:split1", NodeType.SPLIT);
+            split.addPredecessor("mcp:pre_fetch");
+            BaseNode classify = new TestNode("agent:classify", NodeType.MCP);
+            classify.addPredecessor("core:split1");
+            BaseNode merge = new TestNode("core:merge1", NodeType.MERGE);
+            merge.addPredecessor("agent:classify");
+            nodeMap.put("trigger:manual", trigger);
+            nodeMap.put("mcp:pre_fetch", preFetch);
+            nodeMap.put("core:split1", split);
+            nodeMap.put("agent:classify", classify);
+            nodeMap.put("core:merge1", merge);
+
+            com.apimarketplace.orchestrator.services.StepOutputService stepOutputService =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.StepOutputService.class);
+            SplitMergeHandler handlerWithDurable = new SplitMergeHandler(contextManager);
+            handlerWithDurable.setStepOutputService(stepOutputService);
+
+            when(contextManager.findActiveContext(eq("run1"), eq("core:merge1"), eq(WORKFLOW_ITEM_INDEX), any()))
+                .thenReturn(Optional.of(splitContext));
+            when(context.itemIndex()).thenReturn(0);
+            when(context.itemId()).thenReturn("item1");
+            when(context.runId()).thenReturn("run1");
+            when(context.epoch()).thenReturn(0);
+            when(context.tenantId()).thenReturn("tenant1");
+            // Durable epoch snapshot ALSO contains pre-split and trigger rows - these must be excluded.
+            when(stepOutputService.loadPerItemOutputsByStepKey("run1", 0, "tenant1")).thenReturn(Map.of(
+                "agent:classify", Map.of(0, Map.of("cat", "a"), 1, Map.of("cat", "b"), 2, Map.of("cat", "c")),
+                "mcp:pre_fetch", Map.of(0, Map.of("junk", 1)),
+                "trigger:manual", Map.of(0, Map.of("junk", 2))));
+
+            NodeExecutionResult result =
+                handlerWithDurable.handleMerge("run1", "core:merge1", WORKFLOW_ITEM_INDEX, context, nodeMap);
+
+            Map<String, Object> aggregated = (Map<String, Object>) result.output().get("aggregated_results");
+            assertThat(aggregated).containsKey("agent:classify");
+            assertThat(aggregated)
+                .as("pre-split / trigger epoch nodes must NOT pollute the aggregate")
+                .doesNotContainKey("mcp:pre_fetch")
+                .doesNotContainKey("trigger:manual");
+            assertThat(aggregated.get("nodes_executed"))
+                .as("nodes_executed counts only the split-subgraph nodes folded in")
+                .isEqualTo(1);
+        }
+
+        @Test
         @DisplayName("should include original items in output")
         void shouldIncludeOriginalItems() {
             List<Object> items = List.of("item1", "item2");

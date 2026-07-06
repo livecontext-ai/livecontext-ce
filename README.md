@@ -60,9 +60,6 @@ This repository is the **Community Edition (CE)**: the full platform as a single
 - Docker Engine 24+ with Compose v2 (or Docker Desktop 4.x and later)
 - 4 GB RAM minimum, 8 GB recommended
 
-For agents to run, connect your instance to **LiveContext Cloud** (recommended: managed model
-access, nothing to set up) or add your own OpenAI / Anthropic / Google key in the app.
-
 ## Quick start
 
 ```bash
@@ -75,6 +72,8 @@ docker compose ps
 ```
 
 Then open **http://localhost:3000** and create the first account (the first user becomes the admin).
+Two optional add-ons (interface screenshots/PDFs, and a browser agent with web search) are one env
+file away when you want them, see [Optional features](#optional-features) below.
 
 Configuration (LLM keys, SMTP, ports) is documented in [docker/README-CE.md](docker/README-CE.md).
 Copy `docker/.env.ce.example` to set your own values, and never commit it.
@@ -92,9 +91,7 @@ app setting in one shot):
   ```
 - **Browser agent and web search** (`browser-agent` profile). Adds a Chromium browser-use container
   plus a SearXNG metasearch sidecar (~2 GB) so agents can browse pages (`agent_browse`) and run
-  `web_search`. The browser agent uses whichever model you pick per AI provider, relayed through
-  your cloud connection when the install is cloud-linked (like the other agents), or a direct
-  provider key added in the app otherwise. Enable it with:
+  `web_search`. Enable it with:
   ```bash
   docker compose --env-file docker/.env.ce.browser-agent up -d
   ```

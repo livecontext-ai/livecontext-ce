@@ -4,9 +4,10 @@
  * Plumbing regression test - pins the {@code previewMode} prop forwarding
  * from {@link ApplicationCarousel} to its inner {@link ApplicationTabContent}.
  *
- * Why: the marketplace-preview UX fix gates three authed-API affordances
- * (Launch, Continue, Maximize buttons) + the toolbar portal on this single
- * boolean. The actual gating logic lives in {@code ApplicationTabContent},
+ * Why: the marketplace-preview UX fix gates the authed-API affordances
+ * (Launch, Continue buttons) + the toolbar portal on this single boolean
+ * (the fullscreen toggle stays available in preview). The actual gating
+ * logic lives in {@code ApplicationTabContent},
  * but the carousel is the only path that connects the page-level
  * {@code publicPreviewMode} (set by the preview page) to the gate-evaluating
  * component. A refactor that silently drops {@code previewMode} from the
@@ -99,8 +100,8 @@ describe('ApplicationCarousel - previewMode prop plumbing', () => {
   it('defaults previewMode to false when omitted (workflow side-panel callers must keep all controls)', () => {
     // The non-preview caller is WorkflowPanelContent. If a future refactor
     // makes previewMode default to anything other than false, the side-panel
-    // would silently lose Launch / Continue / Maximize - a regression worth
-    // pinning even though the current default is correct.
+    // would silently lose Launch / Continue - a regression worth pinning
+    // even though the current default is correct.
     render(
       <ApplicationCarousel
         configs={[baseConfig]}

@@ -126,7 +126,9 @@ export default function DataTable({
   };
 
   return (
-    <div className={`w-full h-full flex flex-col ${className}`}>
+    // Embedded (side panel / modal / builder inspector): `relative` so the floating
+    // SelectionActionBar anchors to THIS table container instead of <main> (the whole app).
+    <div className={`w-full h-full flex flex-col ${effectiveEmbedded ? 'relative' : ''} ${className}`}>
       {/* Breadcrumb for embedded mode (side panel / tab) - matches AppHeader style */}
       {effectiveEmbedded && jsonPath && (
         <div className="flex-shrink-0 pb-1">
@@ -147,7 +149,6 @@ export default function DataTable({
             jsonPath={jsonPath}
             onAddAnalyzeBadges={onAddAnalyzeBadges}
             onAnalyzeClick={onAnalyzeClick}
-            embedded={effectiveEmbedded}
           />
         </div>
       )}

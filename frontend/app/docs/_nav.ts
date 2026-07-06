@@ -46,6 +46,7 @@ export const DOCS_NAV: DocsNavSection[] = [
       { title: 'Node reference', href: '/nodes' },
       { title: 'Triggers', href: '/triggers' },
       { title: 'Interfaces & apps', href: '/interfaces' },
+      { title: 'Runs & execution', href: '/runs' },
     ],
   },
   {
@@ -53,6 +54,9 @@ export const DOCS_NAV: DocsNavSection[] = [
     icon: Bot,
     items: [
       { title: 'Agents', href: '/agents' },
+      { title: 'Models & providers', href: '/models' },
+      { title: 'Browser Agent', href: '/browser-agent' },
+      { title: 'Skills', href: '/skills' },
     ],
   },
   {
@@ -61,6 +65,7 @@ export const DOCS_NAV: DocsNavSection[] = [
     items: [
       { title: 'Tables & data', href: '/tables' },
       { title: 'Integrations', href: '/integrations' },
+      { title: 'Files & storage', href: '/files' },
     ],
   },
   {
@@ -69,15 +74,16 @@ export const DOCS_NAV: DocsNavSection[] = [
     items: [
       { title: 'Marketplace', href: '/marketplace' },
       { title: 'Self-hosting', href: '/self-host' },
+      { title: 'Organizations & roles', href: '/organizations' },
+      { title: 'Plans & billing', href: '/billing' },
     ],
   },
   {
     title: 'Reference',
     icon: BookOpen,
     items: [
-      { title: 'Access, roles & SSO', badge: 'Soon' },
-      { title: 'Expressions & variables', badge: 'Soon' },
-      { title: 'REST API & webhooks', badge: 'Soon' },
+      { title: 'Expressions & variables', href: '/expressions' },
+      { title: 'REST API & webhooks', href: '/rest-api' },
     ],
   },
 ];

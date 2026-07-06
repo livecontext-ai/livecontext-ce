@@ -18,24 +18,27 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Split node - Iteration over a list of items (currently sequential, parallel semantics planned).
+ * Split node - fans a collection out into N PARALLEL execution contexts (one per item).
  *
- * Each item traverses the split body independently with its own item data.
+ * <p>IMPORTANT - who produces the output: under the current engine a top-level split is executed
+ * by {@link com.apimarketplace.orchestrator.execution.v2.split.SplitNodeExecutor} (dispatched from
+ * {@code UnifiedExecutionEngine.executeSplitNodeSimplified} because {@link #isSplitNode()} is true);
+ * nested splits go through {@code SplitAwareNodeExecutor}. That executor is the SOURCE OF TRUTH for
+ * the persisted output - it emits {@code items, item_count, split_id, spawn_reason, terminated}
+ * (see {@code SplitNodeExecutor.createSuccessResult} and SplitOutputSchemaMapper). {@code SplitNode}
+ * itself is used for TRAVERSAL/wiring ({@link #getNextNodes}, {@link #getBodyNodes}, port targets);
+ * {@link #execute} below is NOT on the live output path.
  *
- * Flow:
- * 1. Evaluate list to get list of items
- * 2. Get current iteration state
- * 3. If currentIndex < items.size() && currentIndex < maxItems:
- *    - Set current item in context
- *    - Execute body nodes with item data
- *    - After body completes, increment index (handled by engine)
- * 4. If all items processed:
- *    - Exit split, return successors
+ * <p>Per-branch item data ({@code current_item}, {@code current_index}, and the {@code item}/
+ * {@code index} shorthands) is injected at RUNTIME into each branch's context by
+ * {@code SplitAwareNodeExecutor}; it is NOT part of the split's own persisted output. See the
+ * SplitNodeSpec output schema (current_item/current_index are marked {@code runtimeOnly}).
  *
- * State Management:
- * - Split state is stored in ExecutionContext per parent item
- * - Key: "split_state:{nodeId}" -> SplitState record
- * - Contains: list of items, current index, strategy
+ * <p>NOTE: the {@code splitState != null} branch of {@link #execute} is a legacy SEQUENTIAL
+ * iteration path. It is unreachable under the current parallel engine ({@code getSplitState}
+ * always returns null - nothing writes {@code "split_state:{nodeId}"} into globalData) and is
+ * kept only for historical reference. {@link #getNextNodes} and {@link #onComplete}, however,
+ * ARE live: the parallel executor calls them to drive per-item body traversal.
  */
 public class SplitNode extends BaseNode {
 
@@ -139,6 +142,12 @@ public class SplitNode extends BaseNode {
                 java.util.Optional.empty(), metadata, 0);
         }
 
+        // ── LEGACY SEQUENTIAL PATH (unreachable under the parallel engine) ──────────────
+        // getSplitState() only ever READS "split_state:{nodeId}" from globalData and nothing
+        // writes it, so splitState is always null above and control never reaches here. This
+        // per-item iteration block (and its `current_item`/`continue` output) predates the
+        // parallel-spawn model; kept for historical reference only. Per-item context in the
+        // live flow is injected by SplitAwareNodeExecutor, not emitted here.
         int currentIndex = splitState.currentIndex();
         List<Object> items = splitState.items();
 

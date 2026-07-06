@@ -79,11 +79,9 @@ class NodeOutputSchemaCoherenceContractTest {
         "DECISION",
         "EXTRACT_FROM_FILE",
         "GUARDRAIL",
-        "FIND",
         "INTERFACE",
         "MERGE",
         "OPTION",
-        "SPLIT",
         "STOP_ON_ERROR",
         "SUMMARIZE",
         "SWITCH"

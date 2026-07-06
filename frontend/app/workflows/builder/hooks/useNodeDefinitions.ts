@@ -16,16 +16,19 @@ import type { OutputSchema } from '../components/inspector/outputs/UnifiedNodeOu
 import { useCallback, useMemo } from 'react';
 
 export function toOutputSchema(fields: NodeDefinitionOutputField[]): OutputSchema[] {
-  return fields
-    .filter((f) => !f.runtimeOnly)
-    .map((f) => ({
-      key: f.key,
-      type: f.type,
-      description: f.description,
-      ...(f.children && f.children.length > 0
-        ? { children: toOutputSchema(f.children) }
-        : {}),
-    }));
+  // Runtime-only fields (e.g. a Split's current_item / current_index) are KEPT and flagged so the
+  // OutputColumn and the InputColumn ancestor variable picker surface them (with a "runtime" badge)
+  // - they resolve inside the node body ({{item}} / {{core:<label>.output.current_item}}) even
+  // though they are not part of the persisted output.
+  return fields.map((f) => ({
+    key: f.key,
+    type: f.type,
+    description: f.description,
+    ...(f.runtimeOnly ? { runtimeOnly: true } : {}),
+    ...(f.children && f.children.length > 0
+      ? { children: toOutputSchema(f.children) }
+      : {}),
+  }));
 }
 
 export function useNodeDefinitions() {

@@ -6,6 +6,7 @@ import com.apimarketplace.agent.domain.ToolResult;
 import com.apimarketplace.agent.prompt.ConversationToolDefinitions;
 import com.apimarketplace.agent.tool.ToolExecutionService;
 import com.apimarketplace.agent.tools.authz.ToolAuthorizationGuard;
+import com.apimarketplace.agent.tools.remote.ToolServiceTopology;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -59,15 +60,6 @@ public class RemoteToolExecutionService implements ToolExecutionService {
 
     @Value("${services.catalog-url:http://localhost:8081}")
     private String catalogUrl;
-
-    /** Tools that route to datasource-service instead of orchestrator. */
-    private static final Set<String> DATASOURCE_TOOLS = Set.of("table");
-
-    /** Tools that route to interface-service instead of orchestrator. */
-    private static final Set<String> INTERFACE_TOOLS = Set.of("interface");
-
-    /** Tools that route to catalog-service instead of orchestrator. */
-    private static final Set<String> CATALOG_TOOLS = Set.of("catalog");
 
     /**
      * Sub-agent execution handler - intercepts agent(action='execute') locally.
@@ -157,18 +149,19 @@ public class RemoteToolExecutionService implements ToolExecutionService {
                 return executeViaCallbackUrl(toolCall, tenantId, credentials, callbackUrl, startTime);
             }
 
-            // Route to owning service (datasource-service, interface-service, catalog-service)
-            if (DATASOURCE_TOOLS.contains(toolName)) {
-                log.info("Routing tool '{}' to datasource-service", toolName);
-                return executeRemoteCoreTools(toolCall, tenantId, credentials, datasourceUrl, startTime);
-            }
-            if (INTERFACE_TOOLS.contains(toolName)) {
-                log.info("Routing tool '{}' to interface-service", toolName);
-                return executeRemoteCoreTools(toolCall, tenantId, credentials, interfaceUrl, startTime);
-            }
-            if (CATALOG_TOOLS.contains(toolName)) {
-                log.info("Routing tool '{}' to catalog-service", toolName);
-                return executeRemoteCoreTools(toolCall, tenantId, credentials, catalogUrl, startTime);
+            // Route to the owning service (datasource / interface / catalog). agent+skill
+            // are already handled locally above; ORCHESTRATOR + AGENT fall through to the
+            // core/MCP path below. Owner rules come from the shared ToolServiceTopology.
+            ToolServiceTopology.ServiceKey owner = ToolServiceTopology.serviceFor(toolName);
+            String ownerUrl = switch (owner) {
+                case DATASOURCE -> datasourceUrl;
+                case INTERFACE -> interfaceUrl;
+                case CATALOG -> catalogUrl;
+                default -> null;
+            };
+            if (ownerUrl != null) {
+                log.info("Routing tool '{}' to {}", toolName, owner);
+                return executeRemoteCoreTools(toolCall, tenantId, credentials, ownerUrl, startTime);
             }
 
             // Check if this is a core tool or MCP tool

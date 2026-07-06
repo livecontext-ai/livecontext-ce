@@ -415,7 +415,8 @@
         { "name": "maxIterations", "type": "number", "status": "aligned", "action": "keep", "notes": "Configured max iterations (camelCase in backend)" },
         { "name": "terminated", "type": "boolean", "status": "aligned", "action": "keep", "notes": "Whether the loop has terminated" },
         { "name": "enter_body", "type": "boolean", "status": "aligned", "action": "keep", "notes": "Whether the loop body should be entered" },
-        { "name": "selected_path", "type": "string", "status": "aligned", "action": "keep", "notes": "body or exit" }
+        { "name": "selected_path", "type": "string", "status": "aligned", "action": "keep", "notes": "body or exit" },
+        { "name": "reason", "type": "string", "status": "aligned", "action": "keep", "notes": "Exit reason, present only once terminated: condition_false or max_iterations_reached" }
       ]
     },
 
@@ -432,12 +433,11 @@
       "outputs": [
         { "name": "current_item", "type": "any", "description": "Current item in parallel branch (runtime context, body nodes only)", "runtimeOnly": true },
         { "name": "current_index", "type": "number", "description": "0-based index of current item (runtime context, body nodes only)", "runtimeOnly": true },
+        { "name": "items", "type": "array", "status": "aligned", "action": "keep", "notes": "The collection being split (persisted by SplitNodeExecutor for inspection)" },
         { "name": "item_count", "type": "number", "status": "aligned", "action": "keep", "notes": "Number of items being split" },
         { "name": "split_id", "type": "string", "status": "aligned", "action": "keep", "notes": "Node ID of the split" },
-        { "name": "split_strategy", "type": "string", "status": "aligned", "action": "keep", "notes": "The strategy used" },
-        { "name": "max_items", "type": "number", "status": "aligned", "action": "keep", "notes": "Configured max items" },
-        { "name": "terminated", "type": "boolean", "status": "aligned", "action": "keep", "notes": "Whether split has terminated" },
-        { "name": "exit_reason", "type": "string", "status": "aligned", "action": "keep", "notes": "empty_list, all_items_processed, or items_spawned" }
+        { "name": "spawn_reason", "type": "string", "status": "aligned", "action": "keep", "notes": "items_spawned or empty_list" },
+        { "name": "terminated", "type": "boolean", "status": "aligned", "action": "keep", "notes": "Always true: split completes immediately after spawning" }
       ]
     },
 
@@ -878,7 +878,8 @@
         { "name": "approver_roles", "type": "array", "itemType": "string", "status": "aligned", "action": "keep", "notes": "Configured approver roles (in AWAITING_SIGNAL output)" },
         { "name": "required_approvals", "type": "number", "status": "aligned", "action": "keep", "notes": "Configured required approvals count" },
         { "name": "expires_at", "type": "string", "status": "aligned", "action": "keep", "notes": "ISO timestamp when approval expires" },
-        { "name": "selected_port", "type": "string", "status": "aligned", "action": "keep", "notes": "approved, rejected, or timeout - set after signal resolution" }
+        { "name": "selected_port", "type": "string", "status": "aligned", "action": "keep", "notes": "approved, rejected, or timeout - set after signal resolution" },
+        { "name": "approval_context", "type": "string", "status": "aligned", "action": "keep", "notes": "Resolved contextTemplate shown to the approver, carried into the resolved output (present only when a context template resolved to non-blank text)" }
       ]
     },
 
@@ -1015,24 +1016,20 @@
       "id": "find-row",
       "name": "Find Row",
       "category": "action",
-      "description": "Queries a data source and executes successor nodes in parallel for each found row. Combines CRUD read with split-like parallel execution.",
+      "description": "Queries a data source and returns matching rows as a collection (does not spawn parallel per-row contexts; use a Split node on the items for that).",
       "parameters": [
         { "name": "table_id", "type": "number", "required": true, "status": "aligned", "notes": "Datasource ID (alias: dataSourceId)" },
         { "name": "where", "type": "object", "status": "aligned", "notes": "Filter condition: {column, operator, value}" },
         { "name": "maxItems", "type": "number", "status": "aligned", "notes": "Maximum number of rows to process. Caps the result set." }
       ],
       "outputs": [
-        { "name": "current_item", "type": "object", "description": "Current row being processed in parallel branch (runtime context, body nodes only)", "runtimeOnly": true },
-        { "name": "current_index", "type": "number", "description": "0-based index of current row (runtime context, body nodes only)", "runtimeOnly": true },
         { "name": "items", "type": "array", "itemType": "object", "status": "aligned", "action": "keep", "notes": "All found rows (after limit applied)" },
         { "name": "item_count", "type": "number", "status": "aligned", "action": "keep", "notes": "Number of items found" },
         { "name": "total_before_limit", "type": "number", "status": "aligned", "action": "keep", "notes": "Total rows before maxItems cap" },
         { "name": "has_more", "type": "boolean", "status": "aligned", "action": "keep", "notes": "Whether more rows exist beyond the limit" },
         { "name": "exit_reason", "type": "string", "status": "aligned", "action": "keep", "notes": "items_found or empty_result" },
-        { "name": "find_id", "type": "string", "status": "aligned", "action": "keep", "notes": "Node ID of the find node (used for split context)" },
-        { "name": "max_items", "type": "number", "status": "aligned", "action": "keep", "notes": "Configured max items cap" },
-        { "name": "split_strategy", "type": "string", "status": "aligned", "action": "keep", "notes": "Execution strategy for parallel items" },
-        { "name": "terminated", "type": "boolean", "status": "aligned", "action": "keep", "notes": "Whether find has terminated (all items processed or empty)" }
+        { "name": "find_id", "type": "string", "status": "aligned", "action": "keep", "notes": "Node ID of the find node" },
+        { "name": "max_items", "type": "number", "status": "aligned", "action": "keep", "notes": "Configured max items cap" }
       ]
     }
   ]

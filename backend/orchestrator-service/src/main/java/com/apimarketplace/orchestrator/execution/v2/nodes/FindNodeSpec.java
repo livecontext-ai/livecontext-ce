@@ -17,7 +17,7 @@ public class FindNodeSpec implements NodeSpec {
             .label("Find")
             .category("table")
             .variablePrefix("table")
-            .description("Finds rows matching criteria, optionally spawning parallel contexts")
+            .description("Finds rows matching criteria and returns them as a collection")
             .outputs(List.of(
                 OutputFieldDef.builder()
                     .key("items")
@@ -54,21 +54,6 @@ public class FindNodeSpec implements NodeSpec {
                     .type("string")
                     .description("Reason for completion: items_found or empty_result")
                     .aliases(List.of("spawn_reason"))
-                    .build(),
-                OutputFieldDef.builder()
-                    .key("terminated")
-                    .type("boolean")
-                    .description("Whether the find was terminated early")
-                    .build(),
-                OutputFieldDef.builder()
-                    .key("split_strategy")
-                    .type("string")
-                    .description("Strategy used for splitting results")
-                    .build(),
-                OutputFieldDef.builder()
-                    .key("split_id")
-                    .type("string")
-                    .description("Split identifier when used with parallel contexts")
                     .build()
             ))
             .keywords(List.of("find", "search", "query", "lookup"))

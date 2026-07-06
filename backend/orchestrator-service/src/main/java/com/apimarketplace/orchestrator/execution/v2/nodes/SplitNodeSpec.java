@@ -43,7 +43,7 @@ public class SplitNodeSpec implements NodeSpec {
                 OutputFieldDef.builder()
                     .key("items")
                     .type("array")
-                    .description("The collection being split")
+                    .description("The collection being split (also persisted for inspection)")
                     .build(),
                 OutputFieldDef.builder()
                     .key("item_count")
@@ -58,12 +58,12 @@ public class SplitNodeSpec implements NodeSpec {
                 OutputFieldDef.builder()
                     .key("spawn_reason")
                     .type("string")
-                    .description("Reason for spawning parallel contexts")
+                    .description("Why the split completed: items_spawned (N parallel branches created) or empty_list")
                     .build(),
                 OutputFieldDef.builder()
                     .key("terminated")
                     .type("boolean")
-                    .description("Whether the split was terminated early")
+                    .description("Always true: the split node completes immediately after spawning its branches")
                     .build()
             ))
             .keywords(List.of("split", "each", "iterate", "parallel"))

@@ -76,6 +76,36 @@ class SplitNodeExecutorTest {
         }
 
         @Test
+        @DisplayName("emitted persisted keys match the non-runtime keys declared by SplitNodeSpec (runtime <-> spec guard)")
+        void emittedKeysMatchSplitNodeSpec() {
+            List<Object> items = List.of("a", "b", "c");
+            when(templateAdapter.evaluateTemplate(eq("{{trigger:webhook.messages}}"), any()))
+                .thenReturn(items);
+            when(contextManager.createContext(any(), any(), anyInt(), isNull(), any()))
+                .thenReturn(SplitContext.create("core:split1:0", items));
+
+            NodeExecutionResult result = executor.execute(
+                "run1", "core:split1", "{{trigger:webhook.messages}}", 0, WORKFLOW_ITEM_INDEX, context);
+
+            // The live producer's top-level output keys, minus the engine-envelope keys that
+            // GenericOutputSchemaMapper strips (node_type / resolved_params / item_index...).
+            java.util.Set<String> emittedPersisted = new java.util.TreeSet<>(result.output().keySet());
+            emittedPersisted.removeAll(
+                com.apimarketplace.orchestrator.services.persistence.schema.GenericOutputSchemaMapper.ENGINE_ENVELOPE_KEYS);
+
+            // The persisted (non-runtimeOnly) keys the agent/inspector schema declares.
+            java.util.Set<String> declaredPersisted =
+                new com.apimarketplace.orchestrator.execution.v2.nodes.SplitNodeSpec().definition().outputs().stream()
+                    .filter(f -> !Boolean.TRUE.equals(f.runtimeOnly()))
+                    .map(com.apimarketplace.agent.domain.OutputFieldDef::key)
+                    .collect(java.util.stream.Collectors.toCollection(java.util.TreeSet::new));
+
+            assertThat(emittedPersisted)
+                .as("SplitNodeExecutor (the live output producer) must emit exactly the persisted keys SplitNodeSpec declares")
+                .isEqualTo(declaredPersisted);
+        }
+
+        @Test
         @DisplayName("should return COMPLETED immediately after spawning")
         void shouldReturnCompletedImmediately() {
             when(templateAdapter.evaluateTemplate(any(), any()))

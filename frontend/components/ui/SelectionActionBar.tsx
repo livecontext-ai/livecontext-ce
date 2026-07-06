@@ -10,11 +10,13 @@ import { useTranslations } from 'next-intl';
  * task board's BulkActionBar (TaskBoardPage) so selection actions float at the
  * bottom instead of pushing the page down with an inline toolbar.
  *
- * Positioning: `absolute bottom-6 left-1/2 -translate-x-1/2`. The /app layout's
- * <main> is `relative`, so the bar anchors to the content area (auto-centered
- * between the sidebar and any open side panel) and stays put while the page
- * scrolls - no `fixed` viewport offset. Render it anywhere inside the page; the
- * absolute positioning resolves to <main>, escaping the scroll container.
+ * Positioning: `absolute bottom-6 left-1/2 -translate-x-1/2`. The bar anchors to
+ * the nearest positioned ancestor. On a standalone full page the /app layout's
+ * <main> is `relative`, so it centers in the content area (between the sidebar and
+ * any open side panel). Embedded (side panel / modal / builder inspector) the host
+ * container is made `relative` (see DataTable's embedded root), so the bar stays
+ * INSIDE that panel instead of floating over the whole app. Either way it stays put
+ * while the page scrolls - no `fixed` viewport offset.
  */
 
 const BAR_BUTTON_BASE =

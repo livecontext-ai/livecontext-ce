@@ -1681,6 +1681,59 @@ class SignalResumeServiceTest {
             assertThat(output).doesNotContainKey("passed");
             assertThat(output).doesNotContainKey("selected_category");
         }
+
+        @Test
+        @DisplayName("USER_APPROVAL resolution carries the resolved approval_context into the completed output (survives awaiting -> resolved)")
+        void approvalResolutionIncludesApprovalContext() throws Exception {
+            SignalWaitEntity signal = mock(SignalWaitEntity.class);
+            when(signal.getSignalType()).thenReturn(SignalType.USER_APPROVAL);
+            when(signal.getResolution()).thenReturn(SignalResolution.APPROVED);
+            when(signal.getResolvedAt()).thenReturn(Instant.now());
+            when(signal.getResolvedBy()).thenReturn("42");
+            when(signal.getApprovalContext()).thenReturn("Approve refund of 120 EUR for x@y.com?");
+
+            Map<String, Object> payload = invokeBuild(signal);
+            Map<String, Object> output = (Map<String, Object>) payload.get("output");
+
+            // The resolved context (previously only on the pending signal) is now on the
+            // COMPLETED node output, alongside the routing port.
+            assertThat(output).containsEntry("approval_context", "Approve refund of 120 EUR for x@y.com?");
+            assertThat(output).containsEntry("selected_port", "approved");
+        }
+
+        @Test
+        @DisplayName("USER_APPROVAL TIMEOUT resolution also carries the resolved approval_context (not APPROVED-only)")
+        void approvalTimeoutResolutionIncludesApprovalContext() throws Exception {
+            SignalWaitEntity signal = mock(SignalWaitEntity.class);
+            when(signal.getSignalType()).thenReturn(SignalType.USER_APPROVAL);
+            when(signal.getResolution()).thenReturn(SignalResolution.TIMEOUT);
+            when(signal.getResolvedAt()).thenReturn(Instant.now());
+            when(signal.getResolvedBy()).thenReturn("system");
+            when(signal.getApprovalContext()).thenReturn("Approve refund of 120 EUR for x@y.com?");
+
+            Map<String, Object> payload = invokeBuild(signal);
+            Map<String, Object> output = (Map<String, Object>) payload.get("output");
+
+            assertThat(output).containsEntry("approval_context", "Approve refund of 120 EUR for x@y.com?");
+            assertThat(output).containsEntry("selected_port", "timeout");
+        }
+
+        @Test
+        @DisplayName("USER_APPROVAL with a blank/absent context does NOT add an approval_context key (soft-required, never a blank key)")
+        void approvalResolutionOmitsBlankApprovalContext() throws Exception {
+            SignalWaitEntity signal = mock(SignalWaitEntity.class);
+            when(signal.getSignalType()).thenReturn(SignalType.USER_APPROVAL);
+            when(signal.getResolution()).thenReturn(SignalResolution.REJECTED);
+            when(signal.getResolvedAt()).thenReturn(Instant.now());
+            when(signal.getResolvedBy()).thenReturn("42");
+            when(signal.getApprovalContext()).thenReturn("   ");
+
+            Map<String, Object> payload = invokeBuild(signal);
+            Map<String, Object> output = (Map<String, Object>) payload.get("output");
+
+            assertThat(output).doesNotContainKey("approval_context");
+            assertThat(output).containsEntry("selected_port", "rejected");
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

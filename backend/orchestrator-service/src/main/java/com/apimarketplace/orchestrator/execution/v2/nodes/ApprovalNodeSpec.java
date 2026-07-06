@@ -39,6 +39,11 @@ public class ApprovalNodeSpec implements NodeSpec {
                     .key("selected_port")
                     .type("string")
                     .description("Selected port: approved or rejected")
+                    .build(),
+                OutputFieldDef.builder()
+                    .key("approval_context")
+                    .type("string")
+                    .description("Resolved approval context: the node's contextTemplate rendered at pause time. Present only when a context template was configured and resolved to non-blank text.")
                     .build()
             ))
             .keywords(List.of("approval", "approve", "reject", "human"))
