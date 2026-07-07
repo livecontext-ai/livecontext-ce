@@ -94,10 +94,10 @@ export function clampTierIndex(tierIndex: number, maxTierIndex: number): number 
  */
 export const PLAN_FEATURE_KEYS: Record<string, string[]> = {
   free: ['creditsFree', 'users1', 'workspaces1', 'variables3', 'concurrent1', 'storage100mb', 'logs7', 'supportCommunity'],
-  starter: ['creditsDynamic', 'users1', 'workspaces1', 'variables25', 'concurrent5', 'storage1gb', 'logs30', 'versioning', 'apiAccess', 'analyticsBasic', 'supportEmail'],
-  pro: ['creditsDynamic', 'users1', 'workspaces3', 'variables100', 'concurrent20', 'storage10gb', 'logs30', 'versioning', 'apiAccess', 'priorityExecution', 'executionSearch', 'analyticsDetailed', 'supportPriority'],
-  team: ['creditsDynamic', 'users25', 'workspaces10', 'variables500', 'concurrent50', 'storage100gb', 'logs60', 'versioning', 'apiAccess', 'priorityExecution', 'executionSearch', 'sso', 'rbac', 'auditLogs', 'sharedTemplates', 'centralizedBilling', 'analyticsTeam', 'supportSla'],
-  enterprise: ['creditsCustom', 'usersUnlimited', 'workspacesUnlimited', 'variablesUnlimited', 'concurrentUnlimited', 'storage1tb', 'logsCustom', 'versioning', 'apiAccess', 'priorityExecution', 'executionSearch', 'sso', 'rbac', 'auditLogs', 'sharedTemplates', 'centralizedBilling', 'dedicatedInstance', 'compliance', 'overageProtection', 'analyticsAdvanced', 'sla999', 'accountManager', 'onboarding'],
+  starter: ['creditsDynamic', 'users1', 'workspaces1', 'variables25', 'concurrent5', 'storage1gb', 'logs30', 'versioning', 'apiAccess', 'cePlatformCreds', 'analyticsBasic', 'supportEmail'],
+  pro: ['creditsDynamic', 'users1', 'workspaces3', 'variables100', 'concurrent20', 'storage10gb', 'logs30', 'versioning', 'apiAccess', 'cePlatformCreds', 'priorityExecution', 'executionSearch', 'analyticsDetailed', 'supportPriority'],
+  team: ['creditsDynamic', 'users25', 'workspaces10', 'variables500', 'concurrent50', 'storage100gb', 'logs60', 'versioning', 'apiAccess', 'cePlatformCreds', 'priorityExecution', 'executionSearch', 'sso', 'rbac', 'auditLogs', 'sharedTemplates', 'centralizedBilling', 'analyticsTeam', 'supportSla'],
+  enterprise: ['creditsCustom', 'usersUnlimited', 'workspacesUnlimited', 'variablesUnlimited', 'concurrentUnlimited', 'storage1tb', 'logsCustom', 'versioning', 'apiAccess', 'cePlatformCreds', 'priorityExecution', 'executionSearch', 'sso', 'rbac', 'auditLogs', 'sharedTemplates', 'centralizedBilling', 'dedicatedInstance', 'compliance', 'overageProtection', 'analyticsAdvanced', 'sla999', 'accountManager', 'onboarding'],
 };
 
 /**
@@ -106,7 +106,7 @@ export const PLAN_FEATURE_KEYS: Record<string, string[]> = {
  * Used by the coherence test: each tier must include every capability of the tier below.
  */
 export const CAPABILITY_KEYS = [
-  'versioning', 'apiAccess', 'priorityExecution', 'executionSearch',
+  'versioning', 'apiAccess', 'cePlatformCreds', 'priorityExecution', 'executionSearch',
   'sso', 'rbac', 'auditLogs', 'sharedTemplates', 'centralizedBilling',
   'dedicatedInstance', 'compliance', 'overageProtection', 'accountManager', 'onboarding',
 ];

@@ -136,6 +136,73 @@ class CloudLinkControllerTest {
     }
 
     @Nested
+    @DisplayName("Catalog source")
+    class CatalogSource {
+
+        @Test
+        @DisplayName("GET /catalog-source returns the current source")
+        void shouldReturnCatalogSource() {
+            when(cloudLinkService.getCatalogSource(TENANT_ID)).thenReturn(CloudLlmSource.CLOUD);
+
+            ResponseEntity<Map<String, Object>> response = controller.getCatalogSource(TENANT_ID);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(response.getBody()).containsEntry("source", "CLOUD");
+        }
+
+        @Test
+        @DisplayName("PUT /catalog-source persists the selected source")
+        void shouldPersistCatalogSource() {
+            when(cloudLinkService.setCatalogSource(TENANT_ID, CloudLlmSource.BYOK)).thenReturn(CloudLlmSource.BYOK);
+
+            ResponseEntity<Map<String, Object>> response =
+                    controller.setCatalogSource(TENANT_ID, Map.of("source", "BYOK"));
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(response.getBody()).containsEntry("source", "BYOK");
+        }
+
+        @Test
+        @DisplayName("PUT /catalog-source returns conflict when Cloud link is missing")
+        void shouldReturnConflictWhenCloudLinkMissing() {
+            when(cloudLinkService.setCatalogSource(TENANT_ID, CloudLlmSource.CLOUD))
+                    .thenThrow(new CloudLinkService.CloudAccountNotLinkedException("No cloud account linked"));
+
+            ResponseEntity<Map<String, Object>> response =
+                    controller.setCatalogSource(TENANT_ID, Map.of("source", "CLOUD"));
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+            assertThat(response.getBody()).containsEntry("error", "CLOUD_LINK_REQUIRED");
+        }
+
+        @Test
+        @DisplayName("PUT /catalog-source returns 409 CLOUD_LINK_NOT_READY when the link exists but cloud registration is unconfirmed")
+        void shouldReturnConflictNotReadyWhenRegistrationFails() {
+            // Distinct from CLOUD_LINK_REQUIRED (no link): here a link exists but registerWithCloud
+            // could not confirm, so the service throws IllegalStateException → 409 CLOUD_LINK_NOT_READY.
+            when(cloudLinkService.setCatalogSource(TENANT_ID, CloudLlmSource.CLOUD))
+                    .thenThrow(new IllegalStateException("Cloud link is not registered"));
+
+            ResponseEntity<Map<String, Object>> response =
+                    controller.setCatalogSource(TENANT_ID, Map.of("source", "CLOUD"));
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+            assertThat(response.getBody()).containsEntry("error", "CLOUD_LINK_NOT_READY");
+        }
+
+        @Test
+        @DisplayName("PUT /catalog-source rejects invalid source instead of silently switching to BYOK")
+        void shouldRejectInvalidCatalogSource() {
+            ResponseEntity<Map<String, Object>> response =
+                    controller.setCatalogSource(TENANT_ID, Map.of("source", "anything"));
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+            assertThat(response.getBody()).containsEntry("error", "INVALID_CATALOG_SOURCE");
+            verifyNoInteractions(cloudLinkService);
+        }
+    }
+
+    @Nested
     @DisplayName("GET /auth-url")
     class GetAuthUrl {
 

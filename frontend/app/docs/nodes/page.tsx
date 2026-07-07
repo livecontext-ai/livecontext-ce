@@ -144,9 +144,10 @@ export default function NodesPage() {
         </p>
         <Callout variant="info">
           A User Approval node can also <strong>delegate the decision to Telegram</strong>: enable
-          the &quot;Delegate via external channel&quot; section, pick your Telegram bot credential
-          and a chat id, and the pending approval is sent as a message with inline Approve/Reject
-          buttons. Tapping a button resolves the approval exactly like an in-app decision (the
+          the &quot;Delegate via external channel&quot; section and set a chat id (required), and
+          the pending approval is sent as a message with inline Approve/Reject buttons. Picking a
+          bot credential is optional: leave it empty to send with your own Telegram credential, or
+          select one to pin a specific bot. Tapping a button resolves the approval exactly like an in-app decision (the
           message is then edited with the verdict and its buttons removed), and in-app resolution
           keeps working in parallel. The message body defaults to the resolved{' '}
           <code>contextTemplate</code>; an optional allow-list restricts which Telegram users may

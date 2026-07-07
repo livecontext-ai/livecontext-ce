@@ -15,9 +15,16 @@ export interface CloudLinkStatus {
   linkedAt?: string;
   llmSource?: 'CLOUD' | 'BYOK';
   /**
+   * Source of third-party integration (catalog) credentials: CLOUD relays integration
+   * executions to the linked cloud account (its platform credentials, per-call markup
+   * billed there); BYOK keeps credentials configured and used locally on this install.
+   */
+  catalogSource?: 'CLOUD' | 'BYOK';
+  /**
    * Plan code of the bound cloud account when it GOVERNS this install's entitlements
-   * (CLOUD LLM source only - BYOK installs keep their local plan). Mirrors the backend
-   * EffectivePlanResolver contract so frontend affordance gates match server enforcement.
+   * (populated when EITHER the LLM source or the catalog credential source is CLOUD;
+   * all-BYOK installs keep their local plan). Mirrors the backend EffectivePlanResolver
+   * contract so frontend affordance gates match server enforcement.
    */
   cloudPlanCode?: string;
   /**
@@ -120,6 +127,16 @@ export class CloudLinkService {
 
   async setLlmSource(source: 'CLOUD' | 'BYOK'): Promise<'CLOUD' | 'BYOK'> {
     const response = await apiClient.put<{ source: 'CLOUD' | 'BYOK' }>('/cloud-link/llm-source', { source });
+    return response.source;
+  }
+
+  async getCatalogSource(): Promise<'CLOUD' | 'BYOK'> {
+    const response = await apiClient.get<{ source: 'CLOUD' | 'BYOK' }>('/cloud-link/catalog-source');
+    return response.source;
+  }
+
+  async setCatalogSource(source: 'CLOUD' | 'BYOK'): Promise<'CLOUD' | 'BYOK'> {
+    const response = await apiClient.put<{ source: 'CLOUD' | 'BYOK' }>('/cloud-link/catalog-source', { source });
     return response.source;
   }
 

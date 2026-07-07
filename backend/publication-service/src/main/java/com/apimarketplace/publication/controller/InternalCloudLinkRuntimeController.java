@@ -40,6 +40,19 @@ public class InternalCloudLinkRuntimeController {
         ));
     }
 
+    @GetMapping("/catalog-source/{tenantId}")
+    public ResponseEntity<Map<String, Object>> catalogSource(
+            @RequestHeader("X-User-ID") Long authenticatedTenantId,
+            @PathVariable Long tenantId) {
+        if (!tenantId.equals(authenticatedTenantId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", "TENANT_MISMATCH"));
+        }
+        return ResponseEntity.ok(Map.of(
+                "source", cloudLinkService.getCatalogSource(tenantId).name()
+        ));
+    }
+
     @GetMapping("/runtime/{tenantId}")
     public ResponseEntity<Map<String, Object>> runtime(
             @RequestHeader("X-User-ID") Long authenticatedTenantId,
@@ -49,6 +62,29 @@ public class InternalCloudLinkRuntimeController {
                     .body(Map.of("error", "TENANT_MISMATCH"));
         }
         CloudLinkService.CloudRuntimeStatus status = cloudLinkService.getCloudRuntimeStatus(tenantId);
+        return ResponseEntity.ok(Map.of(
+                "source", status.source().name(),
+                "cloudReady", status.cloudReady(),
+                "accessToken", status.accessToken() == null ? "" : status.accessToken(),
+                "installId", status.installId() == null ? "" : status.installId(),
+                "cloudApiUrl", status.cloudApiUrl() == null ? "" : status.cloudApiUrl()
+        ));
+    }
+
+    /**
+     * Mirror of {@link #runtime} for the catalog credential relay, keyed on the
+     * link's {@code catalogSource} instead of {@code llmSource}. Same tenant scope:
+     * {@code X-User-ID} must match the path tenant or the call is refused.
+     */
+    @GetMapping("/catalog-runtime/{tenantId}")
+    public ResponseEntity<Map<String, Object>> catalogRuntime(
+            @RequestHeader("X-User-ID") Long authenticatedTenantId,
+            @PathVariable Long tenantId) {
+        if (!tenantId.equals(authenticatedTenantId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", "TENANT_MISMATCH"));
+        }
+        CloudLinkService.CloudRuntimeStatus status = cloudLinkService.getCatalogRuntimeStatus(tenantId);
         return ResponseEntity.ok(Map.of(
                 "source", status.source().name(),
                 "cloudReady", status.cloudReady(),
@@ -70,6 +106,27 @@ public class InternalCloudLinkRuntimeController {
     @GetMapping("/active-runtime")
     public ResponseEntity<Map<String, Object>> activeRuntime() {
         CloudLinkService.CloudRuntimeStatus status = cloudLinkService.getActiveInstallRuntime();
+        return ResponseEntity.ok(Map.of(
+                "source", status.source().name(),
+                "cloudReady", status.cloudReady(),
+                "accessToken", status.accessToken() == null ? "" : status.accessToken(),
+                "installId", status.installId() == null ? "" : status.installId(),
+                "cloudApiUrl", status.cloudApiUrl() == null ? "" : status.cloudApiUrl()
+        ));
+    }
+
+    /**
+     * Install-global catalog runtime, mirror of {@link #activeRuntime} but reporting the
+     * active link's {@code catalogSource}. Like {@code /active-runtime} this is NOT
+     * tenant-scoped (no {@code X-User-ID} match): the auth-side public-info delegation
+     * runs once per CE install, so it resolves THE active cloud link rather than a
+     * specific user's. Downstream cloud calls remain gated server-side by
+     * {@code userOwnsActiveCeLink} + subscription, so an install with no registered link
+     * gets {@code cloudReady=false} here and the caller simply skips.
+     */
+    @GetMapping("/active-catalog-runtime")
+    public ResponseEntity<Map<String, Object>> activeCatalogRuntime() {
+        CloudLinkService.CloudRuntimeStatus status = cloudLinkService.getActiveInstallCatalogRuntime();
         return ResponseEntity.ok(Map.of(
                 "source", status.source().name(),
                 "cloudReady", status.cloudReady(),

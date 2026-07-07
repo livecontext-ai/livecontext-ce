@@ -453,7 +453,7 @@ class CoreValidatorTest {
 
         private static final List<String> DELEGATION_CODES = List.of(
             "APPROVAL_DELEGATION_UNKNOWN_CHANNEL",
-            "APPROVAL_DELEGATION_NO_CREDENTIAL",
+            "APPROVAL_DELEGATION_INVALID_CREDENTIAL",
             "APPROVAL_DELEGATION_NO_CHAT_ID",
             "APPROVAL_DELEGATION_MULTI_APPROVALS");
 
@@ -481,16 +481,17 @@ class CoreValidatorTest {
         }
 
         @Test
-        @DisplayName("Telegram without a numeric credentialId is a WARNING (in-app resolution still works)")
-        void missingCredentialIsWarning() {
+        @DisplayName("regression: Telegram WITHOUT a credentialId is clean (the send falls back to the user's own Telegram credential)")
+        void missingCredentialIsClean() {
+            // Pre-fix this warned NO_CREDENTIAL and the run silently sent nothing. The
+            // agent-built shape almost never carries a numeric credential id; absent now
+            // means default-credential fallback, so validation must not cry wolf.
             ValidationResult result = validate(Map.of(
                 "contextTemplate", "Approve?",
                 "delegation", Map.of("channel", "telegram", "chatId", "123")));
 
-            assertThat(result.getWarnings()).anyMatch(w ->
-                w.code().equals("APPROVAL_DELEGATION_NO_CREDENTIAL"));
-            assertThat(result.getErrors()).noneMatch(e ->
-                e.code().equals("APPROVAL_DELEGATION_NO_CREDENTIAL"));
+            assertThat(result.getErrors()).noneMatch(e -> DELEGATION_CODES.contains(e.code()));
+            assertThat(result.getWarnings()).noneMatch(w -> DELEGATION_CODES.contains(w.code()));
         }
 
         @Test
@@ -546,6 +547,30 @@ class CoreValidatorTest {
 
             assertThat(result.getErrors()).noneMatch(e -> DELEGATION_CODES.contains(e.code()));
             assertThat(result.getWarnings()).noneMatch(w -> DELEGATION_CODES.contains(w.code()));
+        }
+
+        @Test
+        @DisplayName("regression: a numeric-string credentialId (LLM-quoted \"40\") raises no credential finding")
+        void numericStringCredentialIdDoesNotWarn() {
+            // Pre-fix the instanceof Number check warned on "40" even though the
+            // creator/parser coerce that shape, producing a misleading finding.
+            ValidationResult result = validate(Map.of(
+                "contextTemplate", "Approve?",
+                "delegation", Map.of("channel", "telegram", "credentialId", "40", "chatId", "123")));
+
+            assertThat(result.getWarnings()).noneMatch(w ->
+                w.code().equals("APPROVAL_DELEGATION_INVALID_CREDENTIAL"));
+        }
+
+        @Test
+        @DisplayName("A present-but-non-numeric credentialId warns INVALID_CREDENTIAL (it will be ignored at run time)")
+        void nonNumericCredentialIdWarnsInvalid() {
+            ValidationResult result = validate(Map.of(
+                "contextTemplate", "Approve?",
+                "delegation", Map.of("channel", "telegram", "credentialId", "not-a-number", "chatId", "123")));
+
+            assertThat(result.getWarnings()).anyMatch(w ->
+                w.code().equals("APPROVAL_DELEGATION_INVALID_CREDENTIAL"));
         }
     }
 }

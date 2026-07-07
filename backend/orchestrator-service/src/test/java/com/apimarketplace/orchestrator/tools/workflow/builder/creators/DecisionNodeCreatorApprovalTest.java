@@ -167,4 +167,44 @@ class DecisionNodeCreatorApprovalTest {
         assertThat(r.success()).isTrue();
         assertThat(firstApprovalConfig()).doesNotContainKey("delegation");
     }
+
+    @Test
+    @DisplayName("regression: numeric-string credentialId (LLM-quoted \"40\") is coerced to a number at creation")
+    @SuppressWarnings("unchecked")
+    void numericStringCredentialIdCoerced() {
+        // Pre-fix the string rode verbatim into the session: validate warned
+        // NO_CREDENTIAL and the plan parser silently dropped the id at run time
+        // (delegation configured, no Telegram message ever sent).
+        Map<String, Object> delegation = new LinkedHashMap<>();
+        delegation.put("channel", "telegram");
+        delegation.put("credentialId", "40");
+        delegation.put("chatId", "123456");
+        Map<String, Object> p = new LinkedHashMap<>();
+        p.put("label", "Manager Review");
+        p.put("delegation", delegation);
+
+        ToolExecutionResult r = creator.executeAddApproval(session, p);
+
+        assertThat(r.success()).isTrue();
+        Map<String, Object> stored = (Map<String, Object>) firstApprovalConfig().get("delegation");
+        assertThat(stored.get("credentialId")).isEqualTo(40L);
+    }
+
+    @Test
+    @DisplayName("non-numeric credentialId string is left as-is for the validator to flag")
+    @SuppressWarnings("unchecked")
+    void nonNumericCredentialIdLeftForValidator() {
+        Map<String, Object> delegation = new LinkedHashMap<>();
+        delegation.put("channel", "telegram");
+        delegation.put("credentialId", "not-a-number");
+        Map<String, Object> p = new LinkedHashMap<>();
+        p.put("label", "Manager Review");
+        p.put("delegation", delegation);
+
+        ToolExecutionResult r = creator.executeAddApproval(session, p);
+
+        assertThat(r.success()).isTrue();
+        Map<String, Object> stored = (Map<String, Object>) firstApprovalConfig().get("delegation");
+        assertThat(stored.get("credentialId")).isEqualTo("not-a-number");
+    }
 }

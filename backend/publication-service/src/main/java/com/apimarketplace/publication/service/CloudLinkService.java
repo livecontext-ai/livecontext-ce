@@ -237,6 +237,7 @@ public class CloudLinkService {
         link.setTokenExpiresAt(clock.instant().plusSeconds(expiresIn - 30)); // 30s buffer
         link.setLinkedAt(clock.instant());
         link.setLlmSource(CloudLlmSource.BYOK.name());
+        link.setCatalogSource(CloudLlmSource.BYOK.name());
 
         cloudLinkRepository.save(link);
         logger.info("CE cloud account linked: tenant {} -> cloud user {}", tenantId, userInfo.get("sub"));
@@ -435,12 +436,13 @@ public class CloudLinkService {
 
     /**
      * The cloud account's plan code that GOVERNS this CE install for entitlement
-     * purposes (feature gating), present only when the install is CLOUD-sourced and the
-     * cloud returns a usable plan; empty otherwise (BYOK, unlinked, unregistered, or the
-     * cloud unreachable). The consultation half of {@code EffectivePlanResolver}: gated on
-     * the CLOUD LLM source so a BYOK install keeps its own local plan, matching the
-     * established resolver contract. {@code PlanLimitService} falls back to the local plan
-     * when this is empty, so a transient cloud outage never strips entitlements.
+     * purposes (feature gating), present only when the install is CLOUD-sourced (through
+     * EITHER toggle, see {@link #governingCloudEntitlementForLink}) and the cloud returns
+     * a usable plan; empty otherwise (all-BYOK, unlinked, unregistered, or the cloud
+     * unreachable). The consultation half of {@code EffectivePlanResolver}: an all-BYOK
+     * install keeps its own local plan, matching the established resolver contract.
+     * {@code PlanLimitService} falls back to the local plan when this is empty, so a
+     * transient cloud outage never strips entitlements.
      */
     public java.util.Optional<String> governingCloudPlanCode(Long tenantId) {
         return governingCloudEntitlement(tenantId).map(CloudEntitlement::planCode);
@@ -448,8 +450,9 @@ public class CloudLinkService {
 
     /**
      * Like {@link #governingCloudPlanCode} but carries the full entitlement (plan code + credit-tier
-     * index + billing cadence). CLOUD-sourced installs only; empty for BYOK/unlinked/unregistered or
-     * when the cloud is unreachable and no last-known-good value exists.
+     * index + billing cadence). CLOUD-sourced installs only (either toggle); empty for
+     * all-BYOK/unlinked/unregistered or when the cloud is unreachable and no last-known-good
+     * value exists.
      */
     public java.util.Optional<CloudEntitlement> governingCloudEntitlement(Long tenantId) {
         return governingCloudEntitlementForLink(
@@ -460,9 +463,17 @@ public class CloudLinkService {
      * Same as {@link #governingCloudEntitlement(Long)} but resolves from a link entity directly,
      * so a caller that already holds the GOVERNING link - e.g. the install-global link a CE member
      * inherits - can read its entitlement without re-keying on the caller's own tenant.
+     *
+     * <p>The entitlement is fetched when the install draws on the cloud account through EITHER
+     * relay toggle: {@code llmSource=CLOUD} (LLM relay) or {@code catalogSource=CLOUD} (catalog
+     * credential relay). Both relays are gated on the cloud plan, so a catalog-only CLOUD install
+     * needs its cloudPlanCode surfaced just like an LLM-relaying one (the frontend upsell keys on
+     * it). Only when BOTH toggles are BYOK does the local plan govern and the fetch is skipped.
      */
     private java.util.Optional<CloudEntitlement> governingCloudEntitlementForLink(CeCloudLinkEntity link) {
-        if (link == null || CloudLlmSource.from(link.getLlmSource()) != CloudLlmSource.CLOUD) {
+        if (link == null
+                || (CloudLlmSource.from(link.getLlmSource()) != CloudLlmSource.CLOUD
+                        && CloudLlmSource.from(link.getCatalogSource()) != CloudLlmSource.CLOUD)) {
             return java.util.Optional.empty();
         }
         CloudEntitlement e = fetchCloudEntitlement(link);
@@ -731,6 +742,7 @@ public class CloudLinkService {
             fresh.setCachedAccessToken(null);
             fresh.setTokenExpiresAt(null);
             fresh.setLlmSource(CloudLlmSource.BYOK.name());
+            fresh.setCatalogSource(CloudLlmSource.BYOK.name());
             cloudLinkRepository.save(fresh);
             // Mirror onto the caller's instance so any test/caller observing it sees the
             // post-revoke state without needing to re-fetch.
@@ -738,6 +750,7 @@ public class CloudLinkService {
             incomingLink.setCachedAccessToken(null);
             incomingLink.setTokenExpiresAt(null);
             incomingLink.setLlmSource(CloudLlmSource.BYOK.name());
+            incomingLink.setCatalogSource(CloudLlmSource.BYOK.name());
             logger.warn("CE cloud link 410 GONE for tenant {} installId={} - local link marked unregistered",
                     link.getTenantId(), link.getInstallId());
             return HeartbeatOutcome.REVOKED;
@@ -747,9 +760,11 @@ public class CloudLinkService {
             CeCloudLinkEntity fresh = cloudLinkRepository.findByTenantId(link.getTenantId()).orElse(link);
             fresh.setRegisteredAt(null);
             fresh.setLlmSource(CloudLlmSource.BYOK.name());
+            fresh.setCatalogSource(CloudLlmSource.BYOK.name());
             cloudLinkRepository.save(fresh);
             incomingLink.setRegisteredAt(null);
             incomingLink.setLlmSource(CloudLlmSource.BYOK.name());
+            incomingLink.setCatalogSource(CloudLlmSource.BYOK.name());
             logger.warn("CE cloud link 404 for tenant {} installId={} - cleared registered marker",
                     link.getTenantId(), link.getInstallId());
             return HeartbeatOutcome.NOT_FOUND;
@@ -824,6 +839,7 @@ public class CloudLinkService {
             status.put("cloudUsername", entity.getCloudUsername());
             status.put("linkedAt", entity.getLinkedAt().toString());
             status.put("llmSource", CloudLlmSource.from(entity.getLlmSource()).name());
+            status.put("catalogSource", CloudLlmSource.from(entity.getCatalogSource()).name());
             if (entity.getInstallId() != null) {
                 status.put("installId", entity.getInstallId().toString());
             }
@@ -863,6 +879,35 @@ public class CloudLinkService {
                 .orElse(CloudLlmSource.BYOK);
     }
 
+    public CloudLlmSource getCatalogSource(Long tenantId) {
+        return cloudLinkRepository.findByTenantId(tenantId)
+                .map(link -> CloudLlmSource.from(link.getCatalogSource()))
+                .orElse(CloudLlmSource.BYOK);
+    }
+
+    public CloudLlmSource setCatalogSource(Long tenantId, CloudLlmSource source) {
+        CloudLlmSource normalized = source == null ? CloudLlmSource.BYOK : source;
+        Optional<CeCloudLinkEntity> existing = cloudLinkRepository.findByTenantId(tenantId);
+        if (existing.isEmpty()) {
+            if (normalized == CloudLlmSource.BYOK) {
+                return CloudLlmSource.BYOK;
+            }
+            throw new CloudAccountNotLinkedException("No cloud account linked");
+        }
+        CeCloudLinkEntity link = existing.get();
+        if (normalized == CloudLlmSource.CLOUD && link.getRegisteredAt() == null) {
+            registerWithCloud(link);
+            link = cloudLinkRepository.findByTenantId(tenantId)
+                    .orElseThrow(() -> new CloudAccountNotLinkedException("No cloud account linked"));
+            if (link.getRegisteredAt() == null) {
+                throw new IllegalStateException("Cloud link is not registered");
+            }
+        }
+        link.setCatalogSource(normalized.name());
+        cloudLinkRepository.save(link);
+        return normalized;
+    }
+
     public CloudLlmSource setLlmSource(Long tenantId, CloudLlmSource source) {
         CloudLlmSource normalized = source == null ? CloudLlmSource.BYOK : source;
         Optional<CeCloudLinkEntity> existing = cloudLinkRepository.findByTenantId(tenantId);
@@ -895,6 +940,35 @@ public class CloudLinkService {
         if (source != CloudLlmSource.CLOUD) {
             return CloudRuntimeStatus.byok();
         }
+        return resolveCloudSelectedRuntime(tenantId, link);
+    }
+
+    /**
+     * Mirror of {@link #getCloudRuntimeStatus} for the catalog credential relay, keyed on
+     * the link's {@code catalogSource} instead of {@code llmSource}. The two toggles are
+     * independent: a tenant may relay LLM calls to the cloud while executing catalog tools
+     * locally with its own credentials, and vice versa.
+     */
+    public CloudRuntimeStatus getCatalogRuntimeStatus(Long tenantId) {
+        CeCloudLinkEntity link = cloudLinkRepository.findByTenantId(tenantId).orElse(null);
+        if (link == null) {
+            return CloudRuntimeStatus.byok();
+        }
+        CloudLlmSource source = CloudLlmSource.from(link.getCatalogSource());
+        if (source != CloudLlmSource.CLOUD) {
+            return CloudRuntimeStatus.byok();
+        }
+        return resolveCloudSelectedRuntime(tenantId, link);
+    }
+
+    /**
+     * Shared tail of {@link #getCloudRuntimeStatus} and {@link #getCatalogRuntimeStatus}:
+     * the caller already established that the relevant source toggle is CLOUD, so this
+     * ensures the link is registered (attempting a register when it is not), then
+     * resolves the access token. Registration and token resolution do not depend on
+     * which toggle selected the cloud.
+     */
+    private CloudRuntimeStatus resolveCloudSelectedRuntime(Long tenantId, CeCloudLinkEntity link) {
         if (link.getRegisteredAt() == null) {
             registerWithCloud(link);
         }
@@ -944,6 +1018,46 @@ public class CloudLinkService {
                     source, true, accessToken, link.getInstallId().toString(), cloudApiUrl);
         } catch (RuntimeException tokenFailure) {
             logger.warn("Active-install runtime: access token unavailable for tenant {}: {}",
+                    link.getTenantId(), tokenFailure.toString());
+            return CloudRuntimeStatus.notReady(source);
+        }
+    }
+
+    /**
+     * Install-global runtime for the catalog credential relay, mirror of
+     * {@link #getActiveInstallRuntime()} but keyed on the link's {@code catalogSource}
+     * instead of its {@code llmSource}. Used by the auth-side public-info delegation,
+     * which runs per install (not per tenant), so it resolves THE active cloud link -
+     * the most recently linked registered link. Unlike the bundle-sync runtime (where
+     * being linked alone entitles the install to catalog updates), the credential relay
+     * is an OPT-IN: it only applies when the admin set {@code catalogSource=CLOUD},
+     * mirroring the tenant-scoped {@link #getCatalogRuntimeStatus} filter. Returns
+     * {@code byok()} (not ready) when this install has no registered link or its active
+     * link's catalog source is not CLOUD, or {@code notReady} when the link exists but
+     * its access token can't be obtained.
+     */
+    public CloudRuntimeStatus getActiveInstallCatalogRuntime() {
+        CeCloudLinkEntity link = cloudLinkRepository
+                .findFirstByRegisteredAtNotNullOrderByLinkedAtDesc()
+                .orElse(null);
+        if (link == null) {
+            logger.info("Active-install catalog runtime: no registered cloud link found install-globally → not linked");
+            return CloudRuntimeStatus.byok();
+        }
+        CloudLlmSource source = CloudLlmSource.from(link.getCatalogSource());
+        if (source != CloudLlmSource.CLOUD) {
+            logger.info("Active-install catalog runtime: active link tenant={} has catalogSource={} → relay not opted in",
+                    link.getTenantId(), source);
+            return CloudRuntimeStatus.byok();
+        }
+        try {
+            String accessToken = getCloudAccessToken(link.getTenantId());
+            logger.info("Active-install catalog runtime: resolved active link tenant={} source={} → ready",
+                    link.getTenantId(), source);
+            return new CloudRuntimeStatus(
+                    source, true, accessToken, link.getInstallId().toString(), cloudApiUrl);
+        } catch (RuntimeException tokenFailure) {
+            logger.warn("Active-install catalog runtime: access token unavailable for tenant {}: {}",
                     link.getTenantId(), tokenFailure.toString());
             return CloudRuntimeStatus.notReady(source);
         }

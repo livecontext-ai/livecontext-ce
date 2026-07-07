@@ -208,6 +208,12 @@ marketplace:
   ce-download:
     enabled: false
 
+# CE catalog credential relay: the CLOUD-side relay controller (/ce-catalog/**) must never
+# load in the CE monolith - CE only CONSUMES it. The CE-side relay client is gated by bean
+# presence instead (CloudLlmRuntimeAccess exists only when marketplace.mode=remote).
+ce-catalog-relay:
+  enabled: false
+
 # Cloud account linking (OAuth to LiveContext cloud for paid marketplace operations)
 cloud-link:
   keycloak-url: ${CLOUD_KEYCLOAK_URL:https://auth.livecontext.ai/realms/livecontext}

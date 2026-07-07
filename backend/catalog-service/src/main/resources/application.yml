@@ -228,6 +228,13 @@ cache:
     server-health: 5      # Server health status
     rate-limit-window: 1  # Rate limiting sliding window
 
+# CE → cloud catalog relay (CloudCatalogRelayController + CeCatalogRelayService).
+# enabled defaults to true via matchIfMissing (cloud); the CE monolith sets it false.
+# rate-limit-per-minute is a per-install, per-pod fixed window; 0 disables it.
+ce-catalog-relay:
+  rate-limit-per-minute: 120
+  reserve-ttl-minutes: 10
+
 # Global-catalog admin gate (ToolCategoryController, ToolResponseController).
 # Shared secret checked against the X-Internal-Admin-Token header on writes to
 # global catalog rows. Blank (default) = those endpoints are locked down.

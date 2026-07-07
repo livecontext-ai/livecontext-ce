@@ -75,11 +75,71 @@ public class PublicationCloudLlmRuntimeAccess implements CloudLlmRuntimeAccess {
         return Optional.of(new CloudLlmRuntimeCredentials(accessToken, installId, cloudApiUrl));
     }
 
+    @Override
+    public CloudLlmSource getEffectiveCatalogSource(String tenantId) {
+        if (tenantId == null || tenantId.isBlank()) {
+            return CloudLlmSource.BYOK;
+        }
+        Map<?, ?> body = fetch("/api/internal/cloud-link/catalog-source/" + tenantId, tenantId);
+        return CloudLlmSource.from(asString(body.get("source")));
+    }
+
+    @Override
+    public Optional<CloudLlmRuntimeCredentials> resolveCatalogCloudRuntime(String tenantId) {
+        return Optional.of(catalogRuntime(tenantId))
+                .filter(RuntimeResponse::cloudReady)
+                .filter(r -> r.source() == CloudLlmSource.CLOUD)
+                .filter(r -> hasText(r.accessToken()) && hasText(r.installId()) && hasText(r.cloudApiUrl()))
+                .map(r -> new CloudLlmRuntimeCredentials(r.accessToken(), r.installId(), r.cloudApiUrl()));
+    }
+
+    @Override
+    public Optional<CloudLlmRuntimeCredentials> resolveActiveCatalogRuntime() {
+        Map<?, ?> body;
+        try {
+            // Install-global, tenant-less. Send a system sentinel X-User-ID ("0") so any
+            // header filter is satisfied; the /active-catalog-runtime endpoint ignores it
+            // and resolves THE active install link itself. Any failure (unreachable,
+            // non-2xx) is treated as "not linked" so the caller skips instead of crashing.
+            body = fetch("/api/internal/cloud-link/active-catalog-runtime", "0");
+        } catch (RuntimeException unreachable) {
+            return Optional.empty();
+        }
+        // Defensive source filter, mirroring the tenant-scoped resolveCatalogCloudRuntime:
+        // the catalog credential relay is an opt-in (catalogSource=CLOUD), so credentials
+        // reported for a BYOK catalog source must never be consumed even if the producer
+        // ever emitted them ready.
+        CloudLlmSource source = CloudLlmSource.from(asString(body.get("source")));
+        boolean cloudReady = Boolean.TRUE.equals(body.get("cloudReady"));
+        String accessToken = asString(body.get("accessToken"));
+        String installId = asString(body.get("installId"));
+        String cloudApiUrl = asString(body.get("cloudApiUrl"));
+        if (source != CloudLlmSource.CLOUD
+                || !cloudReady || !hasText(accessToken) || !hasText(installId) || !hasText(cloudApiUrl)) {
+            return Optional.empty();
+        }
+        return Optional.of(new CloudLlmRuntimeCredentials(accessToken, installId, cloudApiUrl));
+    }
+
     private RuntimeResponse runtime(String tenantId) {
         if (tenantId == null || tenantId.isBlank()) {
             return new RuntimeResponse(CloudLlmSource.BYOK, false, null, null, null);
         }
         Map<?, ?> body = fetch("/api/internal/cloud-link/runtime/" + tenantId, tenantId);
+        return new RuntimeResponse(
+                CloudLlmSource.from(asString(body.get("source"))),
+                Boolean.TRUE.equals(body.get("cloudReady")),
+                asString(body.get("accessToken")),
+                asString(body.get("installId")),
+                asString(body.get("cloudApiUrl"))
+        );
+    }
+
+    private RuntimeResponse catalogRuntime(String tenantId) {
+        if (tenantId == null || tenantId.isBlank()) {
+            return new RuntimeResponse(CloudLlmSource.BYOK, false, null, null, null);
+        }
+        Map<?, ?> body = fetch("/api/internal/cloud-link/catalog-runtime/" + tenantId, tenantId);
         return new RuntimeResponse(
                 CloudLlmSource.from(asString(body.get("source"))),
                 Boolean.TRUE.equals(body.get("cloudReady")),

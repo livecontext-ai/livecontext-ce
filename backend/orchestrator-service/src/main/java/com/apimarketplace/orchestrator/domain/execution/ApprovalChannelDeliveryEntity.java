@@ -66,6 +66,15 @@ public class ApprovalChannelDeliveryEntity {
     @Column(name = "tenant_id", nullable = false, length = 255)
     private String tenantId;
 
+    /**
+     * Workspace (organization) id of the run at delivery creation, re-bound via
+     * TenantResolver.runWithOrgScope around catalog calls on async threads so the
+     * default-credential fallback resolves ORG-SHARED credentials for workspace
+     * runs. Null = personal scope (matches workflow_runs.org_id).
+     */
+    @Column(name = "org_id", length = 100)
+    private String orgId;
+
     /** PUBLIC run id (matches workflow_signal_waits.run_id), not the UUID PK. */
     @Column(name = "run_id", nullable = false, length = 100)
     private String runId;
@@ -177,6 +186,14 @@ public class ApprovalChannelDeliveryEntity {
 
     public void setTenantId(String tenantId) {
         this.tenantId = tenantId;
+    }
+
+    public String getOrgId() {
+        return orgId;
+    }
+
+    public void setOrgId(String orgId) {
+        this.orgId = orgId;
     }
 
     public String getRunId() {

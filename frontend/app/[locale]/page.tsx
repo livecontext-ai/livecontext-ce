@@ -12,6 +12,7 @@ import {
   Server,
   SlidersHorizontal,
   Github,
+  ChevronDown,
 } from 'lucide-react';
 import { LandingFooter, LandingHeader, landingChromeStyles } from '@/components/landing/LandingShell';
 import PricingSection from './_landing/PricingSection';
@@ -328,19 +329,22 @@ function ComparisonStrip() {
 function FaqSection() {
   return (
     <Section alt id="faq">
-      <SectionEyebrow icon={Sparkles}>FAQ</SectionEyebrow>
-      <SectionH2>Frequently asked questions</SectionH2>
-      <div className="mt-12 max-w-3xl space-y-4">
+      <div className="text-center">
+        <SectionEyebrow icon={Sparkles}>FAQ</SectionEyebrow>
+        <SectionH2>Frequently asked questions</SectionH2>
+      </div>
+      <div className="mt-12 max-w-3xl mx-auto space-y-4">
         {LANDING_FAQ.map((item) => (
-          <details key={item.question} className="rounded-2xl p-6" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)' }}>
-            <summary className="cursor-pointer text-base font-semibold list-none" style={{ color: 'var(--text-primary)' }}>
-              {item.question}
+          <details key={item.question} className="faq-item rounded-2xl p-6" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)' }}>
+            <summary className="flex items-center justify-between gap-4 cursor-pointer text-base font-semibold list-none" style={{ color: 'var(--text-primary)' }}>
+              <span>{item.question}</span>
+              <ChevronDown className="faq-chevron h-5 w-5 shrink-0" style={{ color: 'var(--text-muted)' }} aria-hidden="true" />
             </summary>
             <p className="mt-3 text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>{item.answer}</p>
           </details>
         ))}
       </div>
-      <p className="mt-8 text-sm" style={{ color: 'var(--text-muted)' }}>
+      <p className="mt-8 text-sm text-center" style={{ color: 'var(--text-muted)' }}>
         More detail in the{' '}
         <a href="https://docs.livecontext.ai" className="underline underline-offset-2 hover:opacity-80">documentation</a>
         {' '}or the{' '}
@@ -683,6 +687,16 @@ function MediaSlot({
 }
 
 const landingStyles = `
+  /* FAQ accordion: the chevron points down when collapsed and flips up when the
+     <details> is open, so it reads as expandable. */
+  .landing-root .faq-chevron {
+    transition: transform 200ms ease;
+  }
+
+  .landing-root details.faq-item[open] .faq-chevron {
+    transform: rotate(180deg);
+  }
+
   .landing-root .eyebrow {
     font-size: 11px;
     text-transform: uppercase;

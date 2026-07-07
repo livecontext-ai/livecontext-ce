@@ -7,10 +7,12 @@ import com.apimarketplace.auth.credential.service.PlatformCredentialPricingServi
 import com.apimarketplace.auth.credential.service.PlatformCredentialService;
 import com.apimarketplace.auth.credential.service.TooManyByokAppsException;
 import com.apimarketplace.auth.credential.web.dto.MyOAuthAppDto;
+import com.apimarketplace.common.credential.CloudPlatformCredentialInfoAccess;
 import com.apimarketplace.common.web.AdminRoleGuard;
 import com.apimarketplace.common.web.TenantResolver;
 import com.fasterxml.jackson.databind.node.NullNode;
 import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.transaction.annotation.Transactional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,6 +23,7 @@ import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -37,15 +40,20 @@ public class PlatformCredentialsController {
     private final PlatformCredentialPricingService pricingService;
     private final CredentialService credentialService;
     private final TenantResolver tenantResolver;
+    // Optional CE-only bridge to the cloud's platform-credential public info (bean
+    // absent on the cloud deployment - see CloudPlatformCredentialInfoAccess).
+    private final ObjectProvider<CloudPlatformCredentialInfoAccess> cloudPlatformInfoAccess;
 
     public PlatformCredentialsController(PlatformCredentialService service,
                                           PlatformCredentialPricingService pricingService,
                                           CredentialService credentialService,
-                                          TenantResolver tenantResolver) {
+                                          TenantResolver tenantResolver,
+                                          ObjectProvider<CloudPlatformCredentialInfoAccess> cloudPlatformInfoAccess) {
         this.service = service;
         this.pricingService = pricingService;
         this.credentialService = credentialService;
         this.tenantResolver = tenantResolver;
+        this.cloudPlatformInfoAccess = cloudPlatformInfoAccess;
     }
 
     /**
@@ -467,6 +475,13 @@ public class PlatformCredentialsController {
     ) {
         var credOpt = service.getCredential(integrationName);
         if (credOpt.isEmpty()) {
+            // CE-only: no LOCAL platform credential row - ask the cloud whether ITS
+            // platform credential can be relayed for this integration (bean absent on
+            // the cloud deployment, empty on unlinked/BYOK/failure = legacy shape).
+            Optional<Map<String, Object>> cloudInfo = cloudRelayPublicInfo(integrationName, apiToolIdRaw);
+            if (cloudInfo.isPresent()) {
+                return ResponseEntity.ok(cloudInfo.get());
+            }
             return ResponseEntity.ok(Map.of(
                     "integrationName", integrationName,
                     "available", false,
@@ -510,6 +525,75 @@ public class PlatformCredentialsController {
             out.put("pricingVersion", latest.get().getVersion());
         }
         return ResponseEntity.ok(out);
+    }
+
+    /**
+     * CE cloud-relay half of {@link #publicInfo}. Consulted ONLY when no local platform
+     * credential row exists (local always wins). Maps the cloud's platform-info payload
+     * onto the public-info response shape:
+     * <ul>
+     *   <li>Cloud credential available + active subscription + relay-eligible → the
+     *       builder toggle unlocks exactly as if the credential were local
+     *       ({@code available:true} + id + pricing), tagged {@code cloudRelay:true}.</li>
+     *   <li>Cloud credential available but no active subscription → stays
+     *       {@code available:false} but carries {@code subscriptionRequired:true} so the
+     *       frontend can upsell the linked-account upgrade.</li>
+     *   <li>Anything else (bean absent, unlinked, BYOK source, transport failure,
+     *       credential not offered) → empty, caller returns the legacy not-found shape.</li>
+     * </ul>
+     */
+    private Optional<Map<String, Object>> cloudRelayPublicInfo(String integrationName, String apiToolIdRaw) {
+        if (cloudPlatformInfoAccess == null) {
+            return Optional.empty();
+        }
+        CloudPlatformCredentialInfoAccess access = cloudPlatformInfoAccess.getIfAvailable();
+        if (access == null) {
+            return Optional.empty();
+        }
+        Map<String, Object> info;
+        try {
+            info = access.fetchPlatformInfo(integrationName, apiToolIdRaw).orElse(null);
+        } catch (RuntimeException e) {
+            log.debug("public-info: cloud platform-info delegation failed for '{}': {}",
+                    integrationName, e.getMessage());
+            return Optional.empty();
+        }
+        if (info == null) {
+            return Optional.empty();
+        }
+
+        boolean available = Boolean.TRUE.equals(info.get("available"));
+        boolean subscriptionActive = Boolean.TRUE.equals(info.get("subscriptionActive"));
+        boolean relayEligible = Boolean.TRUE.equals(info.get("relayEligible"));
+
+        if (available && subscriptionActive && relayEligible) {
+            Map<String, Object> out = new HashMap<>();
+            out.put("integrationName", integrationName);
+            out.put("available", true);
+            out.put("platformCredentialId", info.get("platformCredentialId"));
+            out.put("hasPricing", Boolean.TRUE.equals(info.get("hasPricing")));
+            Object markupCredits = info.get("markupCredits");
+            if (markupCredits != null) {
+                out.put("markupCredits", String.valueOf(markupCredits));
+            }
+            out.put("showUnverifiedAppWarning", false);
+            out.put("cloudRelay", true);
+            return Optional.of(out);
+        }
+
+        if (available && !subscriptionActive) {
+            // Toggle stays locked (available:false) but the frontend gets the upsell hook.
+            Map<String, Object> out = new HashMap<>();
+            out.put("integrationName", integrationName);
+            out.put("available", false);
+            out.put("showUnverifiedAppWarning", false);
+            out.put("hasPricing", false);
+            out.put("cloudRelay", true);
+            out.put("subscriptionRequired", true);
+            return Optional.of(out);
+        }
+
+        return Optional.empty();
     }
 
     private static UUID parseUuid(String raw) {

@@ -57,6 +57,11 @@ export default function PricingPage() {
       if (key === 'creditsFree') {
         return `${tCards('features.creditsFree')}||${tCards('features.creditsFreeTooltip')}`;
       }
+      // Managed integration credentials for cloud-linked self-hosted installs carry
+      // an info tooltip (relay + per-call credit markup), same "label||tooltip" convention.
+      if (key === 'cePlatformCreds') {
+        return `${tCards('features.cePlatformCreds')}||${tCards('features.cePlatformCredsTooltip')}`;
+      }
       return tCards(`features.${key}`);
     });
 

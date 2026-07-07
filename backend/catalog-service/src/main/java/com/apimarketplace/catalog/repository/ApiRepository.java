@@ -52,6 +52,13 @@ public interface ApiRepository extends CrudRepository<ApiEntity, UUID> {
     Optional<ApiEntity> findByApiSlug(String apiSlug);
 
     /**
+     * Find API by its platform credential integration name. One icon = one API:
+     * {@code platform_credential_name} is unique per API (see
+     * scripts/api-migrations/SCHEMA.md), so a single row is expected.
+     */
+    Optional<ApiEntity> findByPlatformCredentialName(String platformCredentialName);
+
+    /**
      * Find APIs by creator and API slug
      */
     List<ApiEntity> findByCreatedByAndApiSlug(String createdBy, String apiSlug);

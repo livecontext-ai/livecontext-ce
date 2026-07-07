@@ -901,13 +901,28 @@ public final class WorkflowPlanParser {
         if (!(raw instanceof Map<?, ?> map)) return null;
         Map<String, Object> data = (Map<String, Object>) map;
         String channel = data.get("channel") instanceof String s ? s : "";
-        Long credentialId = data.get("credentialId") instanceof Number n ? n.longValue() : null;
+        // Accept a numeric-string credentialId too: LLM-built plans routinely quote
+        // numbers, and silently dropping the id here meant "delegation configured but
+        // no message ever sent" at run time with no visible error.
+        Long credentialId = parseCredentialId(data.get("credentialId"));
         String chatId = data.get("chatId") instanceof String s ? s : "";
         String messageTemplate = data.get("messageTemplate") instanceof String s ? s : "";
         List<String> allowedUserIds = data.get("allowedUserIds") instanceof List
             ? ((List<Object>) data.get("allowedUserIds")).stream().map(String::valueOf).collect(Collectors.toList())
             : List.of();
         return new Core.ApprovalDelegation(channel, credentialId, chatId, messageTemplate, allowedUserIds);
+    }
+
+    private static Long parseCredentialId(Object value) {
+        if (value instanceof Number n) return n.longValue();
+        if (value instanceof String s && !s.isBlank()) {
+            try {
+                return Long.parseLong(s.trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
     }
 
     @SuppressWarnings("unchecked")

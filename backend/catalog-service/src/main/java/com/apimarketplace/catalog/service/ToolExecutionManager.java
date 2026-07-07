@@ -10,6 +10,7 @@ import com.apimarketplace.catalog.service.billing.CatalogToolBillingService;
 import com.apimarketplace.catalog.service.exception.ToolNotFoundException;
 import com.apimarketplace.catalog.service.execution.BinaryResponseHandler;
 import com.apimarketplace.catalog.service.execution.ToolExecutionOrchestrator;
+import com.apimarketplace.catalog.service.relay.CeCatalogCloudRelay;
 import com.apimarketplace.credential.client.CredentialClient;
 import com.apimarketplace.credential.client.dto.PlatformCredentialLookupDto;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -43,6 +44,7 @@ public class ToolExecutionManager {
     private final CatalogToolBillingService catalogBillingService;
     private final CredentialClient credentialClient;
     private final ApiRepository apiRepository;
+    private final CeCatalogCloudRelay ceCatalogCloudRelay;
 
     public ToolExecutionResponse executeTool(String toolIdOrSlug,
                                              ToolExecutionRequest request,
@@ -51,6 +53,20 @@ public class ToolExecutionManager {
                                              String requestId) {
         ToolContextService.ToolContext context = toolContextService.loadToolContext(toolIdOrSlug)
                 .orElseThrow(() -> new ToolNotFoundException(toolIdOrSlug));
+
+        // CE cloud relay: when the install is cloud-linked, the admin selected the CLOUD
+        // catalog source, and NO local platform credential exists for the integration of a
+        // credentialSource="platform" call, the whole execution is delegated to the cloud
+        // (which injects its platform credential and bills the linked account). Empty =
+        // proceed with the unchanged local path. Placed AFTER loadToolContext so unknown
+        // tools still surface the local ToolNotFoundException.
+        if (ceCatalogCloudRelay != null) {
+            Optional<ToolExecutionResponse> relayed =
+                    ceCatalogCloudRelay.tryRelay(toolIdOrSlug, request, userId, requestId);
+            if (relayed.isPresent()) {
+                return relayed.get();
+            }
+        }
 
         long start = System.currentTimeMillis();
         try {

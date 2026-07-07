@@ -76,6 +76,14 @@ public class CeCloudLinkEntity implements OrgScopedEntity {
     @Column(name = "llm_source", nullable = false, length = 16)
     private String llmSource = "BYOK";
 
+    /**
+     * CE source for third-party catalog API platform credentials. BYOK executes locally
+     * with the install's own credentials; CLOUD relays the tool execution to the linked
+     * LiveContext account, which injects its platform credentials and bills markup there.
+     */
+    @Column(name = "catalog_source", nullable = false, length = 16)
+    private String catalogSource = "BYOK";
+
     public CeCloudLinkEntity() {}
 
     @PrePersist
@@ -127,4 +135,7 @@ public class CeCloudLinkEntity implements OrgScopedEntity {
 
     public String getLlmSource() { return llmSource; }
     public void setLlmSource(String llmSource) { this.llmSource = llmSource; }
+
+    public String getCatalogSource() { return catalogSource; }
+    public void setCatalogSource(String catalogSource) { this.catalogSource = catalogSource; }
 }

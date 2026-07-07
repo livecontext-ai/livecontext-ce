@@ -557,10 +557,13 @@ public class DecisionNodeCreator extends CreatorBase {
         if (contextTemplate == null) contextTemplate = safeString(parameters.get("context_template"));
 
         // Optional external-channel delegation block (channel/credentialId/chatId/
-        // messageTemplate/allowedUserIds), passed through verbatim; CoreValidator
-        // flags unknown channels and missing credential/chatId at validate time.
-        Object delegation = parameters.get("delegation") instanceof Map<?, ?> d && !d.isEmpty()
-            ? parameters.get("delegation") : null;
+        // messageTemplate/allowedUserIds). Sanitized, not verbatim: LLMs routinely
+        // quote numbers, and a credentialId stored as the string "40" used to pass
+        // creation, WARN at validate, then be silently dropped by the plan parser at
+        // run time (no Telegram message, no error). Coerce it to a number here so the
+        // session holds the canonical shape; CoreValidator flags unknown channels and
+        // missing credential/chatId at validate time.
+        Object delegation = sanitizeDelegation(parameters.get("delegation"));
 
         // 6. Build approval node
         Map<String, Object> approvalConfig = new LinkedHashMap<>();
@@ -621,6 +624,31 @@ public class DecisionNodeCreator extends CreatorBase {
         ));
 
         return ToolExecutionResult.success(response);
+    }
+
+    // ==================== Delegation Helpers ====================
+
+    /**
+     * Sanitize the approval delegation block from LLM params. Returns null for a
+     * missing/empty/non-map value. Coerces a numeric-string credentialId (LLMs
+     * routinely quote numbers) to a Long so every downstream consumer (validator,
+     * plan parser, frontend import) sees the canonical numeric shape.
+     */
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> sanitizeDelegation(Object raw) {
+        if (!(raw instanceof Map<?, ?> map) || map.isEmpty()) {
+            return null;
+        }
+        Map<String, Object> delegation = new LinkedHashMap<>((Map<String, Object>) map);
+        Object credentialId = delegation.get("credentialId");
+        if (credentialId instanceof String s && !s.isBlank()) {
+            try {
+                delegation.put("credentialId", Long.parseLong(s.trim()));
+            } catch (NumberFormatException ignored) {
+                // Non-numeric string: leave as-is; CoreValidator flags it.
+            }
+        }
+        return delegation;
     }
 
     // ==================== Label Helpers ====================

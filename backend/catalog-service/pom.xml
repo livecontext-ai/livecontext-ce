@@ -84,6 +84,13 @@
             <version>${project.version}</version>
         </dependency>
 
+        <!-- Auth client (CE-link ownership + entitlements checks for the CE catalog relay) -->
+        <dependency>
+            <groupId>com.apimarketplace</groupId>
+            <artifactId>auth-client</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- Interface client (HTTP client for interface-service) -->
         <dependency>
             <groupId>com.apimarketplace</groupId>

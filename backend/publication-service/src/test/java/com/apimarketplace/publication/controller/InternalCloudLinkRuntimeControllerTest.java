@@ -115,4 +115,97 @@ class InternalCloudLinkRuntimeControllerTest {
                 .containsEntry("accessToken", "")
                 .containsEntry("installId", "");
     }
+
+    @Test
+    @DisplayName("Returns the selected catalog source only for the authenticated tenant")
+    void returnsCatalogSourceForAuthenticatedTenant() {
+        InternalCloudLinkRuntimeController controller = new InternalCloudLinkRuntimeController(cloudLinkService);
+        when(cloudLinkService.getCatalogSource(42L)).thenReturn(CloudLlmSource.CLOUD);
+
+        ResponseEntity<Map<String, Object>> response = controller.catalogSource(42L, 42L);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody()).containsEntry("source", "CLOUD");
+    }
+
+    @Test
+    @DisplayName("Refuses cross-tenant catalog source access")
+    void refusesCrossTenantCatalogSourceAccess() {
+        InternalCloudLinkRuntimeController controller = new InternalCloudLinkRuntimeController(cloudLinkService);
+
+        ResponseEntity<Map<String, Object>> response = controller.catalogSource(7L, 42L);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(response.getBody()).containsEntry("error", "TENANT_MISMATCH");
+        verify(cloudLinkService, never()).getCatalogSource(42L);
+    }
+
+    @Test
+    @DisplayName("Returns catalog runtime credentials only for the authenticated tenant")
+    void returnsCatalogRuntimeCredentialsForAuthenticatedTenant() {
+        InternalCloudLinkRuntimeController controller = new InternalCloudLinkRuntimeController(cloudLinkService);
+        when(cloudLinkService.getCatalogRuntimeStatus(42L)).thenReturn(new CloudLinkService.CloudRuntimeStatus(
+                CloudLlmSource.CLOUD,
+                true,
+                "access-token",
+                "install-1",
+                "https://livecontext.ai/api"
+        ));
+
+        ResponseEntity<Map<String, Object>> response = controller.catalogRuntime(42L, 42L);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody())
+                .containsEntry("source", "CLOUD")
+                .containsEntry("cloudReady", true)
+                .containsEntry("accessToken", "access-token")
+                .containsEntry("installId", "install-1")
+                .containsEntry("cloudApiUrl", "https://livecontext.ai/api");
+    }
+
+    @Test
+    @DisplayName("Refuses cross-tenant catalog runtime credential access")
+    void refusesCrossTenantCatalogRuntimeAccess() {
+        InternalCloudLinkRuntimeController controller = new InternalCloudLinkRuntimeController(cloudLinkService);
+
+        ResponseEntity<Map<String, Object>> response = controller.catalogRuntime(7L, 42L);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(response.getBody()).containsEntry("error", "TENANT_MISMATCH");
+        verify(cloudLinkService, never()).getCatalogRuntimeStatus(42L);
+    }
+
+    @Test
+    @DisplayName("active-catalog-runtime returns the install-global catalog runtime (no tenant scope, no X-User-ID match)")
+    void activeCatalogRuntimeReturnsInstallGlobalStatus() {
+        InternalCloudLinkRuntimeController controller = new InternalCloudLinkRuntimeController(cloudLinkService);
+        when(cloudLinkService.getActiveInstallCatalogRuntime()).thenReturn(new CloudLinkService.CloudRuntimeStatus(
+                CloudLlmSource.CLOUD, true, "tok", "install-9", "https://livecontext.ai/api"));
+
+        ResponseEntity<Map<String, Object>> response = controller.activeCatalogRuntime();
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody())
+                .containsEntry("source", "CLOUD")
+                .containsEntry("cloudReady", true)
+                .containsEntry("accessToken", "tok")
+                .containsEntry("installId", "install-9")
+                .containsEntry("cloudApiUrl", "https://livecontext.ai/api");
+    }
+
+    @Test
+    @DisplayName("active-catalog-runtime: not-linked install → cloudReady=false with blank creds (caller skips)")
+    void activeCatalogRuntimeNotLinked() {
+        InternalCloudLinkRuntimeController controller = new InternalCloudLinkRuntimeController(cloudLinkService);
+        when(cloudLinkService.getActiveInstallCatalogRuntime()).thenReturn(new CloudLinkService.CloudRuntimeStatus(
+                CloudLlmSource.BYOK, false, null, null, null));
+
+        ResponseEntity<Map<String, Object>> response = controller.activeCatalogRuntime();
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody())
+                .containsEntry("cloudReady", false)
+                .containsEntry("accessToken", "")
+                .containsEntry("installId", "");
+    }
 }

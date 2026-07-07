@@ -80,7 +80,7 @@ class ToolExecutionManagerCacheKeyTest {
                 toolContextService, apiService, new ObjectMapper(), responseShaper,
                 nextActionBuilder, responseCache, toolNextHintRepository, toolResponseService,
                 toolExecutionOrchestrator, binaryResponseHandler, catalogBillingService,
-                credentialClient, apiRepository);
+                credentialClient, apiRepository, /* ceCatalogCloudRelay */ null);
 
         ToolContextService.ToolContext context = new ToolContextService.ToolContext();
         context.setApiId(API_ID);

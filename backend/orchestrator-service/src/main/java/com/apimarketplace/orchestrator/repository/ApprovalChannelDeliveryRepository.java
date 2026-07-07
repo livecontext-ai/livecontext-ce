@@ -45,9 +45,9 @@ public interface ApprovalChannelDeliveryRepository
     @Transactional
     @Query(value = """
         INSERT INTO orchestrator.approval_channel_deliveries
-            (signal_wait_id, channel, callback_token, status, tenant_id, run_id, node_id,
+            (signal_wait_id, channel, callback_token, status, tenant_id, org_id, run_id, node_id,
              item_id, epoch, credential_id, chat_id, allowed_user_ids, created_at)
-        VALUES (:signalWaitId, :channel, :callbackToken, 'PENDING', :tenantId, :runId, :nodeId,
+        VALUES (:signalWaitId, :channel, :callbackToken, 'PENDING', :tenantId, :orgId, :runId, :nodeId,
              :itemId, :epoch, :credentialId, :chatId, CAST(:allowedUserIdsJson AS jsonb), :now)
         ON CONFLICT (signal_wait_id, channel) DO NOTHING
         """, nativeQuery = true)
@@ -56,6 +56,7 @@ public interface ApprovalChannelDeliveryRepository
             @Param("channel") String channel,
             @Param("callbackToken") String callbackToken,
             @Param("tenantId") String tenantId,
+            @Param("orgId") String orgId,
             @Param("runId") String runId,
             @Param("nodeId") String nodeId,
             @Param("itemId") String itemId,

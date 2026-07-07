@@ -950,8 +950,16 @@ export class NodeCreationService {
         if (rawDelegation && typeof rawDelegation === 'object'
           && typeof rawDelegation.channel === 'string' && rawDelegation.channel.trim() !== '') {
           approvalDelegation = { channel: rawDelegation.channel };
-          if (typeof rawDelegation.credentialId === 'number') {
-            approvalDelegation.credentialId = rawDelegation.credentialId;
+          // Tolerate a numeric-string credentialId ("40") from hand-written or
+          // agent-generated plans: coerce to a NUMBER, drop only true non-numerics.
+          const rawCredentialId = rawDelegation.credentialId;
+          const credentialId = typeof rawCredentialId === 'number'
+            ? rawCredentialId
+            : typeof rawCredentialId === 'string' && rawCredentialId.trim() !== ''
+              ? Number(rawCredentialId)
+              : Number.NaN;
+          if (Number.isFinite(credentialId)) {
+            approvalDelegation.credentialId = credentialId;
           }
           if (typeof rawDelegation.chatId === 'string' && rawDelegation.chatId.trim() !== '') {
             approvalDelegation.chatId = rawDelegation.chatId;

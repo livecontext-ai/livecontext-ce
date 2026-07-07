@@ -53,6 +53,12 @@ public class CloudLinkController {
         return ResponseEntity.ok(Map.of("source", cloudLinkService.getLlmSource(tenantId).name()));
     }
 
+    @GetMapping("/catalog-source")
+    public ResponseEntity<Map<String, Object>> getCatalogSource(
+            @RequestHeader("X-User-ID") Long tenantId) {
+        return ResponseEntity.ok(Map.of("source", cloudLinkService.getCatalogSource(tenantId).name()));
+    }
+
     /**
      * GET /api/cloud-link/usage-summary
      * Mirrors the bound cloud account's credit usage summary so a CLOUD-linked CE can show
@@ -132,6 +138,27 @@ public class CloudLinkController {
         }
         try {
             CloudLlmSource saved = cloudLinkService.setLlmSource(tenantId, source);
+            return ResponseEntity.ok(Map.of("source", saved.name()));
+        } catch (CloudLinkService.CloudAccountNotLinkedException e) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(Map.of("error", "CLOUD_LINK_REQUIRED"));
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(Map.of("error", "CLOUD_LINK_NOT_READY"));
+        }
+    }
+
+    @PutMapping("/catalog-source")
+    public ResponseEntity<Map<String, Object>> setCatalogSource(
+            @RequestHeader("X-User-ID") Long tenantId,
+            @RequestBody Map<String, String> body) {
+        CloudLlmSource source = parseRequestedSource(body == null ? null : body.get("source"));
+        if (source == null) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "INVALID_CATALOG_SOURCE"));
+        }
+        try {
+            CloudLlmSource saved = cloudLinkService.setCatalogSource(tenantId, source);
             return ResponseEntity.ok(Map.of("source", saved.name()));
         } catch (CloudLinkService.CloudAccountNotLinkedException e) {
             return ResponseEntity.status(HttpStatus.CONFLICT)

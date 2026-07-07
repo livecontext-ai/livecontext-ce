@@ -99,6 +99,56 @@ describe('workflowPlanGenerator - approval.delegation emission', () => {
     expect(approvalBlockOf(plan).delegation.allowedUserIds).toEqual(['12345678']);
   });
 
+  it('coerces a numeric-string credentialId ("40") to a NUMBER on export', () => {
+    const plan = generateWorkflowPlan(
+      [approvalNode('approval-1', {
+        channel: 'telegram',
+        credentialId: '40' as any,
+        chatId: '-100123',
+      })],
+      []
+    );
+
+    const delegation = approvalBlockOf(plan).delegation;
+    expect(delegation.credentialId).toBe(40);
+    expect(typeof delegation.credentialId).toBe('number');
+  });
+
+  it('drops a non-numeric credentialId on export instead of emitting garbage', () => {
+    const plan = generateWorkflowPlan(
+      [approvalNode('approval-1', {
+        channel: 'telegram',
+        credentialId: 'not-a-number' as any,
+        chatId: '-100123',
+      })],
+      []
+    );
+
+    expect(approvalBlockOf(plan).delegation).toEqual({ channel: 'telegram', chatId: '-100123' });
+  });
+
+  it('round-trips a numeric-string credentialId to a NUMBER: export ("40") -> import -> export (40)', () => {
+    const first = generateWorkflowPlan(
+      [approvalNode('approval-1', {
+        channel: 'telegram',
+        credentialId: '40' as any,
+        chatId: '-100123',
+      })],
+      []
+    );
+    const firstCore = first.cores!.find((c: any) => c.type === 'approval')!;
+    expect((firstCore.approval as any).delegation.credentialId).toBe(40);
+
+    const imported = (NodeCreationService as any).createCoreNodesInline([firstCore], [], 100, 100).nodes[0];
+    expect(imported.data.approvalDelegation.credentialId).toBe(40);
+    expect(typeof imported.data.approvalDelegation.credentialId).toBe('number');
+
+    const second = generateWorkflowPlan([imported], []);
+    const delegation = approvalBlockOf(second).delegation;
+    expect(delegation.credentialId).toBe(40);
+    expect(typeof delegation.credentialId).toBe('number');
+  });
+
   it('round-trips losslessly: export -> import -> export produces the same approval block', () => {
     const first = generateWorkflowPlan(
       [approvalNode('approval-1', {

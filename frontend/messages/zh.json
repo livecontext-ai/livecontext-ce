@@ -3113,6 +3113,17 @@
       "unchanged": "未更改",
       "updated": "已更新"
     },
+    "catalogSource": {
+      "label": "集成凭据",
+      "cloud": "Cloud",
+      "local": "本地密钥",
+      "cloudHint": "集成调用通过您关联的 LiveContext Cloud 账户执行，并使用其平台凭据。请求经由云端传输，每次调用会在该账户上计收少量积分加价。",
+      "localHint": "集成凭据在此实例上本地配置并使用。",
+      "subscriptionRequired": "使用 Cloud 需要您关联的云账户拥有有效的付费订阅。",
+      "viewPlans": "查看套餐",
+      "linkRequired": "切换到 Cloud 之前请先关联一个 Cloud 账户。",
+      "saveError": "更新集成凭据来源失败。"
+    },
     "cloudSource": {
       "apiKeys": "API 密钥",
       "byokHint": "API 模型调用使用此实例上配置的密钥。",
@@ -4522,6 +4533,8 @@
         "logsCustom": "定制日志保留期",
         "versioning": "工作流版本控制",
         "apiAccess": "API 访问",
+        "cePlatformCreds": "自托管可用的托管集成凭据（通过云关联）",
+        "cePlatformCredsTooltip": "与云关联的自托管实例可使用 LiveContext 平台凭据运行第三方集成，无需自备 API 密钥。每次调用收取少量积分加价。",
         "priorityExecution": "优先执行",
         "executionSearch": "执行记录搜索",
         "analyticsBasic": "基础分析",
@@ -6963,6 +6976,7 @@
           "infoOptional": "可选。审批同时仍可在应用内处理。",
           "enableAria": "启用外部渠道委派",
           "channelLabel": "渠道",
+          "credentialHint": "可选。留空则使用您的默认 Telegram 凭据发送，或选择一个以使用特定机器人。",
           "chatIdLabel": "聊天 ID",
           "chatIdHint": "目标聊天或群组的 ID。支持 '{{...}}' 表达式。",
           "messageLabel": "消息模板",

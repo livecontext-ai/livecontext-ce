@@ -2,6 +2,7 @@ package com.apimarketplace.auth.web;
 
 import com.apimarketplace.auth.repository.OrganizationMemberRepository;
 import com.apimarketplace.auth.repository.UserOnboardingRepository;
+import com.apimarketplace.auth.service.CeLinkEntitlementsService;
 import com.apimarketplace.auth.service.CeLinkService;
 import com.apimarketplace.auth.service.CreditConsumptionDeadLetterService;
 import com.apimarketplace.auth.service.ModelPricingService;
@@ -46,6 +47,7 @@ class InternalAuthControllerCeLinkOptionalTest {
     @Mock private PlanLimitService planLimitService;
     @Mock private OrganizationMemberRepository memberRepository;
     @Mock private ObjectProvider<CeLinkService> ceLinkServiceProvider;
+    @Mock private ObjectProvider<CeLinkEntitlementsService> ceLinkEntitlementsServiceProvider;
     @Mock private CeLinkService ceLinkService;
 
     private InternalAuthController controller;
@@ -59,7 +61,8 @@ class InternalAuthControllerCeLinkOptionalTest {
                 onboardingRepository,
                 org.mockito.Mockito.mock(com.apimarketplace.auth.service.OnboardingService.class),
                 modelPricingService, planLimitService,
-                memberRepository, ceLinkServiceProvider);
+                memberRepository, ceLinkServiceProvider,
+                ceLinkEntitlementsServiceProvider);
     }
 
     @Test

@@ -352,9 +352,14 @@ export class NodeConfigurationRule extends BaseValidationRule {
   /**
    * External-channel delegation checks (all WARNING, never blocking). Only fire
    * when the section is actually enabled (a channel is selected): a delegation
-   * without a credential or chat id cannot deliver the approval message, and the
-   * channel counts as a single approver decision so requiredApprovals > 1 can
-   * never be satisfied by the external channel alone.
+   * without a chat id cannot deliver the approval message, and the channel counts
+   * as a single approver decision so requiredApprovals > 1 can never be satisfied
+   * by the external channel alone.
+   *
+   * NOTE: a missing credentialId is a VALID configuration (no warning): the backend
+   * falls back to the user's own Telegram credential (catalog implicit resolution,
+   * same as an mcp:telegram step without an explicit credential). A present but
+   * non-numeric value is surfaced backend-side as APPROVAL_DELEGATION_INVALID_CREDENTIAL.
    */
   private validateApprovalDelegation(
     node: Node<BuilderNodeData>,
@@ -365,17 +370,6 @@ export class NodeConfigurationRule extends BaseValidationRule {
     const channel = delegation?.channel;
     if (!channel || (typeof channel === 'string' && channel.trim() === '')) {
       return; // delegation disabled - nothing to check
-    }
-
-    if (typeof delegation.credentialId !== 'number') {
-      issues.push(
-        this.createWarning(
-          elementKey,
-          'core',
-          'Delegation is enabled but no channel credential is selected',
-          { rule: 'approval_delegation_missing_credential', nodeId: node.id }
-        )
-      );
     }
 
     const chatId = delegation.chatId;

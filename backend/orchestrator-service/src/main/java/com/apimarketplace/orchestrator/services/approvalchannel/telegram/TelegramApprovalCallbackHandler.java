@@ -151,7 +151,12 @@ public class TelegramApprovalCallbackHandler {
     private void answer(ApprovalChannelDeliveryEntity delivery, String callbackQueryId,
                         String text, boolean showAlert) {
         if (callbackQueryId != null) {
-            notifier.answerCallbackQuery(delivery, callbackQueryId, text, showAlert);
+            // Re-bind the delivery's workspace scope: this thread serves a public
+            // webhook (no org header), and the catalog call's default-credential
+            // fallback must see the org-shared Telegram credential of a workspace
+            // run. Null orgId = personal scope (no-op binding).
+            com.apimarketplace.common.web.TenantResolver.runWithOrgScope(delivery.getOrgId(),
+                    () -> notifier.answerCallbackQuery(delivery, callbackQueryId, text, showAlert));
         }
     }
 

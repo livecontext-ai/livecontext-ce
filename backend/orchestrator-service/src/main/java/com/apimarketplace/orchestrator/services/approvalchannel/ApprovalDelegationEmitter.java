@@ -6,6 +6,7 @@ import com.apimarketplace.orchestrator.domain.execution.ApprovalChannelDeliveryE
 import com.apimarketplace.orchestrator.domain.execution.SignalType;
 import com.apimarketplace.orchestrator.domain.execution.SignalWaitEntity;
 import com.apimarketplace.orchestrator.execution.v2.services.SignalResolvedEvent;
+import com.apimarketplace.common.web.TenantResolver;
 import com.apimarketplace.orchestrator.domain.WorkflowEntity;
 import com.apimarketplace.orchestrator.repository.ApprovalChannelDeliveryRepository;
 import com.apimarketplace.orchestrator.repository.SignalWaitRepository;
@@ -99,7 +100,14 @@ public class ApprovalDelegationEmitter {
                 return;
             }
             WorkflowRunEntity run = runOpt.get();
-            notifier.get().notifyPending(signal, config, run, resolveWorkflowName(run));
+            String workflowName = resolveWorkflowName(run);
+            // Bind the run's workspace scope for the catalog call: this async thread has
+            // no HTTP request, and without the org ThreadLocal the default-credential
+            // fallback would resolve only PERSONAL credentials, silently missing an
+            // org-shared Telegram credential on a workspace run. Null orgId = personal
+            // scope (clean no-op binding).
+            TenantResolver.runWithOrgScope(run.getOrgId(),
+                    () -> notifier.get().notifyPending(signal, config, run, workflowName));
         } catch (Exception ex) {
             meterRegistry.counter("approval.delegation.errors",
                     "type", ex.getClass().getSimpleName()).increment();
@@ -149,7 +157,8 @@ public class ApprovalDelegationEmitter {
                     deliveryRepository.findBySignalWaitIdInAndStatus(List.of(signal.getId()), DeliveryStatus.SENT);
             for (ApprovalChannelDeliveryEntity delivery : deliveries) {
                 registry.forChannel(delivery.getChannel()).ifPresent(n ->
-                        n.onResolved(delivery, signal.getResolution(), signal.getResolvedBy()));
+                        TenantResolver.runWithOrgScope(delivery.getOrgId(),
+                                () -> n.onResolved(delivery, signal.getResolution(), signal.getResolvedBy())));
             }
         } catch (Exception ex) {
             meterRegistry.counter("approval.delegation.errors",
@@ -172,7 +181,8 @@ public class ApprovalDelegationEmitter {
             List<ApprovalChannelDeliveryEntity> deliveries = deliveryRepository
                     .findBySignalWaitIdInAndStatus(event.userApprovalSignalIds(), DeliveryStatus.SENT);
             for (ApprovalChannelDeliveryEntity delivery : deliveries) {
-                registry.forChannel(delivery.getChannel()).ifPresent(n -> n.onCancelled(delivery));
+                registry.forChannel(delivery.getChannel()).ifPresent(n ->
+                        TenantResolver.runWithOrgScope(delivery.getOrgId(), () -> n.onCancelled(delivery)));
             }
         } catch (Exception ex) {
             meterRegistry.counter("approval.delegation.errors",

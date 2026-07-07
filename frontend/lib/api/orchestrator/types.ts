@@ -1141,6 +1141,16 @@ export interface PlatformCredentialPublicInfo {
   defaultMarkupCredits?: string;
   /** Version number of the latest pricing snapshot when one exists. */
   pricingVersion?: number;
+  /**
+   * CE only: true when the credential is offered by the linked cloud account
+   * (executions relay to the cloud, which uses ITS platform credentials).
+   */
+  cloudRelay?: boolean;
+  /**
+   * CE only: true when the cloud offers this credential but the linked account
+   * has no active paid subscription (the relay requires one).
+   */
+  subscriptionRequired?: boolean;
 }
 
 /**

@@ -363,6 +363,19 @@ describe('Pricing Logic', () => {
         expect(new Set(keys).size).toBe(keys.length);
       }
     });
+
+    it('lists managed integration credentials (cePlatformCreds) on every paid tier but not Free', () => {
+      // The CE catalog credential relay requires an active paid subscription on the
+      // linked cloud account, so the marketing line belongs to paid tiers only.
+      for (const planId of ['starter', 'pro', 'team', 'enterprise']) {
+        expect(PLAN_FEATURE_KEYS[planId], `${planId} must list "cePlatformCreds"`).toContain('cePlatformCreds');
+      }
+      expect(PLAN_FEATURE_KEYS.free).not.toContain('cePlatformCreds');
+    });
+
+    it('registers cePlatformCreds as an additive capability so the superset guard covers it', () => {
+      expect(CAPABILITY_KEYS).toContain('cePlatformCreds');
+    });
   });
 
   // =========================================================================

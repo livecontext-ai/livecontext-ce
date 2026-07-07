@@ -87,6 +87,10 @@ describe('NodeConfigurationRule', () => {
         },
       }) as any;
 
+    // 'approval_delegation_missing_credential' stays listed although the rule was
+    // REMOVED (missing credential is a valid configuration: the backend falls back to
+    // the user's own Telegram credential). The absence assertions below double as a
+    // removal regression guard: the rule id must never fire again.
     const delegationRules = [
       'approval_delegation_missing_credential',
       'approval_delegation_missing_chat_id',
@@ -114,16 +118,20 @@ describe('NodeConfigurationRule', () => {
       ).toHaveLength(0);
     });
 
-    it('warns (not errors) when delegation is enabled without a credential', () => {
+    it('REGRESSION (missing-credential rule removed): emits NO finding when delegation has no credential (backend falls back to the user\'s own Telegram credential)', () => {
       const ctx = buildContext(
         [makeDelegatedApprovalNode({ approvalDelegation: { channel: 'telegram', chatId: '-100123' } })],
         [],
       );
       const result = rule.validate(ctx);
 
-      const issues = result.issues.filter((i) => i.context?.rule === 'approval_delegation_missing_credential');
-      expect(issues).toHaveLength(1);
-      expect(issues[0].severity).toBe('warning');
+      expect(
+        result.issues.filter((i) => i.context?.rule === 'approval_delegation_missing_credential'),
+      ).toHaveLength(0);
+      // The shape is otherwise fully valid: no delegation issue at all.
+      expect(
+        result.issues.filter((i) => delegationRules.includes(i.context?.rule as string)),
+      ).toHaveLength(0);
     });
 
     it('warns (not errors) when delegation is enabled with a blank chat ID', () => {
@@ -187,14 +195,14 @@ describe('NodeConfigurationRule', () => {
       ).toHaveLength(0);
     });
 
-    it('emits both missing-credential and missing-chat-id warnings for a bare enabled delegation', () => {
+    it('emits ONLY the missing-chat-id warning for a bare enabled delegation (no credential warning: credential is optional)', () => {
       const ctx = buildContext(
         [makeDelegatedApprovalNode({ approvalDelegation: { channel: 'telegram' } })],
         [],
       );
       const result = rule.validate(ctx);
 
-      expect(result.issues.filter((i) => i.context?.rule === 'approval_delegation_missing_credential')).toHaveLength(1);
+      expect(result.issues.filter((i) => i.context?.rule === 'approval_delegation_missing_credential')).toHaveLength(0);
       expect(result.issues.filter((i) => i.context?.rule === 'approval_delegation_missing_chat_id')).toHaveLength(1);
       expect(result.hasErrors).toBe(false);
     });

@@ -3113,6 +3113,17 @@
       "unchanged": "Unverändert",
       "updated": "Aktualisiert"
     },
+    "catalogSource": {
+      "label": "Integrations-Zugangsdaten",
+      "cloud": "Cloud",
+      "local": "Lokale Schlüssel",
+      "cloudHint": "Integrationsaufrufe laufen über Ihr verknüpftes LiveContext-Cloud-Konto und verwenden dessen Plattform-Zugangsdaten. Anfragen laufen durch die Cloud, und pro Aufruf wird dort ein kleiner Aufschlag in Credits abgerechnet.",
+      "localHint": "Integrations-Zugangsdaten werden lokal auf dieser Installation konfiguriert und verwendet.",
+      "subscriptionRequired": "Die Cloud-Option erfordert ein aktives kostenpflichtiges Abonnement für Ihr verknüpftes Cloud-Konto.",
+      "viewPlans": "Tarife ansehen",
+      "linkRequired": "Verknüpfen Sie ein Cloud-Konto, bevor Sie zu Cloud wechseln.",
+      "saveError": "Die Quelle der Integrations-Zugangsdaten konnte nicht aktualisiert werden."
+    },
     "cloudSource": {
       "apiKeys": "API-Schlüssel",
       "byokHint": "API-Modellaufrufe verwenden die auf dieser Instanz konfigurierten Schlüssel.",
@@ -4522,6 +4533,8 @@
         "logsCustom": "Individuelle Protokollaufbewahrung",
         "versioning": "Workflow-Versionierung",
         "apiAccess": "API-Zugriff",
+        "cePlatformCreds": "Verwaltete Integrations-Zugangsdaten für Self-Hosted (über Cloud-Verknüpfung)",
+        "cePlatformCredsTooltip": "Eine mit der Cloud verknüpfte Self-Hosted-Installation kann Drittanbieter-Integrationen mit LiveContext-Plattform-Zugangsdaten ausführen, ohne eigene API-Schlüssel. Pro Aufruf fällt ein kleiner Aufschlag in Credits an.",
         "priorityExecution": "Priorisierte Ausführung",
         "executionSearch": "Ausführungssuche",
         "analyticsBasic": "Basis-Analytik",
@@ -6963,6 +6976,7 @@
           "infoOptional": "Optional. Die Genehmigung bleibt auch in der App verfügbar.",
           "enableAria": "Delegation über externen Kanal aktivieren",
           "channelLabel": "Kanal",
+          "credentialHint": "Optional. Leer lassen, um mit Ihren Standard-Telegram-Anmeldedaten zu senden, oder wählen Sie welche aus, um einen bestimmten Bot zu verwenden.",
           "chatIdLabel": "Chat-ID",
           "chatIdHint": "ID des Ziel-Chats oder der Zielgruppe. Unterstützt '{{...}}'-Ausdrücke.",
           "messageLabel": "Nachrichtenvorlage",

@@ -23,6 +23,36 @@ public interface CloudLlmRuntimeAccess {
         return Optional.empty();
     }
 
+    /**
+     * Catalog-credential relay variant of {@link #getEffectiveLlmSource}: the tenant's
+     * source for third-party catalog API platform credentials, keyed on the cloud link's
+     * {@code catalogSource} instead of {@code llmSource}. The two toggles are independent.
+     * Default BYOK (execute locally) for non-CE implementations.
+     */
+    default CloudLlmSource getEffectiveCatalogSource(String tenantId) {
+        return CloudLlmSource.BYOK;
+    }
+
+    /**
+     * Catalog-credential relay variant of {@link #resolveCloudRuntime}: the cloud relay
+     * credentials for catalog tool executions, present only when the link's
+     * {@code catalogSource} is CLOUD and the relay is ready. Default empty for non-CE
+     * implementations.
+     */
+    default Optional<CloudLlmRuntimeCredentials> resolveCatalogCloudRuntime(String tenantId) {
+        return Optional.empty();
+    }
+
+    /**
+     * Catalog-credential relay variant of {@link #resolveActiveCloudRuntime}:
+     * install-global cloud credentials resolved from THE active registered cloud link,
+     * reported against its {@code catalogSource} instead of its {@code llmSource}.
+     * Default empty for non-CE implementations.
+     */
+    default Optional<CloudLlmRuntimeCredentials> resolveActiveCatalogRuntime() {
+        return Optional.empty();
+    }
+
     default boolean isCloudSelected(String tenantId) {
         return getEffectiveLlmSource(tenantId) == CloudLlmSource.CLOUD;
     }

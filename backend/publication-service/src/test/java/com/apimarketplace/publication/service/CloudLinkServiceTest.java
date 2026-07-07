@@ -323,6 +323,20 @@ class CloudLinkServiceTest {
         }
 
         @Test
+        @DisplayName("Status map carries catalogSource alongside llmSource, each reflecting its own toggle")
+        void statusCarriesCatalogSourceAlongsideLlmSource() {
+            CeCloudLinkEntity link = buildLink();
+            link.setLlmSource(CloudLlmSource.BYOK.name());
+            link.setCatalogSource(CloudLlmSource.CLOUD.name());
+            when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
+
+            Map<String, Object> status = service.getLinkStatus(TENANT_ID);
+
+            assertThat(status).containsEntry("llmSource", "BYOK");
+            assertThat(status).containsEntry("catalogSource", "CLOUD");
+        }
+
+        @Test
         @DisplayName("Should include registered flag and install id when link is registered")
         void shouldIncludeRegisteredFlagAndInstallId() {
             CeCloudLinkEntity link = buildLink();
@@ -365,15 +379,46 @@ class CloudLinkServiceTest {
         }
 
         @Test
-        @DisplayName("BYOK link omits cloudPlanCode (local plan governs, no entitlements fetch)")
+        @DisplayName("All-BYOK link (both toggles) omits cloudPlanCode (local plan governs, no entitlements fetch)")
         void byokStatusOmitsCloudPlanCode() {
-            CeCloudLinkEntity link = buildLink(); // BYOK by default
+            CeCloudLinkEntity link = buildLink(); // both llmSource and catalogSource BYOK by default
             when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
 
             Map<String, Object> status = service.getLinkStatus(TENANT_ID);
 
             assertThat(status).doesNotContainKey("cloudPlanCode");
+            // No cloud round-trip at all: neither toggle draws on the cloud account.
             verifyNoInteractions(restTemplate);
+        }
+
+        @Test
+        @DisplayName("regression: llmSource=BYOK + catalogSource=CLOUD still exposes cloudPlanCode (catalog upsell keys on it)")
+        void catalogOnlyCloudSourcedStatusIncludesCloudPlanCode() throws Exception {
+            // Pre-fix, the entitlement fetch was gated on llmSource==CLOUD only, so a
+            // catalog-relaying install on a PAID plan showed a false "subscription
+            // required" note in the Settings > AI Providers catalogSource pill.
+            CeCloudLinkEntity link = buildLink();
+            UUID installId = UUID.fromString("11111111-2222-3333-4444-555555555555");
+            link.setInstallId(installId);
+            link.setLlmSource(CloudLlmSource.BYOK.name());
+            link.setCatalogSource(CloudLlmSource.CLOUD.name());
+            link.setRegisteredAt(clock.instant());
+            link.setCachedAccessToken("cached-access-token");
+            link.setTokenExpiresAt(clock.instant().plusSeconds(300));
+            when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
+            when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            com.fasterxml.jackson.databind.JsonNode body =
+                    new ObjectMapper().readTree("{\"planCode\":\"TEAM\",\"userId\":42}");
+            when(restTemplate.exchange(
+                    org.mockito.ArgumentMatchers.contains("/ce-link/" + installId + "/entitlements"),
+                    eq(HttpMethod.GET),
+                    any(HttpEntity.class),
+                    eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                    .thenReturn(ResponseEntity.ok(body));
+
+            Map<String, Object> status = service.getLinkStatus(TENANT_ID);
+
+            assertThat(status).containsEntry("cloudPlanCode", "TEAM");
         }
 
         @Test
@@ -673,6 +718,277 @@ class CloudLinkServiceTest {
     }
 
     @Nested
+    @DisplayName("catalogSource")
+    class CatalogSource {
+
+        @Test
+        @DisplayName("Should default to BYOK when no cloud link exists")
+        void shouldDefaultToByokWhenNoLink() {
+            when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.empty());
+
+            assertThat(service.getCatalogSource(TENANT_ID)).isEqualTo(CloudLlmSource.BYOK);
+            assertThat(service.setCatalogSource(TENANT_ID, CloudLlmSource.BYOK)).isEqualTo(CloudLlmSource.BYOK);
+            verify(cloudLinkRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("Should reject Cloud catalog source when no cloud link exists")
+        void shouldRejectCloudWhenNoLink() {
+            when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> service.setCatalogSource(TENANT_ID, CloudLlmSource.CLOUD))
+                    .isInstanceOf(CloudLinkService.CloudAccountNotLinkedException.class)
+                    .hasMessageContaining("No cloud account linked");
+            verify(cloudLinkRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("Should trigger cloud registration when switching an unregistered link to CLOUD, and persist on success")
+        void shouldRegisterWhenUnregisteredAndPersistOnSuccess() {
+            CeCloudLinkEntity link = buildLink(); // registeredAt=null by default
+            link.setInstallId(UUID.fromString("11111111-2222-3333-4444-555555555555"));
+            link.setCachedAccessToken("cached-access-token");
+            link.setTokenExpiresAt(clock.instant().plusSeconds(300));
+            when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
+            when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            // registerWithCloud POSTs to /ce-link/register; 2xx stamps registeredAt.
+            when(restTemplate.postForEntity(any(String.class), any(HttpEntity.class), eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                    .thenReturn(ResponseEntity.ok().build());
+
+            CloudLlmSource selected = service.setCatalogSource(TENANT_ID, CloudLlmSource.CLOUD);
+
+            assertThat(selected).isEqualTo(CloudLlmSource.CLOUD);
+            assertThat(link.getRegisteredAt()).isNotNull();
+            verify(cloudLinkRepository, atLeastOnce())
+                    .save(argThat(s -> "CLOUD".equals(s.getCatalogSource())));
+        }
+
+        @Test
+        @DisplayName("Should reject Cloud (CLOUD_LINK_NOT_READY) when linked but cloud registration fails - never persists CLOUD")
+        void shouldRejectCloudWhenLinkedButRegistrationFails() {
+            // Exact mirror of the llmSource guard: a linked-but-unregistered install asked to
+            // switch the CATALOG toggle to CLOUD attempts registerWithCloud; the cloud responds
+            // non-2xx so registeredAt stays null, and the service must throw WITHOUT persisting CLOUD.
+            CeCloudLinkEntity link = buildLink(); // BYOK, registeredAt=null by default
+            link.setInstallId(UUID.fromString("11111111-2222-3333-4444-555555555555"));
+            link.setCachedAccessToken("cached-access-token");
+            link.setTokenExpiresAt(clock.instant().plusSeconds(300));
+            when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
+            when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            when(restTemplate.postForEntity(any(String.class), any(HttpEntity.class), eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                    .thenReturn(ResponseEntity.status(503).build());
+
+            assertThatThrownBy(() -> service.setCatalogSource(TENANT_ID, CloudLlmSource.CLOUD))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("not registered");
+
+            verify(cloudLinkRepository, never()).save(argThat(s -> "CLOUD".equals(s.getCatalogSource())));
+            assertThat(link.getCatalogSource()).isNotEqualTo("CLOUD");
+            assertThat(link.getRegisteredAt()).isNull();
+        }
+
+        @Test
+        @DisplayName("Should persist selected catalog source on an existing registered link without touching llmSource")
+        void shouldPersistSelectedCatalogSource() {
+            CeCloudLinkEntity link = buildLink();
+            link.setInstallId(UUID.fromString("11111111-2222-3333-4444-555555555555"));
+            link.setRegisteredAt(clock.instant());
+            when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
+            when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            CloudLlmSource selected = service.setCatalogSource(TENANT_ID, CloudLlmSource.CLOUD);
+
+            assertThat(selected).isEqualTo(CloudLlmSource.CLOUD);
+            ArgumentCaptor<CeCloudLinkEntity> saved = ArgumentCaptor.forClass(CeCloudLinkEntity.class);
+            verify(cloudLinkRepository).save(saved.capture());
+            assertThat(saved.getValue().getCatalogSource()).isEqualTo("CLOUD");
+            // The LLM toggle is independent and must stay untouched.
+            assertThat(saved.getValue().getLlmSource()).isEqualTo("BYOK");
+        }
+
+        @Test
+        @DisplayName("getCatalogRuntimeStatus returns byok() when catalogSource=BYOK even if llmSource=CLOUD (toggle independence)")
+        void catalogRuntimeStaysByokWhenOnlyLlmSourceIsCloud() {
+            // Regression guard: the catalog relay must key on catalogSource, never on the
+            // (independent) llmSource toggle - a tenant relaying LLM calls has NOT opted in
+            // to relaying catalog tool executions.
+            CeCloudLinkEntity link = buildLink();
+            link.setInstallId(UUID.fromString("11111111-2222-3333-4444-555555555555"));
+            link.setRegisteredAt(clock.instant());
+            link.setLlmSource("CLOUD");
+            link.setCatalogSource("BYOK");
+            when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
+
+            CloudLinkService.CloudRuntimeStatus status = service.getCatalogRuntimeStatus(TENANT_ID);
+
+            assertThat(status.source()).isEqualTo(CloudLlmSource.BYOK);
+            assertThat(status.cloudReady()).isFalse();
+            assertThat(status.accessToken()).isNull();
+            verifyNoInteractions(restTemplate);
+        }
+
+        @Test
+        @DisplayName("getCloudRuntimeStatus (LLM) stays byok() when only catalogSource=CLOUD (toggle independence, other direction)")
+        void llmRuntimeStaysByokWhenOnlyCatalogSourceIsCloud() {
+            CeCloudLinkEntity link = buildLink();
+            link.setInstallId(UUID.fromString("11111111-2222-3333-4444-555555555555"));
+            link.setRegisteredAt(clock.instant());
+            link.setLlmSource("BYOK");
+            link.setCatalogSource("CLOUD");
+            when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
+
+            CloudLinkService.CloudRuntimeStatus status = service.getCloudRuntimeStatus(TENANT_ID);
+
+            assertThat(status.source()).isEqualTo(CloudLlmSource.BYOK);
+            assertThat(status.cloudReady()).isFalse();
+            verifyNoInteractions(restTemplate);
+        }
+
+        @Test
+        @DisplayName("getCatalogRuntimeStatus returns ready credentials when catalogSource=CLOUD on a registered link")
+        void catalogRuntimeReadyWhenCatalogSourceCloud() {
+            CeCloudLinkEntity link = buildLink();
+            UUID installId = UUID.fromString("11111111-2222-3333-4444-555555555555");
+            link.setInstallId(installId);
+            link.setRegisteredAt(clock.instant());
+            link.setLlmSource("BYOK"); // independent toggle stays BYOK
+            link.setCatalogSource("CLOUD");
+            link.setCachedAccessToken("cached-access-token");
+            link.setTokenExpiresAt(clock.instant().plusSeconds(300));
+            when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
+            when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            CloudLinkService.CloudRuntimeStatus status = service.getCatalogRuntimeStatus(TENANT_ID);
+
+            assertThat(status.source()).isEqualTo(CloudLlmSource.CLOUD);
+            assertThat(status.cloudReady()).isTrue();
+            assertThat(status.accessToken()).isEqualTo("cached-access-token");
+            assertThat(status.installId()).isEqualTo(installId.toString());
+            assertThat(status.cloudApiUrl()).isEqualTo("https://livecontext.ai/api");
+        }
+
+        @Test
+        @DisplayName("getCatalogRuntimeStatus is notReady when catalogSource=CLOUD but cloud registration fails")
+        void catalogRuntimeNotReadyWhenRegistrationFails() {
+            CeCloudLinkEntity link = buildLink();
+            link.setInstallId(UUID.fromString("11111111-2222-3333-4444-555555555555"));
+            link.setCatalogSource("CLOUD");
+            link.setCachedAccessToken("cached-access-token");
+            link.setTokenExpiresAt(clock.instant().plusSeconds(300));
+            when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
+            when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            when(restTemplate.postForEntity(any(String.class), any(HttpEntity.class), eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                    .thenReturn(ResponseEntity.status(503).build());
+
+            CloudLinkService.CloudRuntimeStatus status = service.getCatalogRuntimeStatus(TENANT_ID);
+
+            assertThat(status.source()).isEqualTo(CloudLlmSource.CLOUD);
+            assertThat(status.cloudReady()).isFalse();
+            assertThat(status.accessToken()).isNull();
+            assertThat(status.installId()).isNull();
+        }
+    }
+
+    @Nested
+    @DisplayName("getActiveInstallCatalogRuntime (install-global, for the auth-side public-info delegation)")
+    class ActiveInstallCatalogRuntime {
+
+        @Test
+        @DisplayName("Returns the install's active-link creds reporting the link's catalogSource (not its llmSource)")
+        void returnsCredsReportingCatalogSource() {
+            CeCloudLinkEntity link = buildLink();
+            link.setTenantId(TENANT_ID);
+            UUID installId = UUID.fromString("11111111-2222-3333-4444-555555555555");
+            link.setInstallId(installId);
+            link.setRegisteredAt(clock.instant());
+            link.setLlmSource("BYOK");
+            link.setCatalogSource("CLOUD");
+            link.setCachedAccessToken("cached-access-token");
+            link.setTokenExpiresAt(clock.instant().plusSeconds(300));
+            when(cloudLinkRepository.findFirstByRegisteredAtNotNullOrderByLinkedAtDesc())
+                    .thenReturn(Optional.of(link));
+            when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
+            org.mockito.Mockito.lenient().when(cloudLinkRepository.save(any()))
+                    .thenAnswer(inv -> inv.getArgument(0));
+
+            CloudLinkService.CloudRuntimeStatus status = service.getActiveInstallCatalogRuntime();
+
+            assertThat(status.cloudReady()).isTrue();
+            assertThat(status.accessToken()).isEqualTo("cached-access-token");
+            assertThat(status.installId()).isEqualTo(installId.toString());
+            // The CATALOG toggle is reported, not the (BYOK) llm toggle.
+            assertThat(status.source()).isEqualTo(CloudLlmSource.CLOUD);
+        }
+
+        @Test
+        @DisplayName("byok()/not-ready when this install has no registered link")
+        void byokWhenNoRegisteredLink() {
+            when(cloudLinkRepository.findFirstByRegisteredAtNotNullOrderByLinkedAtDesc())
+                    .thenReturn(Optional.empty());
+
+            CloudLinkService.CloudRuntimeStatus status = service.getActiveInstallCatalogRuntime();
+
+            assertThat(status.cloudReady()).isFalse();
+            assertThat(status.accessToken()).isNull();
+        }
+
+        @Test
+        @DisplayName("regression: NOT ready when the active link's catalogSource=BYOK, even with llmSource=CLOUD (relay is opt-in)")
+        void notReadyWhenCatalogSourceByokDespiteCloudLlmSource() {
+            // Pre-fix, this returned cloudReady=true regardless of catalogSource, so the
+            // public-info delegation advertised available=true for an install whose admin
+            // left the catalog toggle on BYOK - unlocking a builder toggle that could
+            // never execute (the relay itself filters on catalogSource=CLOUD).
+            CeCloudLinkEntity link = buildLink();
+            link.setTenantId(TENANT_ID);
+            link.setInstallId(UUID.fromString("11111111-2222-3333-4444-555555555555"));
+            link.setRegisteredAt(clock.instant());
+            link.setLlmSource("CLOUD");
+            link.setCatalogSource("BYOK");
+            link.setCachedAccessToken("cached-access-token");
+            link.setTokenExpiresAt(clock.instant().plusSeconds(300));
+            when(cloudLinkRepository.findFirstByRegisteredAtNotNullOrderByLinkedAtDesc())
+                    .thenReturn(Optional.of(link));
+
+            CloudLinkService.CloudRuntimeStatus status = service.getActiveInstallCatalogRuntime();
+
+            assertThat(status.cloudReady()).isFalse();
+            assertThat(status.accessToken()).isNull();
+            assertThat(status.installId()).isNull();
+            assertThat(status.source()).isEqualTo(CloudLlmSource.BYOK);
+        }
+
+        @Test
+        @DisplayName("notReady (cloudReady=false, no creds) when the link exists but its access token can't be obtained")
+        void notReadyWhenTokenUnavailable() {
+            CeCloudLinkEntity link = buildLink();
+            link.setTenantId(TENANT_ID);
+            link.setInstallId(UUID.fromString("11111111-2222-3333-4444-555555555555"));
+            link.setRegisteredAt(clock.instant());
+            link.setCatalogSource("CLOUD");
+            link.setCachedAccessToken("expired-token");
+            link.setTokenExpiresAt(clock.instant().minusSeconds(60)); // expired → forces a refresh
+            when(cloudLinkRepository.findFirstByRegisteredAtNotNullOrderByLinkedAtDesc())
+                    .thenReturn(Optional.of(link));
+            when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
+            org.mockito.Mockito.lenient().when(cloudLinkRepository.save(any()))
+                    .thenAnswer(inv -> inv.getArgument(0));
+            org.mockito.Mockito.lenient().when(restTemplate.exchange(
+                            eq("https://keycloak.example.com/realms/test/protocol/openid-connect/token"),
+                            eq(HttpMethod.POST),
+                            any(HttpEntity.class),
+                            eq(Map.class)))
+                    .thenThrow(new org.springframework.web.client.RestClientException("keycloak refresh failed"));
+
+            CloudLinkService.CloudRuntimeStatus status = service.getActiveInstallCatalogRuntime();
+
+            assertThat(status.cloudReady()).isFalse();
+            assertThat(status.accessToken()).isNull();
+            assertThat(status.source()).isEqualTo(CloudLlmSource.CLOUD);
+        }
+    }
+
+    @Nested
     @DisplayName("sendHeartbeat")
     class SendHeartbeat {
 
@@ -823,6 +1139,44 @@ class CloudLinkServiceTest {
             assertThat(link.getRegisteredAt()).isEqualTo(registeredAt);
             assertThat(link.getLlmSource()).isEqualTo("CLOUD");
             verify(restTemplate, never()).postForEntity(any(String.class), any(HttpEntity.class), eq(Void.class));
+        }
+
+        @Test
+        @DisplayName("Registered link + cloud 410 GONE also resets catalogSource to BYOK (same revocation as llmSource)")
+        void registeredHeartbeat410AlsoResetsCatalogSource() {
+            CeCloudLinkEntity link = registeredCloudLink();
+            link.setCatalogSource("CLOUD");
+            when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
+            when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            when(restTemplate.postForEntity(any(String.class), any(HttpEntity.class), eq(Void.class)))
+                    .thenThrow(HttpClientErrorException.create(HttpStatus.GONE, "GONE",
+                            HttpHeaders.EMPTY, new byte[0], StandardCharsets.UTF_8));
+
+            CloudLinkService.HeartbeatOutcome outcome = service.sendHeartbeat(link);
+
+            assertThat(outcome).isEqualTo(CloudLinkService.HeartbeatOutcome.REVOKED);
+            assertThat(link.getCatalogSource()).isEqualTo("BYOK");
+            verify(cloudLinkRepository, atLeastOnce()).save(argThat(s ->
+                    "BYOK".equals(s.getCatalogSource()) && "BYOK".equals(s.getLlmSource())));
+        }
+
+        @Test
+        @DisplayName("Registered link + cloud 404 also resets catalogSource to BYOK (same revocation as llmSource)")
+        void registeredHeartbeat404AlsoResetsCatalogSource() {
+            CeCloudLinkEntity link = registeredCloudLink();
+            link.setCatalogSource("CLOUD");
+            when(cloudLinkRepository.findByTenantId(TENANT_ID)).thenReturn(Optional.of(link));
+            when(cloudLinkRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            when(restTemplate.postForEntity(any(String.class), any(HttpEntity.class), eq(Void.class)))
+                    .thenThrow(HttpClientErrorException.create(HttpStatus.NOT_FOUND, "NOT FOUND",
+                            HttpHeaders.EMPTY, new byte[0], StandardCharsets.UTF_8));
+
+            CloudLinkService.HeartbeatOutcome outcome = service.sendHeartbeat(link);
+
+            assertThat(outcome).isEqualTo(CloudLinkService.HeartbeatOutcome.NOT_FOUND);
+            assertThat(link.getCatalogSource()).isEqualTo("BYOK");
+            verify(cloudLinkRepository, atLeastOnce()).save(argThat(s ->
+                    "BYOK".equals(s.getCatalogSource()) && "BYOK".equals(s.getLlmSource())));
         }
 
         /** A fully-registered CLOUD link with a still-valid cached token (skips OAuth refresh). */

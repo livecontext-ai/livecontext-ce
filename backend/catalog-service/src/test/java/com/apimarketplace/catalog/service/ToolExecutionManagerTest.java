@@ -46,6 +46,8 @@ class ToolExecutionManagerTest {
     private ToolResponseService toolResponseService;
     @Mock
     private CredentialClient credentialClient;
+    @Mock
+    private com.apimarketplace.catalog.service.relay.CeCatalogCloudRelay ceCatalogCloudRelay;
 
     private ToolExecutionManager executionManager;
     private ObjectMapper objectMapper;
@@ -63,9 +65,12 @@ class ToolExecutionManagerTest {
         com.apimarketplace.catalog.service.execution.BinaryResponseHandler binaryResponseHandler =
             new com.apimarketplace.catalog.service.execution.BinaryResponseHandler(objectMapper);
         executionManager = new ToolExecutionManager(toolContextService, apiService, objectMapper, responseShaper, nextActionBuilder, responseCache, toolNextHintRepository, toolResponseService, toolExecutionOrchestrator, binaryResponseHandler,
-                /* catalogBillingService */ null, credentialClient, /* apiRepository */ null);
+                /* catalogBillingService */ null, credentialClient, /* apiRepository */ null, ceCatalogCloudRelay);
         lenient().when(credentialClient.getCredentialStateVersion(anyString()))
             .thenReturn(CredentialClient.STATE_VERSION_UNAVAILABLE);
+        // Default: relay does not apply - normal local path proceeds.
+        lenient().when(ceCatalogCloudRelay.tryRelay(anyString(), any(), any(), any()))
+            .thenReturn(Optional.empty());
 
         // Default mock behavior for shaper - pass through data as-is, no shaping action.
         lenient().when(responseShaper.shape(any(), any(), any(), any()))
@@ -759,6 +764,107 @@ class ToolExecutionManagerTest {
             executionManager.executeTool(toolIdOrSlug, request, "user-1", null, "req-4");
 
             verify(responseCache).get(anyString(), anyMap());
+        }
+    }
+
+    /**
+     * CE cloud relay branch: when the relay applies (platform credentialSource, no local
+     * platform credential, cloud-linked install with CLOUD catalog source), the relayed
+     * response IS the tool result - no local execution, no local billing. When the relay
+     * does not apply (empty), the local path runs unchanged.
+     */
+    @Nested
+    @DisplayName("CE cloud relay branch")
+    class CeCloudRelayBranch {
+
+        private final String toolIdOrSlug = "telegram/send-message";
+
+        @Test
+        @DisplayName("relay returns a response - manager returns it WITHOUT executing apiService or billing")
+        void relayedResponseShortCircuitsLocalExecution() {
+            UUID toolId = UUID.randomUUID();
+            UUID apiId = UUID.randomUUID();
+            ToolContextService.ToolContext context = createToolContext(toolId, apiId, "SendMessage", "/send", "POST");
+            when(toolContextService.loadToolContext(toolIdOrSlug)).thenReturn(Optional.of(context));
+
+            ToolExecutionResponse relayed = ToolExecutionResponse.builder()
+                    .success(true)
+                    .result(Map.of("ok", true))
+                    .toolId(toolId.toString())
+                    .requestId("req-relay")
+                    .build();
+            ToolExecutionRequest request = ToolExecutionRequest.builder()
+                    .credentialSource("platform")
+                    .parameters(Map.of("chat_id", "1"))
+                    .build();
+            when(ceCatalogCloudRelay.tryRelay(toolIdOrSlug, request, "user-1", "req-relay"))
+                    .thenReturn(Optional.of(relayed));
+
+            ToolExecutionResponse response = executionManager.executeTool(
+                    toolIdOrSlug, request, "user-1", null, "req-relay");
+
+            assertThat(response).isSameAs(relayed);
+            verifyNoInteractions(apiService);
+            verify(responseCache, never()).get(anyString(), anyMap());
+            verify(responseCache, never()).put(anyString(), anyMap(), any());
+        }
+
+        @Test
+        @DisplayName("relay returns a FAILED response - still terminal, no local fallback execution")
+        void relayedFailureIsTerminal() {
+            UUID toolId = UUID.randomUUID();
+            UUID apiId = UUID.randomUUID();
+            ToolContextService.ToolContext context = createToolContext(toolId, apiId, "SendMessage", "/send", "POST");
+            when(toolContextService.loadToolContext(toolIdOrSlug)).thenReturn(Optional.of(context));
+
+            ToolExecutionResponse relayedFailure = ToolExecutionResponse.builder()
+                    .success(false)
+                    .error("Platform credentials via LiveContext Cloud require an active subscription on the linked cloud account.")
+                    .build();
+            when(ceCatalogCloudRelay.tryRelay(eq(toolIdOrSlug), any(), anyString(), anyString()))
+                    .thenReturn(Optional.of(relayedFailure));
+
+            ToolExecutionResponse response = executionManager.executeTool(
+                    toolIdOrSlug,
+                    ToolExecutionRequest.builder().credentialSource("platform").build(),
+                    "user-1", null, "req-x");
+
+            assertThat(response).isSameAs(relayedFailure);
+            verifyNoInteractions(apiService);
+        }
+
+        @Test
+        @DisplayName("relay returns empty - the normal local execution path proceeds")
+        void emptyRelayFallsThroughToLocalPath() {
+            UUID toolId = UUID.randomUUID();
+            UUID apiId = UUID.randomUUID();
+            ToolContextService.ToolContext context = createToolContext(toolId, apiId, "SendMessage", "/send", "POST");
+            when(toolContextService.loadToolContext(toolIdOrSlug)).thenReturn(Optional.of(context));
+            when(ceCatalogCloudRelay.tryRelay(anyString(), any(), any(), any()))
+                    .thenReturn(Optional.empty());
+            when(apiService.executeApiTool(anyString(), anyString(), any(JsonNode.class), anySet(), anyString()))
+                    .thenReturn(Map.of("success", true, "data", Map.of("ok", true)));
+
+            ToolExecutionResponse response = executionManager.executeTool(
+                    toolIdOrSlug,
+                    ToolExecutionRequest.builder().credentialSource("platform").build(),
+                    "user-1", null, "req-y");
+
+            assertThat(response.isSuccess()).isTrue();
+            verify(apiService).executeApiTool(anyString(), anyString(), any(JsonNode.class), anySet(), anyString());
+        }
+
+        @Test
+        @DisplayName("unknown tool still throws ToolNotFoundException locally - relay never consulted")
+        void unknownToolStillThrowsLocally() {
+            when(toolContextService.loadToolContext("nope")).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> executionManager.executeTool(
+                    "nope",
+                    ToolExecutionRequest.builder().credentialSource("platform").build(),
+                    "user-1", null, "req-z"))
+                    .isInstanceOf(ToolNotFoundException.class);
+            verifyNoInteractions(ceCatalogCloudRelay);
         }
     }
 }

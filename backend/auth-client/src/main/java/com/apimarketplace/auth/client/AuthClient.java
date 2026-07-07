@@ -11,6 +11,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestTemplate;
 
+import com.apimarketplace.auth.client.dto.CeLinkEntitlementsResult;
 import com.apimarketplace.auth.client.dto.OrgRestrictionDto;
 import com.apimarketplace.auth.client.dto.PublisherProfileDto;
 import com.apimarketplace.common.auth.UserSummaryDto;
@@ -157,6 +158,44 @@ public class AuthClient {
             log.warn("Failed to validate CE link installId={} userId={}: {}",
                     installId, userId, e.getMessage());
             return false;
+        }
+    }
+
+    /**
+     * Cloud-side subscription check for the CE catalog relay. Resolves the plan
+     * entitlements of the cloud account owning the given install's link. The
+     * caller is the authenticated cloud user, mirroring
+     * {@link #userOwnsActiveCeLink}. Fail-closed: any malformed id, transport
+     * failure, or non-2xx response yields {@link CeLinkEntitlementsResult#none()}
+     * ({@code planCode="__NONE__", hasSubscription=false}).
+     */
+    public CeLinkEntitlementsResult ceLinkEntitlements(String userId, String installId) {
+        if (userId == null || userId.isBlank() || installId == null || installId.isBlank()) {
+            return CeLinkEntitlementsResult.none();
+        }
+        try {
+            UUID.fromString(installId);
+        } catch (IllegalArgumentException invalidInstallId) {
+            return CeLinkEntitlementsResult.none();
+        }
+        String url = baseUrl + "/api/internal/auth/ce-link/" + installId + "/entitlements";
+        HttpEntity<Void> entity = new HttpEntity<>(buildHeaders(userId));
+        try {
+            ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
+                    url, HttpMethod.GET, entity,
+                    new ParameterizedTypeReference<>() {});
+            Map<String, Object> body = response.getBody();
+            if (!response.getStatusCode().is2xxSuccessful() || body == null) {
+                return CeLinkEntitlementsResult.none();
+            }
+            String planCode = body.get("planCode") instanceof String s && !s.isBlank()
+                    ? s : CeLinkEntitlementsResult.NO_SUBSCRIPTION;
+            boolean hasSubscription = Boolean.TRUE.equals(body.get("hasSubscription"));
+            return new CeLinkEntitlementsResult(planCode, hasSubscription);
+        } catch (Exception e) {
+            log.warn("Failed to resolve CE link entitlements installId={} userId={}: {}",
+                    installId, userId, e.getMessage());
+            return CeLinkEntitlementsResult.none();
         }
     }
 

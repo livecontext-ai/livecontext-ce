@@ -3113,6 +3113,17 @@
       "unchanged": "Inalterado",
       "updated": "Atualizado"
     },
+    "catalogSource": {
+      "label": "Credenciais de integração",
+      "cloud": "Cloud",
+      "local": "Chaves locais",
+      "cloudHint": "As chamadas de integração passam pela sua conta vinculada do LiveContext Cloud e usam as credenciais de plataforma dela. As solicitações transitam pela nuvem e uma pequena margem em créditos é cobrada lá a cada chamada.",
+      "localHint": "As credenciais de integração são configuradas e usadas localmente nesta instalação.",
+      "subscriptionRequired": "A opção Cloud exige uma assinatura paga ativa na sua conta de nuvem vinculada.",
+      "viewPlans": "Ver planos",
+      "linkRequired": "Vincule uma conta Cloud antes de mudar para Cloud.",
+      "saveError": "Falha ao atualizar a origem das credenciais de integração."
+    },
     "cloudSource": {
       "apiKeys": "Chaves de API",
       "byokHint": "As chamadas a modelos de API usam as chaves configuradas nesta instância.",
@@ -4522,6 +4533,8 @@
         "logsCustom": "Retenção de logs personalizada",
         "versioning": "Versionamento de workflows",
         "apiAccess": "Acesso à API",
+        "cePlatformCreds": "Credenciais de integração gerenciadas para auto-hospedado (via vínculo com a nuvem)",
+        "cePlatformCredsTooltip": "Uma instalação auto-hospedada vinculada à nuvem pode executar integrações de terceiros com as credenciais de plataforma do LiveContext, sem precisar de suas próprias chaves de API. Uma pequena margem em créditos é aplicada a cada chamada.",
         "priorityExecution": "Execução prioritária",
         "executionSearch": "Busca de execuções",
         "analyticsBasic": "Análises básicas",
@@ -6963,6 +6976,7 @@
           "infoOptional": "Opcional. A aprovação também continua disponível na aplicação.",
           "enableAria": "Ativar a delegação por canal externo",
           "channelLabel": "Canal",
+          "credentialHint": "Opcional. Deixe vazio para enviar com sua credencial padrão do Telegram, ou selecione uma para usar um bot específico.",
           "chatIdLabel": "ID do chat",
           "chatIdHint": "ID do chat ou grupo de destino. Suporta expressões '{{...}}'.",
           "messageLabel": "Modelo de mensagem",

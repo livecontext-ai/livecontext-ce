@@ -332,7 +332,15 @@ function registerUserApprovalNode(
   if (rawDelegation && typeof rawDelegation === 'object'
     && typeof rawDelegation.channel === 'string' && rawDelegation.channel.trim() !== '') {
     delegation = { channel: rawDelegation.channel };
-    if (typeof rawDelegation.credentialId === 'number') delegation.credentialId = rawDelegation.credentialId;
+    // Tolerate a numeric-string credentialId ("40") in node data: emit a NUMBER
+    // (the plan contract), drop only true non-numerics. Mirrors the importer.
+    const rawCredentialId = rawDelegation.credentialId;
+    const credentialId = typeof rawCredentialId === 'number'
+      ? rawCredentialId
+      : typeof rawCredentialId === 'string' && rawCredentialId.trim() !== ''
+        ? Number(rawCredentialId)
+        : Number.NaN;
+    if (Number.isFinite(credentialId)) delegation.credentialId = credentialId;
     if (typeof rawDelegation.chatId === 'string' && rawDelegation.chatId.trim() !== '') {
       delegation.chatId = rawDelegation.chatId;
     }

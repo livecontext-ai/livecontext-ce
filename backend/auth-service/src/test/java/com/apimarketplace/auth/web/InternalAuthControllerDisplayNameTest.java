@@ -2,6 +2,7 @@ package com.apimarketplace.auth.web;
 
 import com.apimarketplace.auth.repository.OrganizationMemberRepository;
 import com.apimarketplace.auth.repository.UserOnboardingRepository;
+import com.apimarketplace.auth.service.CeLinkEntitlementsService;
 import com.apimarketplace.auth.service.CeLinkService;
 import com.apimarketplace.auth.service.CreditConsumptionDeadLetterService;
 import com.apimarketplace.auth.service.ModelPricingService;
@@ -49,6 +50,7 @@ class InternalAuthControllerDisplayNameTest {
     @Mock private PlanLimitService planLimitService;
     @Mock private OrganizationMemberRepository memberRepository;
     @Mock private ObjectProvider<CeLinkService> ceLinkServiceProvider;
+    @Mock private ObjectProvider<CeLinkEntitlementsService> ceLinkEntitlementsServiceProvider;
 
     private InternalAuthController controller;
 
@@ -56,7 +58,8 @@ class InternalAuthControllerDisplayNameTest {
     void setUp() {
         controller = new InternalAuthController(
                 restrictionService, deadLetterService, onboardingRepository, onboardingService,
-                modelPricingService, planLimitService, memberRepository, ceLinkServiceProvider);
+                modelPricingService, planLimitService, memberRepository, ceLinkServiceProvider,
+                ceLinkEntitlementsServiceProvider);
     }
 
     @Test

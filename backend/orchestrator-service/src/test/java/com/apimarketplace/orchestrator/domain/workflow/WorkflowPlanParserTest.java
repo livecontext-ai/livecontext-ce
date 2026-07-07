@@ -214,6 +214,41 @@ class WorkflowPlanParserTest {
             assertEquals("", delegation.messageTemplate());
             assertTrue(delegation.allowedUserIds().isEmpty());
         }
+
+        @Test
+        @DisplayName("regression: numeric-string credentialId (LLM-quoted \"40\") is coerced, not dropped")
+        void numericStringCredentialIdCoerced() {
+            // Pre-fix the instanceof Number check silently dropped "40": the plan said
+            // delegation was configured, but at run time no credential reached the
+            // notifier and no Telegram message was ever sent, with no visible error.
+            Map<String, Object> approvalData = new HashMap<>();
+            approvalData.put("delegation", Map.of(
+                "channel", "telegram",
+                "credentialId", "40",
+                "chatId", "123"));
+
+            WorkflowPlan plan = parseApprovalPlan(approvalData);
+
+            Core.ApprovalDelegation delegation = plan.getCores().get(0).approvalConfig().delegation();
+            assertNotNull(delegation);
+            assertEquals(40L, delegation.credentialId());
+        }
+
+        @Test
+        @DisplayName("Non-numeric credentialId string parses to null (delegation kept, validator flags it)")
+        void nonNumericCredentialIdParsesToNull() {
+            Map<String, Object> approvalData = new HashMap<>();
+            approvalData.put("delegation", Map.of(
+                "channel", "telegram",
+                "credentialId", "not-a-number",
+                "chatId", "123"));
+
+            WorkflowPlan plan = parseApprovalPlan(approvalData);
+
+            Core.ApprovalDelegation delegation = plan.getCores().get(0).approvalConfig().delegation();
+            assertNotNull(delegation);
+            assertNull(delegation.credentialId());
+        }
     }
 
     @Nested

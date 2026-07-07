@@ -275,14 +275,20 @@ public class CoreValidator implements WorkflowValidator {
             result.addError("APPROVAL_DELEGATION_UNKNOWN_CHANNEL", nodeId,
                     "Approval '" + label + "' delegates to unknown channel '" + channel + "'. " +
                     "Only 'telegram' is supported. Fix: workflow(action='modify', node='" + label + "', " +
-                    "params={delegation: {channel: 'telegram', credentialId: <id>, chatId: '<chat id>'}}).");
+                    "params={delegation: {channel: 'telegram', chatId: '<chat id>'}}).");
             return;
         }
-        if (!(delegation.get("credentialId") instanceof Number)) {
-            result.addWarning("APPROVAL_DELEGATION_NO_CREDENTIAL", nodeId,
-                    "Approval '" + label + "' delegates to Telegram without a credentialId (the numeric id " +
-                    "of the user's Telegram bot credential). Without it no Telegram message is sent; the " +
-                    "approval stays resolvable in-app and via workflow(action='resolve_approval').");
+        // credentialId is OPTIONAL: absent means the send uses the user's own Telegram
+        // credential automatically (same resolution as a telegram step with no explicit
+        // credential). Only a PRESENT-but-non-numeric value is flagged: it will be
+        // ignored at run time, which is almost never what the author meant.
+        Object credentialId = delegation.get("credentialId");
+        if (credentialId != null && !isNumericId(credentialId)) {
+            result.addWarning("APPROVAL_DELEGATION_INVALID_CREDENTIAL", nodeId,
+                    "Approval '" + label + "' delegates to Telegram with a non-numeric credentialId ('" +
+                    credentialId + "'). The value will be ignored and the send falls back to the user's " +
+                    "own Telegram credential. Set a numeric credential id to pin a specific bot, or " +
+                    "remove the field to use the default.");
         }
         if (!(delegation.get("chatId") instanceof String cid) || cid.isBlank()) {
             result.addWarning("APPROVAL_DELEGATION_NO_CHAT_ID", nodeId,
@@ -300,6 +306,24 @@ public class CoreValidator implements WorkflowValidator {
     }
 
     // ===== Helpers =====
+
+    /**
+     * True for a Number or a numeric string. LLMs routinely quote numeric ids
+     * ("credentialId": "40"); the creator and plan parser coerce that shape, so
+     * the validator must accept it too instead of raising a misleading warning.
+     */
+    private static boolean isNumericId(Object value) {
+        if (value instanceof Number) return true;
+        if (value instanceof String s && !s.isBlank()) {
+            try {
+                Long.parseLong(s.trim());
+                return true;
+            } catch (NumberFormatException ignored) {
+                return false;
+            }
+        }
+        return false;
+    }
 
     private boolean hasInput(Map<String, Object> cn, String type) {
         // Check params.input

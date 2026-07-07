@@ -4,10 +4,10 @@ import * as React from 'react';
 import { Info } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { ExpressionEditor } from '@/components/ui/expression-editor';
 import type { ApprovalDelegation } from '../../../types';
 import { CredentialSection } from '../CredentialSection';
 
@@ -20,10 +20,14 @@ const CHAT_ID_PLACEHOLDER = '-100123456789 or {{trigger:form.output.chat_id}}';
 /** Syntax example for the allowed user ids (code/syntax token, intentionally not translated). */
 const ALLOWED_USER_IDS_PLACEHOLDER = '123456789, 987654321';
 
-/** Telegram bot credential requirement passed to CredentialSection (same pattern as SMTP/SSH). */
+/**
+ * Telegram bot credential descriptor passed to CredentialSection (same pattern as SMTP/SSH).
+ * OPTIONAL: when no credentialId is configured, the backend falls back to the user's own
+ * Telegram credential (catalog implicit resolution, same as an mcp:telegram step).
+ */
 const TELEGRAM_CREDENTIAL = [{
   credentialName: 'telegram',
-  isRequired: true,
+  isRequired: false,
   displayName: 'Telegram',
   description: 'Telegram bot credential used to send the approval message',
   credentialType: 'telegram',
@@ -69,8 +73,12 @@ export function ApprovalDelegationSection({
     handleDelegationChange(checked ? { channel: 'telegram' } : undefined);
   }, [isRunMode, handleDelegationChange]);
 
+  // Defensive Number() coercion: some callers hand a numeric STRING id (e.g. "40").
+  // The plan contract stores credentialId as a number, so coerce here and drop
+  // only true non-numerics (matching the importer/exporter tolerance).
   const handleCredentialSelect = React.useCallback((credentialId: number | null) => {
-    patch({ credentialId: credentialId ?? undefined });
+    const coerced = credentialId == null ? Number.NaN : Number(credentialId);
+    patch({ credentialId: Number.isFinite(coerced) ? coerced : undefined });
   }, [patch]);
 
   // Local text buffer for the comma-separated ids: a plain join/parse controlled
@@ -123,9 +131,9 @@ export function ApprovalDelegationSection({
 
       {enabled && (
         <div className="flex flex-col gap-3">
-          {/* Channel (v1: Telegram only) */}
+          {/* Channel (v1: Telegram only) - required while the section is enabled */}
           <div className="space-y-1">
-            <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('channelLabel')}</span>
+            <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('channelLabel')} <span className="text-red-500">*</span></span>
             <Select
               value={approvalDelegation?.channel ?? 'telegram'}
               onValueChange={(value) => patch({ channel: value as 'telegram' })}
@@ -140,37 +148,40 @@ export function ApprovalDelegationSection({
             </Select>
           </div>
 
-          {/* Telegram bot credential - same pattern as SMTP/SSH nodes */}
-          <CredentialSection
-            toolCredentials={TELEGRAM_CREDENTIAL}
-            selectedCredentialId={approvalDelegation?.credentialId ?? null}
-            onCredentialSelect={handleCredentialSelect}
-            integration="telegram"
-            isRunMode={isRunMode}
-          />
-
-          {/* Chat id (template-capable) */}
+          {/* Telegram bot credential (optional) - blank = the user's default Telegram credential */}
           <div className="space-y-1">
-            <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('chatIdLabel')}</span>
-            <Input
-              type="text"
+            <CredentialSection
+              toolCredentials={TELEGRAM_CREDENTIAL}
+              selectedCredentialId={approvalDelegation?.credentialId ?? null}
+              onCredentialSelect={handleCredentialSelect}
+              integration="telegram"
+              isRunMode={isRunMode}
+            />
+            <p className="text-xs text-slate-400 dark:text-slate-500">{t('credentialHint')}</p>
+          </div>
+
+          {/* Chat id (template-capable, required) - same expression editor as contextTemplate */}
+          <div className="space-y-1">
+            <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('chatIdLabel')} <span className="text-red-500">*</span></span>
+            <ExpressionEditor
               value={approvalDelegation?.chatId ?? ''}
-              onChange={(event) => patch({ chatId: event.target.value })}
-              className="w-full"
+              onChange={(value) => patch({ chatId: value })}
               placeholder={CHAT_ID_PLACEHOLDER}
+              className="w-full"
+              isRequired
               readOnly={isRunMode}
             />
             <p className="text-xs text-slate-400 dark:text-slate-500">{t('chatIdHint')}</p>
           </div>
 
-          {/* Message template (blank = resolved approval context) */}
+          {/* Message template (template-capable, optional; blank = resolved approval context) */}
           <div className="space-y-1">
             <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('messageLabel')}</span>
-            <Textarea
+            <ExpressionEditor
               value={approvalDelegation?.messageTemplate ?? ''}
-              onChange={(event) => patch({ messageTemplate: event.target.value })}
-              className="w-full"
+              onChange={(value) => patch({ messageTemplate: value })}
               placeholder={t('messagePlaceholder')}
+              className="w-full"
               readOnly={isRunMode}
             />
           </div>

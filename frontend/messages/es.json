@@ -3113,6 +3113,17 @@
       "unchanged": "Sin cambios",
       "updated": "Actualizado"
     },
+    "catalogSource": {
+      "label": "Credenciales de integración",
+      "cloud": "Cloud",
+      "local": "Claves locales",
+      "cloudHint": "Las llamadas de integración pasan por tu cuenta vinculada de LiveContext Cloud y usan sus credenciales de plataforma. Las solicitudes transitan por la nube y allí se factura un pequeño recargo en créditos por llamada.",
+      "localHint": "Las credenciales de integración se configuran y se usan localmente en esta instalación.",
+      "subscriptionRequired": "La opción Cloud requiere una suscripción de pago activa en tu cuenta de nube vinculada.",
+      "viewPlans": "Ver planes",
+      "linkRequired": "Vincula una cuenta de Cloud antes de cambiar a Cloud.",
+      "saveError": "No se pudo actualizar el origen de las credenciales de integración."
+    },
     "cloudSource": {
       "apiKeys": "Claves de API",
       "byokHint": "Las llamadas a modelos de API usan las claves configuradas en esta instancia.",
@@ -4522,6 +4533,8 @@
         "logsCustom": "Retención de registros personalizada",
         "versioning": "Versionado de flujos de trabajo",
         "apiAccess": "Acceso a la API",
+        "cePlatformCreds": "Credenciales de integración gestionadas para autoalojado (mediante enlace a la nube)",
+        "cePlatformCredsTooltip": "Una instalación autoalojada vinculada a la nube puede ejecutar integraciones de terceros con las credenciales de plataforma de LiveContext, sin necesitar tus propias claves de API. Se aplica un pequeño recargo en créditos por llamada.",
         "priorityExecution": "Ejecución prioritaria",
         "executionSearch": "Búsqueda de ejecuciones",
         "analyticsBasic": "Analíticas básicas",
@@ -6963,6 +6976,7 @@
           "infoOptional": "Opcional. La aprobación también sigue disponible en la aplicación.",
           "enableAria": "Activar la delegación por canal externo",
           "channelLabel": "Canal",
+          "credentialHint": "Opcional. Déjalo vacío para enviar con tu credencial de Telegram predeterminada, o selecciona una para usar un bot específico.",
           "chatIdLabel": "ID del chat",
           "chatIdHint": "ID del chat o grupo de destino. Admite expresiones '{{...}}'.",
           "messageLabel": "Plantilla de mensaje",

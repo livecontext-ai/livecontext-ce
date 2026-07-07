@@ -91,7 +91,7 @@ public class TelegramApprovalNotifier implements ApprovalChannelNotifier {
             String token = generateToken();
             int inserted = deliveryRepository.insertPendingIfAbsent(
                     signal.getId(), CHANNEL_ID, token,
-                    run.getTenantId(), signal.getRunId(), signal.getNodeId(),
+                    run.getTenantId(), run.getOrgId(), signal.getRunId(), signal.getNodeId(),
                     signal.getItemId() != null ? signal.getItemId() : "0", signal.getEpoch(),
                     config.credentialId(), config.chatId(),
                     toJsonOrNull(config.allowedUserIds()), Instant.now());
@@ -105,8 +105,13 @@ public class TelegramApprovalNotifier implements ApprovalChannelNotifier {
             }
             ApprovalChannelDeliveryEntity delivery = deliveryOpt.get();
 
-            if (config.credentialId() == null || config.chatId() == null || config.chatId().isBlank()) {
-                fail(delivery, "Delegation misconfigured: missing credentialId or chatId");
+            // Only chatId is truly required. credentialId is optional: when absent the
+            // catalog call carries NO credential markers and the catalog applies its
+            // implicit fallback (the tenant's own telegram credential), exactly like an
+            // mcp:telegram step with no explicit credential selected. This is the common
+            // agent-built shape: the builder LLM rarely knows the numeric credential id.
+            if (config.chatId() == null || config.chatId().isBlank()) {
+                fail(delivery, "Delegation misconfigured: missing chatId");
                 return;
             }
             ToolsGateway gateway = toolsGatewayProvider.getIfAvailable();
@@ -184,8 +189,7 @@ public class TelegramApprovalNotifier implements ApprovalChannelNotifier {
      */
     private void editMessage(ApprovalChannelDeliveryEntity delivery, String verdict) {
         try {
-            if (delivery.getMessageId() == null || delivery.getChatId() == null
-                    || delivery.getCredentialId() == null) {
+            if (delivery.getMessageId() == null || delivery.getChatId() == null) {
                 return;
             }
             ToolsGateway gateway = toolsGatewayProvider.getIfAvailable();
@@ -217,9 +221,6 @@ public class TelegramApprovalNotifier implements ApprovalChannelNotifier {
     void answerCallbackQuery(ApprovalChannelDeliveryEntity delivery, String callbackQueryId,
                              String text, boolean showAlert) {
         try {
-            if (delivery.getCredentialId() == null) {
-                return;
-            }
             ToolsGateway gateway = toolsGatewayProvider.getIfAvailable();
             if (gateway == null) {
                 return;
@@ -286,7 +287,17 @@ public class TelegramApprovalNotifier implements ApprovalChannelNotifier {
         };
     }
 
+    /**
+     * Credential markers for the catalog call. Null when no explicit credential is
+     * pinned: the catalog then applies its implicit fallback (the tenant's own
+     * telegram credential), the same resolution an mcp:telegram step gets when the
+     * author selected no credential. An explicit id pins a specific bot (strict:
+     * the catalog will NOT fall back past it).
+     */
     private Map<String, Object> userCredential(Long credentialId) {
+        if (credentialId == null) {
+            return null;
+        }
         return Map.of(
                 "__credentialSource__", "user",
                 "__selectedCredentialId__", credentialId);

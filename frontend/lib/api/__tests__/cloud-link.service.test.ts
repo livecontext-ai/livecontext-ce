@@ -13,6 +13,7 @@ vi.mock('@/lib/api/api-client', () => ({
 }));
 
 const mockGet = vi.mocked(apiClient.get);
+const mockPut = vi.mocked(apiClient.put);
 
 describe('CloudLinkService.getCloudUsageSummary', () => {
   beforeEach(() => {
@@ -83,5 +84,29 @@ describe('CloudLinkService.getCloudUsageHistory', () => {
     const result = await cloudLinkService.getCloudUsageHistory();
 
     expect(result).toBeNull();
+  });
+});
+
+describe('CloudLinkService catalog (integration credential) source', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('reads the integration credential source from the catalog-source endpoint', async () => {
+    mockGet.mockResolvedValue({ source: 'CLOUD' });
+
+    const result = await cloudLinkService.getCatalogSource();
+
+    expect(result).toBe('CLOUD');
+    expect(mockGet).toHaveBeenCalledWith('/cloud-link/catalog-source');
+  });
+
+  it('saves the integration credential source via PUT and returns the persisted value', async () => {
+    mockPut.mockResolvedValue({ source: 'BYOK' });
+
+    const result = await cloudLinkService.setCatalogSource('BYOK');
+
+    expect(result).toBe('BYOK');
+    expect(mockPut).toHaveBeenCalledWith('/cloud-link/catalog-source', { source: 'BYOK' });
   });
 });

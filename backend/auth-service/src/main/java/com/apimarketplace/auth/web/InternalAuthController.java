@@ -4,7 +4,9 @@ import com.apimarketplace.auth.domain.UserOnboarding;
 import com.apimarketplace.auth.repository.OrganizationMemberRepository;
 import com.apimarketplace.auth.repository.UserOnboardingRepository;
 import com.apimarketplace.common.auth.UserSummaryDto;
+import com.apimarketplace.auth.dto.CeLinkEntitlements;
 import com.apimarketplace.auth.service.CreditConsumptionDeadLetterService;
+import com.apimarketplace.auth.service.CeLinkEntitlementsService;
 import com.apimarketplace.auth.service.CeLinkService;
 import com.apimarketplace.auth.service.ModelPricingService;
 import com.apimarketplace.auth.service.OnboardingService;
@@ -49,6 +51,10 @@ public class InternalAuthController {
     // /org-restrictions), so the dependency is OPTIONAL: in CE (auth.mode=embedded) the bean
     // is absent and the /ce-link active probe returns active=false (CE has no cloud link).
     private final ObjectProvider<CeLinkService> ceLinkServiceProvider;
+    // Same Cloud-only optionality as CeLinkService: in CE (auth.mode=embedded) the
+    // bean is absent and the /ce-link entitlements probe returns the no-subscription
+    // shape instead of failing context startup.
+    private final ObjectProvider<CeLinkEntitlementsService> ceLinkEntitlementsServiceProvider;
 
     public InternalAuthController(OrgRestrictionQueryService restrictionService,
                                   CreditConsumptionDeadLetterService deadLetterService,
@@ -57,7 +63,8 @@ public class InternalAuthController {
                                   ModelPricingService modelPricingService,
                                   PlanLimitService planLimitService,
                                   OrganizationMemberRepository memberRepository,
-                                  ObjectProvider<CeLinkService> ceLinkServiceProvider) {
+                                  ObjectProvider<CeLinkService> ceLinkServiceProvider,
+                                  ObjectProvider<CeLinkEntitlementsService> ceLinkEntitlementsServiceProvider) {
         this.restrictionService = restrictionService;
         this.deadLetterService = deadLetterService;
         this.onboardingRepository = onboardingRepository;
@@ -66,6 +73,7 @@ public class InternalAuthController {
         this.planLimitService = planLimitService;
         this.memberRepository = memberRepository;
         this.ceLinkServiceProvider = ceLinkServiceProvider;
+        this.ceLinkEntitlementsServiceProvider = ceLinkEntitlementsServiceProvider;
     }
 
     /**
@@ -99,6 +107,48 @@ public class InternalAuthController {
         return ResponseEntity.ok(Map.of(
                 "active", active,
                 "installId", installId.toString()));
+    }
+
+    /**
+     * Subscription entitlements of the cloud account owning a CE link. Consumed by
+     * the cloud-side CE catalog relay ({@code AuthClient.ceLinkEntitlements}) to
+     * gate relayed tool executions on an ACTIVE PAID subscription.
+     *
+     * <p>Always 200. Fail-closed shape ({@code planCode="__NONE__"},
+     * {@code hasSubscription=false}) for: absent {@code CeLinkEntitlementsService}
+     * (CE, {@code auth.mode=embedded}), unknown/foreign/revoked install, malformed
+     * user id, or malformed install id. Never 500 on bad input.
+     */
+    @GetMapping("/ce-link/{installId}/entitlements")
+    public ResponseEntity<Map<String, Object>> ceLinkEntitlements(
+            @RequestHeader("X-User-ID") String userId,
+            @PathVariable String installId) {
+        CeLinkEntitlements entitlements = resolveEntitlements(userId, installId);
+        String planCode = entitlements.planCode();
+        boolean hasSubscription = planCode != null
+                && !PlanLimitService.NO_SUBSCRIPTION.equals(planCode)
+                && !"FREE".equals(planCode);
+        Map<String, Object> body = new HashMap<>();
+        body.put("planCode", planCode != null ? planCode : PlanLimitService.NO_SUBSCRIPTION);
+        body.put("hasSubscription", hasSubscription);
+        return ResponseEntity.ok(body);
+    }
+
+    private CeLinkEntitlements resolveEntitlements(String userId, String installId) {
+        CeLinkEntitlementsService entitlementsService = ceLinkEntitlementsServiceProvider.getIfAvailable();
+        if (entitlementsService == null) {
+            return CeLinkEntitlements.none();
+        }
+        Long callerUserId;
+        UUID installUuid;
+        try {
+            callerUserId = Long.parseLong(userId);
+            installUuid = UUID.fromString(installId);
+        } catch (RuntimeException malformedInput) {
+            // Malformed caller id or install id → same fail-closed shape, never 500.
+            return CeLinkEntitlements.none();
+        }
+        return entitlementsService.entitlementsForCaller(callerUserId, installUuid);
     }
 
     /**

@@ -38,6 +38,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -121,7 +122,7 @@ class TelegramApprovalNotifierTest {
     private ApprovalChannelDeliveryEntity stubOwnedInsert() {
         ApprovalChannelDeliveryEntity delivery = pendingDelivery();
         when(deliveryRepository.insertPendingIfAbsent(any(), anyString(), anyString(), any(),
-                any(), any(), any(), anyInt(), any(), any(), any(), any())).thenReturn(1);
+                any(), any(), any(), any(), anyInt(), any(), any(), any(), any())).thenReturn(1);
         when(deliveryRepository.findByCallbackToken(anyString())).thenReturn(Optional.of(delivery));
         return delivery;
     }
@@ -204,7 +205,7 @@ class TelegramApprovalNotifierTest {
 
             ArgumentCaptor<String> tokenCaptor = ArgumentCaptor.forClass(String.class);
             verify(deliveryRepository).insertPendingIfAbsent(eq(55L), eq("telegram"),
-                    tokenCaptor.capture(), eq(TENANT_ID), eq(RUN_ID), eq(NODE_ID),
+                    tokenCaptor.capture(), eq(TENANT_ID), isNull(), eq(RUN_ID), eq(NODE_ID),
                     eq("0"), eq(0), eq(CREDENTIAL_ID), eq(CHAT_ID), any(), any());
             verify(toolsGateway).executeTool(any(ToolRef.class), paramsCaptor.capture(),
                     anyString(), anyMap());
@@ -261,7 +262,7 @@ class TelegramApprovalNotifierTest {
         @DisplayName("idempotency: insert returning 0 (replay/replica race) sends NOTHING")
         void insertConflictNeverSends() {
             when(deliveryRepository.insertPendingIfAbsent(any(), anyString(), anyString(), any(),
-                    any(), any(), any(), anyInt(), any(), any(), any(), any())).thenReturn(0);
+                    any(), any(), any(), any(), anyInt(), any(), any(), any(), any())).thenReturn(0);
 
             notifier.notifyPending(signal(), config("msg"), run(), null);
 
@@ -270,17 +271,58 @@ class TelegramApprovalNotifierTest {
         }
 
         @Test
-        @DisplayName("missing credentialId marks the delivery FAILED without sending")
-        void missingCredentialIdFailsWithoutSend() {
+        @DisplayName("regression: missing credentialId sends WITHOUT credential markers (catalog falls back to the user's own Telegram credential)")
+        void missingCredentialIdSendsWithDefaultCredentialFallback() {
+            // Pre-fix this shape (the common agent-built one: the builder LLM rarely
+            // knows the numeric credential id) hard-failed the delivery and no
+            // Telegram message was ever sent, even though the tenant had a perfectly
+            // usable default telegram credential (first live incident, 2026-07-07).
             ApprovalChannelDeliveryEntity delivery = stubOwnedInsert();
+            when(toolsGatewayProvider.getIfAvailable()).thenReturn(toolsGateway);
+            when(toolsGateway.executeTool(any(ToolRef.class), anyMap(), anyString(), isNull()))
+                    .thenReturn(sendSuccess(123));
 
             notifier.notifyPending(signal(),
                     new ApprovalDelegationConfig("telegram", null, CHAT_ID, "msg", List.of()), run(), null);
 
-            verify(toolsGateway, never()).executeTool(any(ToolRef.class), anyMap(), anyString(), anyMap());
-            assertThat(delivery.getStatus()).isEqualTo(DeliveryStatus.FAILED);
-            assertThat(delivery.getError()).contains("credentialId");
-            verify(deliveryRepository).save(delivery);
+            verify(toolsGateway).executeTool(
+                    eq(new ToolRef("telegram/telegram-send-message", 1)),
+                    anyMap(), eq(TENANT_ID), isNull());
+            assertThat(delivery.getStatus()).isEqualTo(DeliveryStatus.SENT);
+            assertThat(delivery.getMessageId()).isEqualTo("123");
+        }
+
+        @Test
+        @DisplayName("the run's workspace id is persisted on the delivery row (org-scoped edits and fallback later)")
+        void orgIdPersistedOnDeliveryRow() {
+            stubOwnedInsert();
+            when(toolsGatewayProvider.getIfAvailable()).thenReturn(toolsGateway);
+            when(toolsGateway.executeTool(any(ToolRef.class), anyMap(), anyString(), anyMap()))
+                    .thenReturn(sendSuccess(123));
+            WorkflowRunEntity orgRun = run();
+            orgRun.setOrganizationId("org-7");
+
+            notifier.notifyPending(signal(), config("msg"), orgRun, null);
+
+            verify(deliveryRepository).insertPendingIfAbsent(eq(55L), eq("telegram"),
+                    anyString(), eq(TENANT_ID), eq("org-7"), eq(RUN_ID), eq(NODE_ID),
+                    eq("0"), eq(0), eq(CREDENTIAL_ID), eq(CHAT_ID), any(), any());
+        }
+
+        @Test
+        @DisplayName("an explicit credentialId still pins the credential markers on the send")
+        void explicitCredentialIdStillPinsMarkers() {
+            stubOwnedInsert();
+            when(toolsGatewayProvider.getIfAvailable()).thenReturn(toolsGateway);
+            when(toolsGateway.executeTool(any(ToolRef.class), anyMap(), anyString(), anyMap()))
+                    .thenReturn(sendSuccess(123));
+
+            notifier.notifyPending(signal(), config("msg"), run(), null);
+
+            verify(toolsGateway).executeTool(any(ToolRef.class), anyMap(), eq(TENANT_ID), billingCaptor.capture());
+            assertThat(billingCaptor.getValue())
+                    .containsEntry("__credentialSource__", "user")
+                    .containsEntry("__selectedCredentialId__", CREDENTIAL_ID);
         }
 
         @Test

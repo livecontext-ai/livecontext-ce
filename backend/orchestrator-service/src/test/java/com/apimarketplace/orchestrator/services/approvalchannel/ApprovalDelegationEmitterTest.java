@@ -172,6 +172,62 @@ class ApprovalDelegationEmitterTest {
             assertThat(errorCount("UnknownChannel")).isZero();
         }
 
+        @Test
+        @DisplayName("regression: the run's workspace scope is bound around notifyPending (org-shared credential fallback) and restored after")
+        void orgScopeBoundAroundNotifyPending() {
+            // Pre-fix this async thread carried NO org context, so the catalog's
+            // default-credential fallback resolved only PERSONAL credentials and an
+            // org-workspace run silently missed its org-shared Telegram credential.
+            SignalWaitEntity signal = signalWithConfig(delegatedConfig("telegram"));
+            WorkflowRunEntity run = runWithTenant(TENANT_ID);
+            run.setOrganizationId("org-9");
+            when(signalWaitRepository.findById(SIGNAL_ID)).thenReturn(Optional.of(signal));
+            when(registry.forChannel("telegram")).thenReturn(Optional.of(notifier));
+            when(workflowRunRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(run));
+            java.util.concurrent.atomic.AtomicReference<String> orgSeenDuringSend =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            org.mockito.Mockito.doAnswer(inv -> {
+                orgSeenDuringSend.set(
+                        com.apimarketplace.common.web.TenantResolver.currentRequestOrganizationId());
+                return null;
+            }).when(notifier).notifyPending(any(), any(), any(), any());
+
+            emitter.onApprovalPending(pendingEvent());
+
+            assertThat(orgSeenDuringSend.get()).isEqualTo("org-9");
+            assertThat(com.apimarketplace.common.web.TenantResolver.currentRequestOrganizationId())
+                    .as("the org binding must not leak past the dispatch")
+                    .isNull();
+        }
+
+        @Test
+        @DisplayName("the delivery's workspace scope is bound around onResolved (post-resolution edit)")
+        void orgScopeBoundAroundOnResolved() {
+            SignalWaitEntity signal = signalWithConfig(delegatedConfig("telegram"));
+            signal.setResolution(com.apimarketplace.orchestrator.domain.execution.SignalResolution.APPROVED);
+            ApprovalChannelDeliveryEntity delivery = new ApprovalChannelDeliveryEntity();
+            delivery.setChannel("telegram");
+            delivery.setOrgId("org-7");
+            when(deliveryRepository.findBySignalWaitIdInAndStatus(
+                    java.util.List.of(SIGNAL_ID),
+                    ApprovalChannelDeliveryEntity.DeliveryStatus.SENT))
+                    .thenReturn(java.util.List.of(delivery));
+            when(registry.forChannel("telegram")).thenReturn(Optional.of(notifier));
+            java.util.concurrent.atomic.AtomicReference<String> orgSeenDuringEdit =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            org.mockito.Mockito.doAnswer(inv -> {
+                orgSeenDuringEdit.set(
+                        com.apimarketplace.common.web.TenantResolver.currentRequestOrganizationId());
+                return null;
+            }).when(notifier).onResolved(any(), any(), any());
+
+            emitter.onSignalResolved(new com.apimarketplace.orchestrator.execution.v2.services.SignalResolvedEvent(
+                    this, signal));
+
+            assertThat(orgSeenDuringEdit.get()).isEqualTo("org-7");
+            assertThat(com.apimarketplace.common.web.TenantResolver.currentRequestOrganizationId()).isNull();
+        }
+
         // ── M2 regression: workflow-name resolution must NEVER navigate the detached
         // run's lazy workflow proxy (async thread, no session). Pre-fix, the notifier
         // read run.getWorkflow().getName() and a LazyInitializationException was

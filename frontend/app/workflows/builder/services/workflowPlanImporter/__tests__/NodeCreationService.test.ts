@@ -331,7 +331,7 @@ describe('NodeCreationService - user_approval round-trip passthrough', () => {
       approval: {
         delegation: {
           channel: 'telegram',
-          credentialId: '123',
+          credentialId: 'not-a-number',
           chatId: '   ',
           messageTemplate: '',
           allowedUserIds: ['', 42, null, '12345678'],
@@ -342,6 +342,33 @@ describe('NodeCreationService - user_approval round-trip passthrough', () => {
       channel: 'telegram',
       allowedUserIds: ['12345678'],
     });
+  });
+
+  it('coerces a numeric-string delegation credentialId ("40") to a NUMBER', () => {
+    const node = createApprovalNode({
+      type: 'approval',
+      label: 'Review',
+      approval: {
+        delegation: { channel: 'telegram', credentialId: '40', chatId: '-100123' },
+      },
+    });
+    expect(node.data.approvalDelegation).toEqual({
+      channel: 'telegram',
+      credentialId: 40,
+      chatId: '-100123',
+    });
+    expect(typeof node.data.approvalDelegation.credentialId).toBe('number');
+  });
+
+  it('drops a blank-string delegation credentialId instead of coercing it to 0', () => {
+    const node = createApprovalNode({
+      type: 'approval',
+      label: 'Review',
+      approval: {
+        delegation: { channel: 'telegram', credentialId: '   ', chatId: '-100123' },
+      },
+    });
+    expect(node.data.approvalDelegation).toEqual({ channel: 'telegram', chatId: '-100123' });
   });
 });
 
