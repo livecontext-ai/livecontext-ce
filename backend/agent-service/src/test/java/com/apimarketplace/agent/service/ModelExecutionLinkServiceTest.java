@@ -274,6 +274,31 @@ class ModelExecutionLinkServiceTest {
     }
 
     @Test
+    @DisplayName("upsert that loses a concurrent-create race (unique-constraint violation) retries as an UPDATE of the winner's row instead of surfacing a 500")
+    void upsertRetriesAsUpdateOnConcurrentCreateRace() {
+        ModelExecutionLinkEntity winnersRow =
+            link("anthropic", "claude-opus-4-8", "openrouter", "or-model", ModelExecutionLinkScope.ALL, true);
+        // First attempt: the row does not exist yet, but our INSERT loses the race.
+        // Retry: the winner's row is now visible and gets updated in place.
+        when(repository.findByBilledProviderAndBilledModelAndScope("anthropic", "claude-opus-4-8", ModelExecutionLinkScope.ALL))
+            .thenReturn(Optional.empty())
+            .thenReturn(Optional.of(winnersRow));
+        when(repository.save(any(ModelExecutionLinkEntity.class)))
+            .thenThrow(new org.springframework.dao.DataIntegrityViolationException(
+                "duplicate key value violates unique constraint \"uq_model_execution_links_billed_scope\""))
+            .thenAnswer(inv -> inv.getArgument(0));
+
+        ModelExecutionLinkEntity saved = service.upsert(
+            "anthropic", "claude-opus-4-8", "codex", "gpt-5.3-codex", ModelExecutionLinkScope.ALL, true);
+
+        // Last write wins, applied onto the winner's row (same outcome as sequential PUTs).
+        assertThat(saved).isSameAs(winnersRow);
+        assertThat(saved.getExecutionProvider()).isEqualTo("codex");
+        assertThat(saved.getExecutionModel()).isEqualTo("gpt-5.3-codex");
+        verify(repository, org.mockito.Mockito.times(2)).save(any(ModelExecutionLinkEntity.class));
+    }
+
+    @Test
     @DisplayName("delete returns true when a scoped link existed and false when it did not")
     void deleteReturnsWhetherLinkExisted() {
         when(repository.findByBilledProviderAndBilledModelAndScope("anthropic", "claude-opus-4-8", ModelExecutionLinkScope.CHAT))

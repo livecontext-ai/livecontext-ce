@@ -180,6 +180,19 @@ public final class DefaultSystemPrompts {
     );
 
     /**
+     * Appended to the system prompt when {@code web_search} was dropped at INSTALL level
+     * (optional browser-agent component not enabled AND no cloud link relay) - never when a
+     * per-agent toolsConfig deliberately disabled the module. Without it the agent can only
+     * produce a vague "I can't browse"; with it the agent relays the exact enable path,
+     * whose terminal state is "the user/admin resolves it".
+     */
+    public static final String WEB_SEARCH_UNAVAILABLE_NOTICE = """
+
+        # Web Browsing Unavailable On This Installation
+        Web search and the browser agent are optional components that are not enabled here, so there is no web_search tool: you cannot search the web or browse pages, and you must not try to emulate browsing with other tools. If the user asks for web search or browsing, tell them the feature is an optional component of this installation and that an administrator can enable it, either by starting the self-hosted stack with the bundled browser-agent option (docker compose --env-file docker/.env.ce.browser-agent up -d) or by linking the installation to the cloud from the settings, then retrying in a new conversation.
+        """;
+
+    /**
      * All resource modules in display order.
      * To add a new resource: create a PromptModule constant + add it here.
      */

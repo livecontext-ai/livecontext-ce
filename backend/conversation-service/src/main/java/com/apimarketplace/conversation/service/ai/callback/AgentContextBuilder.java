@@ -288,13 +288,35 @@ public class AgentContextBuilder {
         // for tenants that cannot use it (local engine disabled AND tenant not
         // cloud-linked with the CLOUD source). No-op in cloud (gate null or local
         // engine enabled).
+        boolean webSearchUnavailableOnInstall = false;
         if (webSearchRelayGate != null) {
-            tools = webSearchRelayGate.filterExposedTools(tools, tenantId);
+            // Install-level unavailability (component off / not linked) - NOT a per-agent
+            // toolsConfig choice: the notice is only flagged when the module was otherwise
+            // wanted, so it never contradicts a deliberate "no web_search" agent config.
+            // Availability is resolved ONCE (it can cost an HTTP roundtrip on relay-wired
+            // CE installs) and reused for both the tool drop and the notice.
+            boolean moduleWanted = enabledModulesForContext == null
+                || enabledModulesForContext.contains(DefaultSystemPrompts.WEB_SEARCH.key());
+            boolean containsWebSearch = tools != null && tools.stream()
+                .anyMatch(t -> t != null
+                    && com.apimarketplace.agent.cloud.CeWebSearchRelayGate.WEB_SEARCH_TOOL_NAME.equals(t.name()));
+            if ((moduleWanted || containsWebSearch)
+                && !webSearchRelayGate.isWebSearchAvailable(tenantId)) {
+                tools = com.apimarketplace.agent.cloud.CeWebSearchRelayGate.removeWebSearch(tools);
+                webSearchUnavailableOnInstall = moduleWanted;
+            }
         }
 
         // Block 1: tools-config restriction
         if (toolsConfig != null) {
             blockSlots[1] = buildToolsConfigPrompt(toolsConfig);
+        }
+        if (webSearchUnavailableOnInstall) {
+            // Tell the agent WHY web_search is missing and what to answer (enable path),
+            // instead of leaving it to guess. Appended to block 1 so block 0 stays the
+            // stable cacheable prefix.
+            blockSlots[1] = (blockSlots[1] == null ? "" : blockSlots[1])
+                + DefaultSystemPrompts.WEB_SEARCH_UNAVAILABLE_NOTICE;
         }
 
         // Blocks 2 + 3: skills (default skills at [2], agent + user-request skills at [3])

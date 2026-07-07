@@ -25,6 +25,14 @@ import java.util.Locale;
  * so a surface-specific link overrides the wildcard for just that surface while
  * every other surface keeps the {@link #ALL} route. Guardrail, classify and
  * sub-agent runs never reach the chokepoint, so no scope can target them.
+ *
+ * <p>Two consumers can only ever match the {@link #ALL} wildcard, never a
+ * surface scope: the browser agent and the {@code json-completion} path (neither
+ * carries an activity source). The CE cloud relay consults NO links at all,
+ * including {@link #ALL}: a linked CE install asked for the billed pair and must
+ * get exactly that provider's real API. Note also that DISABLING an
+ * exact-surface row does not park that surface on the billed model - the surface
+ * reverts to the {@link #ALL} route when one exists.
  */
 public enum ModelExecutionLinkScope {
     ALL,
@@ -73,7 +81,17 @@ public enum ModelExecutionLinkScope {
             ModelExecutionLinkScope scope = valueOf(normalized);
             return scope == ALL ? null : scope;
         } catch (IllegalArgumentException e) {
+            // Unknown token: deliberate for non-surface producers (e.g. SUB_AGENT),
+            // but also what a typo or an untagged NEW surface degrades to -
+            // wildcard-only matching. Leave a trail so that degradation is diagnosable.
+            LoggerHolder.LOG.debug("Activity source '{}' matches no execution-link surface; only ALL links can apply", source);
             return null;
         }
+    }
+
+    /** Holder defers logger init so the enum class-load stays trivial. */
+    private static final class LoggerHolder {
+        private static final org.slf4j.Logger LOG =
+            org.slf4j.LoggerFactory.getLogger(ModelExecutionLinkScope.class);
     }
 }

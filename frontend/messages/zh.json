@@ -5717,6 +5717,7 @@
         "generateScreenshotDescription": "启用后，捕获渲染界面的 PNG 并将其暴露为 screenshot FileRef 输出，供下游节点使用（邮件附件、Telegram 照片、代理图像输入）。尽力而为：捕获失败会使输出缺失，但不会使工作流失败。",
         "generatePdf": "生成 PDF",
         "generatePdfDescription": "启用后，将界面渲染为 PDF 并将其暴露为 pdf FileRef 输出，供下游节点使用（邮件附件、Telegram 文档、代理文件输入）。尽力而为：渲染失败会使输出缺失，但不会使工作流失败。",
+        "rendererUnavailable": "截图和 PDF 渲染需要可选的渲染器组件，而该组件未在此安装中运行。在管理员启用它之前，这些开关不会产生任何输出：",
         "pdfFormat": "PDF 页面大小",
         "pdfLandscape": "横向"
       },
@@ -6882,6 +6883,7 @@
       },
       "addField": "添加字段",
       "browserAgent": {
+        "unavailableNotice": "此安装未启用浏览器代理，该节点在运行时将失败。管理员可以启用可选的 browser-agent 组件，或将此安装关联到云端：",
         "domainAllowlist": {
           "label": "域名允许列表"
         },
@@ -9308,6 +9310,17 @@
     "updateRunFrom": "在您克隆的 LiveContext 目录中运行以下命令：",
     "copy": "复制",
     "copied": "已复制"
+  },
+  "optionalComponents": {
+    "title": "可选组件",
+    "subtitle": "自托管安装中默认关闭的重型功能",
+    "renderer": "界面截图与 PDF",
+    "rendererDescription": "将界面节点渲染为 PNG 截图和 PDF 文档（无头 Chromium 边车）。",
+    "browserAgent": "浏览器代理与网页搜索",
+    "browserAgentDescription": "让代理浏览网页并执行网页搜索（Chromium + 元搜索边车）。",
+    "enabled": "已启用",
+    "notEnabled": "未启用",
+    "loadError": "无法加载组件状态"
   },
   "conversationActivity": {
     "title": "对话活动",

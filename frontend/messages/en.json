@@ -5957,6 +5957,7 @@
         "generateScreenshotDescription": "When enabled, captures a PNG of the rendered interface and exposes it as the screenshot FileRef output for downstream nodes (email attachments, Telegram photo, agent image input). Best-effort: capture failures leave the output absent without failing the workflow.",
         "generatePdf": "Generate PDF",
         "generatePdfDescription": "When enabled, renders the interface to a PDF and exposes it as the pdf FileRef output for downstream nodes (email attachment, Telegram document, agent file input). Best-effort: render failures leave the output absent without failing the workflow.",
+        "rendererUnavailable": "Screenshot and PDF rendering require the optional renderer component, which is not running on this installation. These toggles will produce no output until an administrator enables it:",
         "pdfFormat": "PDF page size",
         "pdfLandscape": "Landscape",
         "exposeRenderedSource": "Expose rendered source",
@@ -6904,6 +6905,7 @@
         "deleteField": "Delete field"
       },
       "browserAgent": {
+        "unavailableNotice": "The browser agent is not enabled on this installation, so this node will fail at run time. An administrator can enable the optional browser-agent component or link the installation to the cloud:",
         "task": {
           "label": "Task",
           "help": "Natural-language goal. Be specific - vague tasks waste LLM steps.",
@@ -9308,6 +9310,17 @@
     "updateRunFrom": "Run these from your cloned LiveContext folder:",
     "copy": "Copy",
     "copied": "Copied"
+  },
+  "optionalComponents": {
+    "title": "Optional components",
+    "subtitle": "Heavy features that are off by default on self-hosted installs",
+    "renderer": "Interface screenshots & PDFs",
+    "rendererDescription": "Renders interface nodes to PNG screenshots and PDF documents (headless Chromium sidecar).",
+    "browserAgent": "Browser agent & web search",
+    "browserAgentDescription": "Lets agents browse web pages and run web searches (Chromium + metasearch sidecars).",
+    "enabled": "Enabled",
+    "notEnabled": "Not enabled",
+    "loadError": "Could not load component status"
   },
   "conversationActivity": {
     "title": "Conversation activity",

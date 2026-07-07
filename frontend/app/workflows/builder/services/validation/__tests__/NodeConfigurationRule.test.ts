@@ -522,4 +522,98 @@ describe('NodeConfigurationRule', () => {
       expect(emptyCtx.issues.filter((i) => i.context?.rule === 'task_invalid_task_context')).toHaveLength(0);
     });
   });
+
+  // ===================== Optional-component availability (warnings) =====================
+
+  describe('Optional-component availability (deployment-level warnings)', () => {
+    const makeBrowserAgentNode = () =>
+      ({
+        id: 'n-browse',
+        type: 'agentNode',
+        position: { x: 0, y: 0 },
+        data: {
+          id: 'browser-agent',
+          kind: 'browser_agent',
+          label: 'Browse',
+          paramExpressions: { task: 'Open example.com' },
+        },
+      }) as any;
+
+    const makeInterfaceNode = (interfaceData: Record<string, unknown>) =>
+      ({
+        id: 'n-iface',
+        type: 'interfaceNode',
+        position: { x: 0, y: 0 },
+        data: { id: 'interface-1', label: 'Results UI', interfaceData },
+      }) as any;
+
+    const withCaps = (
+      nodes: any[],
+      caps?: { screenshotRenderer: boolean; browserAgent: boolean; webSearch: boolean },
+    ) => ({ ...buildContext(nodes, []), featureCapabilities: caps });
+
+    it('warns on a browser_agent node when the browser stack is unavailable', () => {
+      const result = rule.validate(
+        withCaps([makeBrowserAgentNode()], { screenshotRenderer: true, browserAgent: false, webSearch: false })
+      );
+
+      const issues = result.issues.filter((i) => i.context?.rule === 'browser_agent_component_unavailable');
+      expect(issues).toHaveLength(1);
+      expect(issues[0].severity).toBe('warning');
+    });
+
+    it('does not warn on a browser_agent node when the stack is available', () => {
+      const result = rule.validate(
+        withCaps([makeBrowserAgentNode()], { screenshotRenderer: true, browserAgent: true, webSearch: true })
+      );
+
+      expect(result.issues.filter((i) => i.context?.rule === 'browser_agent_component_unavailable')).toHaveLength(0);
+    });
+
+    it('warns on an interface node with generateScreenshot when the renderer is unavailable', () => {
+      const result = rule.validate(
+        withCaps(
+          [makeInterfaceNode({ generateScreenshot: true })],
+          { screenshotRenderer: false, browserAgent: true, webSearch: true },
+        )
+      );
+
+      const issues = result.issues.filter((i) => i.context?.rule === 'interface_renderer_unavailable');
+      expect(issues).toHaveLength(1);
+      expect(issues[0].severity).toBe('warning');
+    });
+
+    it('warns on an interface node with generatePdf when the renderer is unavailable', () => {
+      const result = rule.validate(
+        withCaps(
+          [makeInterfaceNode({ generatePdf: true })],
+          { screenshotRenderer: false, browserAgent: true, webSearch: true },
+        )
+      );
+
+      expect(result.issues.filter((i) => i.context?.rule === 'interface_renderer_unavailable')).toHaveLength(1);
+    });
+
+    it('does not warn on an interface node with NO render toggle even when the renderer is unavailable', () => {
+      const result = rule.validate(
+        withCaps(
+          [makeInterfaceNode({})],
+          { screenshotRenderer: false, browserAgent: true, webSearch: true },
+        )
+      );
+
+      expect(result.issues.filter((i) => i.context?.rule === 'interface_renderer_unavailable')).toHaveLength(0);
+    });
+
+    it('emits NO availability warning when capabilities are unknown (loading / fetch error / older backend)', () => {
+      const result = rule.validate(
+        withCaps([makeBrowserAgentNode(), makeInterfaceNode({ generateScreenshot: true })], undefined)
+      );
+
+      expect(result.issues.filter((i) =>
+        i.context?.rule === 'browser_agent_component_unavailable'
+        || i.context?.rule === 'interface_renderer_unavailable',
+      )).toHaveLength(0);
+    });
+  });
 });

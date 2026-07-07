@@ -132,7 +132,11 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
                                      int spawn, Integer itemIndex, String nodeId, UUID interfaceId,
                                      String pdfFormat, boolean landscape) {
         if (rendererBaseUrl == null || rendererBaseUrl.isBlank()) {
-            logger.debug("screenshot-renderer-url not configured - skipping {} for nodeId={} runId={}",
+            // WARN, not DEBUG: the user explicitly asked for this render (toggle ON) and the
+            // output field will silently be absent. The builder UI warns pre-run via the
+            // capabilities endpoint; this is the run-time trace an operator greps for.
+            logger.warn("services.screenshot-renderer-url not configured - skipping {} for nodeId={} runId={} "
+                + "(enable the optional renderer component to activate interface screenshot/PDF outputs)",
                 kind.segment, nodeId, runId);
             return Optional.empty();
         }

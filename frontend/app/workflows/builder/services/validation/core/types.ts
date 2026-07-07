@@ -6,6 +6,7 @@
 import type { Node, Edge } from 'reactflow';
 import type { BuilderNodeData } from '../../../types';
 import type { Credential } from '@/lib/api/orchestrator';
+import type { FeatureCapabilities } from '@/lib/api/orchestrator/workflow.service';
 
 // ============================================
 // Node Type Utilities
@@ -117,6 +118,12 @@ export interface ValidationContext {
    * hasn't been auto-persisted yet (only happens when the user opens the node).
    */
   userCredentials?: Credential[];
+  /**
+   * Availability of the deployment's optional components (screenshot/PDF
+   * renderer, browser agent). Absent = unknown (loading / fetch error): rules
+   * must then emit NO availability warning rather than a possibly-false one.
+   */
+  featureCapabilities?: FeatureCapabilities;
 }
 
 // ============================================

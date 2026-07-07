@@ -61,6 +61,68 @@ class AgentClientTest {
     }
 
     // =========================================================================
+    // resolveExecutionLinkApiTarget
+    // =========================================================================
+
+    @Nested
+    @DisplayName("resolveExecutionLinkApiTarget")
+    class ResolveExecutionLinkApiTarget {
+
+        private static final String RESOLVE_URL_PREFIX =
+            BASE_URL + "/api/internal/model-config/execution-links/resolve-api-target";
+
+        @Test
+        @DisplayName("returns the execution target on 200 and query-encodes a billed model containing '/'")
+        void success_returnsTargetAndEncodesSlashModel() {
+            ArgumentCaptor<java.net.URI> url = ArgumentCaptor.forClass(java.net.URI.class);
+            when(restTemplate.exchange(url.capture(), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(ResponseEntity.ok(Map.of(
+                    "executionProvider", "openrouter", "executionModel", "meta-llama/llama-3.3-70b")));
+
+            var target = agentClient.resolveExecutionLinkApiTarget("anthropic", "claude/opus");
+
+            assertThat(target).isPresent();
+            assertThat(target.get().executionProvider()).isEqualTo("openrouter");
+            assertThat(target.get().executionModel()).isEqualTo("meta-llama/llama-3.3-70b");
+            // The billed pair travels as query params, never as path segments, and the
+            // call uses a pre-built java.net.URI (the String overload would re-encode).
+            assertThat(url.getValue().toString()).startsWith(RESOLVE_URL_PREFIX + "?");
+            assertThat(url.getValue().getQuery()).contains("billedProvider=anthropic");
+            assertThat(url.getValue().getQuery()).contains("billedModel=claude/opus");
+        }
+
+        @Test
+        @DisplayName("returns empty on 204 (unlinked pair or bridge-target link)")
+        void noContent_returnsEmpty() {
+            when(restTemplate.exchange(any(java.net.URI.class), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                .thenReturn(ResponseEntity.noContent().build());
+
+            assertThat(agentClient.resolveExecutionLinkApiTarget("openai", "gpt-4o")).isEmpty();
+        }
+
+        @Test
+        @DisplayName("returns empty on 404 (CE: the execution-links controller is not loaded)")
+        void notFound_returnsEmpty() {
+            when(restTemplate.exchange(any(java.net.URI.class), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                .thenThrow(HttpClientErrorException.NotFound.create(
+                    HttpStatus.NOT_FOUND, "Not Found", org.springframework.http.HttpHeaders.EMPTY, new byte[0], null));
+
+            assertThat(agentClient.resolveExecutionLinkApiTarget("openai", "gpt-4o")).isEmpty();
+        }
+
+        @Test
+        @DisplayName("returns empty (fail-open to the billed pair) when agent-service is unreachable - never throws into the browser run")
+        void transportError_returnsEmptyWithoutThrowing() {
+            when(restTemplate.exchange(any(java.net.URI.class), eq(HttpMethod.GET), any(HttpEntity.class), eq(Map.class)))
+                .thenThrow(new org.springframework.web.client.ResourceAccessException("connection refused"));
+
+            assertThatCode(() ->
+                assertThat(agentClient.resolveExecutionLinkApiTarget("openai", "gpt-4o")).isEmpty())
+                .doesNotThrowAnyException();
+        }
+    }
+
+    // =========================================================================
     // getAgent
     // =========================================================================
 

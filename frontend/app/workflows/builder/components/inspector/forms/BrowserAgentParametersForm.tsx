@@ -23,6 +23,9 @@ import { ModelPicker } from '@/components/ai/ModelPicker';
 import type { SelectedModel } from '@/hooks/useModels';
 import { ExpressionField, ConnectionProps } from '../ExpressionField';
 import { OptionalSection } from '../OptionalSection';
+import { OptionalFeatureNotice } from '../OptionalFeatureNotice';
+import { BROWSER_AGENT_ENABLE_COMMAND } from '@/lib/optionalComponentCommands';
+import { useFeatureCapabilities } from '@/hooks/useFeatureCapabilities';
 import type { BuilderNodeData } from '../../../types';
 
 const DEFAULT_MAX_STEPS = 25;
@@ -54,6 +57,9 @@ export function BrowserAgentParametersForm({
   handleParamExpressionChange,
 }: BrowserAgentParametersFormProps) {
   const t = useTranslations('workflowBuilder.forms.browserAgent');
+  // Optional browser stack availability - null while unknown (no false warning).
+  const { capabilities } = useFeatureCapabilities();
+  const browserAgentMissing = capabilities !== null && !capabilities.browserAgent;
 
   // Browser-agent params live under data.params per AgentCreator spec -
   // but historic entries may have stored fields at the top level. Read
@@ -162,6 +168,15 @@ export function BrowserAgentParametersForm({
 
   return (
     <div className="space-y-5 pt-2">
+      {/* Browser stack missing on this install: the node WILL fail at run time -
+          say so up front with the enable path instead of a run-time surprise. */}
+      {!isRunMode && browserAgentMissing && (
+        <OptionalFeatureNotice
+          message={t('unavailableNotice')}
+          command={BROWSER_AGENT_ENABLE_COMMAND}
+        />
+      )}
+
       {/* LLM picker - FIRST, mirrors the classify/guardrail layout where
           provider/model is the most prominent control. Browser-agent steps
           each cost an LLM call, so the choice belongs at the top. */}

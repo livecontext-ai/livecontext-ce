@@ -259,9 +259,11 @@ class ModelConfigService {
     billedModel: string,
     scope: ModelExecutionLinkScope = 'ALL',
   ): Promise<void> {
-    await apiClient.delete(
-      `/model-config/execution-links/${encodeURIComponent(billedProvider)}/${encodeURIComponent(billedModel)}/${encodeURIComponent(scope)}`,
-    );
+    // Query-param form: a billed model id may contain '/' (OpenRouter ids like
+    // meta-llama/llama-3.3-70b), which cannot travel as a path segment (%2F is
+    // rejected by the backend URL firewall), so such links were undeletable.
+    const params = new URLSearchParams({ billedProvider, billedModel, scope });
+    await apiClient.delete(`/model-config/execution-links?${params.toString()}`);
   }
 }
 

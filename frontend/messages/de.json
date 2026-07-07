@@ -5717,6 +5717,7 @@
         "generateScreenshotDescription": "Wenn aktiviert, wird ein PNG des gerenderten Interfaces erfasst und als die screenshot-FileRef-Ausgabe für nachgelagerte Knoten bereitgestellt (E-Mail-Anhänge, Telegram-Foto, Agenten-Bildeingabe). Best-Effort: Erfassungsfehler lassen die Ausgabe weg, ohne den Workflow zum Scheitern zu bringen.",
         "generatePdf": "PDF generieren",
         "generatePdfDescription": "Wenn aktiviert, wird das Interface als PDF gerendert und als die pdf-FileRef-Ausgabe für nachgelagerte Knoten bereitgestellt (E-Mail-Anhang, Telegram-Dokument, Agenten-Dateieingabe). Best-Effort: Render-Fehler lassen die Ausgabe weg, ohne den Workflow zum Scheitern zu bringen.",
+        "rendererUnavailable": "Screenshot- und PDF-Rendering benötigen die optionale Renderer-Komponente, die auf dieser Installation nicht läuft. Diese Schalter erzeugen keine Ausgabe, bis ein Administrator sie aktiviert:",
         "pdfFormat": "PDF-Seitengröße",
         "pdfLandscape": "Querformat"
       },
@@ -6882,6 +6883,7 @@
       },
       "addField": "Feld hinzufügen",
       "browserAgent": {
+        "unavailableNotice": "Der Browser-Agent ist auf dieser Installation nicht aktiviert, dieser Knoten schlägt daher zur Laufzeit fehl. Ein Administrator kann die optionale Browser-Agent-Komponente aktivieren oder die Installation mit der Cloud verknüpfen:",
         "domainAllowlist": {
           "label": "Domain-Zulassungsliste"
         },
@@ -9308,6 +9310,17 @@
     "updateRunFrom": "Führen Sie diese Befehle in Ihrem geklonten LiveContext-Ordner aus:",
     "copy": "Kopieren",
     "copied": "Kopiert"
+  },
+  "optionalComponents": {
+    "title": "Optionale Komponenten",
+    "subtitle": "Schwere Funktionen, die auf selbst gehosteten Installationen standardmäßig deaktiviert sind",
+    "renderer": "Interface-Screenshots & PDFs",
+    "rendererDescription": "Rendert Interface-Knoten zu PNG-Screenshots und PDF-Dokumenten (Headless-Chromium-Sidecar).",
+    "browserAgent": "Browser-Agent & Websuche",
+    "browserAgentDescription": "Ermöglicht Agenten das Browsen von Webseiten und Websuchen (Chromium- + Metasuch-Sidecars).",
+    "enabled": "Aktiviert",
+    "notEnabled": "Nicht aktiviert",
+    "loadError": "Komponentenstatus konnte nicht geladen werden"
   },
   "conversationActivity": {
     "title": "Konversationsaktivität",

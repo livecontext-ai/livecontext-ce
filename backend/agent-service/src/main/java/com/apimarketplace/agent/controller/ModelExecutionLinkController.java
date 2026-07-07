@@ -65,7 +65,7 @@ public class ModelExecutionLinkController {
             String executionProvider = requireString(body, "executionProvider");
             String executionModel = optionalString(body, "executionModel");
             ModelExecutionLinkScope scope = ModelExecutionLinkScope.parse(optionalString(body, "scope"));
-            boolean enabled = !body.containsKey("enabled") || Boolean.TRUE.equals(body.get("enabled"));
+            boolean enabled = optionalBoolean(body, "enabled", true);
             ModelExecutionLinkEntity saved = service.upsert(
                     billedProvider, billedModel, executionProvider, executionModel, scope, enabled);
             return ResponseEntity.ok(toMap(saved));
@@ -74,12 +74,35 @@ public class ModelExecutionLinkController {
         }
     }
 
-    /** Delete the link for a billed {@code (provider, model)} pair on a given scope. */
+    /**
+     * Delete the link for a billed {@code (provider, model)} pair on a given scope.
+     * Query-param form, the canonical one: a billed model id may contain {@code /}
+     * (any OpenRouter id, e.g. {@code meta-llama/llama-3.3-70b}), which cannot travel
+     * as a path segment (the raw slash splits the path and the encoded {@code %2F} is
+     * rejected by the default URL firewall), so path addressing made such links
+     * undeletable.
+     */
+    @DeleteMapping
+    public ResponseEntity<?> deleteByParams(
+            @RequestHeader(value = "X-User-Roles", defaultValue = "USER") String roles,
+            @RequestParam String billedProvider, @RequestParam String billedModel,
+            @RequestParam(required = false) String scope) {
+        return doDelete(roles, billedProvider, billedModel, scope);
+    }
+
+    /**
+     * Legacy path form, kept for pre-existing callers. Only reachable for model ids
+     * without {@code /} - use the query-param form otherwise.
+     */
     @DeleteMapping("/{billedProvider}/{billedModel}/{scope}")
     public ResponseEntity<?> delete(
             @RequestHeader(value = "X-User-Roles", defaultValue = "USER") String roles,
             @PathVariable String billedProvider, @PathVariable String billedModel,
             @PathVariable String scope) {
+        return doDelete(roles, billedProvider, billedModel, scope);
+    }
+
+    private ResponseEntity<?> doDelete(String roles, String billedProvider, String billedModel, String scope) {
         var denied = AdminRoleGuard.denyIfNotAdmin(roles);
         if (denied != null) return denied;
         try {
@@ -117,5 +140,20 @@ public class ModelExecutionLinkController {
             throw new IllegalArgumentException(key + " must be a string or null");
         }
         return s;
+    }
+
+    /**
+     * Strict JSON boolean: absent ⇒ {@code defaultValue}, anything else must be a
+     * real boolean. A lenient read ({@code Boolean.TRUE.equals}) silently turned
+     * {@code "enabled": "true"} (string) into a DISABLED link with a 200 OK - the
+     * admin saw success while the route never fired.
+     */
+    private static boolean optionalBoolean(Map<String, Object> body, String key, boolean defaultValue) {
+        if (!body.containsKey(key)) return defaultValue;
+        Object value = body.get(key);
+        if (!(value instanceof Boolean b)) {
+            throw new IllegalArgumentException(key + " must be a boolean");
+        }
+        return b;
     }
 }

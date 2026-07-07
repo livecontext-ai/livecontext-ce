@@ -6,10 +6,12 @@ import com.apimarketplace.agent.repository.ModelExecutionLinkRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -48,7 +50,9 @@ public class ModelExecutionLinkService {
     private volatile Map<String, ExecutionRoute> cache = Map.of();
     private volatile long cacheExpiresAt = 0L;
     /**
-     * Bumped by every write. A rebuild that started before a concurrent write
+     * Bumped by every write, AFTER its commit ({@link #upsert}/{@link #delete} are
+     * non-transactional, so the repository write is already visible when
+     * {@link #invalidate()} runs). A rebuild that started before a concurrent write
      * (so its {@code findAll()} may predate the commit) is discarded instead of
      * masking the write for a full TTL - closes the cache TOCTOU window.
      */
@@ -94,7 +98,15 @@ public class ModelExecutionLinkService {
                 return Optional.of(exact);
             }
         }
-        return Optional.ofNullable(snap.get(key(billedProvider, billedModel, ModelExecutionLinkScope.ALL)));
+        ExecutionRoute wildcard = snap.get(key(billedProvider, billedModel, ModelExecutionLinkScope.ALL));
+        // The model id is matched VERBATIM (case-sensitive): a casing mismatch between
+        // the admin-typed id and the catalog id makes the link a silent no-op, so leave
+        // a diagnostic trail for "the link doesn't fire" reports.
+        if (wildcard == null && !snap.isEmpty() && log.isDebugEnabled()) {
+            log.debug("No execution link for billed pair {}/{} (source={}, surfaceScope={}); {} enabled link(s) in snapshot",
+                billedProvider, billedModel, activitySource, surfaceScope, snap.size());
+        }
+        return Optional.ofNullable(wildcard);
     }
 
     /**
@@ -170,7 +182,7 @@ public class ModelExecutionLinkService {
     }
 
     private static String key(String provider, String model, ModelExecutionLinkScope scope) {
-        return provider.trim().toLowerCase() + " " + model.trim() + " " + scope.name();
+        return provider.trim().toLowerCase(Locale.ROOT) + " " + model.trim() + " " + scope.name();
     }
 
     // ── Admin CRUD ───────────────────────────────────────────────────────────
@@ -193,9 +205,16 @@ public class ModelExecutionLinkService {
      * {@code scope} narrows the link to one app surface ({@code null} ⇒
      * {@link ModelExecutionLinkScope#ALL}, the wildcard).
      *
+     * <p>Deliberately NOT {@code @Transactional}: each repository call commits on its
+     * own, so {@link #invalidate()} runs strictly AFTER the write is visible to other
+     * readers (an in-transaction invalidate lets a concurrent {@link #snapshot()}
+     * rebuild from pre-commit rows and republish a stale cache for a full TTL). The
+     * find-then-save pair needs no atomicity: the DB UNIQUE constraint on
+     * {@code (billed_provider, billed_model, scope)} arbitrates concurrent creators,
+     * and the loser retries once as an update of the winner's row.
+     *
      * @throws IllegalArgumentException on blank required fields
      */
-    @Transactional
     public ModelExecutionLinkEntity upsert(String billedProvider, String billedModel,
                                            String executionProvider, String executionModel,
                                            ModelExecutionLinkScope scope, boolean enabled) {
@@ -203,17 +222,20 @@ public class ModelExecutionLinkService {
         require(billedModel, "billedModel");
         require(executionProvider, "executionProvider");
         ModelExecutionLinkScope resolvedScope = scope == null ? ModelExecutionLinkScope.ALL : scope;
-        ModelExecutionLinkEntity entity = repository
-                .findByBilledProviderAndBilledModelAndScope(
-                        billedProvider.trim().toLowerCase(), billedModel.trim(), resolvedScope)
-                .orElseGet(ModelExecutionLinkEntity::new);
-        entity.setBilledProvider(billedProvider.trim().toLowerCase());
-        entity.setBilledModel(billedModel.trim());
-        entity.setExecutionProvider(executionProvider.trim().toLowerCase());
-        entity.setExecutionModel(executionModel == null || executionModel.isBlank() ? null : executionModel.trim());
-        entity.setScope(resolvedScope);
-        entity.setEnabled(enabled);
-        ModelExecutionLinkEntity saved = repository.save(entity);
+        ModelExecutionLinkEntity saved;
+        try {
+            saved = saveUpsert(billedProvider, billedModel, executionProvider, executionModel,
+                    resolvedScope, enabled);
+        } catch (DataIntegrityViolationException e) {
+            // Concurrent PUT created the same (provider, model, scope) first: our INSERT
+            // lost the unique-constraint race. The row now exists, so the retry re-finds
+            // it and applies this call as an UPDATE (last write wins, same as sequential
+            // PUTs) instead of surfacing a raw 500 to the admin.
+            log.info("Model execution link upsert lost a concurrent-create race for {}/{} (scope={}); retrying as update",
+                    billedProvider, billedModel, resolvedScope);
+            saved = saveUpsert(billedProvider, billedModel, executionProvider, executionModel,
+                    resolvedScope, enabled);
+        }
         invalidate();
         log.info("Model execution link upserted: {}/{} -> {}/{} (scope={}, enabled={})",
                 saved.getBilledProvider(), saved.getBilledModel(),
@@ -221,14 +243,34 @@ public class ModelExecutionLinkService {
         return saved;
     }
 
-    @Transactional
+    private ModelExecutionLinkEntity saveUpsert(String billedProvider, String billedModel,
+                                                String executionProvider, String executionModel,
+                                                ModelExecutionLinkScope scope, boolean enabled) {
+        ModelExecutionLinkEntity entity = repository
+                .findByBilledProviderAndBilledModelAndScope(
+                        billedProvider.trim().toLowerCase(Locale.ROOT), billedModel.trim(), scope)
+                .orElseGet(ModelExecutionLinkEntity::new);
+        entity.setBilledProvider(billedProvider.trim().toLowerCase(Locale.ROOT));
+        entity.setBilledModel(billedModel.trim());
+        entity.setExecutionProvider(executionProvider.trim().toLowerCase(Locale.ROOT));
+        entity.setExecutionModel(executionModel == null || executionModel.isBlank() ? null : executionModel.trim());
+        entity.setScope(scope);
+        entity.setEnabled(enabled);
+        return repository.save(entity);
+    }
+
+    /**
+     * Delete the link for a billed pair on a scope. Not {@code @Transactional} for the
+     * same after-commit-invalidate reason as {@link #upsert}; a concurrent delete of the
+     * same row is benign (the second call finds nothing and returns {@code false}).
+     */
     public boolean delete(String billedProvider, String billedModel, ModelExecutionLinkScope scope) {
         require(billedProvider, "billedProvider");
         require(billedModel, "billedModel");
         ModelExecutionLinkScope resolvedScope = scope == null ? ModelExecutionLinkScope.ALL : scope;
         Optional<ModelExecutionLinkEntity> existing = repository
                 .findByBilledProviderAndBilledModelAndScope(
-                        billedProvider.trim().toLowerCase(), billedModel.trim(), resolvedScope);
+                        billedProvider.trim().toLowerCase(Locale.ROOT), billedModel.trim(), resolvedScope);
         if (existing.isEmpty()) {
             return false;
         }

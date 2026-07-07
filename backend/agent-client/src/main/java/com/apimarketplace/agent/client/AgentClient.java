@@ -22,6 +22,7 @@ import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -271,6 +272,54 @@ public class AgentClient {
             restTemplate.exchange(url, HttpMethod.POST, entity, Void.class);
         } catch (Exception e) {
             log.warn("Failed to record observability (non-critical): {}", e.getMessage());
+        }
+    }
+
+    /**
+     * The direct-API execution target a billed {@code (provider, model)} pair is
+     * linked to, from agent-service's model execution links (CLOUD only).
+     * {@code executionModel} is already resolved (never null).
+     */
+    public record ExecutionLinkTarget(String executionProvider, String executionModel) {}
+
+    /**
+     * Resolve the execution link for a billed pair, restricted to DIRECT-API targets
+     * (agent-service returns no route for bridge-target links). Only ALL-scoped
+     * links can match - the calling consumer (browser agent) carries no activity
+     * source. Empty when the pair is unlinked, the link targets a CLI bridge, the
+     * feature is absent (CE: the internal endpoint 404s), or agent-service is
+     * unreachable - the caller then keeps the billed pair, so a transient error can
+     * never fail a run, only skip the reroute (logged).
+     */
+    public Optional<ExecutionLinkTarget> resolveExecutionLinkApiTarget(String billedProvider, String billedModel) {
+        // Built as a java.net.URI: the String overload re-encodes (URI-template
+        // semantics), which double-encodes '%'/spaces and throws on '{'/'}' in ids.
+        java.net.URI url = UriComponentsBuilder
+                .fromHttpUrl(baseUrl + "/api/internal/model-config/execution-links/resolve-api-target")
+                .queryParam("billedProvider", billedProvider)
+                .queryParam("billedModel", billedModel)
+                .build()
+                .encode()
+                .toUri();
+        HttpEntity<Void> entity = new HttpEntity<>(buildHeaders(null));
+        try {
+            ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.GET, entity, Map.class);
+            Map<?, ?> body = response.getBody();
+            if (body == null) {
+                return Optional.empty(); // 204: unlinked or bridge-target
+            }
+            Object provider = body.get("executionProvider");
+            Object model = body.get("executionModel");
+            if (provider == null || model == null) {
+                return Optional.empty();
+            }
+            return Optional.of(new ExecutionLinkTarget(String.valueOf(provider), String.valueOf(model)));
+        } catch (HttpClientErrorException.NotFound e) {
+            return Optional.empty(); // CE: execution-links controller not loaded
+        } catch (Exception e) {
+            log.warn("Failed to resolve execution link for {}/{} (run stays on the billed pair): {}",
+                    billedProvider, billedModel, e.getMessage());
+            return Optional.empty();
         }
     }
 

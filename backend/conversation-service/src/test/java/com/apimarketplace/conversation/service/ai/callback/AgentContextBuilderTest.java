@@ -1589,4 +1589,145 @@ class AgentContextBuilderTest {
         }
     }
 
+    @Nested
+    @DisplayName("web_search install-level availability notice")
+    class WebSearchInstallAvailabilityNotice {
+
+        private static final String NOTICE_MARKER = "Web Browsing Unavailable On This Installation";
+
+        private void injectGate(com.apimarketplace.agent.cloud.CeWebSearchRelayGate gate) throws Exception {
+            Field gateField = AgentContextBuilder.class.getDeclaredField("webSearchRelayGate");
+            gateField.setAccessible(true);
+            gateField.set(agentContextBuilder, gate);
+        }
+
+        private ChatRequest generalChatRequest(List<ToolDefinition> coreTools) {
+            ChatRequest request = createRequest("Hello", "gpt-4", "openai");
+            when(historyConverter.convert(any(), eq("conv-1"), eq("user-1"))).thenReturn(List.of());
+            when(historyConverter.isNewConversation(any())).thenReturn(true);
+            when(workflowContextProvider.getConversationMeta("conv-1")).thenReturn(ConversationMeta.empty());
+            when(workflowContextProvider.getWorkflowContext(any(ConversationMeta.class), eq("user-1")))
+                    .thenReturn(new WorkflowContext(null, null, null, null, null, null, false));
+            when(workflowContextProvider.getActiveWorkflowBuilderSession("user-1", "conv-1"))
+                    .thenReturn(WorkflowBuilderSessionContext.empty());
+            when(coreToolsProvider.getCoreTools(anyBoolean())).thenReturn(coreTools);
+            return request;
+        }
+
+        @Test
+        @DisplayName("gate unavailable: web_search dropped from tools AND the enable-path notice enters the system prompt")
+        void unavailableInstallDropsToolAndAddsNotice() throws Exception {
+            com.apimarketplace.agent.cloud.CeWebSearchRelayGate gate =
+                    mock(com.apimarketplace.agent.cloud.CeWebSearchRelayGate.class);
+            when(gate.isWebSearchAvailable("user-1")).thenReturn(false);
+            injectGate(gate);
+
+            ToolDefinition webSearch = ToolDefinition.builder().name("web_search").description("Web").build();
+            ToolDefinition catalog = ToolDefinition.builder().name("catalog").description("Catalog").build();
+            ChatRequest request = generalChatRequest(List.of(webSearch, catalog));
+
+            AgentLoopContext context = agentContextBuilder.build(request, "conv-1", null);
+
+            assertThat(context.tools()).extracting(ToolDefinition::name).containsExactly("catalog");
+            assertThat(context.systemPrompt()).contains(NOTICE_MARKER);
+        }
+
+        @Test
+        @DisplayName("gate available: web_search kept, no notice")
+        void availableInstallKeepsToolWithoutNotice() throws Exception {
+            com.apimarketplace.agent.cloud.CeWebSearchRelayGate gate =
+                    mock(com.apimarketplace.agent.cloud.CeWebSearchRelayGate.class);
+            when(gate.isWebSearchAvailable("user-1")).thenReturn(true);
+            injectGate(gate);
+
+            ToolDefinition webSearch = ToolDefinition.builder().name("web_search").description("Web").build();
+            ChatRequest request = generalChatRequest(List.of(webSearch));
+
+            AgentLoopContext context = agentContextBuilder.build(request, "conv-1", null);
+
+            assertThat(context.tools()).extracting(ToolDefinition::name).contains("web_search");
+            assertThat(context.systemPrompt()).doesNotContain(NOTICE_MARKER);
+        }
+
+        @Test
+        @DisplayName("no gate bean (cloud standalone): behavior unchanged, no notice")
+        void noGateKeepsExistingBehavior() throws Exception {
+            injectGate(null);
+
+            ToolDefinition webSearch = ToolDefinition.builder().name("web_search").description("Web").build();
+            ChatRequest request = generalChatRequest(List.of(webSearch));
+
+            AgentLoopContext context = agentContextBuilder.build(request, "conv-1", null);
+
+            assertThat(context.tools()).extracting(ToolDefinition::name).contains("web_search");
+            assertThat(context.systemPrompt()).doesNotContain(NOTICE_MARKER);
+        }
+
+        @Test
+        @DisplayName("toolsConfig mode=off (module deliberately not wanted): no notice even when the install cannot browse")
+        void deliberateModuleOffSuppressesNotice() throws Exception {
+            com.apimarketplace.agent.cloud.CeWebSearchRelayGate gate =
+                    mock(com.apimarketplace.agent.cloud.CeWebSearchRelayGate.class);
+            injectGate(gate);
+
+            ChatRequest request = createRequest("Hello", "gpt-4", "openai");
+            request.setAgentId("agent-1");
+            ToolsConfig tc = new ToolsConfig("off", List.of(), null, null, null, null, null, null, null, null, null, null, null, null);
+            AgentConfig agentConfig = new AgentConfig(
+                    "agent-1", "Agent", null, null, null,
+                    null, null, null, tc, null, null,
+                    null, null, null);
+            when(historyConverter.convert(any(), eq("conv-1"), eq("user-1"))).thenReturn(List.of());
+            when(historyConverter.isNewConversation(any())).thenReturn(true);
+            when(agentConfigProvider.getAgentConfig("agent-1", "user-1", null)).thenReturn(agentConfig);
+            when(workflowContextProvider.getConversationMeta("conv-1")).thenReturn(ConversationMeta.empty());
+            when(workflowContextProvider.getWorkflowContext(any(ConversationMeta.class), eq("user-1")))
+                    .thenReturn(new WorkflowContext(null, null, null, null, null, null, false));
+            when(workflowContextProvider.getActiveWorkflowBuilderSession("user-1", "conv-1"))
+                    .thenReturn(WorkflowBuilderSessionContext.empty());
+            when(coreToolsProvider.getCoreTools(anySet(), anyBoolean())).thenReturn(List.of());
+
+            AgentLoopContext context = agentContextBuilder.build(request, "conv-1", null);
+
+            assertThat(context.systemPrompt()).doesNotContain(NOTICE_MARKER);
+            // mode=off wants no modules at all → availability is never even resolved
+            // (no wasted HTTP roundtrip on relay-wired CE installs).
+            verify(gate, never()).isWebSearchAvailable(anyString());
+        }
+
+        @Test
+        @DisplayName("module not wanted but tool present: web_search still dropped, NO notice (drop-without-notice asymmetry)")
+        void moduleOffWithToolPresentDropsWithoutNotice() throws Exception {
+            com.apimarketplace.agent.cloud.CeWebSearchRelayGate gate =
+                    mock(com.apimarketplace.agent.cloud.CeWebSearchRelayGate.class);
+            when(gate.isWebSearchAvailable("user-1")).thenReturn(false);
+            injectGate(gate);
+
+            ChatRequest request = createRequest("Hello", "gpt-4", "openai");
+            request.setAgentId("agent-1");
+            ToolsConfig tc = new ToolsConfig("off", List.of(), null, null, null, null, null, null, null, null, null, null, null, null);
+            AgentConfig agentConfig = new AgentConfig(
+                    "agent-1", "Agent", null, null, null,
+                    null, null, null, tc, null, null,
+                    null, null, null);
+            when(historyConverter.convert(any(), eq("conv-1"), eq("user-1"))).thenReturn(List.of());
+            when(historyConverter.isNewConversation(any())).thenReturn(true);
+            when(agentConfigProvider.getAgentConfig("agent-1", "user-1", null)).thenReturn(agentConfig);
+            when(workflowContextProvider.getConversationMeta("conv-1")).thenReturn(ConversationMeta.empty());
+            when(workflowContextProvider.getWorkflowContext(any(ConversationMeta.class), eq("user-1")))
+                    .thenReturn(new WorkflowContext(null, null, null, null, null, null, false));
+            when(workflowContextProvider.getActiveWorkflowBuilderSession("user-1", "conv-1"))
+                    .thenReturn(WorkflowBuilderSessionContext.empty());
+            // Tool list unexpectedly contains web_search despite mode=off - the drop must
+            // still happen (fail-closed), but the notice must NOT (deliberate module off).
+            ToolDefinition webSearch = ToolDefinition.builder().name("web_search").description("Web").build();
+            when(coreToolsProvider.getCoreTools(anySet(), anyBoolean())).thenReturn(List.of(webSearch));
+
+            AgentLoopContext context = agentContextBuilder.build(request, "conv-1", null);
+
+            assertThat(context.tools()).extracting(ToolDefinition::name).doesNotContain("web_search");
+            assertThat(context.systemPrompt()).doesNotContain(NOTICE_MARKER);
+        }
+    }
+
 }

@@ -173,4 +173,26 @@ class CeWebSearchRelayGateTest {
             assertThat(gate.filterExposedTools(List.of(), TENANT)).isEmpty();
         }
     }
+
+    @Nested
+    @DisplayName("removeWebSearch (availability-free drop for callers that already resolved it)")
+    class RemoveWebSearch {
+
+        @Test
+        @DisplayName("removes ONLY web_search, preserving order of the rest")
+        void removesOnlyWebSearch() {
+            List<ToolDefinition> filtered = CeWebSearchRelayGate.removeWebSearch(
+                    List.of(tool("catalog"), tool("web_search"), tool("workflow")));
+
+            assertThat(filtered).extracting(ToolDefinition::name)
+                    .containsExactly("catalog", "workflow");
+        }
+
+        @Test
+        @DisplayName("handles null and empty lists")
+        void handlesNullAndEmpty() {
+            assertThat(CeWebSearchRelayGate.removeWebSearch(null)).isNull();
+            assertThat(CeWebSearchRelayGate.removeWebSearch(List.of())).isEmpty();
+        }
+    }
 }

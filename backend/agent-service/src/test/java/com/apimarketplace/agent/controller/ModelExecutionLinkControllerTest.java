@@ -153,6 +153,81 @@ class ModelExecutionLinkControllerTest {
     }
 
     @Test
+    @DisplayName("query-param delete addresses a billed model containing '/' (undeletable via the path form) and returns 204")
+    void deleteByParamsHandlesSlashModel() {
+        when(service.delete("openrouter", "meta-llama/llama-3.3-70b", ModelExecutionLinkScope.ALL)).thenReturn(true);
+
+        ResponseEntity<?> response = controller.deleteByParams(
+            "ADMIN", "openrouter", "meta-llama/llama-3.3-70b", "ALL");
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        verify(service).delete("openrouter", "meta-llama/llama-3.3-70b", ModelExecutionLinkScope.ALL);
+    }
+
+    @Test
+    @DisplayName("query-param delete defaults an absent scope to ALL and shares the path form's semantics (403 non-admin, 400 unknown scope, 404 missing)")
+    void deleteByParamsSharedSemantics() {
+        when(service.delete("openai", "gpt-5", ModelExecutionLinkScope.ALL)).thenReturn(false);
+
+        assertThat(controller.deleteByParams("USER", "openai", "gpt-5", null).getStatusCode())
+            .isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(controller.deleteByParams("ADMIN", "openai", "gpt-5", "bogus").getStatusCode())
+            .isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(controller.deleteByParams("ADMIN", "openai", "gpt-5", null).getStatusCode())
+            .isEqualTo(HttpStatus.NOT_FOUND);
+        // Absent scope reached the service as the ALL wildcard, not null.
+        verify(service).delete("openai", "gpt-5", ModelExecutionLinkScope.ALL);
+    }
+
+    @Test
+    @DisplayName("upsert with a non-boolean 'enabled' (string \"true\") returns 400 instead of silently persisting a DISABLED link")
+    void upsertStringEnabledIs400() {
+        ResponseEntity<?> response = controller.upsert("ADMIN", Map.of(
+            "billedProvider", "anthropic", "billedModel", "claude-opus-4-8",
+            "executionProvider", "codex", "enabled", "true"));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        verify(service, never()).upsert(any(), any(), any(), any(), any(), anyBoolean());
+    }
+
+    @Test
+    @DisplayName("upsert with a numeric 'enabled' returns 400 (strict JSON boolean)")
+    void upsertNumericEnabledIs400() {
+        ResponseEntity<?> response = controller.upsert("ADMIN", Map.of(
+            "billedProvider", "anthropic", "billedModel", "claude-opus-4-8",
+            "executionProvider", "codex", "enabled", 1));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        verify(service, never()).upsert(any(), any(), any(), any(), any(), anyBoolean());
+    }
+
+    @Test
+    @DisplayName("upsert with 'enabled': false passes false through (an explicit boolean is honored)")
+    void upsertExplicitFalseEnabled() {
+        when(service.upsert(eq("anthropic"), eq("claude-opus-4-8"), eq("codex"), any(),
+                eq(ModelExecutionLinkScope.ALL), eq(false)))
+            .thenReturn(link("anthropic", "claude-opus-4-8", "codex", null, ModelExecutionLinkScope.ALL, false));
+
+        ResponseEntity<?> response = controller.upsert("ADMIN", Map.of(
+            "billedProvider", "anthropic", "billedModel", "claude-opus-4-8",
+            "executionProvider", "codex", "enabled", false));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(((Map<?, ?>) response.getBody()).get("enabled")).isEqualTo(false);
+    }
+
+    @Test
+    @DisplayName("upsert with a non-string optional field (numeric scope) returns 400 via the optionalString type check")
+    void upsertNumericScopeIs400() {
+        ResponseEntity<?> response = controller.upsert("ADMIN", Map.of(
+            "billedProvider", "anthropic", "billedModel", "claude-opus-4-8",
+            "executionProvider", "codex", "scope", 3));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        verify(service, never()).upsert(any(), any(), any(), any(), any(), anyBoolean());
+    }
+
+    @Test
     @DisplayName("list as admin returns the links mapped to a stable JSON shape including the scope")
     void listAsAdmin() {
         when(service.list()).thenReturn(List.of(

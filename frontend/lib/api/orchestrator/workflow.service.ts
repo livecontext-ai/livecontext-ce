@@ -357,6 +357,26 @@ export class WorkflowService {
   async deleteRun(workflowId: string, runId: string): Promise<void> {
     return apiClient.delete<void>(`/workflows/${workflowId}/runs/${runId}`);
   }
+
+  /**
+   * Availability of the deployment's optional components (screenshot/PDF renderer
+   * sidecar, browser agent + web search stack). Lets the builder warn "this toggle
+   * / node cannot work here" instead of silently no-oping on installs without the
+   * opt-in components.
+   */
+  async getFeatureCapabilities(): Promise<FeatureCapabilities> {
+    return apiClient.get<FeatureCapabilities>('/workflows/capabilities');
+  }
+}
+
+/** Mirrors OptionalFeatureCapabilityService.FeatureCapabilities (orchestrator). */
+export interface FeatureCapabilities {
+  /** Playwright renderer sidecar behind interface generateScreenshot / generatePdf. */
+  screenshotRenderer: boolean;
+  /** Browser agent (agent_browse / Browser Agent node) - local stack or cloud-link relay. */
+  browserAgent: boolean;
+  /** web_search chat tool - same stack as browserAgent today, kept separate for the contract. */
+  webSearch: boolean;
 }
 
 export const workflowService = new WorkflowService();

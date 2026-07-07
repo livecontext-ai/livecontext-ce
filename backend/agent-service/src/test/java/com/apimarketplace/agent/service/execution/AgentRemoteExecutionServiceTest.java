@@ -424,6 +424,145 @@ class AgentRemoteExecutionServiceTest {
     }
 
     @Test
+    @DisplayName("Legacy null-source fallback: a conversation-format run without a source resolves links as CONVERSATION (CHAT links keep applying to legacy chat callers)")
+    void nullSourceConversationFormatResolvesAsConversation() {
+        ModelExecutionLinkService linkService = org.mockito.Mockito.mock(ModelExecutionLinkService.class);
+        ArgumentCaptor<String> sourceArg = ArgumentCaptor.forClass(String.class);
+        when(linkService.resolve(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                sourceArg.capture()))
+            .thenReturn(java.util.Optional.empty());
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "executionLinkService", linkService);
+        when(agentLoopService.execute(any(), any(StreamingCallback.class)))
+            .thenReturn(successfulLoopResult());
+
+        // request(...) sets streamingFormat="conversation" and source=null.
+        service.executeAgent(request(Map.of(), UUID.randomUUID().toString(), null), "USER");
+
+        // Regressing this to null/other silently stops CHAT-scoped links for legacy chat callers.
+        assertThat(sourceArg.getValue()).isEqualTo("CONVERSATION");
+    }
+
+    @Test
+    @DisplayName("Legacy null-source fallback: a non-conversation-format run without a source resolves links as WORKFLOW")
+    void nullSourceWorkflowFormatResolvesAsWorkflow() {
+        ModelExecutionLinkService linkService = org.mockito.Mockito.mock(ModelExecutionLinkService.class);
+        ArgumentCaptor<String> sourceArg = ArgumentCaptor.forClass(String.class);
+        when(linkService.resolve(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                sourceArg.capture()))
+            .thenReturn(java.util.Optional.empty());
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "executionLinkService", linkService);
+        when(agentLoopService.execute(any(), any(StreamingCallback.class)))
+            .thenReturn(successfulLoopResult());
+
+        // streamingFormat="workflow", source absent: pre-source-field legacy workflow dispatch.
+        service.executeAgent(streamingRequest("workflow", null));
+
+        assertThat(sourceArg.getValue()).isEqualTo("WORKFLOW");
+    }
+
+    @Test
+    @DisplayName("BILLING-CRITICAL error path: when the direct loop THROWS on a linked run, the FAILED response still carries the BILLED identity, never the execution provider")
+    void linkedRunLoopExceptionKeepsBilledIdentity() {
+        ModelExecutionLinkService linkService = org.mockito.Mockito.mock(ModelExecutionLinkService.class);
+        when(linkService.resolve(org.mockito.ArgumentMatchers.eq("deepseek"),
+                org.mockito.ArgumentMatchers.eq("deepseek-chat"), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(java.util.Optional.of(
+                new com.apimarketplace.agent.service.ModelExecutionLinkService.ExecutionRoute(
+                    "openrouter", "or-model")));
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "executionLinkService", linkService);
+        when(agentLoopService.execute(any(), any(StreamingCallback.class)))
+            .thenThrow(new RuntimeException("upstream 500"));
+
+        AgentExecutionResponseDto response =
+            service.executeAgent(request(Map.of(), UUID.randomUUID().toString(), "CHAT"), "USER");
+
+        assertThat(response.success()).isFalse();
+        // The catch block must build the failure from the BILLED request identity: leaking
+        // "openrouter" here would surface the execution provider in observability/billing rows.
+        assertThat(response.provider()).isEqualTo("deepseek");
+        assertThat(response.model()).isEqualTo("deepseek-chat");
+    }
+
+    @Test
+    @DisplayName("BILLING-CRITICAL error path: a bridge FAILED response (success=false, stamped with the bridge identity) is still re-stamped with the BILLED identity")
+    void linkedRunBridgeFailureResponseIsReStampedBilled() {
+        ModelExecutionLinkService linkService = org.mockito.Mockito.mock(ModelExecutionLinkService.class);
+        when(linkService.resolve(org.mockito.ArgumentMatchers.eq("deepseek"),
+                org.mockito.ArgumentMatchers.eq("deepseek-chat"), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(java.util.Optional.of(
+                new com.apimarketplace.agent.service.ModelExecutionLinkService.ExecutionRoute("codex", "gpt-5.3-codex")));
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "executionLinkService", linkService);
+        when(bridgeDispatcher.isAvailable()).thenReturn(true);
+        when(bridgeDispatcher.shouldDispatch("codex")).thenReturn(true);
+        // The bridge fails the run and stamps its OWN identity on the FAILED response.
+        when(bridgeDispatcher.dispatchRaw(any(), any()))
+            .thenReturn(new AgentExecutionResponseDto(
+                false, null, null, List.of(), 0, Map.of(),
+                "CLI crashed", 10, "codex", "gpt-5.3-codex", List.of(),
+                AgentStopReason.ERROR.name(), Map.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null));
+
+        AgentExecutionResponseDto response =
+            service.executeAgent(request(Map.of(), UUID.randomUUID().toString(), "CHAT"), "USER");
+
+        assertThat(response.success()).isFalse();
+        // Failure or not, the caller-visible identity is the billed pair.
+        assertThat(response.provider()).isEqualTo("deepseek");
+        assertThat(response.model()).isEqualTo("deepseek-chat");
+    }
+
+    @Test
+    @DisplayName("BILLING-CRITICAL error path: a bridge dispatch EXCEPTION on a linked run builds the failure from the BILLED identity")
+    void linkedRunBridgeExceptionKeepsBilledIdentity() {
+        ModelExecutionLinkService linkService = org.mockito.Mockito.mock(ModelExecutionLinkService.class);
+        when(linkService.resolve(org.mockito.ArgumentMatchers.eq("deepseek"),
+                org.mockito.ArgumentMatchers.eq("deepseek-chat"), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(java.util.Optional.of(
+                new com.apimarketplace.agent.service.ModelExecutionLinkService.ExecutionRoute("codex", "gpt-5.3-codex")));
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "executionLinkService", linkService);
+        when(bridgeDispatcher.isAvailable()).thenReturn(true);
+        when(bridgeDispatcher.shouldDispatch("codex")).thenReturn(true);
+        when(bridgeDispatcher.dispatchRaw(any(), any())).thenThrow(new RuntimeException("bridge unreachable"));
+
+        AgentExecutionResponseDto response =
+            service.executeAgent(request(Map.of(), UUID.randomUUID().toString(), "CHAT"), "USER");
+
+        assertThat(response.success()).isFalse();
+        assertThat(response.provider()).isEqualTo("deepseek");
+        assertThat(response.model()).isEqualTo("deepseek-chat");
+    }
+
+    @Test
+    @DisplayName("Streaming display: a linked run's conversation callback is opened with the BILLED model - the UI must never reveal the execution target")
+    void linkedRunConversationCallbackStreamsBilledModel() {
+        ModelExecutionLinkService linkService = org.mockito.Mockito.mock(ModelExecutionLinkService.class);
+        when(linkService.resolve(org.mockito.ArgumentMatchers.eq("deepseek"),
+                org.mockito.ArgumentMatchers.eq("deepseek-chat"), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(java.util.Optional.of(
+                new com.apimarketplace.agent.service.ModelExecutionLinkService.ExecutionRoute(
+                    "openrouter", "or-model")));
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "executionLinkService", linkService);
+        when(conversationRedisStreamingCallback.forExecution(any(), any(), any(), any(), any(), any(), any(), any()))
+            .thenReturn(org.mockito.Mockito.mock(ConversationRedisStreamingCallback.ConversationCallback.class));
+        ArgumentCaptor<AgentLoopContext> ctx = ArgumentCaptor.forClass(AgentLoopContext.class);
+        when(agentLoopService.execute(ctx.capture(), any(StreamingCallback.class)))
+            .thenReturn(successfulLoopResult());
+
+        service.executeAgent(streamingRequest("conversation", "stream-channel-9"));
+
+        // The loop executes on the EXECUTION identity...
+        assertThat(ctx.getValue().provider()).isEqualTo("openrouter");
+        assertThat(ctx.getValue().model()).isEqualTo("or-model");
+        // ...but the live conversation stream displays the BILLED model.
+        verify(conversationRedisStreamingCallback).forExecution(
+            org.mockito.ArgumentMatchers.eq("stream-channel-9"),
+            org.mockito.ArgumentMatchers.eq("conversation-1"),
+            org.mockito.ArgumentMatchers.eq("deepseek-chat"),
+            org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.isNull(),
+            org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.isNull(),
+            org.mockito.ArgumentMatchers.isNull());
+    }
+
+    @Test
     @DisplayName("Conversation format with a null streamChannelId does NOT open a conversation stream (fleet-activity-only callback)")
     void conversationFormatWithoutStreamChannelDoesNotOpenConversationStream() {
         // request(...) sets streamingFormat="conversation" but leaves streamChannelId null.

@@ -101,4 +101,39 @@ describe('WorkflowValidator cache key invalidation', () => {
     // Same object reference = cache hit
     expect(result1).toBe(result2);
   });
+
+  it('should invalidate cache when featureCapabilities resolve on an unchanged graph', () => {
+    // Regression: the capabilities query resolves AFTER the first validation of an
+    // unchanged graph (null → {browserAgent:false}). Without the capability signature
+    // in the cache key, the stale "no warning" result would be served forever.
+    const browserNode = {
+      id: 'n-browse',
+      type: 'agentNode',
+      position: { x: 0, y: 0 },
+      data: {
+        id: 'browser-agent',
+        kind: 'browser_agent',
+        label: 'Browse',
+        paramExpressions: { task: 'Open example.com' },
+      },
+    } as any;
+    const nodes = [makeTriggerNode('Start', 'trigger-1'), browserNode];
+    const edges = [makeEdge('trigger-1', 'n-browse')];
+
+    // Capabilities unknown → no availability warning
+    const result1 = WorkflowValidator.validate(nodes, edges, undefined, false, undefined, undefined);
+    const warnings1 = Object.values(result1.issuesByElement)
+      .flat()
+      .filter(i => i.context?.rule === 'browser_agent_component_unavailable');
+    expect(warnings1).toHaveLength(0);
+
+    // Capabilities resolve to "browser agent missing" → warning must appear (cache miss)
+    const result2 = WorkflowValidator.validate(nodes, edges, undefined, false, undefined,
+      { screenshotRenderer: true, browserAgent: false, webSearch: false });
+    const warnings2 = Object.values(result2.issuesByElement)
+      .flat()
+      .filter(i => i.context?.rule === 'browser_agent_component_unavailable');
+    expect(warnings2).toHaveLength(1);
+    expect(warnings2[0].severity).toBe('warning');
+  });
 });

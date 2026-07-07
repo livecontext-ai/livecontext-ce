@@ -24,6 +24,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useOrgScopedQuery } from '@/lib/hooks/useOrgScopedQuery';
 import { useOrgScopedReset } from '@/lib/hooks/useOrgScopedReset';
 import { orchestratorApi, type Credential } from '@/lib/api/orchestrator';
+import { useFeatureCapabilities, type FeatureCapabilities } from '@/hooks/useFeatureCapabilities';
 
 // Types for per-node validation state
 export interface NodeValidationState {
@@ -167,6 +168,12 @@ export function ValidationProvider({
     const userCredentialsRef = React.useRef<Credential[] | undefined>(userCredentials);
     userCredentialsRef.current = userCredentials;
 
+    // Optional-component availability (renderer sidecar, browser agent). null while
+    // unknown - rules then emit NO availability warning (never a false positive).
+    const { capabilities: featureCapabilities } = useFeatureCapabilities();
+    const featureCapabilitiesRef = React.useRef<FeatureCapabilities | null>(featureCapabilities);
+    featureCapabilitiesRef.current = featureCapabilities;
+
     // Phase 6 (2026-05-18) - clear the ref when active workspace flips so
     // runValidation cannot fire against stale creds during the refetch
     // window (false-positive "missing credential" warnings).
@@ -205,7 +212,8 @@ export function ValidationProvider({
             currentEdges,
             currentBackendErrors,
             true,
-            userCredentialsRef.current
+            userCredentialsRef.current,
+            featureCapabilitiesRef.current ?? undefined
         );
 
         // Build per-node validation map (keyed by node ID for easy lookup)
@@ -356,11 +364,12 @@ export function ValidationProvider({
         const credKey = userCredentials
             ? userCredentials.map((c) => c.id).join(',')
             : '';
-        const key = `${nodeKey}::${edgeKey}::${backendKey}::${credKey}`;
+        const capsKey = featureCapabilities ? JSON.stringify(featureCapabilities) : '';
+        const key = `${nodeKey}::${edgeKey}::${backendKey}::${credKey}::${capsKey}`;
         if (key === lastValidationKeyRef.current) return;
         lastValidationKeyRef.current = key;
         runValidation();
-    }, [nodes, edges, backendErrors, userCredentials, runValidation]);
+    }, [nodes, edges, backendErrors, userCredentials, featureCapabilities, runValidation]);
 
     // Context value (memoized to prevent unnecessary re-renders)
     const contextValue = React.useMemo<ValidationContextValue>(() => ({

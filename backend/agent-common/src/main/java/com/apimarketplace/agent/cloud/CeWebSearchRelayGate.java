@@ -94,6 +94,18 @@ public class CeWebSearchRelayGate {
         if (!containsWebSearch || isWebSearchAvailable(tenantId)) {
             return tools;
         }
+        return removeWebSearch(tools);
+    }
+
+    /**
+     * Drop the {@code web_search} tool definition without re-checking availability.
+     * For callers that already resolved {@link #isWebSearchAvailable} themselves
+     * (the check can cost an HTTP roundtrip on relay-wired CE installs).
+     */
+    public static List<ToolDefinition> removeWebSearch(List<ToolDefinition> tools) {
+        if (tools == null || tools.isEmpty()) {
+            return tools;
+        }
         return tools.stream()
                 .filter(t -> t == null || !WEB_SEARCH_TOOL_NAME.equals(t.name()))
                 .toList();

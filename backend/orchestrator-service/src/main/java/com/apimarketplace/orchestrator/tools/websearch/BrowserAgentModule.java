@@ -465,6 +465,9 @@ public class BrowserAgentModule extends WebJobModule {
             // the direct-key lookup (its provider_kind=="bridge" early return). When not linked
             // this is a no-op and the direct-key path below runs unchanged.
             maybeRouteLlmToCloudRelay(llmCopy);
+            // Cloud: honor model execution links before resolving a key, or the run
+            // executes on the exact provider key the admin linked away from.
+            maybeApplyExecutionLink(llmCopy);
             injectLlmApiKey(llmCopy, userId);
             jobParams.put("llm", llmCopy);
         } else if (llmObj != null) {
@@ -1224,6 +1227,47 @@ public class BrowserAgentModule extends WebJobModule {
                 + "(provider={}, model={})", provider, model);
     }
 
+    /**
+     * Swap the runner's {@code llm.provider}/{@code llm.model} to the execution
+     * target when the billed pair carries a model execution link (CLOUD admin
+     * feature; only ALL-scoped links with a direct-API target apply - agent-service
+     * filters bridge targets out server-side). Runs AFTER the cloud-relay reroute
+     * and BEFORE {@link #injectLlmApiKey}, so the key is resolved for the EXECUTION
+     * provider. Observability keeps the billed identity for free:
+     * {@code recordObservabilityFromResult} reads the caller's original
+     * {@code parameters.llm}, not this mutated copy.
+     *
+     * <p>No-op when: the agent client is absent (tests), the block was rerouted to
+     * a bridge (CE cloud relay / explicit bridge session), an explicit
+     * {@code api_key} override is present, provider/model are missing, the pair is
+     * unlinked, or agent-service is unreachable (fail-open to the billed pair,
+     * logged in the client).
+     */
+    void maybeApplyExecutionLink(Map<String, Object> llm) {
+        if (agentClient == null) {
+            return;
+        }
+        Object kind = llm.get("provider_kind");
+        if (kind != null && "bridge".equalsIgnoreCase(String.valueOf(kind).trim())) {
+            return; // bridge sessions never resolve direct upstream identities here
+        }
+        if (llm.get("api_key") instanceof String key && !key.isBlank()) {
+            return; // explicit direct key wins - don't reroute what the caller pinned
+        }
+        String provider = llm.get("provider") == null ? "" : String.valueOf(llm.get("provider")).trim();
+        String model = llm.get("model") == null ? "" : String.valueOf(llm.get("model")).trim();
+        if (provider.isEmpty() || model.isEmpty()) {
+            return;
+        }
+        agentClient.resolveExecutionLinkApiTarget(provider, model).ifPresent(target -> {
+            llm.put("provider", target.executionProvider());
+            llm.put("model", target.executionModel());
+            log.info("BrowserAgentModule: execution link routes billed {}/{} -> exec {}/{} "
+                    + "(observability keeps the billed pair)",
+                provider, model, target.executionProvider(), target.executionModel());
+        });
+    }
+
     private void injectLlmApiKey(Map<String, Object> llm, String userId) {
         // Bridge check FIRST: a bridge session must never trigger a direct
         // upstream credential lookup, regardless of what api_key (if any) is
@@ -1327,6 +1371,15 @@ public class BrowserAgentModule extends WebJobModule {
      *       0). For bridge models the snapshot rows have rate=0 by design,
      *       so the formula produces 0 and we keep the existing value.</li>
      * </ul>
+     *
+     * <p>Linked runs: when a model execution link redirected the session
+     * ({@link #maybeApplyExecutionLink}), {@code by_model} comes back keyed by
+     * the EXECUTION model while {@code parameters.llm} still holds the BILLED
+     * pair. The user pays the billed pair's price (same re-stamp semantics as
+     * the agent chokepoint), so an entry whose key is exactly the billed pair's
+     * linked execution model is priced at the BILLED model's rate - even when
+     * the execution model has its own rate row. An unrelated model key in
+     * {@code by_model} keeps today's skip-with-WARN behaviour.</p>
      */
     @SuppressWarnings("unchecked")
     private void applyPricingToResponse(Map<String, Object> response, Map<String, Object> parameters) {
@@ -1352,6 +1405,7 @@ public class BrowserAgentModule extends WebJobModule {
             log.debug("BrowserAgentModule: skipping cost calculation - no provider in llm block");
             return;
         }
+        String billedModel = modelFromParameters(parameters);
 
         BigDecimal totalUsd = BigDecimal.ZERO;
         boolean anyMatched = false;
@@ -1365,10 +1419,19 @@ public class BrowserAgentModule extends WebJobModule {
             if (promptTokens <= 0 && completionTokens <= 0) {
                 continue;
             }
-            var ratesOpt = pricingSnapshotClient.getRates(provider, model);
+            // An execution link may have run the session on a different model than
+            // the billed one (by_model is keyed by the EXECUTION model). The user
+            // pays the BILLED pair's price, so a linked entry is priced at the
+            // billed rate FIRST - even when the execution model happens to have its
+            // own rate row, which would otherwise display the wrong price.
+            boolean linkedEntry = isLinkedExecutionModel(provider, billedModel, model);
+            var ratesOpt = linkedEntry
+                ? pricingSnapshotClient.getRates(provider, billedModel)
+                : pricingSnapshotClient.getRates(provider, model);
             if (ratesOpt.isEmpty()) {
-                log.warn("BrowserAgentModule: no pricing rate for ({}, {}) - cost_usd contribution skipped",
-                    provider, model);
+                log.warn("BrowserAgentModule: no pricing rate for ({}, {}){} - cost_usd contribution skipped",
+                    provider, linkedEntry ? billedModel : model,
+                    linkedEntry ? " (billed pair of linked execution model " + model + ")" : "");
                 continue;
             }
             var rates = ratesOpt.get();
@@ -1398,6 +1461,35 @@ public class BrowserAgentModule extends WebJobModule {
         if (p == null) return null;
         String s = String.valueOf(p).trim().toLowerCase();
         return s.isEmpty() ? null : s;
+    }
+
+    /** The BILLED model id from the caller's llm block (verbatim - model ids are case-sensitive). */
+    private static String modelFromParameters(Map<String, Object> parameters) {
+        if (parameters == null) return null;
+        Object llm = parameters.get("llm");
+        if (!(llm instanceof Map<?, ?> llmMap)) return null;
+        Object m = llmMap.get("model");
+        if (m == null) return null;
+        String s = String.valueOf(m).trim();
+        return s.isEmpty() ? null : s;
+    }
+
+    /**
+     * True iff {@code runnerModel} is the EXECUTION target a model execution link
+     * maps the billed pair to - i.e. this run was redirected by
+     * {@link #maybeApplyExecutionLink}, and the runner-reported model key must be
+     * priced at the billed pair's rate. Re-resolves through the (server-side
+     * cached) link lookup only on a rate miss, so unlinked runs never pay the
+     * extra call; any resolution failure means "not linked" (skip-with-WARN, as
+     * before).
+     */
+    private boolean isLinkedExecutionModel(String provider, String billedModel, String runnerModel) {
+        if (agentClient == null || billedModel == null || billedModel.equals(runnerModel)) {
+            return false;
+        }
+        return agentClient.resolveExecutionLinkApiTarget(provider, billedModel)
+            .map(target -> runnerModel.equals(target.executionModel()))
+            .orElse(false);
     }
 
     private static long longField(Map<String, Object> m, String key) {

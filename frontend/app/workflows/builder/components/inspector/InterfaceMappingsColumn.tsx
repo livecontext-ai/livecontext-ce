@@ -17,6 +17,9 @@ import { nodeRegistry } from '../../registry/nodeRegistry';
 import { triggerKey } from '../../utils/labelNormalizer';
 import { NodeSettingsSection } from './NodeSettingsSection';
 import { nodeSupportsPolicy } from '../../utils/nodePolicy';
+import { OptionalFeatureNotice } from './OptionalFeatureNotice';
+import { RENDERER_ENABLE_COMMAND } from '@/lib/optionalComponentCommands';
+import { useFeatureCapabilities } from '@/hooks/useFeatureCapabilities';
 
 interface InterfaceMappingsColumnProps {
   node: { data: BuilderNodeData; id: string } | null;
@@ -317,6 +320,9 @@ export const InterfaceMappingsColumn = ({
   handleEditorExpressionChange,
 }: InterfaceMappingsColumnProps) => {
   const t = useTranslations('workflowBuilder.inspector.interfaceMappings');
+  // Optional renderer sidecar availability - null while unknown (no false warning).
+  const { capabilities } = useFeatureCapabilities();
+  const rendererMissing = capabilities !== null && !capabilities.screenshotRenderer;
 
   // Check if this interface comes from an existing interface (has interfaceId)
   const interfaceData = (node?.data as any)?.interfaceData || {};
@@ -1015,6 +1021,15 @@ export const InterfaceMappingsColumn = ({
                     </div>
                   </div>
                 </div>
+              )}
+
+              {/* Renderer sidecar missing: both render toggles would silently produce no
+                  output on this install - warn with the enable path instead of no-oping. */}
+              {rendererMissing && (
+                <OptionalFeatureNotice
+                  message={t('rendererUnavailable')}
+                  command={RENDERER_ENABLE_COMMAND}
+                />
               )}
             </div>
           )}

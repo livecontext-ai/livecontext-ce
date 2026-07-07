@@ -150,10 +150,11 @@ public class BrowserAgentNode extends BaseNode {
         boolean relayWired = this.cloudBrowserRelayClient != null && this.cloudRuntimeAccess != null;
         if (this.browserAgentModule == null && !relayWired) {
             throw new IllegalStateException(
-                "BrowserAgentNode '" + nodeId + "' cannot be wired: BrowserAgentModule "
-                + "missing from ServiceRegistry. Enable 'websearch.enabled=true', link this "
-                + "install to a cloud deployment with the Cloud LLM source, or remove the "
-                + "BROWSER_AGENT node from the workflow plan.");
+                "BrowserAgentNode '" + nodeId + "' cannot be wired: no browser stack is "
+                + "available on this deployment. Enable the optional browser-agent component "
+                + "(self-hosted: start the stack with docker/.env.ce.browser-agent, which sets "
+                + "websearch.enabled=true), link this install to a cloud deployment with the "
+                + "Cloud LLM source, or remove the BROWSER_AGENT node from the workflow plan.");
         }
         // AgentClient is only required for the LOCAL path (it records the browser-agent
         // observability row). The relay path bills + records on the cloud account, so a
@@ -297,9 +298,12 @@ public class BrowserAgentNode extends BaseNode {
         Optional<CloudLlmRuntimeCredentials> credentials = resolveRelayCredentials(tenantId);
         if (credentials.isEmpty()) {
             long duration = System.currentTimeMillis() - startTime;
-            String err = "Browser automation is not available: this workspace has no local "
-                + "browser stack (websearch.enabled=false) and no active cloud link with the "
-                + "Cloud LLM source to relay the session to. Only the user can set up the cloud link.";
+            String err = "Browser automation is not available on this installation: the optional "
+                + "browser-agent component is not enabled and there is no active cloud link with "
+                + "the Cloud LLM source to relay the session to. Only the user can fix this: an "
+                + "administrator can enable the component (self-hosted: restart the stack with the "
+                + "bundled docker/.env.ce.browser-agent env file) or set up the cloud link from the "
+                + "settings.";
             logger.warn("Browser agent node relay unavailable: nodeId={}, tenant={}", nodeId, tenantId);
             return NodeExecutionResult.failureWithOutput(nodeId, err,
                 buildFailureOutput(context, resolvedParams, err, null), duration);

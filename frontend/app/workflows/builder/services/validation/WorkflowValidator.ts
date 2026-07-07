@@ -16,6 +16,7 @@
 import type { Node, Edge } from 'reactflow';
 import type { BuilderNodeData } from '../../types';
 import type { Credential } from '@/lib/api/orchestrator';
+import type { FeatureCapabilities } from '@/lib/api/orchestrator/workflow.service';
 import type {
   ValidationContext,
   ValidationRule,
@@ -55,7 +56,8 @@ export class WorkflowValidator {
     nodes: Node<BuilderNodeData>[],
     edges: Edge[],
     backendErrors?: BackendValidationError[],
-    userCredentials?: Credential[]
+    userCredentials?: Credential[],
+    featureCapabilities?: FeatureCapabilities
   ): string {
     // Include all data that affects validation in the cache key
     const nodeSignatures = nodes
@@ -113,8 +115,12 @@ export class WorkflowValidator {
       .sort()
       .join(',');
 
+    // Include optional-component availability so the availability warnings
+    // (dis)appear when the capabilities query resolves or the deployment changes.
+    const capabilitySignature = featureCapabilities ? JSON.stringify(featureCapabilities) : '';
+
     // Create a hash of the combined signatures
-    const combined = `${nodeSignatures}###${edgeSignatures}###${errorSignature}###${credentialSignature}`;
+    const combined = `${nodeSignatures}###${edgeSignatures}###${errorSignature}###${credentialSignature}###${capabilitySignature}`;
     let hash = 0;
     for (let i = 0; i < combined.length; i++) {
       const char = combined.charCodeAt(i);
@@ -139,12 +145,13 @@ export class WorkflowValidator {
     edges: Edge[],
     backendErrors?: BackendValidationError[],
     forceRevalidate = false,
-    userCredentials?: Credential[]
+    userCredentials?: Credential[],
+    featureCapabilities?: FeatureCapabilities
   ): WorkflowValidationResult {
     const startTime = performance.now();
 
     // Check cache (unless forced)
-    const cacheKey = this.generateCacheKey(nodes, edges, backendErrors, userCredentials);
+    const cacheKey = this.generateCacheKey(nodes, edges, backendErrors, userCredentials, featureCapabilities);
     if (!forceRevalidate && this.lastValidationKey === cacheKey && this.lastValidationResult) {
       return this.lastValidationResult;
     }
@@ -159,6 +166,7 @@ export class WorkflowValidator {
       backendErrors,
       cache,
       userCredentials,
+      featureCapabilities,
     };
 
     // Execute all validation rules

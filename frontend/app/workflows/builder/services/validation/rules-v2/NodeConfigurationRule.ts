@@ -73,6 +73,11 @@ export class NodeConfigurationRule extends BaseValidationRule {
       // #14: Required fields for all core node types
       this.validateRequiredFields(node, elementKey, issues);
 
+      // Optional-component availability (deployment-level, WARNING): browser_agent
+      // nodes fail at run time and interface render toggles silently no-op when the
+      // backing opt-in component is absent - surface it at build time.
+      this.validateOptionalComponentAvailability(node, elementKey, context, issues);
+
       // #15: MCP tool required parameters
       if (nodeType === 'mcp' && !isInterfaceNode(node) && !isCrudNode(node)) {
         this.validateToolParameters(node, elementKey, issues);
@@ -80,6 +85,40 @@ export class NodeConfigurationRule extends BaseValidationRule {
     }
 
     return this.buildResult(issues);
+  }
+
+  /**
+   * Warns when a node depends on an OPTIONAL deployment component reported absent
+   * by the capabilities endpoint. Warning (not error): the workflow stays saveable
+   * and runnable elsewhere (publish/clone onto an install that has the component).
+   * Unknown capabilities (context field absent: loading, fetch error, older
+   * backend) emit nothing - never a possibly-false warning.
+   */
+  private validateOptionalComponentAvailability(
+    node: Node<BuilderNodeData>,
+    elementKey: string,
+    context: ValidationContext,
+    issues: ValidationIssue[]
+  ): void {
+    const caps = context.featureCapabilities;
+    if (!caps) return;
+
+    const d = node.data as any;
+
+    if (nodeRegistry.isBrowserAgentNode(node) && !caps.browserAgent) {
+      issues.push(this.createWarning(elementKey, 'agent',
+        'Browser agent is not enabled on this installation - this node will fail at run time. An administrator can enable the optional browser-agent component or link the installation to the cloud.',
+        { rule: 'browser_agent_component_unavailable', nodeId: node.id }));
+    }
+
+    if (isInterfaceNode(node) && !caps.screenshotRenderer) {
+      const iface = d?.interfaceData ?? {};
+      if (iface.generateScreenshot === true || iface.generatePdf === true) {
+        issues.push(this.createWarning(elementKey, 'interface',
+          'Screenshot/PDF generation is enabled but the optional renderer component is not running on this installation - the screenshot/pdf outputs will be absent. An administrator can enable the renderer component.',
+          { rule: 'interface_renderer_unavailable', nodeId: node.id }));
+      }
+    }
   }
 
   /**

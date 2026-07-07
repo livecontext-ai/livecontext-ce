@@ -5957,6 +5957,7 @@
         "generateScreenshotDescription": "Active la capture PNG de l'interface rendue cote backend. La capture est exposee comme FileRef sur la sortie screenshot pour les nodes en aval (piece jointe email, Telegram photo, entree image agent). Best-effort : si la capture echoue, la sortie reste absente sans faire echouer le workflow.",
         "generatePdf": "Générer un PDF",
         "generatePdfDescription": "Une fois activé, rend l'interface en PDF et l'expose comme FileRef sur la sortie pdf pour les nodes en aval (pièce jointe email, Telegram document, entrée fichier agent). Best-effort : si le rendu échoue, la sortie reste absente sans faire échouer le workflow.",
+        "rendererUnavailable": "Le rendu screenshot et PDF nécessite le composant optionnel de rendu (renderer), qui n'est pas démarré sur cette installation. Ces options ne produiront aucune sortie tant qu'un administrateur ne l'a pas activé :",
         "pdfFormat": "Taille de page PDF",
         "pdfLandscape": "Paysage",
         "exposeRenderedSource": "Exposer la source rendue",
@@ -6904,6 +6905,7 @@
         "deleteField": "Supprimer le champ"
       },
       "browserAgent": {
+        "unavailableNotice": "L'agent navigateur n'est pas activé sur cette installation : ce node échouera à l'exécution. Un administrateur peut activer le composant optionnel browser-agent ou lier l'installation au cloud :",
         "task": {
           "label": "Tâche",
           "help": "Objectif en langage naturel. Soyez précis - une tâche vague gaspille les steps LLM.",
@@ -9308,6 +9310,17 @@
     "updateRunFrom": "Exécutez ces commandes depuis votre dossier LiveContext cloné :",
     "copy": "Copier",
     "copied": "Copié"
+  },
+  "optionalComponents": {
+    "title": "Composants optionnels",
+    "subtitle": "Fonctionnalités lourdes désactivées par défaut sur les installations auto-hébergées",
+    "renderer": "Screenshots et PDF d'interface",
+    "rendererDescription": "Rend les nodes interface en captures PNG et documents PDF (sidecar Chromium headless).",
+    "browserAgent": "Agent navigateur et recherche web",
+    "browserAgentDescription": "Permet aux agents de naviguer sur des pages web et de lancer des recherches web (sidecars Chromium + métamoteur).",
+    "enabled": "Activé",
+    "notEnabled": "Non activé",
+    "loadError": "Impossible de charger l'état des composants"
   },
   "conversationActivity": {
     "title": "Activité de la conversation",

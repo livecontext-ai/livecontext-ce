@@ -5717,6 +5717,7 @@
         "generateScreenshotDescription": "Quando habilitado, captura um PNG da interface renderizada e o expõe como a saída screenshot FileRef para os nós posteriores (anexos de e-mail, foto do Telegram, entrada de imagem do agente). Melhor esforço: falhas de captura deixam a saída ausente sem fazer o fluxo de trabalho falhar.",
         "generatePdf": "Gerar PDF",
         "generatePdfDescription": "Quando habilitado, renderiza a interface para um PDF e o expõe como a saída pdf FileRef para os nós posteriores (anexo de e-mail, documento do Telegram, entrada de arquivo do agente). Melhor esforço: falhas de renderização deixam a saída ausente sem fazer o fluxo de trabalho falhar.",
+        "rendererUnavailable": "A geração de capturas de tela e PDF requer o componente opcional de renderização, que não está em execução nesta instalação. Essas opções não produzirão nenhuma saída até que um administrador o habilite:",
         "pdfFormat": "Tamanho da página PDF",
         "pdfLandscape": "Paisagem"
       },
@@ -6882,6 +6883,7 @@
       },
       "addField": "Adicionar campo",
       "browserAgent": {
+        "unavailableNotice": "O agente de navegador não está habilitado nesta instalação, então este nó falhará em tempo de execução. Um administrador pode habilitar o componente opcional browser-agent ou vincular a instalação à nuvem:",
         "domainAllowlist": {
           "label": "Lista de domínios permitidos"
         },
@@ -9308,6 +9310,17 @@
     "updateRunFrom": "Execute estes comandos na sua pasta clonada do LiveContext:",
     "copy": "Copiar",
     "copied": "Copiado"
+  },
+  "optionalComponents": {
+    "title": "Componentes opcionais",
+    "subtitle": "Recursos pesados desativados por padrão em instalações auto-hospedadas",
+    "renderer": "Capturas de tela e PDF de interface",
+    "rendererDescription": "Renderiza os nós de interface em capturas PNG e documentos PDF (sidecar de Chromium headless).",
+    "browserAgent": "Agente de navegador e busca na web",
+    "browserAgentDescription": "Permite que agentes naveguem em páginas web e façam buscas na web (sidecars de Chromium + metabusca).",
+    "enabled": "Habilitado",
+    "notEnabled": "Não habilitado",
+    "loadError": "Não foi possível carregar o status dos componentes"
   },
   "conversationActivity": {
     "title": "Atividade da conversa",
