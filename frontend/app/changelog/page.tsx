@@ -1,25 +1,27 @@
-import Link from 'next/link';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { ExternalLink } from 'lucide-react';
 import { LandingShell } from '@/components/landing/LandingShell';
 import { docsStyles } from '@/app/docs/_components/docsStyles';
-import { fetchReleases } from '@/lib/changelog/githubReleases';
+import { changelogStyles } from '@/app/changelog/_components/changelogStyles';
+import { fetchReleases, formatReleaseDate } from '@/lib/changelog/githubReleases';
 import { SELF_HOSTED_GITHUB_URL } from '@/lib/billing/pricing-constants';
 import { IS_CE } from '@/lib/edition/edition';
 
 /**
- * Public changelog, rendered from the GitHub Releases of the public CE repo.
+ * Public changelog, rendered from the GitHub Releases of the public CE repo as
+ * a vertical timeline (frieze): one dated, versioned entry per shipped release
+ * with its notes formatted as markdown.
  *
- * The release pipeline (publish-ce.yml) creates one Release per shipped
- * version with the release notes as its body - that list IS the changelog, so
- * this page never needs a manual update and can never drift from what was
- * actually published. ISR keeps it fresh (a new release shows up within
- * `revalidate` seconds) while shielding the landing site from GitHub API
- * hiccups and rate limits.
+ * The release pipeline (publish-ce.yml) creates one Release per shipped version
+ * with the release notes as its body - that list IS the changelog, so this page
+ * never needs a manual update and can never drift from what was actually
+ * published. ISR keeps it fresh (a new release shows up within `revalidate`
+ * seconds) while shielding the landing site from GitHub API hiccups and rate
+ * limits (any failure degrades to the "browse on GitHub" fallback).
  *
- * Like every page outside the [locale] tree, this stays intl-context-free
- * (see the LandingShell contract): hardcoded English, same as /about and
- * /legal. Dates render as ISO (locale-neutral) on purpose.
+ * Like every page outside the [locale] tree, this stays intl-context-free (see
+ * the LandingShell contract): hardcoded English, same as /about and /legal.
  */
 export const revalidate = 1800;
 
@@ -29,102 +31,95 @@ export const metadata = {
   robots: IS_CE ? { index: false, follow: false } : undefined,
 };
 
-function isoDate(publishedAt: string): string {
-  return publishedAt.slice(0, 10);
-}
-
 export default async function ChangelogPage() {
   const releases = await fetchReleases(revalidate);
+  const releasesUrl = `${SELF_HOSTED_GITHUB_URL}/releases`;
 
   return (
-    <LandingShell extraStyles={docsStyles}>
-      <div className="max-w-3xl mx-auto px-6 py-20">
+    <LandingShell extraStyles={docsStyles + changelogStyles}>
+      <div className="max-w-3xl mx-auto px-6 py-16 md:py-20">
         <header className="mb-14">
-          <h1
-            className="text-3xl md:text-4xl font-bold mb-3"
-            style={{
-              color: 'var(--text-primary)',
-              fontFamily: 'var(--font-outfit), Outfit, sans-serif',
-              letterSpacing: '-0.02em',
-            }}
-          >
-            Changelog
-          </h1>
-          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-            What we shipped, when. Sourced live from our{' '}
+          <span className="docs-eyebrow">Product updates</span>
+          <h1 className="docs-h1">Changelog</h1>
+          <p className="docs-lead">
+            A running record of what we ship: every released version with its notes,
+            newest first. It comes straight from our{' '}
             <a
-              href={`${SELF_HOSTED_GITHUB_URL}/releases`}
+              href={releasesUrl}
               target="_blank"
               rel="noopener noreferrer"
-              style={{ color: 'var(--expression-color)' }}
+              style={{ color: 'var(--expression-color)', fontWeight: 500 }}
             >
-              GitHub releases
+              public GitHub releases
             </a>
-            .
+            , so it always matches what actually went out.
           </p>
         </header>
 
         {releases.length === 0 ? (
-          <div
-            className="rounded-xl px-6 py-10 text-center text-sm"
-            style={{
-              background: 'var(--bg-tertiary)',
-              border: '1px solid var(--border-color)',
-              color: 'var(--text-muted)',
-            }}
-          >
+          <div className="cl-fallback">
             Release notes are momentarily unavailable. Browse them directly on{' '}
-            <a
-              href={`${SELF_HOSTED_GITHUB_URL}/releases`}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ color: 'var(--expression-color)' }}
-            >
+            <a href={releasesUrl} target="_blank" rel="noopener noreferrer">
               GitHub
             </a>
             .
           </div>
         ) : (
-          <div className="space-y-14">
-            {releases.map((release) => (
-              <article key={release.tag} id={release.tag}>
-                <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-4">
-                  <h2
-                    className="text-xl md:text-2xl font-semibold"
-                    style={{
-                      color: 'var(--text-primary)',
-                      fontFamily: 'var(--font-outfit), Outfit, sans-serif',
-                    }}
-                  >
-                    <Link href={`#${release.tag}`} style={{ color: 'inherit' }}>
-                      {release.title}
-                    </Link>
-                  </h2>
-                  <time
-                    dateTime={release.publishedAt}
-                    className="text-xs tracking-wide"
-                    style={{ color: 'var(--text-muted)' }}
-                  >
-                    {isoDate(release.publishedAt)}
+          <ol className="cl-timeline">
+            {releases.map((release, index) => (
+              <li key={release.tag} id={release.tag} className="cl-entry">
+                <span
+                  className={index === 0 ? 'cl-dot is-latest' : 'cl-dot'}
+                  aria-hidden="true"
+                />
+
+                <div className="cl-head">
+                  <time className="cl-date" dateTime={release.publishedAt}>
+                    {formatReleaseDate(release.publishedAt)}
                   </time>
-                  <a
-                    href={release.htmlUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs"
-                    style={{ color: 'var(--expression-color)' }}
-                  >
-                    View on GitHub
-                  </a>
+                  <span className="cl-version">{release.tag}</span>
+                  {index === 0 && <span className="cl-latest">Latest</span>}
                 </div>
+
+                <h2 className="cl-title">
+                  <a href={`#${release.tag}`}>{release.title}</a>
+                </h2>
+
                 {release.body.trim() !== '' && (
-                  <div className="docs-prose">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{release.body}</ReactMarkdown>
+                  <div className="cl-body docs-prose">
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={{
+                        // Demote body headings so the release title stays the
+                        // only h2 per entry (h1 = page, h2 = title, h3+ = body).
+                        h1: ({ node: _n, ...p }) => <h3 {...p} />,
+                        h2: ({ node: _n, ...p }) => <h3 {...p} />,
+                        h3: ({ node: _n, ...p }) => <h4 {...p} />,
+                        h4: ({ node: _n, ...p }) => <h5 {...p} />,
+                        table: ({ node: _n, ...p }) => (
+                          <div className="docs-table-wrap">
+                            <table {...p} />
+                          </div>
+                        ),
+                      }}
+                    >
+                      {release.body}
+                    </ReactMarkdown>
                   </div>
                 )}
-              </article>
+
+                <a
+                  className="cl-gh"
+                  href={release.htmlUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  View on GitHub
+                </a>
+              </li>
             ))}
-          </div>
+          </ol>
         )}
       </div>
     </LandingShell>

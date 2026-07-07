@@ -2848,6 +2848,15 @@
   "aiProviders": {
     "title": "AI 提供商",
     "subtitle": "为代理和聊天使用的 LLM 提供商配置 API 密钥",
+    "noProviderCta": {
+      "noModels": "无模型",
+      "title": "暂无可用的 AI 模型",
+      "body": "将此安装连接到 LiveContext Cloud 以使用托管模型，或添加您自己的提供商 API 密钥。",
+      "bodyMember": "此安装尚未配置任何 AI 提供商。请联系管理员连接 LiveContext Cloud 或添加提供商 API 密钥。",
+      "connectCloud": "连接 LiveContext Cloud",
+      "addApiKey": "添加 API 密钥",
+      "connectError": "无法启动云连接，请重试。"
+    },
     "infoBanner": "此处存储的 API 密钥优先于环境变量。如果未保存密钥，系统将回退到服务器的环境配置。",
     "getDocs": "获取 API 密钥",
     "save": "保存",

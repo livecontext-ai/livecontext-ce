@@ -35,6 +35,8 @@ import {
 } from '@/hooks/useModels';
 import { getProviderIconSlug, getProviderDisplayName } from '@/lib/ai-providers/providerIcons';
 import { ModelOptionDisplay, ModelInfoPopover } from '@/components/ai/ModelInfo';
+import { NoProviderCta } from '@/components/ai/NoProviderCta';
+import { IS_CE } from '@/lib/edition';
 
 export interface ModelPickerProps {
   /** Current selection - `{ provider: '', id: '' }` when unset. */
@@ -85,7 +87,7 @@ export function ModelPicker({
   filterCapability = 'chat',
   excludeBridgeProviders = false,
 }: ModelPickerProps) {
-  const { providers, defaultModel, defaultProvider, isLoading } = useVisibleModels();
+  const { providers, defaultModel, defaultProvider, isLoading, error } = useVisibleModels();
 
   // Apply the capability (and optional bridge-exclusion) filter ONCE at the
   // top: providers without any matching model are dropped entirely (so the
@@ -162,6 +164,18 @@ export function ModelPicker({
     [availableModels, currentModelId],
   );
   const selectedModelName = selectedModel?.name || currentModelId;
+
+  // CE with ZERO usable models (no cloud link, no BYOK key - or none matching
+  // the capability filter): replace the two dead Selects with the connect CTA.
+  // Only once the catalog has actually resolved (not while loading, not on a
+  // fetch error - a transient network failure is not an onboarding state).
+  if (IS_CE && !isLoading && !error && filteredProviders.length === 0) {
+    return (
+      <div className={className}>
+        <NoProviderCta variant="form" />
+      </div>
+    );
+  }
 
   return (
     <div className={className}>

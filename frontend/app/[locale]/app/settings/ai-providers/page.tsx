@@ -241,6 +241,10 @@ export default function AiProvidersPage() {
 
     // Invalidate cache on agent-service side
     await credentialService.invalidateLlmCache(def.providerName);
+    // A new key changes which models are executable (a first key flips the
+    // pickers from the NoProviderCta empty state to this provider's catalog) -
+    // drop the frontend model cache so pickers refetch on next mount.
+    clearModelsCache();
     await fetchStatus();
   };
 
@@ -251,6 +255,8 @@ export default function AiProvidersPage() {
     if (def) {
       await credentialService.invalidateLlmCache(def.providerName);
     }
+    // Symmetric with save: removing the last key must surface the empty state.
+    clearModelsCache();
     await fetchStatus();
   };
 

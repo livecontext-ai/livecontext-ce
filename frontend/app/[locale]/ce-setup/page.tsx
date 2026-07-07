@@ -34,6 +34,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { credentialService } from '@/lib/api/orchestrator/credential.service';
 import { bridgeAccessService } from '@/lib/api/orchestrator/bridge-access.service';
 import { cloudLinkService, type CloudLinkStatus, type TlsInterceptProbe } from '@/lib/api/cloud-link.service';
+import { clearModelsCache } from '@/hooks/useModels';
 import { apiClient } from '@/lib/api';
 import { CE_COMPLETE_API_PATH } from '@/components/security/onboardingStatus';
 import {
@@ -703,6 +704,9 @@ export default function CeSetupPage() {
     cloudLinkService.connect(oauthState)
       .then((status) => {
         setCloudLinkStatus(status);
+        // Linking changes the executable model catalog (BYOK -> cloud): drop the
+        // cached (possibly empty) list so every picker refetches the cloud one.
+        clearModelsCache();
         window.history.replaceState({}, '', `/${locale}/ce-setup`);
       })
       .catch((err: unknown) => {

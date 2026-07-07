@@ -49,10 +49,23 @@ public class OptionalFeatureCapabilityService {
     }
 
     public FeatureCapabilities resolve(String tenantId) {
-        boolean renderer = rendererBaseUrl != null && !rendererBaseUrl.isBlank();
-        // Per-tenant: true when the local browser stack runs, or when this tenant's
-        // cloud link relays browsing/search to the cloud. Fail-closed inside the gate.
-        boolean browsing = webSearchGate.isWebSearchAvailable(tenantId);
-        return new FeatureCapabilities(renderer, browsing, browsing);
+        // Resolve browsing ONCE (it can cost an HTTP roundtrip) and reuse for both fields.
+        boolean browsing = isBrowsingAvailable(tenantId);
+        return new FeatureCapabilities(isScreenshotRendererAvailable(), browsing, browsing);
+    }
+
+    /** Deployment-global, pure property check - never a remote call. */
+    public boolean isScreenshotRendererAvailable() {
+        return rendererBaseUrl != null && !rendererBaseUrl.isBlank();
+    }
+
+    /**
+     * Per-tenant: true when the local browser stack runs, or when this tenant's
+     * cloud link relays browsing/search to the cloud. Fail-closed inside the gate.
+     * Can cost an HTTP roundtrip on relay-wired CE installs - callers that only
+     * need the renderer verdict should use {@link #isScreenshotRendererAvailable()}.
+     */
+    public boolean isBrowsingAvailable(String tenantId) {
+        return webSearchGate.isWebSearchAvailable(tenantId);
     }
 }

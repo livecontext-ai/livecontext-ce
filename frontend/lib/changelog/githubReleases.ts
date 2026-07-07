@@ -78,3 +78,23 @@ export async function fetchReleases(revalidateSeconds = 1800): Promise<Changelog
     return [];
   }
 }
+
+const MONTHS = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+/**
+ * Format an ISO timestamp as a short, locale-neutral date such as "Jul 2, 2026".
+ * The changelog renders outside the `[locale]` tree (see the LandingShell
+ * contract), so it stays hardcoded English like /about and /legal - and it
+ * parses the ISO string by hand (no `toLocale*`, no `Date`) to avoid both the
+ * browser-locale trap and any timezone shift on the calendar day.
+ */
+export function formatReleaseDate(publishedAt: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(publishedAt);
+  if (!match) return publishedAt;
+  const [, year, month, day] = match;
+  const monthLabel = MONTHS[Number(month) - 1] ?? month;
+  return `${monthLabel} ${Number(day)}, ${year}`;
+}

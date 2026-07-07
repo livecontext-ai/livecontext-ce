@@ -2848,6 +2848,15 @@
   "aiProviders": {
     "title": "Provedores de IA",
     "subtitle": "Configurar chaves de API para provedores de LLM usados por agentes e chat",
+    "noProviderCta": {
+      "noModels": "Sem modelos",
+      "title": "Nenhum modelo de IA disponível",
+      "body": "Conecte esta instalação ao LiveContext Cloud para usar modelos gerenciados, ou adicione sua própria chave de API de provedor.",
+      "bodyMember": "Nenhum provedor de IA está configurado nesta instalação. Peça ao seu administrador para conectar o LiveContext Cloud ou adicionar uma chave de API de provedor.",
+      "connectCloud": "Conectar ao LiveContext Cloud",
+      "addApiKey": "Adicionar uma chave de API",
+      "connectError": "Não foi possível iniciar a conexão com a nuvem. Tente novamente."
+    },
     "infoBanner": "As chaves de API armazenadas aqui têm prioridade sobre as variáveis de ambiente. Se nenhuma chave estiver salva, o sistema usa a configuração de ambiente do servidor como fallback.",
     "getDocs": "Obter chave de API",
     "save": "Salvar",

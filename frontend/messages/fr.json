@@ -3000,6 +3000,15 @@
     "title": "Fournisseurs IA",
     "subtitle": "Configurez les clés API des fournisseurs LLM utilisés par les agents et le chat",
     "adminOnlyBadge": "Admin uniquement",
+    "noProviderCta": {
+      "noModels": "Aucun modèle",
+      "title": "Aucun modèle IA disponible",
+      "body": "Connectez cette installation à LiveContext Cloud pour utiliser des modèles gérés, ou ajoutez votre propre clé API de fournisseur.",
+      "bodyMember": "Aucun fournisseur IA n'est configuré sur cette installation. Demandez à votre administrateur de connecter LiveContext Cloud ou d'ajouter une clé API de fournisseur.",
+      "connectCloud": "Connecter à LiveContext Cloud",
+      "addApiKey": "Ajouter une clé API",
+      "connectError": "Impossible de démarrer la connexion cloud. Veuillez réessayer."
+    },
     "infoBanner": "Les clés API stockées ici ont la priorité sur les variables d'environnement. Si aucune clé n'est enregistrée, le système utilise la configuration du serveur.",
     "cloudSource": {
       "label": "Source LLM",

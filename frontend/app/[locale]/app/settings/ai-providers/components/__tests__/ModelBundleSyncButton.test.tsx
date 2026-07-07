@@ -12,7 +12,10 @@ const editionState = vi.hoisted(() => ({ IS_CE: true, IS_CLOUD: false }));
 vi.mock("@/lib/edition", () => editionState);
 const gate = vi.hoisted(() => ({ ensureCloudLinked: vi.fn(() => true), isCloudLinked: true, syncBlocked: false }));
 vi.mock("@/hooks/useCloudSyncGate", () => ({ useCloudSyncGate: () => gate }));
-const svc = vi.hoisted(() => ({ syncNow: vi.fn() }));
+// The component drives useBundleSync off SERVER state, so the mock service
+// must expose the full {getSyncStatus, syncNow, syncCancel} trio and syncNow
+// must resolve a status row (running flag + last fetch outcome).
+const svc = vi.hoisted(() => ({ syncNow: vi.fn(), getSyncStatus: vi.fn(), syncCancel: vi.fn() }));
 vi.mock("@/lib/api/model-config.service", () => ({ modelConfigService: svc }));
 
 import { ModelBundleSyncButton } from "../ModelBundleSyncButton";
@@ -21,7 +24,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   editionState.IS_CE = true;
   gate.ensureCloudLinked.mockReturnValue(true);
-  svc.syncNow.mockResolvedValue({});
+  svc.getSyncStatus.mockResolvedValue({ running: false });
+  svc.syncNow.mockResolvedValue({ running: false, lastFetchStatus: "OK" });
+  svc.syncCancel.mockResolvedValue({ running: false });
 });
 afterEach(cleanup);
 

@@ -2848,6 +2848,15 @@
   "aiProviders": {
     "title": "KI-Anbieter",
     "subtitle": "API-Schlüssel für LLM-Anbieter konfigurieren, die von Agenten und Chat verwendet werden",
+    "noProviderCta": {
+      "noModels": "Keine Modelle",
+      "title": "Keine KI-Modelle verfügbar",
+      "body": "Verbinden Sie diese Installation mit LiveContext Cloud, um verwaltete Modelle zu nutzen, oder fügen Sie Ihren eigenen Anbieter-API-Schlüssel hinzu.",
+      "bodyMember": "Auf dieser Installation ist kein KI-Anbieter konfiguriert. Bitten Sie Ihren Administrator, LiveContext Cloud zu verbinden oder einen Anbieter-API-Schlüssel hinzuzufügen.",
+      "connectCloud": "Mit LiveContext Cloud verbinden",
+      "addApiKey": "API-Schlüssel hinzufügen",
+      "connectError": "Die Cloud-Verbindung konnte nicht gestartet werden. Bitte versuchen Sie es erneut."
+    },
     "infoBanner": "Hier gespeicherte API-Schlüssel haben Vorrang vor Umgebungsvariablen. Wenn kein Schlüssel gespeichert ist, greift das System auf die Server-Umgebungskonfiguration zurück.",
     "getDocs": "API-Schlüssel abrufen",
     "save": "Speichern",

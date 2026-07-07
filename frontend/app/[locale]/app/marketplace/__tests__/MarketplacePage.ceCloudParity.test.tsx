@@ -48,6 +48,14 @@ vi.mock('@/lib/hooks/useOrgScopedReset', () => ({
   useOrgScopedReset: () => {},
 }));
 
+// The connect callback must drop the module-level models cache (linking flips
+// the executable catalog BYOK -> cloud; useModels' 5-min TTL would otherwise
+// keep the pickers on the stale, possibly empty, list).
+const clearModelsCacheMock = vi.hoisted(() => vi.fn());
+vi.mock('@/hooks/useModels', () => ({
+  clearModelsCache: clearModelsCacheMock,
+}));
+
 vi.mock('@/lib/providers/smart-providers', () => ({
   useAuth: () => ({ isLoading: false, isAuthenticated: true, numericUserId: 7 }),
 }));
@@ -287,6 +295,9 @@ describe('MarketplacePage - CE cloud-parity gate', () => {
     // Invalidating the shared status query flips the gate to the linked
     // marketplace once the refetch reports linked+registered.
     expect(queryClientMock.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['cloud-link', 'status'] });
+    // Linking changes the executable model catalog: the stale (possibly empty)
+    // models cache must be dropped so every picker refetches the cloud one.
+    expect(clearModelsCacheMock).toHaveBeenCalledTimes(1);
     // No connect CTA flow was started - this is the return leg, not the start.
     expect(cloudLinkServiceMock.getAuthUrl).not.toHaveBeenCalled();
   });
@@ -303,6 +314,8 @@ describe('MarketplacePage - CE cloud-parity gate', () => {
     expect(await screen.findByText('cloudConnect.title')).toBeInTheDocument();
     expect(cloudLinkServiceMock.connect).toHaveBeenCalledWith('stale');
     expect(screen.queryByTestId('publication-card')).not.toBeInTheDocument();
+    // The catalog did not change (link failed) - the models cache must survive.
+    expect(clearModelsCacheMock).not.toHaveBeenCalled();
   });
 
   it('remote mode never passes the local CE user id - a cloud publisherId colliding with it keeps the install CTA', async () => {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchReleases, mapReleases, releasesApiUrl } from '../githubReleases';
+import { fetchReleases, formatReleaseDate, mapReleases, releasesApiUrl } from '../githubReleases';
 
 const release = (over: Record<string, unknown> = {}) => ({
   tag_name: 'v0.1.5',
@@ -92,5 +92,22 @@ describe('fetchReleases', () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network down')));
 
     expect(await fetchReleases(60)).toEqual([]);
+  });
+});
+
+describe('formatReleaseDate', () => {
+  it('formats an ISO timestamp as a short English date', () => {
+    expect(formatReleaseDate('2026-07-02T12:30:00Z')).toBe('Jul 2, 2026');
+    expect(formatReleaseDate('2026-01-15T00:00:00Z')).toBe('Jan 15, 2026');
+    expect(formatReleaseDate('2026-12-31T23:59:59Z')).toBe('Dec 31, 2026');
+  });
+
+  it('reads the calendar day off the string, immune to the runner timezone', () => {
+    // A late-UTC time must not roll the day backward via local-time parsing.
+    expect(formatReleaseDate('2026-07-02T23:59:00Z')).toBe('Jul 2, 2026');
+  });
+
+  it('returns the raw input when it is not an ISO date', () => {
+    expect(formatReleaseDate('not-a-date')).toBe('not-a-date');
   });
 });

@@ -7,6 +7,7 @@ import com.apimarketplace.orchestrator.tools.workflow.builder.validation.CoreVal
 import com.apimarketplace.orchestrator.tools.workflow.builder.validation.EdgeValidator;
 import com.apimarketplace.orchestrator.tools.workflow.builder.validation.GraphValidation;
 import com.apimarketplace.orchestrator.tools.workflow.builder.validation.NodeStructureValidator;
+import com.apimarketplace.orchestrator.tools.workflow.builder.validation.OptionalComponentValidator;
 import com.apimarketplace.orchestrator.tools.workflow.builder.validation.ReferenceValidator;
 import com.apimarketplace.orchestrator.tools.workflow.builder.validation.StepValidator;
 import com.apimarketplace.orchestrator.tools.workflow.builder.validation.TriggerValidator;
@@ -143,6 +144,7 @@ class WorkflowBuilderValidatorTest {
         @Mock private GraphValidation graphValidator;
         @Mock private ReferenceValidator referenceValidator;
         @Mock private NodeStructureValidator nodeStructureValidator;
+        @Mock private OptionalComponentValidator optionalComponentValidator;
         @Mock private WorkflowErrorChecker workflowErrorChecker;
 
         private WorkflowBuilderValidator validator;
@@ -152,7 +154,8 @@ class WorkflowBuilderValidatorTest {
         void setUp() {
             validator = new WorkflowBuilderValidator(
                 triggerValidator, stepValidator, coreValidator, edgeValidator,
-                graphValidator, referenceValidator, nodeStructureValidator, workflowErrorChecker);
+                graphValidator, referenceValidator, nodeStructureValidator,
+                optionalComponentValidator, workflowErrorChecker);
 
             session = WorkflowBuilderSession.builder()
                 .sessionId("s")
@@ -203,6 +206,36 @@ class WorkflowBuilderValidatorTest {
             assertThat(result.getAgentErrors().get(0).get("type")).isEqualTo("TOOL_ID_NOT_FOUND");
             assertThat(result.getAgentErrors().get(0).get("fix"))
                 .isEqualTo("Use workflow(action='list_nodes') to find a valid tool");
+        }
+
+        @Test
+        @DisplayName("Runs OptionalComponentValidator: its availability warning surfaces in the result and toAgentFormat, without blocking can_create")
+        void optionalComponentWarningsAreWiredIn() {
+            doAnswer(inv -> {
+                ValidationResult r = inv.getArgument(1);
+                r.addWarning("BROWSER_AGENT_COMPONENT_UNAVAILABLE", "agent:browse_site",
+                    "Browser automation is not available on this installation");
+                return null;
+            }).when(optionalComponentValidator).validate(any(), any());
+            when(workflowErrorChecker.checkForErrors(any()))
+                .thenReturn(new WorkflowErrorChecker.CheckResult(List.of(), List.of(), true, "ok"));
+
+            ValidationResult result = validator.validate(session);
+
+            // Deleting the optionalComponentValidator.validate(...) call in
+            // WorkflowBuilderValidator.validate must fail THIS test - the whole point
+            // of the increment is that validate/finish/save report the warning.
+            assertThat(result.isValid()).isTrue();
+            assertThat(result.getWarnings()).hasSize(1);
+            assertThat(result.getWarnings().get(0).code()).isEqualTo("BROWSER_AGENT_COMPONENT_UNAVAILABLE");
+
+            Map<String, Object> agent = validator.toAgentFormat(result);
+            assertThat(agent.get("can_create")).isEqualTo(true);
+            assertThat(agent.get("warning_count")).isEqualTo(1);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> warning = (Map<String, Object>) ((List<?>) agent.get("warnings")).get(0);
+            assertThat(warning.get("type")).isEqualTo("BROWSER_AGENT_COMPONENT_UNAVAILABLE");
+            assertThat(warning.get("node")).isEqualTo("agent:browse_site");
         }
 
         @Test
@@ -274,7 +307,7 @@ class WorkflowBuilderValidatorTest {
         void setUp() {
             // We never call validate() in this nested class, so sub-validator mocks
             // aren't needed - passing nulls is safe for pure toAgentFormat() tests.
-            validator = new WorkflowBuilderValidator(null, null, null, null, null, null, null, null);
+            validator = new WorkflowBuilderValidator(null, null, null, null, null, null, null, null, null);
         }
 
         @Test

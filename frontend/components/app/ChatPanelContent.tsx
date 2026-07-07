@@ -10,6 +10,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { ChatCore } from '@/components/chat/ChatCore';
 import { ModelSelectorDropdown, PROVIDER_ICON_MAP } from '@/components/chat/ModelSelectorDropdown';
+import { NoProviderCta } from '@/components/ai/NoProviderCta';
 import { useStreaming } from '@/contexts/StreamingContext';
 import { useVisibleModels, AIModel, SelectedModel, EMPTY_SELECTED_MODEL, modelMatches, selectedModelFromAIModel, selectedModelEquals, getEffectiveDefaultSelectedModel } from '@/hooks/useModels';
 import { useUnifiedAppSafe } from '@/contexts/UnifiedAppContext';
@@ -46,7 +47,10 @@ function buildStorageKey(pathname: string | null): string {
 export function ChatPanelContent() {
   const t = useTranslations();
   const streaming = useStreaming();
-  const { models, defaultModel } = useVisibleModels();
+  const { models, defaultModel, isLoading: modelsLoading, error: modelsError } = useVisibleModels();
+  // Same gate as ModelPicker: never show the no-provider empty state while the
+  // catalog is loading or after a fetch error - only once it RESOLVED empty.
+  const modelsResolvedEmpty = !modelsLoading && !modelsError;
   const appContext = useUnifiedAppSafe();
   const pathname = usePathname();
   // Seed the side-panel composer's new conversations with the user's per-workspace defaults (V312).
@@ -100,6 +104,8 @@ export function ChatPanelContent() {
       availableModels={availableModels}
       setSelectedModel={setSelectedModel}
       changeModelTitle={t('actions.changeModel')}
+      noModelsLabel={modelsResolvedEmpty ? t('aiProviders.noProviderCta.noModels') : undefined}
+      emptyState={modelsResolvedEmpty ? <NoProviderCta variant="menu" /> : undefined}
     />
   );
 

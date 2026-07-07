@@ -3000,6 +3000,15 @@
     "title": "AI Providers",
     "subtitle": "Configure API keys for LLM providers used by agents and chat",
     "adminOnlyBadge": "Admin only",
+    "noProviderCta": {
+      "noModels": "No models",
+      "title": "No AI models available",
+      "body": "Connect this install to LiveContext Cloud to use managed models, or add your own provider API key.",
+      "bodyMember": "No AI provider is configured on this install. Ask your administrator to connect LiveContext Cloud or add a provider API key.",
+      "connectCloud": "Connect to LiveContext Cloud",
+      "addApiKey": "Add an API key",
+      "connectError": "Couldn't start the cloud connection. Please try again."
+    },
     "infoBanner": "API keys stored here take priority over environment variables. If no key is saved, the system falls back to the server's environment configuration.",
     "cloudSource": {
       "label": "LLM source",

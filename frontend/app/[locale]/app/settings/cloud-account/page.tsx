@@ -17,6 +17,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import {
   AlertTriangle,
@@ -43,6 +44,7 @@ import {
   type CloudLinkStatus,
 } from '@/lib/api/cloud-link.service';
 import { ceLinkService, type CeLinkSummary } from '@/lib/api/ce-link.service';
+import { clearModelsCache } from '@/hooks/useModels';
 import { useAuth } from '@/lib/providers/smart-providers';
 import { formatUtcDate } from '@/lib/utils/dateFormatters';
 import { IS_CE } from '@/lib/edition/edition';
@@ -65,6 +67,7 @@ function ThisInstallSection() {
   const tErr = useTranslations('settings.cloudAccount.errors');
   const tConfirm = useTranslations('settings.cloudAccount.confirmDisconnect');
   const searchParams = useSearchParams();
+  const queryClient = useQueryClient();
   const { hasRole, isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const [state, setState] = useState<CeState>('loading');
   const [status, setStatus] = useState<CloudLinkStatus | null>(null);
@@ -88,13 +91,19 @@ function ThisInstallSection() {
         setState('connecting');
         setStatus(await cloudLinkService.connect(oauthState));
         setState('ready');
+        // Linking changes what the install can execute: drop the cached (empty
+        // BYOK) model catalog so every picker refetches the cloud one, and
+        // refresh the shared cloud-link query (sidebar, marketplace gate,
+        // NoProviderCta surfaces) without waiting out its staleTime.
+        clearModelsCache();
+        queryClient.invalidateQueries({ queryKey: ['cloud-link', 'status'] });
         window.history.replaceState({}, '', window.location.pathname);
       } catch (err: any) {
         setError(err?.message || tErr('connectFailed'));
         setState('error');
       }
     },
-    [tErr],
+    [tErr, queryClient],
   );
 
   useEffect(() => {
@@ -125,6 +134,9 @@ function ThisInstallSection() {
       setStatus({ linked: false });
       setConfirmOpen(false);
       setState('ready');
+      // Symmetric with connect: the cloud catalog is gone, refetch the BYOK one.
+      clearModelsCache();
+      queryClient.invalidateQueries({ queryKey: ['cloud-link', 'status'] });
     } catch (err: any) {
       setError(err?.message || tErr('disconnect'));
       setState('error');

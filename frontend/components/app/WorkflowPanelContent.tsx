@@ -16,6 +16,7 @@ import { Sparkles, MessageSquare, FileText, AppWindow, Workflow } from 'lucide-r
 import { usePathname } from '@/i18n/navigation';
 import { ChatCore } from '@/components/chat/ChatCore';
 import { ModelSelectorDropdown, PROVIDER_ICON_MAP } from '@/components/chat/ModelSelectorDropdown';
+import { NoProviderCta } from '@/components/ai/NoProviderCta';
 import { TriggerTabContent } from '@/components/chat/TriggerTabContent';
 import { type ApplicationConfig } from '@/components/chat/ApplicationTabContent';
 import { ApplicationCarousel } from '@/components/chat/ApplicationCarousel';
@@ -133,7 +134,10 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
   const pathname = usePathname();
 
   // ── Model selector state ──
-  const { models, defaultModel } = useVisibleModels();
+  const { models, defaultModel, isLoading: modelsLoading, error: modelsError } = useVisibleModels();
+  // Same gate as ModelPicker: never show the no-provider empty state while the
+  // catalog is loading or after a fetch error - only once it RESOLVED empty.
+  const modelsResolvedEmpty = !modelsLoading && !modelsError;
   const appContext = useUnifiedAppSafe();
   const setSelectedModel = appContext?.setSelectedModel ?? ((_: SelectedModel) => {});
   const appSelectedModel: SelectedModel = appContext?.state.selectedModel ?? EMPTY_SELECTED_MODEL;
@@ -183,6 +187,8 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
       availableModels={availableModels}
       setSelectedModel={setSelectedModel}
       changeModelTitle={t('actions.changeModel')}
+      noModelsLabel={modelsResolvedEmpty ? t('aiProviders.noProviderCta.noModels') : undefined}
+      emptyState={modelsResolvedEmpty ? <NoProviderCta variant="menu" /> : undefined}
     />
   );
 

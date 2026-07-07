@@ -37,6 +37,7 @@ import { useAnchorScrollToBottom } from '@/lib/hooks/useAnchorScrollToBottom';
 import { ChatPageLayout } from '@/app/shared/components/ChatPageLayout';
 import { ServiceApprovalCard } from '../ServiceApprovalCard';
 import { ModelSelectorDropdown } from '@/components/chat/ModelSelectorDropdown';
+import { NoProviderCta } from '@/components/ai/NoProviderCta';
 import { ComposerLeadingControl } from '@/components/chat/ComposerLeadingControl';
 import { useSidePanelSafe } from '@/contexts/SidePanelContext';
 import { buildAgentConfigPanelTab } from '@/lib/sidePanel/agentConfigPanelTab';
@@ -56,7 +57,11 @@ export function ChatPageV2({ conversationIdFromParams, enableDataSource = false 
   const { toasts, addToast, removeToast } = useToast();
 
   // AI Models from backend (role-filtered: non-admins don't see CLI-bridge models)
-  const { models, defaultModel } = useVisibleModels();
+  const { models, defaultModel, isLoading: modelsLoading, error: modelsError } = useVisibleModels();
+  // Only surface the no-provider empty state once the catalog has RESOLVED
+  // empty - never while loading (flash) or on a fetch error (a transient
+  // failure is not an onboarding state). Same contract as ModelPicker's gate.
+  const modelsResolvedEmpty = !modelsLoading && !modelsError;
 
   // Models for the composer model selector. Spread the full AIModel (capability
   // flags, context window, rate limits, …) so ModelOptionDisplay renders the
@@ -617,6 +622,8 @@ export function ChatPageV2({ conversationIdFromParams, enableDataSource = false 
           availableModels={availableModels}
           setSelectedModel={setSelectedModel}
           changeModelTitle={t('actions.changeModel')}
+          noModelsLabel={modelsResolvedEmpty ? t('aiProviders.noProviderCta.noModels') : undefined}
+          emptyState={modelsResolvedEmpty ? <NoProviderCta variant="menu" /> : undefined}
           reasoningEffort={state.reasoningEffort}
           onReasoningEffortChange={state.setReasoningEffort}
           reasoningEffortLabel={t('actions.reasoningEffort')}
@@ -624,7 +631,7 @@ export function ChatPageV2({ conversationIdFromParams, enableDataSource = false 
         />
       }
     />
-  ), [agentAvatarUrl, resolvedAgentId, handleOpenAgentPanel, agentName, showModelSelector, setShowModelSelector, selectedModel, selectedModelData, availableModels, setSelectedModel, t, state.reasoningEffort, state.setReasoningEffort]);
+  ), [agentAvatarUrl, resolvedAgentId, handleOpenAgentPanel, agentName, showModelSelector, setShowModelSelector, selectedModel, selectedModelData, availableModels, setSelectedModel, t, state.reasoningEffort, state.setReasoningEffort, modelsResolvedEmpty]);
 
   const composerProps = {
     inputValue,

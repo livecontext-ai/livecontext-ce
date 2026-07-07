@@ -61,6 +61,8 @@ export function ModelSelectorDropdown({
   availableModels,
   setSelectedModel,
   changeModelTitle,
+  noModelsLabel,
+  emptyState,
   reasoningEffort,
   onReasoningEffortChange,
   reasoningEffortLabel,
@@ -73,6 +75,15 @@ export function ModelSelectorDropdown({
   availableModels: DropdownModel[];
   setSelectedModel: (model: SelectedModel) => void;
   changeModelTitle: string;
+  /** Trigger label when the model list is EMPTY and nothing is selected -
+   *  without it the trigger collapses to a blank chevron. Caller-translated,
+   *  keeping this component NextIntl-free. */
+  noModelsLabel?: string;
+  /** Rendered inside the open menu instead of the (empty) model list - the
+   *  composers inject {@code <NoProviderCta variant='menu' />} here so an
+   *  unconfigured CE gets a way out instead of a blank menu. Injected as a
+   *  node (not imported) to keep this component translation-free. */
+  emptyState?: React.ReactNode;
   /** Per-conversation reasoning-effort override. When `onReasoningEffortChange`
    *  is provided and the selected provider supports effort, an effort control is
    *  rendered at the top of the open menu. Omitted by the panel chats. */
@@ -178,7 +189,9 @@ export function ModelSelectorDropdown({
         title={changeModelTitle}
       >
         <span className="truncate max-w-[180px] text-sm">
-          {selectedModelData?.name || selectedModel.id}
+          {selectedModelData?.name
+            || selectedModel.id
+            || (availableModels.length === 0 ? noModelsLabel : '')}
         </span>
         <ChevronDown className={cn(
           "w-3.5 h-3.5 transition-transform duration-200",
@@ -222,6 +235,7 @@ export function ModelSelectorDropdown({
               </Select>
             </div>
           )}
+          {availableModels.length === 0 && emptyState}
           <div className="space-y-0.5 model-selector-scroll pr-1 overflow-y-auto">
             {availableModels.map((model) => {
               const isSelected = modelMatches(model, selectedModel);

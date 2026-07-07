@@ -21,6 +21,7 @@ import AcquirePublicationModal from '@/components/marketplace/AcquirePublication
 import { IS_CE } from '@/lib/edition';
 import { useCeCloudLinkStatus } from '@/hooks/useCeCloudLinkStatus';
 import { cloudLinkService } from '@/lib/api/cloud-link.service';
+import { clearModelsCache } from '@/hooks/useModels';
 import { PublicationCard, PublicationCardSkeleton } from '@/components/marketplace/PublicationCard';
 
 // Card + preview helpers extracted to a shared component so the onboarding
@@ -726,6 +727,9 @@ function CeMarketplaceGate() {
     (async () => {
       try {
         await cloudLinkService.connect(state);
+        // Linking changes the executable model catalog (BYOK -> cloud): drop the
+        // cached (possibly empty) list so every picker refetches the cloud one.
+        clearModelsCache();
         await queryClient.invalidateQueries({ queryKey: ['cloud-link', 'status'] });
       } catch {
         // fail-soft: fall back to the connect CTA so the user can retry

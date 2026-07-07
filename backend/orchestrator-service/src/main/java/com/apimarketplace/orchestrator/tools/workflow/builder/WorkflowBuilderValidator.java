@@ -38,6 +38,7 @@ public class WorkflowBuilderValidator {
     private final GraphValidation graphValidator;
     private final ReferenceValidator referenceValidator;
     private final NodeStructureValidator nodeStructureValidator;
+    private final OptionalComponentValidator optionalComponentValidator;
     private final WorkflowErrorChecker workflowErrorChecker;
 
     /**
@@ -94,6 +95,7 @@ public class WorkflowBuilderValidator {
         graphValidator.validate(session, graph, result);
         referenceValidator.validate(session, result);
         nodeStructureValidator.validate(session, result);
+        optionalComponentValidator.validate(session, result);
 
         WorkflowErrorChecker.CheckResult legacy = workflowErrorChecker.checkForErrors(session);
         mergeLegacy(result, legacy);
