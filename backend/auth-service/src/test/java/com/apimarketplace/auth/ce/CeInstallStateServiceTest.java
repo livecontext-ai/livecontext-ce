@@ -24,11 +24,14 @@ class CeInstallStateServiceTest {
     @Mock
     private CeInstallStateRepository repository;
 
+    @Mock
+    private com.apimarketplace.auth.repository.UserRepository userRepository;
+
     private CeInstallStateService service;
 
     @BeforeEach
     void setUp() {
-        service = new CeInstallStateService(repository);
+        service = new CeInstallStateService(repository, userRepository);
     }
 
     @Test
@@ -205,6 +208,46 @@ class CeInstallStateServiceTest {
         // the self-heal implementation detail is allowed to change.
         assertThat(view.bootstrapped()).isTrue();
         assertThat(view.bootstrappedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("hasUsers=false on a virgin install (no account yet) - the login->register first-run signal")
+    void hasUsersFalseWhenNoAccountExists() {
+        when(repository.findById(CeInstallState.SINGLETON_ID)).thenReturn(Optional.of(freshRow()));
+        when(userRepository.findFirstBy()).thenReturn(Optional.empty());
+
+        assertThat(service.getStatus().hasUsers()).isFalse();
+    }
+
+    @Test
+    @DisplayName("hasUsers=true as soon as any account exists")
+    void hasUsersTrueWhenAnAccountExists() {
+        when(repository.findById(CeInstallState.SINGLETON_ID)).thenReturn(Optional.of(freshRow()));
+        when(userRepository.findFirstBy())
+                .thenReturn(Optional.of(new com.apimarketplace.auth.domain.User()));
+
+        assertThat(service.getStatus().hasUsers()).isTrue();
+    }
+
+    @Test
+    @DisplayName("hasUsers is threaded through mutation views too (markBootstrapped)")
+    void hasUsersThreadedThroughMutationViews() {
+        CeInstallState row = freshRow();
+        when(repository.findSingletonForUpdate()).thenReturn(Optional.of(row));
+        when(repository.save(any(CeInstallState.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(userRepository.findFirstBy())
+                .thenReturn(Optional.of(new com.apimarketplace.auth.domain.User()));
+
+        assertThat(service.markBootstrapped(1L).hasUsers()).isTrue();
+    }
+
+    @Test
+    @DisplayName("hasUsers fails SAFE to true when the probe throws (never bounce a working install to register)")
+    void hasUsersFailsSafeToTrueOnProbeError() {
+        when(repository.findById(CeInstallState.SINGLETON_ID)).thenReturn(Optional.of(freshRow()));
+        when(userRepository.findFirstBy()).thenThrow(new RuntimeException("db hiccup"));
+
+        assertThat(service.getStatus().hasUsers()).isTrue();
     }
 
     private CeInstallState freshRow() {

@@ -356,6 +356,8 @@
     "register": {
       "title": "Créer votre compte",
       "subtitle": "Lancez-vous avec LiveContext en moins d'une minute.",
+      "firstRunTitle": "Configurez votre LiveContext",
+      "firstRunSubtitle": "Cette instance est toute neuve. Créez le compte administrateur pour commencer.",
       "firstName": "Prénom",
       "firstNamePlaceholder": "Jean",
       "lastName": "Nom",

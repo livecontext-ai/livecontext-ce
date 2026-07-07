@@ -371,6 +371,8 @@
       "signIn": "登录",
       "submit": "创建账户",
       "subtitle": "在一分钟内开始使用 LiveContext。",
+      "firstRunTitle": "设置您的 LiveContext",
+      "firstRunSubtitle": "这是一个全新的实例。创建管理员账户即可开始使用。",
       "title": "创建您的账户"
     }
   },

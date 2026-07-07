@@ -19,9 +19,12 @@ public class CeInstallStateService {
     private static final Logger log = LoggerFactory.getLogger(CeInstallStateService.class);
 
     private final CeInstallStateRepository repository;
+    private final com.apimarketplace.auth.repository.UserRepository userRepository;
 
-    public CeInstallStateService(CeInstallStateRepository repository) {
+    public CeInstallStateService(CeInstallStateRepository repository,
+                                 com.apimarketplace.auth.repository.UserRepository userRepository) {
         this.repository = repository;
+        this.userRepository = userRepository;
     }
 
     /**
@@ -31,9 +34,25 @@ public class CeInstallStateService {
      */
     @Transactional(readOnly = true)
     public CeStatusView getStatus() {
+        boolean hasUsers = hasAnyUser();
         return repository.findById(CeInstallState.SINGLETON_ID)
-                .map(CeStatusView::from)
-                .orElseGet(CeStatusView::notBootstrapped);
+                .map(state -> CeStatusView.from(state, hasUsers))
+                .orElseGet(() -> CeStatusView.notBootstrapped(hasUsers));
+    }
+
+    /**
+     * First-run probe behind {@code CeStatusView.hasUsers} (LIMIT 1, no count
+     * scan). Fail-SAFE to {@code true} on error: {@code false} is what routes
+     * the login page to account creation, so an unknown state must never send
+     * existing users of a working install to the register page.
+     */
+    private boolean hasAnyUser() {
+        try {
+            return userRepository.findFirstBy().isPresent();
+        } catch (Exception e) {
+            log.warn("[CE] user-existence probe failed - reporting hasUsers=true (fail-safe): {}", e.getMessage());
+            return true;
+        }
     }
 
     /**
@@ -55,7 +74,7 @@ public class CeInstallStateService {
         if (state.isBootstrapped()) {
             log.debug("CE install already bootstrapped at {} (admin={}) - no-op",
                     state.getBootstrappedAt(), state.getBootstrapAdminId());
-            return CeStatusView.from(state);
+            return CeStatusView.from(state, hasAnyUser());
         }
 
         Instant now = Instant.now();
@@ -70,7 +89,7 @@ public class CeInstallStateService {
         CeInstallState saved = repository.save(state);
 
         log.info("[CE] install bootstrapped by admin {} at {} - registration auto-closed", adminUserId, now);
-        return CeStatusView.from(saved);
+        return CeStatusView.from(saved, hasAnyUser());
     }
 
     /**
@@ -93,7 +112,7 @@ public class CeInstallStateService {
                 .orElseGet(this::createSingletonIfMissing);
 
         if (state.isRegistrationOpen() == open) {
-            return CeStatusView.from(state);
+            return CeStatusView.from(state, hasAnyUser());
         }
 
         state.setRegistrationOpen(open);
@@ -101,7 +120,7 @@ public class CeInstallStateService {
         CeInstallState saved = repository.save(state);
 
         log.info("[CE] registration {} by admin action", open ? "OPENED" : "CLOSED");
-        return CeStatusView.from(saved);
+        return CeStatusView.from(saved, hasAnyUser());
     }
 
     /**

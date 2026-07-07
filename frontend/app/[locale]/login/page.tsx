@@ -10,6 +10,9 @@ import { useAuth } from '@/lib/providers/smart-providers';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { AuthLayout } from '@/components/auth/AuthLayout';
 import Link from 'next/link';
+import { apiClient } from '@/lib/api';
+import { CE_STATUS_API_PATH } from '@/components/security/onboardingStatus';
+import { isCeFirstRun, type CeFirstRunStatus } from '@/lib/auth/ceFirstRun';
 
 export default function LoginPage() {
   const t = useTranslations('auth.login');
@@ -39,6 +42,28 @@ export default function LoginPage() {
       setError(t('error'));
     });
   }, [isAuthenticated, isAuthLoading, loginWithRedirect, returnTo, router, t]);
+
+  useEffect(() => {
+    // CE first-run: a virgin install has no account to sign into, so a
+    // "Welcome back" login page is a dead end - route straight to the
+    // admin-account creation. Fail open (stay on login) on any fetch issue.
+    if (IS_CLOUD) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        // skipAuth: the endpoint is public and the visitor is by definition
+        // unauthenticated here - without it apiClient fails fast with NO_TOKEN
+        // and the request never goes out.
+        const status = await apiClient.get<CeFirstRunStatus>(CE_STATUS_API_PATH, { skipAuth: true });
+        if (!cancelled && isCeFirstRun(status)) {
+          router.replace(registerHref);
+        }
+      } catch {
+        // Unknown state: keep the normal login form.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [registerHref, router]);
 
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();

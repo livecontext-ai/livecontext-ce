@@ -46,6 +46,15 @@ public interface UserRepository extends JpaRepository<User, Long> {
     Optional<User> findByApiKeyHash(String apiKeyHash);
 
     /**
+     * O(1) "does ANY account exist" probe (derived {@code LIMIT 1}, never a count
+     * scan - the cloud shares this service and its users table is large). Feeds
+     * the public CE first-run signal ({@code CeStatusView.hasUsers}) so a virgin
+     * install routes {@code /login} to admin-account creation instead of the
+     * "Welcome back" sign-in.
+     */
+    Optional<User> findFirstBy();
+
+    /**
      * Atomic conditional update of last_login_at. Sets the timestamp to {@code now}
      * iff the current value is null OR strictly older than {@code threshold}.
      * Returns the number of rows updated (0 or 1) - used as the canonical "is this

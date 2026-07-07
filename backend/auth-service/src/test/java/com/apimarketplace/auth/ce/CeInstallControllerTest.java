@@ -70,6 +70,19 @@ class CeInstallControllerTest {
     }
 
     @Test
+    @DisplayName("GET /status body serializes hasUsers - the JSON field the frontend first-run check consumes")
+    void statusJsonCarriesHasUsers() throws Exception {
+        when(service.getStatus()).thenReturn(new CeStatusView(false, null, "v1", true, false));
+
+        String json = new com.fasterxml.jackson.databind.ObjectMapper()
+                .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule())
+                .writeValueAsString(controller.status().getBody());
+
+        assertThat(json).contains("\"hasUsers\":false");
+        assertThat(json).contains("\"registrationOpen\":true");
+    }
+
+    @Test
     @DisplayName("POST /complete by ADMIN flips state and returns updated view")
     void postCompleteAsAdmin() {
         CeStatusView afterView = new CeStatusView(true, Instant.parse("2026-04-22T10:00:00Z"), "v1", false);

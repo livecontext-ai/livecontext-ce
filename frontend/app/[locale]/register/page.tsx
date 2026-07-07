@@ -10,6 +10,9 @@ import { useAuth } from '@/lib/providers/smart-providers';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { AuthLayout } from '@/components/auth/AuthLayout';
 import Link from 'next/link';
+import { apiClient } from '@/lib/api';
+import { CE_STATUS_API_PATH } from '@/components/security/onboardingStatus';
+import { isCeFirstRun, type CeFirstRunStatus } from '@/lib/auth/ceFirstRun';
 
 export default function RegisterPage() {
   const t = useTranslations('auth.register');
@@ -32,7 +35,26 @@ export default function RegisterPage() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [firstRun, setFirstRun] = useState(false);
   const redirectStartedRef = useRef(false);
+
+  useEffect(() => {
+    // CE first-run: this registration creates the instance's ADMIN account, so
+    // swap the generic copy for the setup framing. Cosmetic only - a wrong or
+    // failed read just keeps the generic copy.
+    if (IS_CLOUD) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        // skipAuth: public endpoint, pre-auth visitor (see login page note).
+        const status = await apiClient.get<CeFirstRunStatus>(CE_STATUS_API_PATH, { skipAuth: true });
+        if (!cancelled && isCeFirstRun(status)) setFirstRun(true);
+      } catch {
+        // Keep the generic copy.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     if (!IS_CLOUD || isAuthLoading || redirectStartedRef.current) return;
@@ -95,10 +117,10 @@ export default function RegisterPage() {
   return (
     <AuthLayout metaText={t('hasAccount')} metaLinkText={t('signIn')} metaLinkHref={loginHref}>
       <h1 className="mb-2 text-[28px] font-semibold leading-tight tracking-tight text-[var(--text-primary)]">
-        {t('title')}
+        {firstRun ? t('firstRunTitle') : t('title')}
       </h1>
       <p className="mb-7 max-w-[340px] text-sm text-[var(--text-secondary)]">
-        {t('subtitle')}
+        {firstRun ? t('firstRunSubtitle') : t('subtitle')}
       </p>
 
       <form onSubmit={handleSubmit} className="space-y-3.5">

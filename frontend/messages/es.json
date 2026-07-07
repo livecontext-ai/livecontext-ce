@@ -371,6 +371,8 @@
       "signIn": "Iniciar sesión",
       "submit": "Crear cuenta",
       "subtitle": "Empieza con LiveContext en menos de un minuto.",
+      "firstRunTitle": "Configura tu LiveContext",
+      "firstRunSubtitle": "Esta instancia es completamente nueva. Crea la cuenta de administrador para empezar.",
       "title": "Crea tu cuenta"
     }
   },

@@ -371,6 +371,8 @@
       "signIn": "Anmelden",
       "submit": "Konto erstellen",
       "subtitle": "Starten Sie in unter einer Minute mit LiveContext.",
+      "firstRunTitle": "Richten Sie Ihr LiveContext ein",
+      "firstRunSubtitle": "Diese Instanz ist brandneu. Erstellen Sie das Administratorkonto, um loszulegen.",
       "title": "Erstellen Sie Ihr Konto"
     }
   },
