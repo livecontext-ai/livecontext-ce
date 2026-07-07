@@ -7177,7 +7177,21 @@
         "contextInfoTitle": "Approval context",
         "contextInfoBody": "Shown to the approver so they can see what they are approving. Resolved when the workflow pauses.",
         "contextInfoVariables": "Insert workflow data with expressions, for example:",
-        "contextInfoOptional": "Recommended. The run still works if you leave it empty."
+        "contextInfoOptional": "Recommended. The run still works if you leave it empty.",
+        "delegation": {
+          "title": "Delegate via external channel",
+          "infoTitle": "External channel delegation",
+          "infoBody": "Sends the pending approval to a Telegram chat as a message with approve and reject buttons. Tapping a button resolves the approval, in addition to the in-app decision.",
+          "infoOptional": "Optional. The approval also stays available in the app.",
+          "enableAria": "Enable external channel delegation",
+          "channelLabel": "Channel",
+          "chatIdLabel": "Chat ID",
+          "chatIdHint": "Destination chat or group ID. Supports '{{...}}' expressions.",
+          "messageLabel": "Message template",
+          "messagePlaceholder": "Defaults to the approval context",
+          "allowedUserIdsLabel": "Allowed user IDs",
+          "allowedUserIdsHint": "Comma-separated Telegram user IDs. Leave empty to let anyone in the chat decide."
+        }
       }
     },
     "databaseNode": {

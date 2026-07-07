@@ -68,6 +68,7 @@ export class NodeConfigurationRule extends BaseValidationRule {
       // the approver sees no description of what they are approving; the run still works.
       if (nodeRegistry.isUserApprovalNode(node)) {
         this.validateApprovalContext(node, elementKey, issues);
+        this.validateApprovalDelegation(node, elementKey, issues);
       }
 
       // #14: Required fields for all core node types
@@ -343,6 +344,60 @@ export class NodeConfigurationRule extends BaseValidationRule {
           'core',
           'Approval context is recommended so reviewers see what they are approving',
           { rule: 'approval_missing_context_template', nodeId: node.id }
+        )
+      );
+    }
+  }
+
+  /**
+   * External-channel delegation checks (all WARNING, never blocking). Only fire
+   * when the section is actually enabled (a channel is selected): a delegation
+   * without a credential or chat id cannot deliver the approval message, and the
+   * channel counts as a single approver decision so requiredApprovals > 1 can
+   * never be satisfied by the external channel alone.
+   */
+  private validateApprovalDelegation(
+    node: Node<BuilderNodeData>,
+    elementKey: string,
+    issues: ValidationIssue[]
+  ): void {
+    const delegation = (node.data as any)?.approvalDelegation;
+    const channel = delegation?.channel;
+    if (!channel || (typeof channel === 'string' && channel.trim() === '')) {
+      return; // delegation disabled - nothing to check
+    }
+
+    if (typeof delegation.credentialId !== 'number') {
+      issues.push(
+        this.createWarning(
+          elementKey,
+          'core',
+          'Delegation is enabled but no channel credential is selected',
+          { rule: 'approval_delegation_missing_credential', nodeId: node.id }
+        )
+      );
+    }
+
+    const chatId = delegation.chatId;
+    if (!chatId || (typeof chatId === 'string' && chatId.trim() === '')) {
+      issues.push(
+        this.createWarning(
+          elementKey,
+          'core',
+          'Delegation is enabled but the chat ID is empty',
+          { rule: 'approval_delegation_missing_chat_id', nodeId: node.id }
+        )
+      );
+    }
+
+    const requiredApprovals = (node.data as any)?.requiredApprovals;
+    if (typeof requiredApprovals === 'number' && requiredApprovals > 1) {
+      issues.push(
+        this.createWarning(
+          elementKey,
+          'core',
+          'The external channel counts as a single approver decision; it cannot satisfy more than one required approval on its own',
+          { rule: 'approval_delegation_multi_approvals', nodeId: node.id }
         )
       );
     }

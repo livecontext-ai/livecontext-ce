@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import type { Node } from 'reactflow';
-import type { BuilderNodeData, ApprovalOutput } from '../../types';
+import type { BuilderNodeData, ApprovalOutput, ApprovalDelegation } from '../../types';
 import { createDefaultApprovalOutputs } from '../../types';
 import type { Connection } from './useInspectorConnections';
 
@@ -106,6 +106,16 @@ export function useInspectorApprovalOutputs({
     [data, onUpdate],
   );
 
+  // Update external-channel delegation (undefined = delegation disabled, removed from node data)
+  const handleDelegationChange = React.useCallback(
+    (delegation: ApprovalDelegation | undefined) => {
+      if (!data) return;
+      const { validationIssues, approvalDelegation, ...rest } = data as any;
+      onUpdate(delegation === undefined ? rest : { ...rest, approvalDelegation: delegation });
+    },
+    [data, onUpdate],
+  );
+
   return {
     currentOutputs,
     handleUpdateOutputs,
@@ -114,7 +124,9 @@ export function useInspectorApprovalOutputs({
     handleRenameOutput,
     handleTimeoutChange,
     handleContextTemplateChange,
+    handleDelegationChange,
     approvalTimeoutMs: data?.approvalTimeoutMs,
     approvalContextTemplate: data?.approvalContextTemplate,
+    approvalDelegation: data?.approvalDelegation,
   };
 }

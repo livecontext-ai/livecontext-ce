@@ -556,12 +556,19 @@ public class DecisionNodeCreator extends CreatorBase {
         String contextTemplate = safeString(parameters.get("contextTemplate"));
         if (contextTemplate == null) contextTemplate = safeString(parameters.get("context_template"));
 
+        // Optional external-channel delegation block (channel/credentialId/chatId/
+        // messageTemplate/allowedUserIds), passed through verbatim; CoreValidator
+        // flags unknown channels and missing credential/chatId at validate time.
+        Object delegation = parameters.get("delegation") instanceof Map<?, ?> d && !d.isEmpty()
+            ? parameters.get("delegation") : null;
+
         // 6. Build approval node
         Map<String, Object> approvalConfig = new LinkedHashMap<>();
         approvalConfig.put("approverRoles", approverRoles);
         approvalConfig.put("requiredApprovals", requiredApprovals);
         approvalConfig.put("timeoutMs", timeoutMs);
         if (contextTemplate != null) approvalConfig.put("contextTemplate", contextTemplate);
+        if (delegation != null) approvalConfig.put("delegation", delegation);
 
         Map<String, Object> approvalNode = new LinkedHashMap<>();
         approvalNode.put("id", nodeId);
@@ -602,6 +609,7 @@ public class DecisionNodeCreator extends CreatorBase {
         savedParams.put("requiredApprovals", requiredApprovals);
         savedParams.put("timeoutMs", timeoutMs);
         if (contextTemplate != null) savedParams.put("contextTemplate", contextTemplate);
+        if (delegation != null) savedParams.put("delegation", delegation);
         response.put("saved_params", savedParams);
 
         // NEXT pattern

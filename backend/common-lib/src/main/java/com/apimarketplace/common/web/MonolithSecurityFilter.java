@@ -566,6 +566,7 @@ public class MonolithSecurityFilter implements Filter {
                path.startsWith("/api/auth/health") ||
                path.startsWith("/health") ||
                path.startsWith("/webhook/") ||
+               path.startsWith("/approval-callback/") ||
                path.startsWith("/chat/") ||
                path.startsWith("/form/") ||
                path.startsWith("/widget/") ||
@@ -621,7 +622,12 @@ public class MonolithSecurityFilter implements Filter {
                 || path.startsWith("/api/internal/app/public/")
                 || path.startsWith("/api/internal/auth/pricing/")
                 || path.startsWith("/api/internal/browser-agent/")
-                || path.startsWith("/api/internal/bridge-access/"));
+                || path.startsWith("/api/internal/bridge-access/")
+                // Delegated-approval channel callback (Telegram button clicks). Public by
+                // design, mirroring the cloud gateway's /approval-callback/** route: the
+                // 128-bit capability token inside the payload is the auth, plus the optional
+                // Telegram secret_token header check in the controller.
+                || path.startsWith("/api/internal/approval-callback/"));
     }
 
     private boolean isLoopbackRequest(HttpServletRequest request) {

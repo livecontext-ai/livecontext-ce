@@ -426,6 +426,86 @@ class CoreTest {
         }
     }
 
+    @Nested
+    @DisplayName("ApprovalDelegation record")
+    class ApprovalDelegationTests {
+
+        @Test
+        @DisplayName("Normalizes the channel: trimmed and lowercased")
+        void normalizesChannelTrimLowercase() {
+            Core.ApprovalDelegation delegation = new Core.ApprovalDelegation(
+                "  Telegram ", 42L, "123", "msg", List.of("777"));
+
+            assertEquals("telegram", delegation.channel());
+        }
+
+        @Test
+        @DisplayName("Null channel becomes empty string (never null)")
+        void nullChannelBecomesEmpty() {
+            Core.ApprovalDelegation delegation = new Core.ApprovalDelegation(
+                null, null, null, null, null);
+
+            assertEquals("", delegation.channel());
+        }
+
+        @Test
+        @DisplayName("Null chatId and messageTemplate become empty strings")
+        void nullChatIdAndMessageTemplateBecomeEmpty() {
+            Core.ApprovalDelegation delegation = new Core.ApprovalDelegation(
+                "telegram", null, null, null, null);
+
+            assertEquals("", delegation.chatId());
+            assertEquals("", delegation.messageTemplate());
+        }
+
+        @Test
+        @DisplayName("Null allowedUserIds becomes an empty list")
+        void nullAllowedUserIdsBecomesEmptyList() {
+            Core.ApprovalDelegation delegation = new Core.ApprovalDelegation(
+                "telegram", null, "123", "", null);
+
+            assertNotNull(delegation.allowedUserIds());
+            assertTrue(delegation.allowedUserIds().isEmpty());
+        }
+
+        @Test
+        @DisplayName("isConfigured() is true when a channel is set")
+        void isConfiguredTrueWithChannel() {
+            Core.ApprovalDelegation delegation = new Core.ApprovalDelegation(
+                "telegram", null, "", "", null);
+
+            assertTrue(delegation.isConfigured());
+        }
+
+        @Test
+        @DisplayName("isConfigured() is false for a blank or null channel (section left unconfigured)")
+        void isConfiguredFalseWithBlankChannel() {
+            assertFalse(new Core.ApprovalDelegation("   ", 42L, "123", "msg", null).isConfigured());
+            assertFalse(new Core.ApprovalDelegation(null, 42L, "123", "msg", null).isConfigured());
+        }
+
+        @Test
+        @DisplayName("ApprovalConfig accepts a null delegation (in-app-only approval, back-compat)")
+        void approvalConfigAcceptsNullDelegation() {
+            Core.ApprovalConfig config = new Core.ApprovalConfig(
+                List.of("manager"), 1, 86400000L, "Approve?", null);
+
+            assertNull(config.delegation());
+        }
+
+        @Test
+        @DisplayName("ApprovalConfig carries the delegation when provided")
+        void approvalConfigCarriesDelegation() {
+            Core.ApprovalDelegation delegation = new Core.ApprovalDelegation(
+                "telegram", 42L, "123", "msg", List.of("777"));
+
+            Core.ApprovalConfig config = new Core.ApprovalConfig(
+                List.of("manager"), 1, 86400000L, "Approve?", delegation);
+
+            assertSame(delegation, config.delegation());
+        }
+    }
+
     // Helper method
     private Core createCore(String type) {
         return new Core("c1", type, null, "Label", null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);

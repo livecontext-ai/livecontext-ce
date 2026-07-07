@@ -44,6 +44,11 @@ public class ApprovalNodeSpec implements NodeSpec {
                     .key("approval_context")
                     .type("string")
                     .description("Resolved approval context: the node's contextTemplate rendered at pause time. Present only when a context template was configured and resolved to non-blank text.")
+                    .build(),
+                OutputFieldDef.builder()
+                    .key("delegated_channel")
+                    .type("string")
+                    .description("External channel the approval was delegated to (e.g. telegram). Present only when the node's delegation is configured.")
                     .build()
             ))
             .keywords(List.of("approval", "approve", "reject", "human"))

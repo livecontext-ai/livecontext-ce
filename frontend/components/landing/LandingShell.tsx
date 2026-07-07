@@ -259,6 +259,12 @@ export function LandingFooter({ siteBaseUrl }: { siteBaseUrl?: string } = {}) {
             <li><Link href={withBase(siteBaseUrl, '/changelog')}>Changelog</Link></li>
             <li><Link href={siteBaseUrl ? '/' : '/docs'} prefetch={false}>Docs</Link></li>
           </ul>
+          <p className="text-[11px] uppercase tracking-wider mb-3 mt-6" style={{ color: 'var(--text-muted)' }}>Compare</p>
+          <ul className="space-y-2" style={{ color: 'var(--text-secondary)' }}>
+            <li><Link href={withBase(siteBaseUrl, '/compare/zapier-alternative')}>Zapier alternative</Link></li>
+            <li><Link href={withBase(siteBaseUrl, '/compare/n8n-alternative')}>n8n alternative</Link></li>
+            <li><Link href={withBase(siteBaseUrl, '/compare/make-alternative')}>Make alternative</Link></li>
+          </ul>
         </div>
         <div>
           <p className="text-[11px] uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>Company</p>
@@ -310,7 +316,11 @@ export function LandingShell({ children, extraStyles, headerExtra, themeStorageK
       storageKey={themeStorageKey}
       respectStored={themeRespectStored}
     >
-      <style>{landingChromeStyles}{extraStyles ?? ''}</style>
+      {/* ONE string child: React 19 only renders <style> content when it is a
+          single string. Two expression children ({a}{b}) render an EMPTY style
+          tag server-side and the full text client-side - a hydration mismatch
+          (React #418) plus unstyled server HTML. */}
+      <style>{landingChromeStyles + (extraStyles ?? '')}</style>
       <LandingHeader extra={headerExtra} siteBaseUrl={siteBaseUrl} />
       <main className="flex-1">{children}</main>
       <LandingFooter siteBaseUrl={siteBaseUrl} />

@@ -125,6 +125,98 @@ class WorkflowPlanParserTest {
     }
 
     @Nested
+    @DisplayName("parse() - approval delegation")
+    class ApprovalDelegationParsingTests {
+
+        private WorkflowPlan parseApprovalPlan(Map<String, Object> approvalData) {
+            Map<String, Object> core = new HashMap<>();
+            core.put("id", "core-1");
+            core.put("type", "approval");
+            core.put("label", "Manager Review");
+            core.put("approval", approvalData);
+
+            Map<String, Object> planData = new HashMap<>();
+            planData.put("cores", List.of(core));
+            return WorkflowPlanParser.parse(planData, "tenant-1");
+        }
+
+        @Test
+        @DisplayName("Parses the full delegation block of an approval core")
+        void parsesFullDelegationBlock() {
+            Map<String, Object> approvalData = new HashMap<>();
+            approvalData.put("approverRoles", List.of("manager"));
+            approvalData.put("requiredApprovals", 1);
+            approvalData.put("timeoutMs", 3600000L);
+            approvalData.put("contextTemplate", "Approve {{amount}}?");
+            approvalData.put("delegation", Map.of(
+                "channel", "telegram",
+                "credentialId", 42,
+                "chatId", "{{trigger:start.output.chat_id}}",
+                "messageTemplate", "Please approve {{amount}}",
+                "allowedUserIds", List.of("777", "888")));
+
+            WorkflowPlan plan = parseApprovalPlan(approvalData);
+
+            Core.ApprovalConfig config = plan.getCores().get(0).approvalConfig();
+            assertNotNull(config);
+            Core.ApprovalDelegation delegation = config.delegation();
+            assertNotNull(delegation);
+            assertEquals("telegram", delegation.channel());
+            assertEquals(42L, delegation.credentialId());
+            assertEquals("{{trigger:start.output.chat_id}}", delegation.chatId());
+            assertEquals("Please approve {{amount}}", delegation.messageTemplate());
+            assertEquals(List.of("777", "888"), delegation.allowedUserIds());
+        }
+
+        @Test
+        @DisplayName("regression: approval core without a delegation block keeps a null delegation (back-compat)")
+        void approvalWithoutDelegationParsesNullDelegation() {
+            Map<String, Object> approvalData = new HashMap<>();
+            approvalData.put("approverRoles", List.of("manager"));
+            approvalData.put("requiredApprovals", 1);
+            approvalData.put("timeoutMs", 86400000L);
+            approvalData.put("contextTemplate", "Approve?");
+
+            WorkflowPlan plan = parseApprovalPlan(approvalData);
+
+            Core.ApprovalConfig config = plan.getCores().get(0).approvalConfig();
+            assertNotNull(config);
+            assertNull(config.delegation());
+            assertEquals(List.of("manager"), config.approverRoles());
+            assertEquals(1, config.requiredApprovals());
+            assertEquals("Approve?", config.contextTemplate());
+        }
+
+        @Test
+        @DisplayName("Non-map delegation value is ignored (null delegation)")
+        void nonMapDelegationIgnored() {
+            Map<String, Object> approvalData = new HashMap<>();
+            approvalData.put("delegation", "telegram");
+
+            WorkflowPlan plan = parseApprovalPlan(approvalData);
+
+            assertNull(plan.getCores().get(0).approvalConfig().delegation());
+        }
+
+        @Test
+        @DisplayName("Partial delegation block defaults missing fields (blank chatId/message, no credential, empty allowlist)")
+        void partialDelegationDefaults() {
+            Map<String, Object> approvalData = new HashMap<>();
+            approvalData.put("delegation", Map.of("channel", "telegram"));
+
+            WorkflowPlan plan = parseApprovalPlan(approvalData);
+
+            Core.ApprovalDelegation delegation = plan.getCores().get(0).approvalConfig().delegation();
+            assertNotNull(delegation);
+            assertEquals("telegram", delegation.channel());
+            assertNull(delegation.credentialId());
+            assertEquals("", delegation.chatId());
+            assertEquals("", delegation.messageTemplate());
+            assertTrue(delegation.allowedUserIds().isEmpty());
+        }
+    }
+
+    @Nested
     @DisplayName("normalizeStepId()")
     class NormalizeStepIdTests {
 

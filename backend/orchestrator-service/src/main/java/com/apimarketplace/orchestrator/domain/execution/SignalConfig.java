@@ -58,6 +58,32 @@ public final class SignalConfig {
     }
 
     /**
+     * Create config for a user approval signal that is ALSO delegated to an
+     * external channel (v1: Telegram inline buttons). The delegation map is the
+     * node's delegation block with templates ALREADY resolved at yield time
+     * (keys: channel, credentialId, chatId, message, allowedUserIds). Persisting
+     * it in signal_config makes the outbound sender stateless and restart-safe:
+     * everything the channel notifier needs rides with the signal row.
+     *
+     * @param approverRoles required roles (e.g., ["manager"])
+     * @param requiredApprovals threshold for multi-level approval
+     * @param timeout max wait time before auto-timeout
+     * @param delegation resolved delegation block; null/empty = plain userApproval
+     * @return config map for JSONB storage
+     */
+    public static Map<String, Object> userApprovalWithDelegation(
+            List<String> approverRoles,
+            int requiredApprovals,
+            Duration timeout,
+            Map<String, Object> delegation) {
+        Map<String, Object> config = userApproval(approverRoles, requiredApprovals, timeout);
+        if (delegation != null && !delegation.isEmpty()) {
+            config.put("delegation", delegation);
+        }
+        return config;
+    }
+
+    /**
      * Create config for a webhook wait signal.
      *
      * @param webhookToken signed JWT token for webhook callback validation
@@ -226,6 +252,17 @@ public final class SignalConfig {
         if (config == null) return Map.of();
         Object val = config.get("actionMapping");
         return val instanceof Map<?, ?> map ? (Map<String, String>) map : Map.of();
+    }
+
+    /**
+     * Get the resolved external-channel delegation block (USER_APPROVAL only).
+     * Null when the approval is not delegated.
+     */
+    @SuppressWarnings("unchecked")
+    public static Map<String, Object> getDelegation(Map<String, Object> config) {
+        if (config == null) return null;
+        Object val = config.get("delegation");
+        return val instanceof Map<?, ?> map ? (Map<String, Object>) map : null;
     }
 
     /**

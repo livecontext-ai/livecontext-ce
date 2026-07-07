@@ -943,6 +943,28 @@ export class NodeCreationService {
           ? approvalCfg.contextTemplate
           : undefined;
 
+        // Optional external-channel delegation (v1: telegram) - mirrors the exporter
+        // in edgeProcessor.ts so the approval.delegation block round-trips losslessly.
+        const rawDelegation = approvalCfg.delegation;
+        let approvalDelegation: Record<string, unknown> | undefined;
+        if (rawDelegation && typeof rawDelegation === 'object'
+          && typeof rawDelegation.channel === 'string' && rawDelegation.channel.trim() !== '') {
+          approvalDelegation = { channel: rawDelegation.channel };
+          if (typeof rawDelegation.credentialId === 'number') {
+            approvalDelegation.credentialId = rawDelegation.credentialId;
+          }
+          if (typeof rawDelegation.chatId === 'string' && rawDelegation.chatId.trim() !== '') {
+            approvalDelegation.chatId = rawDelegation.chatId;
+          }
+          if (typeof rawDelegation.messageTemplate === 'string' && rawDelegation.messageTemplate.trim() !== '') {
+            approvalDelegation.messageTemplate = rawDelegation.messageTemplate;
+          }
+          const allowedUserIds = Array.isArray(rawDelegation.allowedUserIds)
+            ? rawDelegation.allowedUserIds.filter((id: unknown): id is string => typeof id === 'string' && id.trim() !== '')
+            : [];
+          if (allowedUserIds.length > 0) approvalDelegation.allowedUserIds = allowedUserIds;
+        }
+
         nodes.push({
           id: nodeId,
           type: 'userApprovalNode',
@@ -957,6 +979,7 @@ export class NodeCreationService {
             ...(approverRoles && approverRoles.length > 0 ? { approverRoles } : {}),
             ...(requiredApprovals !== undefined ? { requiredApprovals } : {}),
             ...(contextTemplate !== undefined ? { approvalContextTemplate: contextTemplate } : {}),
+            ...(approvalDelegation !== undefined ? { approvalDelegation } : {}),
             paramExpressions: inputToParamExpressions((cn as any).params),
           } as any,
         });

@@ -4,6 +4,7 @@ import { NextIntlClientProvider } from 'next-intl';
 import { getMessages, getTranslations, setRequestLocale } from 'next-intl/server';
 import { resolveRequestLocale } from '@/i18n/resolveRequestLocale';
 import { LandingShell } from '@/components/landing/LandingShell';
+import { IS_CE } from '@/lib/edition';
 
 export async function generateMetadata(): Promise<Metadata> {
   const locale = await resolveRequestLocale();
@@ -12,6 +13,9 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     title: t('title'),
     description: t('description'),
+    alternates: { canonical: '/contact' },
+    // Self-hosted deployments must never index marketing pages.
+    robots: IS_CE ? { index: false, follow: false } : undefined,
   };
 }
 

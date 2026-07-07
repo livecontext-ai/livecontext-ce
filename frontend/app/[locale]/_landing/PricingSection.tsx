@@ -1,10 +1,9 @@
 'use client';
 
 import { useCallback, useState } from 'react';
-import { getClientLocale } from '@/lib/utils/locale';
 import { useRouter } from 'next/navigation';
 import { Check } from 'lucide-react';
-import { useTranslations } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
 import { useAuth } from '@/lib/providers/smart-providers';
 import { calcPrice, CREDIT_TIERS, PLAN_FEATURE_KEYS } from '@/lib/billing/pricing-constants';
 import DeploymentBadge from '@/components/pricing/DeploymentBadge';
@@ -33,9 +32,15 @@ export default function PricingSection() {
   const tCards = useTranslations('pricing.planCards');
   const tBilling = useTranslations('pricing.billing');
   const tBiz = useTranslations('pricing.businessPlans');
+  // useLocale(), NOT getClientLocale(): this section server-renders on the
+  // landing (under NextIntlClientProvider). getClientLocale() resolves 'en' on
+  // the server but the visitor's locale on the client, so a /fr visitor got
+  // "5,000" in the server HTML vs "5 000" after hydration - a React #418
+  // hydration mismatch on the whole landing page.
+  const locale = useLocale();
 
   // Entry tier credits, shared with the settings page so both stay in sync.
-  const landingCredits = CREDIT_TIERS[TIER_INDEX].toLocaleString(getClientLocale());
+  const landingCredits = CREDIT_TIERS[TIER_INDEX].toLocaleString(locale);
   // Same coherent superset feature lists + i18n as the settings page (PlanSelector).
   const featuresFor = (id: string): string[] =>
     (PLAN_FEATURE_KEYS[id] || []).map((k) => {

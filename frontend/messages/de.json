@@ -6955,7 +6955,21 @@
         "contextInfoTitle": "Genehmigungskontext",
         "contextInfoBody": "Wird dem Genehmiger angezeigt, damit er sieht, was er genehmigt. Wird aufgelöst, wenn der Workflow pausiert.",
         "contextInfoVariables": "Fügen Sie Workflow-Daten mit Ausdrücken ein, zum Beispiel:",
-        "contextInfoOptional": "Empfohlen. Der Lauf funktioniert auch, wenn das Feld leer bleibt."
+        "contextInfoOptional": "Empfohlen. Der Lauf funktioniert auch, wenn das Feld leer bleibt.",
+        "delegation": {
+          "title": "Über externen Kanal delegieren",
+          "infoTitle": "Delegation über externen Kanal",
+          "infoBody": "Sendet die ausstehende Genehmigung als Nachricht mit Genehmigen- und Ablehnen-Schaltflächen in einen Telegram-Chat. Ein Tippen auf eine Schaltfläche löst die Genehmigung auf, zusätzlich zur Entscheidung in der App.",
+          "infoOptional": "Optional. Die Genehmigung bleibt auch in der App verfügbar.",
+          "enableAria": "Delegation über externen Kanal aktivieren",
+          "channelLabel": "Kanal",
+          "chatIdLabel": "Chat-ID",
+          "chatIdHint": "ID des Ziel-Chats oder der Zielgruppe. Unterstützt '{{...}}'-Ausdrücke.",
+          "messageLabel": "Nachrichtenvorlage",
+          "messagePlaceholder": "Standardmäßig der Genehmigungskontext",
+          "allowedUserIdsLabel": "Erlaubte Benutzer-IDs",
+          "allowedUserIdsHint": "Kommagetrennte Telegram-Benutzer-IDs. Leer lassen, damit jeder im Chat entscheiden darf."
+        }
       }
     },
     "databaseNode": {

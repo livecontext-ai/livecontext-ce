@@ -101,4 +101,23 @@ public class ShedLockConfig {
         executor.initialize();
         return executor;
     }
+
+    /**
+     * Dedicated small pool for delegated-approval channel deliveries (Telegram send,
+     * post-resolution message edits). These are outbound HTTP calls through the catalog
+     * and MUST NOT run on the signal registration/resume threads: a slow channel API
+     * would otherwise back-pressure signal processing. CallerRuns on saturation keeps
+     * deliveries best-effort without dropping them silently.
+     */
+    @Bean("approvalDelegationExecutor")
+    public TaskExecutor approvalDelegationExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(2);
+        executor.setQueueCapacity(50);
+        executor.setThreadNamePrefix("approval-delegation-");
+        executor.setRejectedExecutionHandler(new java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy());
+        executor.initialize();
+        return executor;
+    }
 }

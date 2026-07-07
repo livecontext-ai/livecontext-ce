@@ -24,13 +24,103 @@ import { SELF_HOSTED_GITHUB_URL } from '@/lib/billing/pricing-constants';
 import { IS_CE as IS_CE_DEPLOY } from '@/lib/edition';
 import { NODE_ICON_REGISTRY } from '@/app/workflows/builder/data/nodeVisuals';
 import LandingThemeProvider from '@/components/landing/LandingThemeProvider';
+import JsonLd from '@/components/seo/JsonLd';
+import Link from 'next/link';
+
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://livecontext.ai';
 
 export const metadata = {
   title: { absolute: 'LiveContext: The AI automation platform. Chat, workflows, agents, apps.' },
   description:
     'The AI automation platform: describe the job in chat and LiveContext builds the workflow in front of you, runs it with agents that have scoped access and credit budgets, and ships it as an app for your team. Full audit, SAML SSO and workspaces.',
+  // The landing content is hardcoded English on every locale URL (/, /fr, /es, ...),
+  // so all locale variants canonicalize to the apex: Google indexes ONE landing
+  // page instead of flagging 5 duplicates. Give each locale its own canonical +
+  // hreflang cluster only when the landing is actually translated.
+  alternates: { canonical: SITE_URL },
   robots: IS_CE_DEPLOY ? { index: false, follow: false } : undefined,
 };
+
+const LANDING_FAQ = [
+  {
+    question: 'What is LiveContext?',
+    answer:
+      'LiveContext is an AI automation platform. You describe a job in chat, the workflow builds itself in front of you, AI agents run it with scoped tool access and hard credit budgets, and the result ships as an app your team or customers can use. It includes 600+ API integrations, built-in data tables, a browser-use agent and a marketplace of forkable automations.',
+  },
+  {
+    question: 'Do I need to know how to code?',
+    answer:
+      'No. You build by describing the job in chat and refining on a visual canvas. When you want them, power tools are there: a code node, raw HTTP requests, database queries and custom API definitions.',
+  },
+  {
+    question: 'Can I self-host LiveContext?',
+    answer:
+      'Yes. The Community Edition is free and self-hosted: one docker compose up on your own server, with the code public on GitHub. The cloud edition adds managed hosting, SAML SSO, workspaces and platform credits.',
+  },
+  {
+    question: 'How is LiveContext different from Zapier, n8n or Make?',
+    answer:
+      'Those tools focus on the pipeline; LiveContext covers the whole loop: the chat that builds the workflow, the agents that run it under budgets and scoped access, the app your team opens, and the tables that hold the data. See the detailed comparisons at livecontext.ai/compare.',
+  },
+  {
+    question: 'How does pricing work?',
+    answer:
+      'There is a free tier with no credit card required. Paid plans are credit-based: you pick a credit tier and can cap the spend per agent with a hard budget it cannot exceed. The self-hosted Community Edition is free.',
+  },
+  {
+    question: 'Which AI models can I use?',
+    answer:
+      'Major providers are supported, including Anthropic Claude, OpenAI, Google Gemini and DeepSeek. Use platform credits or bring your own API keys, and pick the model per agent.',
+  },
+];
+
+const LANDING_JSON_LD = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'Organization',
+    name: 'LiveContext',
+    url: SITE_URL,
+    logo: `${SITE_URL}/liveContext-logo.png`,
+    sameAs: [
+      'https://www.linkedin.com/company/livecontext/',
+      'https://x.com/livecontextai',
+      'https://www.instagram.com/livecontext.ai/',
+      'https://github.com/livecontext-ai',
+      'https://www.tiktok.com/@livecontextai',
+    ],
+  },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'WebSite',
+    name: 'LiveContext',
+    url: SITE_URL,
+  },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareApplication',
+    name: 'LiveContext',
+    applicationCategory: 'BusinessApplication',
+    operatingSystem: 'Web',
+    url: SITE_URL,
+    description:
+      'AI automation platform: build workflows by chat, run them with budgeted AI agents, and ship them as apps. 600+ integrations, built-in tables, marketplace, cloud or self-hosted.',
+    offers: {
+      '@type': 'Offer',
+      price: '0',
+      priceCurrency: 'USD',
+      description: 'Free tier on cloud; free self-hosted Community Edition.',
+    },
+  },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    mainEntity: LANDING_FAQ.map((item) => ({
+      '@type': 'Question',
+      name: item.question,
+      acceptedAnswer: { '@type': 'Answer', text: item.answer },
+    })),
+  },
+];
 
 const HERO_PHOTOS = [
   {
@@ -83,7 +173,12 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
 
   return (
     <LandingThemeProvider className="min-h-screen">
-      <style>{landingChromeStyles}{landingStyles}</style>
+      {/* ONE string child: React 19 only renders <style> content when it is a
+          single string. Two expression children ({a}{b}) render an EMPTY style
+          tag server-side and the full text client-side - a hydration mismatch
+          (React #418) plus unstyled server HTML. */}
+      <style>{landingChromeStyles + landingStyles}</style>
+      {!IS_CE_DEPLOY && LANDING_JSON_LD.map((data, idx) => <JsonLd key={idx} data={data} />)}
 
       <LandingHeader />
 
@@ -95,6 +190,7 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
         <BuilderSection />
         <ComparisonStrip />
         <PricingBlock />
+        <FaqSection />
         <FinalCta />
       </main>
 
@@ -216,8 +312,41 @@ function ComparisonStrip() {
         <p className="mt-6 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
           Build it once. It runs as all four, with every agent scoped, budgeted and audited.
         </p>
+        <p className="mt-3 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
+          Full comparisons:{' '}
+          <Link href="/compare/zapier-alternative" className="underline underline-offset-2 hover:opacity-80">vs Zapier</Link>
+          {' · '}
+          <Link href="/compare/n8n-alternative" className="underline underline-offset-2 hover:opacity-80">vs n8n</Link>
+          {' · '}
+          <Link href="/compare/make-alternative" className="underline underline-offset-2 hover:opacity-80">vs Make</Link>
+        </p>
       </div>
     </section>
+  );
+}
+
+function FaqSection() {
+  return (
+    <Section alt id="faq">
+      <SectionEyebrow icon={Sparkles}>FAQ</SectionEyebrow>
+      <SectionH2>Frequently asked questions</SectionH2>
+      <div className="mt-12 max-w-3xl space-y-4">
+        {LANDING_FAQ.map((item) => (
+          <details key={item.question} className="rounded-2xl p-6" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)' }}>
+            <summary className="cursor-pointer text-base font-semibold list-none" style={{ color: 'var(--text-primary)' }}>
+              {item.question}
+            </summary>
+            <p className="mt-3 text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>{item.answer}</p>
+          </details>
+        ))}
+      </div>
+      <p className="mt-8 text-sm" style={{ color: 'var(--text-muted)' }}>
+        More detail in the{' '}
+        <a href="https://docs.livecontext.ai" className="underline underline-offset-2 hover:opacity-80">documentation</a>
+        {' '}or the{' '}
+        <Link href="/compare" className="underline underline-offset-2 hover:opacity-80">comparison pages</Link>.
+      </p>
+    </Section>
   );
 }
 

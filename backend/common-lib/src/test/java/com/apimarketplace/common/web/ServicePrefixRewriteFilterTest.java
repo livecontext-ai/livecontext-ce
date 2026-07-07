@@ -71,6 +71,7 @@ class ServicePrefixRewriteFilterTest {
             "/share/sl_0123456789abcdef0123456789abcdef,/api/public/share/sl_0123456789abcdef0123456789abcdef",
             "/c/conversation-token,/api/shared/c/conversation-token",
             "/webhook/wh_abc,/api/internal/webhook/wh_abc",
+            "/approval-callback/telegram,/api/internal/approval-callback/telegram",
             "/chat/chat-token,/api/internal/chat/chat-token",
             "/form/form-token,/api/internal/form/form-token",
             "/app/public/app-token,/api/internal/app/public/app-token"

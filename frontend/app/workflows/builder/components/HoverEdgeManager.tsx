@@ -492,8 +492,10 @@ export function HoverEdgeManager({
                 />
             )}
 
-            {/* CSS for animations */}
-            <style jsx global>{`
+            {/* CSS for animations. Plain <style>, NOT <style jsx global>:
+                styled-jsx has no SSR registry in the App Router and causes
+                hydration mismatches; these keyframes are global anyway. */}
+            <style>{`
         @keyframes pulse-ring {
           0% {
             transform: scale(0.5);

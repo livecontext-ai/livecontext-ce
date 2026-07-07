@@ -858,6 +858,7 @@ public class CoreNodeBuilder {
             int requiredApprovals = 1;
             long timeoutMs = 86400000L; // 24h default
             String contextTemplate = "";
+            Core.ApprovalDelegation delegation = null;
 
             if (coreNode.approvalConfig() != null) {
                 Core.ApprovalConfig config = coreNode.approvalConfig();
@@ -865,6 +866,7 @@ public class CoreNodeBuilder {
                 requiredApprovals = config.requiredApprovals();
                 timeoutMs = config.timeoutMs();
                 contextTemplate = config.contextTemplate();
+                delegation = config.delegation();
             }
 
             // Create UserApprovalNode (port targets wired in second pass)
@@ -874,6 +876,7 @@ public class CoreNodeBuilder {
                 .requiredApprovals(requiredApprovals)
                 .timeoutMs(timeoutMs)
                 .contextTemplate(contextTemplate)
+                .delegation(delegation)
                 .build();
 
             nodeMap.put(approvalKey, approvalNode);

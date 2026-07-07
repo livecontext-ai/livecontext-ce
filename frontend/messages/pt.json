@@ -6955,7 +6955,21 @@
         "contextInfoTitle": "Contexto de aprovação",
         "contextInfoBody": "Mostrado ao aprovador para que veja o que está a aprovar. Resolvido quando o fluxo de trabalho é pausado.",
         "contextInfoVariables": "Insira dados do fluxo com expressões, por exemplo:",
-        "contextInfoOptional": "Recomendado. A execução continua a funcionar mesmo se ficar vazio."
+        "contextInfoOptional": "Recomendado. A execução continua a funcionar mesmo se ficar vazio.",
+        "delegation": {
+          "title": "Delegar por um canal externo",
+          "infoTitle": "Delegação por canal externo",
+          "infoBody": "Envia a aprovação pendente para um chat do Telegram como uma mensagem com botões de aprovar e rejeitar. Tocar num botão resolve a aprovação, além da decisão na aplicação.",
+          "infoOptional": "Opcional. A aprovação também continua disponível na aplicação.",
+          "enableAria": "Ativar a delegação por canal externo",
+          "channelLabel": "Canal",
+          "chatIdLabel": "ID do chat",
+          "chatIdHint": "ID do chat ou grupo de destino. Suporta expressões '{{...}}'.",
+          "messageLabel": "Modelo de mensagem",
+          "messagePlaceholder": "Por padrão, o contexto de aprovação",
+          "allowedUserIdsLabel": "IDs de usuários permitidos",
+          "allowedUserIdsHint": "IDs de usuários do Telegram separados por vírgulas. Deixe vazio para permitir que qualquer pessoa no chat decida."
+        }
       }
     },
     "databaseNode": {

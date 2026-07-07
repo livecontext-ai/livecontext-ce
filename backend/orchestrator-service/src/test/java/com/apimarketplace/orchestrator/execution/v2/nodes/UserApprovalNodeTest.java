@@ -287,6 +287,138 @@ class UserApprovalNodeTest {
     }
 
     @Nested
+    @DisplayName("execute() - external-channel delegation")
+    class DelegationTests {
+
+        private UserApprovalNode buildDelegatedNode(com.apimarketplace.orchestrator.domain.workflow.Core.ApprovalDelegation delegation) {
+            UserApprovalNode node = UserApprovalNode.builder()
+                .nodeId("core:manager_approval")
+                .approverRoles(List.of("manager"))
+                .requiredApprovals(1)
+                .timeoutMs(86400000L)
+                .delegation(delegation)
+                .build();
+            node.setSignalService(signalService);
+            node.setClock(FIXED_CLOCK);
+            return node;
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> capturedSignalConfig() {
+            org.mockito.ArgumentCaptor<Map<String, Object>> configCaptor =
+                org.mockito.ArgumentCaptor.forClass(Map.class);
+            verify(signalService).registerSignal(
+                any(), any(), any(), isNull(), eq(0),
+                eq(SignalType.USER_APPROVAL), configCaptor.capture(), any(), any());
+            return configCaptor.getValue();
+        }
+
+        @Test
+        @DisplayName("delegation configured: the signal config embeds the resolved delegation block (chatId + message resolved at yield)")
+        void embedsResolvedDelegationBlockInSignalConfig() {
+            UserApprovalNode node = buildDelegatedNode(
+                new com.apimarketplace.orchestrator.domain.workflow.Core.ApprovalDelegation(
+                    "telegram", 42L, "{{trigger:start.output.chat_id}}",
+                    "Approve order {{trigger:start.output.id}}?", List.of("777")));
+            node.setTemplateAdapter(templateAdapter);
+
+            when(context.runId()).thenReturn("run-1");
+            when(context.itemId()).thenReturn("0");
+            when(templateAdapter.evaluateTemplate("{{trigger:start.output.chat_id}}", context))
+                .thenReturn("123456");
+            when(templateAdapter.evaluateTemplate("Approve order {{trigger:start.output.id}}?", context))
+                .thenReturn("Approve order 99?");
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertTrue(result.isAwaitingSignal());
+            Map<String, Object> config = capturedSignalConfig();
+            assertInstanceOf(Map.class, config.get("delegation"));
+            Map<String, Object> delegation = (Map<String, Object>) config.get("delegation");
+            assertEquals("telegram", delegation.get("channel"));
+            assertEquals(42L, delegation.get("credentialId"));
+            assertEquals("123456", delegation.get("chatId"));
+            assertEquals("Approve order 99?", delegation.get("message"));
+            assertEquals(List.of("777"), delegation.get("allowedUserIds"));
+        }
+
+        @Test
+        @DisplayName("delegation configured: the yield output advertises delegated_channel")
+        void outputAdvertisesDelegatedChannel() {
+            UserApprovalNode node = buildDelegatedNode(
+                new com.apimarketplace.orchestrator.domain.workflow.Core.ApprovalDelegation(
+                    "telegram", 42L, "123456", "", List.of()));
+
+            when(context.runId()).thenReturn("run-1");
+            when(context.itemId()).thenReturn("0");
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertEquals("telegram", result.output().get("delegated_channel"));
+        }
+
+        @Test
+        @DisplayName("SOFT: a failing chatId template falls back to the raw configured string and the node still yields")
+        void chatIdTemplateFailureFallsBackToRawAndStillYields() {
+            UserApprovalNode node = buildDelegatedNode(
+                new com.apimarketplace.orchestrator.domain.workflow.Core.ApprovalDelegation(
+                    "telegram", 42L, "{{bad.expr}}", "", List.of()));
+            node.setTemplateAdapter(templateAdapter);
+
+            when(context.runId()).thenReturn("run-1");
+            when(context.itemId()).thenReturn("0");
+            when(templateAdapter.evaluateTemplate("{{bad.expr}}", context))
+                .thenThrow(new RuntimeException("bad template"));
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertTrue(result.isAwaitingSignal());
+            Map<String, Object> config = capturedSignalConfig();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> delegation = (Map<String, Object>) config.get("delegation");
+            assertEquals("{{bad.expr}}", delegation.get("chatId"));
+            // blank messageTemplate never resolves: the message key is omitted, not blank
+            assertFalse(delegation.containsKey("message"));
+        }
+
+        @Test
+        @DisplayName("regression: no delegation -> signal config has NO delegation key and output has NO delegated_channel")
+        void noDelegationLeavesConfigAndOutputUntouched() {
+            approvalNode.setSignalService(signalService);
+            approvalNode.setClock(FIXED_CLOCK);
+
+            when(context.runId()).thenReturn("run-1");
+            when(context.itemId()).thenReturn("0");
+
+            NodeExecutionResult result = approvalNode.execute(context);
+
+            assertTrue(result.isAwaitingSignal());
+            Map<String, Object> config = capturedSignalConfig();
+            assertFalse(config.containsKey("delegation"));
+            assertFalse(result.output().containsKey("delegated_channel"));
+        }
+
+        @Test
+        @DisplayName("a blank-channel delegation (section left unconfigured) is treated as no delegation")
+        void blankChannelDelegationTreatedAsAbsent() {
+            UserApprovalNode node = buildDelegatedNode(
+                new com.apimarketplace.orchestrator.domain.workflow.Core.ApprovalDelegation(
+                    "   ", 42L, "123", "msg", List.of()));
+
+            when(context.runId()).thenReturn("run-1");
+            when(context.itemId()).thenReturn("0");
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertTrue(result.isAwaitingSignal());
+            assertNull(node.getDelegation());
+            Map<String, Object> config = capturedSignalConfig();
+            assertFalse(config.containsKey("delegation"));
+            assertFalse(result.output().containsKey("delegated_channel"));
+        }
+    }
+
+    @Nested
     @DisplayName("getNextNodes()")
     class GetNextNodesTests {
 

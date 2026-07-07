@@ -44,7 +44,11 @@ const LogoAnimate = React.memo<LogoAnimateProps>(({ size = 'md', className = '',
 
   return (
     <>
-      <style jsx>{pulseAnimation}</style>
+      {/* Plain <style>, NOT <style jsx>: styled-jsx has no SSR registry in the
+          App Router, so it rendered `jsx-undefined` classes server-side and a
+          real hash client-side - a hydration mismatch (React #418) on every
+          page showing this logo. The keyframes are global anyway. */}
+      <style>{pulseAnimation}</style>
       <div
         className={`${sizeClasses[size]} ${className} cursor-pointer transition-all duration-300 ease-in-out`}
         onMouseEnter={handleMouseEnter}

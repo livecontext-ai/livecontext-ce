@@ -446,4 +446,106 @@ class CoreValidatorTest {
                 w.code().equals("APPROVAL_NO_CONTEXT_TEMPLATE"));
         }
     }
+
+    @Nested
+    @DisplayName("Approval delegation validation")
+    class ApprovalDelegationTests {
+
+        private static final List<String> DELEGATION_CODES = List.of(
+            "APPROVAL_DELEGATION_UNKNOWN_CHANNEL",
+            "APPROVAL_DELEGATION_NO_CREDENTIAL",
+            "APPROVAL_DELEGATION_NO_CHAT_ID",
+            "APPROVAL_DELEGATION_MULTI_APPROVALS");
+
+        private ValidationResult validate(Map<String, Object> approvalConfig) {
+            Map<String, Object> core = Map.of(
+                "type", "approval",
+                "label", "Manager Review",
+                "approval", approvalConfig);
+            when(session.getCores()).thenReturn(List.of(core));
+
+            ValidationResult result = ValidationResult.builder().build();
+            validator.validate(session, result);
+            return result;
+        }
+
+        @Test
+        @DisplayName("Unknown channel is an ERROR (the approval would silently never reach any channel)")
+        void unknownChannelIsError() {
+            ValidationResult result = validate(Map.of(
+                "contextTemplate", "Approve?",
+                "delegation", Map.of("channel", "slack", "credentialId", 42, "chatId", "123")));
+
+            assertThat(result.getErrors()).anyMatch(e ->
+                e.code().equals("APPROVAL_DELEGATION_UNKNOWN_CHANNEL"));
+        }
+
+        @Test
+        @DisplayName("Telegram without a numeric credentialId is a WARNING (in-app resolution still works)")
+        void missingCredentialIsWarning() {
+            ValidationResult result = validate(Map.of(
+                "contextTemplate", "Approve?",
+                "delegation", Map.of("channel", "telegram", "chatId", "123")));
+
+            assertThat(result.getWarnings()).anyMatch(w ->
+                w.code().equals("APPROVAL_DELEGATION_NO_CREDENTIAL"));
+            assertThat(result.getErrors()).noneMatch(e ->
+                e.code().equals("APPROVAL_DELEGATION_NO_CREDENTIAL"));
+        }
+
+        @Test
+        @DisplayName("Telegram without a chatId is a WARNING")
+        void missingChatIdIsWarning() {
+            ValidationResult result = validate(Map.of(
+                "contextTemplate", "Approve?",
+                "delegation", Map.of("channel", "telegram", "credentialId", 42)));
+
+            assertThat(result.getWarnings()).anyMatch(w ->
+                w.code().equals("APPROVAL_DELEGATION_NO_CHAT_ID"));
+        }
+
+        @Test
+        @DisplayName("Delegation with requiredApprovals > 1 is a WARNING (a button tap is a single decision)")
+        void multiApprovalsIsWarning() {
+            ValidationResult result = validate(Map.of(
+                "contextTemplate", "Approve?",
+                "requiredApprovals", 2,
+                "delegation", Map.of("channel", "telegram", "credentialId", 42, "chatId", "123")));
+
+            assertThat(result.getWarnings()).anyMatch(w ->
+                w.code().equals("APPROVAL_DELEGATION_MULTI_APPROVALS"));
+        }
+
+        @Test
+        @DisplayName("Fully configured Telegram delegation raises no delegation finding")
+        void fullyConfiguredDelegationIsClean() {
+            ValidationResult result = validate(Map.of(
+                "contextTemplate", "Approve?",
+                "requiredApprovals", 1,
+                "delegation", Map.of("channel", "telegram", "credentialId", 42, "chatId", "123")));
+
+            assertThat(result.getErrors()).noneMatch(e -> DELEGATION_CODES.contains(e.code()));
+            assertThat(result.getWarnings()).noneMatch(w -> DELEGATION_CODES.contains(w.code()));
+        }
+
+        @Test
+        @DisplayName("regression: an approval WITHOUT a delegation block produces no delegation finding")
+        void noDelegationProducesNoDelegationFinding() {
+            ValidationResult result = validate(Map.of("contextTemplate", "Approve?"));
+
+            assertThat(result.getErrors()).noneMatch(e -> DELEGATION_CODES.contains(e.code()));
+            assertThat(result.getWarnings()).noneMatch(w -> DELEGATION_CODES.contains(w.code()));
+        }
+
+        @Test
+        @DisplayName("A blank channel means the section was left unconfigured: no delegation finding")
+        void blankChannelProducesNoDelegationFinding() {
+            ValidationResult result = validate(Map.of(
+                "contextTemplate", "Approve?",
+                "delegation", Map.of("channel", "   ")));
+
+            assertThat(result.getErrors()).noneMatch(e -> DELEGATION_CODES.contains(e.code()));
+            assertThat(result.getWarnings()).noneMatch(w -> DELEGATION_CODES.contains(w.code()));
+        }
+    }
 }

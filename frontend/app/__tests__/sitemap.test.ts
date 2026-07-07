@@ -23,6 +23,35 @@ describe('sitemap - cloud edition', () => {
     // The apex landing root is still emitted alongside the docs.
     expect(urls).toContain(SITE);
   });
+
+  it('emits the landing page ONCE at the apex (locale duplicates canonicalize there, not sitemap entries)', async () => {
+    vi.doMock('@/lib/edition', () => ({ IS_CE: false }));
+    const { default: sitemap } = await import('../sitemap');
+    const { routing } = await import('@/i18n/routing');
+    const urls = sitemap().map((e) => e.url);
+
+    expect(urls).toContain(SITE);
+    // The landing serves identical English content on every locale URL, so
+    // listing /fr, /es, ... would advertise duplicates that canonicalize away.
+    for (const locale of routing.locales) {
+      expect(urls).not.toContain(`${SITE}/${locale}`);
+    }
+  });
+
+  it('emits the /compare hub and one entry per comparison page', async () => {
+    vi.doMock('@/lib/edition', () => ({ IS_CE: false }));
+    const { default: sitemap } = await import('../sitemap');
+    const { COMPARISONS } = await import('../compare/_lib/comparisons');
+    const entries = sitemap();
+    const urls = entries.map((e) => e.url);
+
+    expect(urls).toContain(`${SITE}/compare`);
+    for (const comparison of COMPARISONS) {
+      expect(urls).toContain(`${SITE}/compare/${comparison.slug}`);
+    }
+    // Comparison pages are a primary SEO surface: above sub-pages, below the landing.
+    expect(entries.find((e) => e.url === `${SITE}/compare/n8n-alternative`)?.priority).toBe(0.8);
+  });
 });
 
 describe('sitemap - community edition', () => {

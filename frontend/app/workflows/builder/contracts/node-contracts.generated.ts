@@ -1172,6 +1172,7 @@ export interface UserApprovalParameters {
   requiredApprovals?: number;
   timeoutMs?: number;
   contextTemplate: string;
+  delegation?: Record<string, any>;
 }
 
 /**
@@ -1188,6 +1189,8 @@ export interface UserApprovalOutputs {
   selected_port?: string;
   /** Resolved contextTemplate shown to the approver, carried into the resolved output (present only when a context template resolved to non-blank text) */
   approval_context?: string;
+  /** External channel the approval was delegated to (e.g. telegram). Present only when delegation is configured. */
+  delegated_channel?: string;
 }
 
 // ═══════════════════════════════════════════════════════════════

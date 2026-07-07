@@ -1734,6 +1734,43 @@ class SignalResumeServiceTest {
             assertThat(output).doesNotContainKey("approval_context");
             assertThat(output).containsEntry("selected_port", "rejected");
         }
+
+        @Test
+        @DisplayName("USER_APPROVAL with a delegation block mirrors delegated_channel into the completed output (survives awaiting -> resolved)")
+        void approvalResolutionMirrorsDelegatedChannel() throws Exception {
+            SignalWaitEntity signal = mock(SignalWaitEntity.class);
+            when(signal.getSignalType()).thenReturn(SignalType.USER_APPROVAL);
+            when(signal.getResolution()).thenReturn(SignalResolution.APPROVED);
+            when(signal.getResolvedAt()).thenReturn(Instant.now());
+            when(signal.getResolvedBy()).thenReturn("telegram:777");
+            when(signal.getSignalConfig()).thenReturn(Map.of(
+                "type", "USER_APPROVAL",
+                "delegation", Map.of("channel", "telegram", "credentialId", 42, "chatId", "123")));
+
+            Map<String, Object> payload = invokeBuild(signal);
+            Map<String, Object> output = (Map<String, Object>) payload.get("output");
+
+            // The yield-time output already advertises delegated_channel; the COMPLETED
+            // output built here must keep {{core:<label>.output.delegated_channel}} resolving.
+            assertThat(output).containsEntry("delegated_channel", "telegram");
+            assertThat(output).containsEntry("selected_port", "approved");
+        }
+
+        @Test
+        @DisplayName("regression: USER_APPROVAL without a delegation block omits the delegated_channel key")
+        void approvalResolutionOmitsDelegatedChannelWhenNotDelegated() throws Exception {
+            SignalWaitEntity signal = mock(SignalWaitEntity.class);
+            when(signal.getSignalType()).thenReturn(SignalType.USER_APPROVAL);
+            when(signal.getResolution()).thenReturn(SignalResolution.APPROVED);
+            when(signal.getResolvedAt()).thenReturn(Instant.now());
+            when(signal.getResolvedBy()).thenReturn("42");
+            when(signal.getSignalConfig()).thenReturn(Map.of("type", "USER_APPROVAL"));
+
+            Map<String, Object> payload = invokeBuild(signal);
+            Map<String, Object> output = (Map<String, Object>) payload.get("output");
+
+            assertThat(output).doesNotContainKey("delegated_channel");
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

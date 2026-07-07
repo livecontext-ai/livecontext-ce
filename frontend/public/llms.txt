@@ -1,0 +1,43 @@
+# LiveContext
+
+> LiveContext is an AI automation platform: describe a job in chat and it builds the workflow in front of you, runs it with AI agents that have scoped tool access and hard credit budgets, and ships the result as an app your team or customers can use. It combines a visual workflow builder (60+ block types), 600+ API integrations (14,000+ operations), built-in data tables, a browser-use agent, MCP (Model Context Protocol) support, and a marketplace of forkable automations. Available as a managed cloud (livecontext.ai, free tier) and as a free self-hosted Community Edition (docker compose, code at github.com/livecontext-ai/livecontext-ce).
+
+Key facts:
+- Build automations by chat: one plain-language message produces a running workflow, editable on a visual canvas.
+- AI agents in production: each agent gets a scoped set of tools, a credit budget it cannot exceed, and a full audit trail.
+- Ships workflows as apps: search pages, dashboards and approval screens on top of the workflow, shareable by link.
+- Built-in spreadsheet-style data tables that automations create, find and update.
+- Cloud with SAML SSO, RBAC and workspaces, or free self-hosted Community Edition.
+- Works with major AI models (Anthropic Claude, OpenAI, Google Gemini, DeepSeek and more), bring your own key or platform credits.
+
+## Docs
+
+- [Documentation home](https://docs.livecontext.ai/): product documentation overview
+- [Getting started](https://docs.livecontext.ai/getting-started): first automation in minutes
+- [Core concepts](https://docs.livecontext.ai/concepts): workflows, agents, interfaces, tables, runs
+- [Workflows](https://docs.livecontext.ai/workflows): the visual builder and how chat builds workflows
+- [Nodes](https://docs.livecontext.ai/nodes): the 60+ building blocks
+- [Triggers](https://docs.livecontext.ai/triggers): webhooks, schedules, chat, forms, table changes
+- [AI agents](https://docs.livecontext.ai/agents): scoped tools, credit budgets, audit
+- [Models](https://docs.livecontext.ai/models): supported AI providers and model configuration
+- [Browser agent](https://docs.livecontext.ai/browser-agent): the agent that operates real web pages
+- [Interfaces](https://docs.livecontext.ai/interfaces): shipping workflows as apps
+- [Tables](https://docs.livecontext.ai/tables): built-in data tables
+- [Integrations](https://docs.livecontext.ai/integrations): the 600+ API catalog
+- [Marketplace](https://docs.livecontext.ai/marketplace): forking and publishing automations
+- [Self-hosting](https://docs.livecontext.ai/self-host): running the free Community Edition
+- [Expressions](https://docs.livecontext.ai/expressions): the template language
+- [REST API](https://docs.livecontext.ai/rest-api): programmatic access
+
+## Compare
+
+- [LiveContext vs Zapier](https://livecontext.ai/compare/zapier-alternative): the AI-native Zapier alternative
+- [LiveContext vs n8n](https://livecontext.ai/compare/n8n-alternative): the AI-native n8n alternative
+- [LiveContext vs Make](https://livecontext.ai/compare/make-alternative): the AI-native Make (Integromat) alternative
+
+## Company
+
+- [Landing page](https://livecontext.ai/): product overview and pricing
+- [Changelog](https://livecontext.ai/changelog): shipped releases with notes
+- [About](https://livecontext.ai/about): company and team
+- [Self-hosted edition on GitHub](https://github.com/livecontext-ai/livecontext-ce): Community Edition source and releases

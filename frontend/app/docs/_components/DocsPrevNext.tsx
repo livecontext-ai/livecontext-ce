@@ -3,11 +3,13 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ArrowLeft, ArrowRight } from 'lucide-react';
-import { getAdjacentPages } from '../_nav';
+import { cleanDocsPathname, getAdjacentPages } from '../_nav';
 
 /** Previous / next page links derived from the docs IA and the current path. */
 export function DocsPrevNext() {
-  const pathname = usePathname() || '/docs';
+  // Normalized: at build time usePathname() is the internal /docs/... route,
+  // in the browser it is the clean subdomain URL (see cleanDocsPathname).
+  const pathname = cleanDocsPathname(usePathname());
   const { prev, next } = getAdjacentPages(pathname);
   if (!prev && !next) return null;
 

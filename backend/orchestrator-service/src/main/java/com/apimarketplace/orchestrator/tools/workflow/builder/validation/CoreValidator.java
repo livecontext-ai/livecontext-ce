@@ -251,7 +251,51 @@ public class CoreValidator implements WorkflowValidator {
                             "Literal text plus {{...}} expressions; resolved at pause time and shown to the approver. " +
                             "The run still works without it.");
                 }
+                validateApprovalDelegation(cn, nodeId, label, result);
             }
+        }
+    }
+
+    /**
+     * Delegation block checks. Unknown channel is an ERROR (the approval would silently
+     * never reach any external channel); missing credential/chatId and multi-approval
+     * thresholds are WARNINGs (the run still proceeds, in-app resolution always works).
+     */
+    private void validateApprovalDelegation(Map<String, Object> cn, String nodeId, String label,
+                                            ValidationResult result) {
+        Object approval = cn.get("approval");
+        if (!(approval instanceof Map<?, ?> approvalMap)) return;
+        Object delegationObj = approvalMap.get("delegation");
+        if (!(delegationObj instanceof Map<?, ?> delegation)) return;
+
+        String channel = delegation.get("channel") instanceof String s ? s.trim().toLowerCase() : "";
+        if (channel.isBlank()) return; // Section left unconfigured - nothing delegated, nothing to check.
+
+        if (!"telegram".equals(channel)) {
+            result.addError("APPROVAL_DELEGATION_UNKNOWN_CHANNEL", nodeId,
+                    "Approval '" + label + "' delegates to unknown channel '" + channel + "'. " +
+                    "Only 'telegram' is supported. Fix: workflow(action='modify', node='" + label + "', " +
+                    "params={delegation: {channel: 'telegram', credentialId: <id>, chatId: '<chat id>'}}).");
+            return;
+        }
+        if (!(delegation.get("credentialId") instanceof Number)) {
+            result.addWarning("APPROVAL_DELEGATION_NO_CREDENTIAL", nodeId,
+                    "Approval '" + label + "' delegates to Telegram without a credentialId (the numeric id " +
+                    "of the user's Telegram bot credential). Without it no Telegram message is sent; the " +
+                    "approval stays resolvable in-app and via workflow(action='resolve_approval').");
+        }
+        if (!(delegation.get("chatId") instanceof String cid) || cid.isBlank()) {
+            result.addWarning("APPROVAL_DELEGATION_NO_CHAT_ID", nodeId,
+                    "Approval '" + label + "' delegates to Telegram without a chatId (destination chat, " +
+                    "{{...}} templates allowed). Without it no Telegram message is sent; the approval " +
+                    "stays resolvable in-app and via workflow(action='resolve_approval').");
+        }
+        Object required = approvalMap.get("requiredApprovals");
+        if (required instanceof Number n && n.intValue() > 1) {
+            result.addWarning("APPROVAL_DELEGATION_MULTI_APPROVALS", nodeId,
+                    "Approval '" + label + "' delegates to Telegram with requiredApprovals > 1. A channel " +
+                    "button tap counts as a single decision; multi-approver thresholds are only tracked " +
+                    "for in-app approvals. Consider requiredApprovals: 1 when delegating.");
         }
     }
 

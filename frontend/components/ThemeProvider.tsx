@@ -74,7 +74,15 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
   const isClient = useIsClient();
   const [themePreference, setThemePreference] = useState<ThemePreference>(getStoredThemePreference);
   const [systemTheme, setSystemTheme] = useState<Theme>(getSystemTheme);
-  const theme: Theme = themePreference === 'auto' ? systemTheme : themePreference;
+  // Until the client snapshot resolves (server render + the hydration pass),
+  // pin the context to the server defaults so the SSR markup and the hydration
+  // render are byte-identical; the persisted preference kicks in on the very
+  // next render. NEVER return null here instead: this provider wraps the whole
+  // app, and returning null on the server used to strip every page (including
+  // the SEO-critical landing/marketing pages) out of the server HTML entirely.
+  const effectivePreference: ThemePreference = isClient ? themePreference : 'auto';
+  const effectiveSystemTheme: Theme = isClient ? systemTheme : 'light';
+  const theme: Theme = effectivePreference === 'auto' ? effectiveSystemTheme : effectivePreference;
 
   // Apply the resolved theme to the document and persist the selected preference.
   useEffect(() => {
@@ -118,13 +126,8 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     setThemePreference(newTheme);
   };
 
-  // Avoid rendering before the persisted preference has been resolved.
-  if (!isClient) {
-    return null;
-  }
-
   return (
-    <ThemeContext.Provider value={{ theme, themePreference, toggleTheme, setTheme }}>
+    <ThemeContext.Provider value={{ theme, themePreference: effectivePreference, toggleTheme, setTheme }}>
       {children}
     </ThemeContext.Provider>
   );

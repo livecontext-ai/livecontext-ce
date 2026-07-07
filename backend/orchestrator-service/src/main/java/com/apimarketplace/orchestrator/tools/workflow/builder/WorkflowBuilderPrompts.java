@@ -384,6 +384,14 @@ public final class WorkflowBuilderPrompts {
                   only a warning - the run still proceeds, but the approver sees no context.
                 Optional: timeoutMs (ms before the timeout port fires, default 86400000 = 24h),
                   requiredApprovals (default 1), approverRoles (array).
+                Optional delegation (external channel): params.delegation={channel: 'telegram',
+                  credentialId: <numeric id of the user's Telegram bot credential>, chatId: '<chat id,
+                  {{...}} allowed>', messageTemplate: '<optional body, {{...}} allowed; defaults to the
+                  resolved contextTemplate>', allowedUserIds: ['<telegram user id>', ...]}. The channel
+                  message shows Approve/Reject buttons; a tap resolves this approval exactly like an
+                  in-app decision (you can still resolve it with workflow(action='resolve_approval')).
+                  Empty allowedUserIds = anyone in the chat can decide. Only channel 'telegram' exists.
+                  Output delegated_channel is set when delegation is configured.
                 Ports: approved, rejected, timeout. Connect: from='Manager Review:approved', to='Next Step'.
                 """;
             case "add_guardrail", "guardrail" -> """

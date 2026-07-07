@@ -71,6 +71,135 @@ describe('NodeConfigurationRule', () => {
     });
   });
 
+  // ===================== Approval delegation (warnings, non-blocking) =====================
+
+  describe('Approval - external channel delegation (warnings, non-blocking)', () => {
+    const makeDelegatedApprovalNode = (data: Record<string, unknown>) =>
+      ({
+        id: 'n-approval-delegated',
+        type: 'userApprovalNode',
+        position: { x: 0, y: 0 },
+        data: {
+          id: 'user-approval',
+          label: 'Manager Review',
+          approvalContextTemplate: 'Approve?',
+          ...data,
+        },
+      }) as any;
+
+    const delegationRules = [
+      'approval_delegation_missing_credential',
+      'approval_delegation_missing_chat_id',
+      'approval_delegation_multi_approvals',
+    ];
+
+    it('emits NO delegation issue when delegation is not configured', () => {
+      const ctx = buildContext([makeDelegatedApprovalNode({})], []);
+      const result = rule.validate(ctx);
+
+      expect(
+        result.issues.filter((i) => delegationRules.includes(i.context?.rule as string)),
+      ).toHaveLength(0);
+    });
+
+    it('emits NO delegation issue when the delegation object has a blank channel (section toggled off mid-edit)', () => {
+      const ctx = buildContext(
+        [makeDelegatedApprovalNode({ approvalDelegation: { channel: '', chatId: '-100' } })],
+        [],
+      );
+      const result = rule.validate(ctx);
+
+      expect(
+        result.issues.filter((i) => delegationRules.includes(i.context?.rule as string)),
+      ).toHaveLength(0);
+    });
+
+    it('warns (not errors) when delegation is enabled without a credential', () => {
+      const ctx = buildContext(
+        [makeDelegatedApprovalNode({ approvalDelegation: { channel: 'telegram', chatId: '-100123' } })],
+        [],
+      );
+      const result = rule.validate(ctx);
+
+      const issues = result.issues.filter((i) => i.context?.rule === 'approval_delegation_missing_credential');
+      expect(issues).toHaveLength(1);
+      expect(issues[0].severity).toBe('warning');
+    });
+
+    it('warns (not errors) when delegation is enabled with a blank chat ID', () => {
+      const ctx = buildContext(
+        [makeDelegatedApprovalNode({ approvalDelegation: { channel: 'telegram', credentialId: 42, chatId: '   ' } })],
+        [],
+      );
+      const result = rule.validate(ctx);
+
+      const issues = result.issues.filter((i) => i.context?.rule === 'approval_delegation_missing_chat_id');
+      expect(issues).toHaveLength(1);
+      expect(issues[0].severity).toBe('warning');
+    });
+
+    it('warns when delegation is enabled and requiredApprovals > 1 (channel counts as ONE approver decision)', () => {
+      const ctx = buildContext(
+        [makeDelegatedApprovalNode({
+          requiredApprovals: 2,
+          approvalDelegation: { channel: 'telegram', credentialId: 42, chatId: '-100123' },
+        })],
+        [],
+      );
+      const result = rule.validate(ctx);
+
+      const issues = result.issues.filter((i) => i.context?.rule === 'approval_delegation_multi_approvals');
+      expect(issues).toHaveLength(1);
+      expect(issues[0].severity).toBe('warning');
+    });
+
+    it('does NOT warn about multi approvals when requiredApprovals is 1', () => {
+      const ctx = buildContext(
+        [makeDelegatedApprovalNode({
+          requiredApprovals: 1,
+          approvalDelegation: { channel: 'telegram', credentialId: 42, chatId: '-100123' },
+        })],
+        [],
+      );
+      const result = rule.validate(ctx);
+
+      expect(
+        result.issues.filter((i) => i.context?.rule === 'approval_delegation_multi_approvals'),
+      ).toHaveLength(0);
+    });
+
+    it('emits no delegation issue for a fully configured delegation', () => {
+      const ctx = buildContext(
+        [makeDelegatedApprovalNode({
+          approvalDelegation: {
+            channel: 'telegram',
+            credentialId: 42,
+            chatId: '{{trigger:form.output.chat_id}}',
+            allowedUserIds: ['12345678'],
+          },
+        })],
+        [],
+      );
+      const result = rule.validate(ctx);
+
+      expect(
+        result.issues.filter((i) => delegationRules.includes(i.context?.rule as string)),
+      ).toHaveLength(0);
+    });
+
+    it('emits both missing-credential and missing-chat-id warnings for a bare enabled delegation', () => {
+      const ctx = buildContext(
+        [makeDelegatedApprovalNode({ approvalDelegation: { channel: 'telegram' } })],
+        [],
+      );
+      const result = rule.validate(ctx);
+
+      expect(result.issues.filter((i) => i.context?.rule === 'approval_delegation_missing_credential')).toHaveLength(1);
+      expect(result.issues.filter((i) => i.context?.rule === 'approval_delegation_missing_chat_id')).toHaveLength(1);
+      expect(result.hasErrors).toBe(false);
+    });
+  });
+
   // ===================== #10: Step without tool ID =====================
 
   describe('#10 - Step without tool ID', () => {

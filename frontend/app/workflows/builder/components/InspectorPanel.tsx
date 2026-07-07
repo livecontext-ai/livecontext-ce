@@ -300,8 +300,10 @@ export function InspectorPanel({ node, selectedNodeIds = [], onUpdate, onClose, 
     handleRenameOutput: handleRenameApprovalOutput,
     handleTimeoutChange: handleApprovalTimeoutChange,
     handleContextTemplateChange: handleApprovalContextTemplateChange,
+    handleDelegationChange: handleApprovalDelegationChange,
     approvalTimeoutMs,
     approvalContextTemplate,
+    approvalDelegation,
   } = useInspectorApprovalOutputs({
     node,
     data,
@@ -875,11 +877,13 @@ export function InspectorPanel({ node, selectedNodeIds = [], onUpdate, onClose, 
                 currentApprovalOutputs: approvalOutputs,
                 approvalTimeoutMs,
                 approvalContextTemplate,
+                approvalDelegation,
                 handleAddApprovalOutput,
                 handleDeleteApprovalOutput,
                 handleRenameApprovalOutput,
                 handleApprovalTimeoutChange,
                 handleApprovalContextTemplateChange,
+                handleApprovalDelegationChange,
                 webhookTokens,
                 showExecutionData,
                 currentWorkflowId: workflowId,
@@ -990,6 +994,8 @@ export function InspectorPanel({ node, selectedNodeIds = [], onUpdate, onClose, 
               approvalTimeoutMs={approvalTimeoutMs}
               handleApprovalContextTemplateChange={handleApprovalContextTemplateChange}
               approvalContextTemplate={approvalContextTemplate}
+              handleApprovalDelegationChange={handleApprovalDelegationChange}
+              approvalDelegation={approvalDelegation}
               getEditorExpression={getEditorExpression}
               handleEditorExpressionChange={handleEditorExpressionChange}
               onBreadcrumbChange={setBreadcrumbItems}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { DOCS_NAV, DOCS_PAGES, getAdjacentPages, isActiveDocPath } from '../_nav';
+import { DOCS_NAV, DOCS_PAGES, cleanDocsPathname, getAdjacentPages, isActiveDocPath } from '../_nav';
 
 describe('docs IA - DOCS_NAV / DOCS_PAGES', () => {
   it('derives DOCS_PAGES from every linked nav item, excluding roadmap stubs', () => {
@@ -122,5 +122,36 @@ describe('isActiveDocPath', () => {
   it('is false when the pathname is null or undefined', () => {
     expect(isActiveDocPath(null, '/agents')).toBe(false);
     expect(isActiveDocPath(undefined, '/agents')).toBe(false);
+  });
+});
+
+// Regression pin for the docs hydration mismatch: docs pages are prerendered
+// at the internal /docs/... route but served (and reported by the browser's
+// usePathname) at the clean subdomain path. Sidebar active state and prev/next
+// must see the SAME normalized value in both worlds, or every docs page throws
+// React #418 and re-renders client-side.
+describe('cleanDocsPathname', () => {
+  it('maps the internal /docs routes to the clean IA form', () => {
+    expect(cleanDocsPathname('/docs')).toBe('/');
+    expect(cleanDocsPathname('/docs/agents')).toBe('/agents');
+    expect(cleanDocsPathname('/docs/agents/budgets')).toBe('/agents/budgets');
+  });
+
+  it('leaves already-clean paths untouched', () => {
+    expect(cleanDocsPathname('/')).toBe('/');
+    expect(cleanDocsPathname('/agents')).toBe('/agents');
+  });
+
+  it('does not mangle lookalike paths and defaults null to /', () => {
+    expect(cleanDocsPathname('/docsy')).toBe('/docsy');
+    expect(cleanDocsPathname(null)).toBe('/');
+    expect(cleanDocsPathname(undefined)).toBe('/');
+  });
+
+  it('build-time and browser forms agree for every live docs page', () => {
+    for (const page of DOCS_PAGES) {
+      const buildTime = page.href === '/' ? '/docs' : `/docs${page.href}`;
+      expect(cleanDocsPathname(buildTime)).toBe(cleanDocsPathname(page.href));
+    }
   });
 });

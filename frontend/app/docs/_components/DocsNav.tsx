@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Search } from 'lucide-react';
-import { DOCS_NAV, isActiveDocPath } from '../_nav';
+import { DOCS_NAV, cleanDocsPathname, isActiveDocPath } from '../_nav';
 
 /**
  * Docs sidebar navigation: a client-side filter ("search") over the IA plus the
@@ -13,7 +13,9 @@ import { DOCS_NAV, isActiveDocPath } from '../_nav';
  * `next/navigation`, never `@/i18n/navigation`.
  */
 export function DocsNav({ onNavigate }: { onNavigate?: () => void }) {
-  const pathname = usePathname();
+  // Normalized: at build time usePathname() is the internal /docs/... route,
+  // in the browser it is the clean subdomain URL (see cleanDocsPathname).
+  const pathname = cleanDocsPathname(usePathname());
   const [query, setQuery] = useState('');
   const q = query.trim().toLowerCase();
 

@@ -103,6 +103,21 @@ export interface ApprovalOutput {
   label: string;
 }
 
+/**
+ * Optional external-channel delegation for a user approval node (plan `approval.delegation`).
+ * v1 supports Telegram only: the pending approval is pushed to the chat as a message with
+ * inline approve/reject buttons; a tap resolves the approval in addition to the in-app paths.
+ * chatId and messageTemplate are template-capable ({{...}}); a blank messageTemplate falls
+ * back to the resolved contextTemplate. Empty allowedUserIds = anyone in the chat can decide.
+ */
+export interface ApprovalDelegation {
+  channel?: 'telegram';
+  credentialId?: number;
+  chatId?: string;
+  messageTemplate?: string;
+  allowedUserIds?: string[];
+}
+
 // Classify node types - AI-powered classification with N outputs
 export interface ClassifyCategory {
   id: string;
@@ -246,6 +261,7 @@ export interface BuilderNodeData {
   approvalOutputs?: ApprovalOutput[]; // The approval outcome paths
   approvalTimeoutMs?: number; // Timeout duration in milliseconds
   approvalContextTemplate?: string; // Template (literal + {{...}}) resolved at pause time and shown to the approver
+  approvalDelegation?: ApprovalDelegation; // Optional external-channel delegation (v1: telegram); undefined = in-app only
   // Branch selection (set by streaming batch-update for decision/switch/approval nodes)
   selectedBranch?: string; // The selected port (e.g., "if", "else", "approved", "rejected")
   onDeleteNode?: (nodeId: string) => void;

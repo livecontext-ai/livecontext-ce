@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { useRouter, usePathname, useSearchParams } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import { useAuthGuard } from '@/hooks/useAuthGuard';
 import { useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api';
@@ -20,6 +20,20 @@ import {
 const IS_EMBEDDED_AUTH = IS_CE;
 
 type Props = { children: React.ReactNode };
+
+/**
+ * Current query string WITHOUT the leading '?', read lazily at effect time.
+ *
+ * Deliberately NOT `useSearchParams()`: calling that hook in a component that
+ * wraps the whole tree (this guard sits in the root layout's Providers) makes
+ * Next.js bail every statically-rendered page out to client-side rendering,
+ * which used to strip the landing/marketing pages out of the server HTML
+ * entirely. The query string is only needed inside the login-redirect effect,
+ * where `window` is always available.
+ */
+function currentQueryString(): string {
+  return window.location.search.replace(/^\?/, '');
+}
 
 /**
  * Guard component that redirects users to onboarding if they haven't completed it.
@@ -49,16 +63,14 @@ export default function FirstLoginGuard({ children }: Props) {
 function CeFirstLoginGuard({ children }: Props) {
   const router = useRouter();
   const pathname = usePathname();
-  const searchParams = useSearchParams();
   const { isAuthenticated, user, isLoading, isAuthChecking } = useAuthGuard();
   const [checked, setChecked] = useState(false);
-  const queryString = searchParams.toString();
   const protectedAppRoute = isProtectedAppRoute(pathname);
 
   useEffect(() => {
     if (isAuthChecking || isLoading || isAuthenticated || !protectedAppRoute) return;
-    router.replace(buildLoginRedirectPath(pathname, queryString));
-  }, [isAuthenticated, isAuthChecking, isLoading, pathname, protectedAppRoute, queryString, router]);
+    router.replace(buildLoginRedirectPath(pathname, currentQueryString()));
+  }, [isAuthenticated, isAuthChecking, isLoading, pathname, protectedAppRoute, router]);
 
   useEffect(() => {
     // Wait for auth and apiClient token initialization before calling guarded APIs.
@@ -146,10 +158,8 @@ function CeFirstLoginGuard({ children }: Props) {
 function FirstLoginGuardInner({ children }: Props) {
   const router = useRouter();
   const pathname = usePathname();
-  const searchParams = useSearchParams();
   const { isAuthenticated, user, isLoading, isAuthChecking } = useAuthGuard();
   const queryClient = useQueryClient();
-  const queryString = searchParams.toString();
   const protectedAppRoute = isProtectedAppRoute(pathname);
 
   // Track the last checked user to reset state on user change
@@ -233,8 +243,8 @@ function FirstLoginGuardInner({ children }: Props) {
 
   useEffect(() => {
     if (isAuthChecking || isLoading || isAuthenticated || !protectedAppRoute) return;
-    router.replace(buildLoginRedirectPath(pathname, queryString));
-  }, [isAuthenticated, isAuthChecking, isLoading, pathname, protectedAppRoute, queryString, router]);
+    router.replace(buildLoginRedirectPath(pathname, currentQueryString()));
+  }, [isAuthenticated, isAuthChecking, isLoading, pathname, protectedAppRoute, router]);
 
   useEffect(() => {
     if (!protectedAppRoute) {

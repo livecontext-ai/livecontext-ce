@@ -2,7 +2,6 @@
 
 import React, { useEffect, useState } from 'react';
 import Script from 'next/script';
-import { useSearchParams } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 
 const RECAPTCHA_SITE_KEY = process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY ?? '';
@@ -53,20 +52,28 @@ function friendlyError(
 }
 
 export default function ContactPage() {
-  // Pre-fill from URL query params (e.g. `/contact?category=abuse&message=…`)
-  // so deep-links from in-app surfaces (publication report, billing CTA, …)
-  // land directly on the correct category with context already populated.
-  const searchParams = useSearchParams();
   const t = useTranslations('contact');
-  const initialCategory = readCategoryFromQuery(searchParams?.get('category') ?? null) ?? 'support';
-  const initialMessage = searchParams?.get('message') ?? '';
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
-  const [category, setCategory] = useState<Category>(initialCategory);
-  const [message, setMessage] = useState(initialMessage);
+  const [category, setCategory] = useState<Category>('support');
+  const [message, setMessage] = useState('');
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
   const [recaptchaReady, setRecaptchaReady] = useState(false);
+
+  // Pre-fill from URL query params (e.g. `/contact?category=abuse&message=…`)
+  // so deep-links from in-app surfaces (publication report, billing CTA, …)
+  // land directly on the correct category with context already populated.
+  // Applied post-mount from window.location instead of useSearchParams():
+  // that hook at page level opts /contact out of server rendering entirely
+  // (empty HTML for crawlers), the same CSR-bailout fixed in FirstLoginGuard.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const queryCategory = readCategoryFromQuery(params.get('category'));
+    if (queryCategory) setCategory(queryCategory);
+    const queryMessage = params.get('message');
+    if (queryMessage) setMessage(queryMessage);
+  }, []);
 
   useEffect(() => {
     if (!RECAPTCHA_SITE_KEY) {

@@ -4,6 +4,7 @@ import com.apimarketplace.common.storage.service.StorageService;
 import com.apimarketplace.orchestrator.domain.WorkflowRunEntity;
 import com.apimarketplace.orchestrator.domain.WorkflowStepDataEntity;
 import com.apimarketplace.orchestrator.domain.execution.EpochState;
+import com.apimarketplace.orchestrator.domain.execution.SignalConfig;
 import com.apimarketplace.orchestrator.domain.execution.SignalResolution;
 import com.apimarketplace.orchestrator.domain.execution.SignalType;
 import com.apimarketplace.orchestrator.domain.execution.SignalWaitEntity;
@@ -1306,6 +1307,18 @@ public class SignalResumeService {
                 && resolvedSignal.getApprovalContext() != null
                 && !resolvedSignal.getApprovalContext().isBlank()) {
             output.put("approval_context", resolvedSignal.getApprovalContext());
+        }
+
+        // Mirror the delegated channel into the COMPLETED output (same survival rationale
+        // as approval_context above): the yield-time output already advertises
+        // delegated_channel, so {{core:<label>.output.delegated_channel}} must keep
+        // resolving after the approval lands. Read back from the persisted
+        // signal_config.delegation block; omitted for non-delegated approvals.
+        if (resolvedSignal.getSignalType() == SignalType.USER_APPROVAL) {
+            Map<String, Object> delegation = SignalConfig.getDelegation(resolvedSignal.getSignalConfig());
+            if (delegation != null && delegation.get("channel") != null) {
+                output.put("delegated_channel", delegation.get("channel"));
+            }
         }
 
         // Wrap in "output" key to match the expected storage format

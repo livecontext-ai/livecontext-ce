@@ -1,7 +1,13 @@
 import type { MetadataRoute } from 'next';
+import { routing } from '@/i18n/routing';
 import { IS_CE } from '@/lib/edition';
 
-const SITE_URL = 'https://livecontext.ai';
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://livecontext.ai';
+
+// Private surfaces that live under the `app/[locale]` tree. With
+// `localePrefix: 'as-needed'` they are reachable both bare (default locale)
+// and under every locale prefix, so the disallow list must cover all of them.
+const LOCALIZED_PRIVATE_PATHS = ['/app/', '/onboarding', '/ce-setup', '/login', '/register', '/auth/'];
 
 export default function robots(): MetadataRoute.Robots {
   // CE deployments are self-hosted and must never appear in public search results.
@@ -12,6 +18,11 @@ export default function robots(): MetadataRoute.Robots {
     };
   }
 
+  const localizedDisallow = LOCALIZED_PRIVATE_PATHS.flatMap((path) => [
+    path,
+    ...routing.locales.map((locale) => `/${locale}${path}`),
+  ]);
+
   return {
     rules: [
       {
@@ -19,13 +30,7 @@ export default function robots(): MetadataRoute.Robots {
         allow: '/',
         disallow: [
           '/api/',
-          '/app/',
-          '/en/app/',
-          '/fr/app/',
-          '/en/onboarding',
-          '/fr/onboarding',
-          '/en/ce-setup',
-          '/fr/ce-setup',
+          ...localizedDisallow,
           '/local-mcp',
           '/workflows/',
           '/billing/',

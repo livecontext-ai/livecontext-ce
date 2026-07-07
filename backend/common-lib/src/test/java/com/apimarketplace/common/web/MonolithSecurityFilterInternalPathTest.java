@@ -117,6 +117,53 @@ class MonolithSecurityFilterInternalPathTest {
         assertReachesChain("GET", "/api/storage/quota");
     }
 
+    // ── M1: delegated-approval callback reachability (Telegram cannot authenticate;
+    // the 128-bit capability token inside the payload is the auth, mirroring /webhook) ──
+
+    @Test
+    @DisplayName("regression M1: external POST to /api/internal/approval-callback/telegram is NOT 404-blocked (Telegram must reach CE)")
+    void externalApprovalCallbackAllowed() throws Exception {
+        assertReachesChain("POST", "/api/internal/approval-callback/telegram");
+    }
+
+    @Test
+    @DisplayName("bare /api/internal/approval-callback (no trailing slash) stays blocked; sibling internal paths (signals) stay blocked too")
+    void approvalCallbackAllowlistIsPrecise() throws Exception {
+        assertBlocked("POST", "/api/internal/approval-callback");
+        // Sibling internal signal-resolution surface must NOT ride along on the allowlist:
+        // it is the server-side resolve API, not a public callback.
+        assertBlocked("POST", "/api/internal/signals/sig-1/resolve");
+    }
+
+    @Test
+    @DisplayName("regression M1: the public /approval-callback/telegram path is rewritten to /api/internal/... and reaches the servlet externally")
+    void publicApprovalCallbackPathRewrittenAndReachesServlet() throws Exception {
+        // Same two-filter chain as the blocked rewrite test, but this path is the
+        // legitimate public entry: rewrite (/approval-callback/** ->
+        // /api/internal/approval-callback/**) then the security filter must let the
+        // external (Telegram) caller through to the controller.
+        ServicePrefixRewriteFilter rewrite = new ServicePrefixRewriteFilter();
+        MonolithSecurityFilter security = new MonolithSecurityFilter(() -> null, List.of());
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/approval-callback/telegram");
+        request.setRemoteAddr(EXTERNAL_IP);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicBoolean servletReached = new AtomicBoolean(false);
+        jakarta.servlet.Servlet servlet = new jakarta.servlet.http.HttpServlet() {
+            @Override
+            public void service(ServletRequest req, jakarta.servlet.ServletResponse res) {
+                servletReached.set(true);
+            }
+        };
+        MockFilterChain chain = new MockFilterChain(servlet, rewrite, security);
+
+        chain.doFilter(request, response);
+
+        assertThat(response.getStatus()).isNotEqualTo(404);
+        assertThat(servletReached.get())
+                .as("the rewritten approval callback must reach the controller servlet")
+                .isTrue();
+    }
+
     // ── CONTRAST: the in-process loopback caller (the only legitimate internal caller) still works ──
 
     @Test

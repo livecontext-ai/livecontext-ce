@@ -872,14 +872,16 @@
         { "name": "approverRoles", "type": "array", "itemType": "string", "status": "aligned", "notes": "List of roles allowed to approve" },
         { "name": "requiredApprovals", "type": "number", "default": 1, "status": "aligned", "notes": "Number of approvals required (multi-level)" },
         { "name": "timeoutMs", "type": "number", "default": 86400000, "status": "aligned", "notes": "Timeout in milliseconds (default 24h). Triggers timeout port." },
-        { "name": "contextTemplate", "type": "string", "required": true, "status": "aligned", "notes": "Template (literal + {{...}} expressions) resolved at pause time and shown to the approver as approvalContext. Required (warning, non-blocking): the run still works if empty." }
+        { "name": "contextTemplate", "type": "string", "required": true, "status": "aligned", "notes": "Template (literal + {{...}} expressions) resolved at pause time and shown to the approver as approvalContext. Required (warning, non-blocking): the run still works if empty." },
+        { "name": "delegation", "type": "object", "status": "aligned", "notes": "Optional external-channel delegation: {channel, credentialId, chatId, messageTemplate, allowedUserIds}. channel: 'telegram' only in v1. credentialId: numeric id of the user's Telegram bot credential. chatId: destination chat id, template-capable ({{...}}). messageTemplate: optional message body, template-capable; blank = falls back to the resolved contextTemplate. allowedUserIds: optional allowlist of channel user ids; empty = anyone in the chat can decide." }
       ],
       "outputs": [
         { "name": "approver_roles", "type": "array", "itemType": "string", "status": "aligned", "action": "keep", "notes": "Configured approver roles (in AWAITING_SIGNAL output)" },
         { "name": "required_approvals", "type": "number", "status": "aligned", "action": "keep", "notes": "Configured required approvals count" },
         { "name": "expires_at", "type": "string", "status": "aligned", "action": "keep", "notes": "ISO timestamp when approval expires" },
         { "name": "selected_port", "type": "string", "status": "aligned", "action": "keep", "notes": "approved, rejected, or timeout - set after signal resolution" },
-        { "name": "approval_context", "type": "string", "status": "aligned", "action": "keep", "notes": "Resolved contextTemplate shown to the approver, carried into the resolved output (present only when a context template resolved to non-blank text)" }
+        { "name": "approval_context", "type": "string", "status": "aligned", "action": "keep", "notes": "Resolved contextTemplate shown to the approver, carried into the resolved output (present only when a context template resolved to non-blank text)" },
+        { "name": "delegated_channel", "type": "string", "status": "aligned", "action": "keep", "notes": "External channel the approval was delegated to (e.g. telegram). Present only when delegation is configured." }
       ]
     },
 

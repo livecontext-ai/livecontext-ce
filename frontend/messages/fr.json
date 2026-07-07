@@ -7177,7 +7177,21 @@
         "contextInfoTitle": "Contexte d'approbation",
         "contextInfoBody": "Affiché à l'approbateur pour qu'il voie ce qu'il approuve. Résolu lorsque le workflow se met en pause.",
         "contextInfoVariables": "Insérez des données du workflow via des expressions, par exemple :",
-        "contextInfoOptional": "Recommandé. Le run fonctionne même s'il est laissé vide."
+        "contextInfoOptional": "Recommandé. Le run fonctionne même s'il est laissé vide.",
+        "delegation": {
+          "title": "Déléguer via un canal externe",
+          "infoTitle": "Délégation via un canal externe",
+          "infoBody": "Envoie l'approbation en attente dans un chat Telegram sous forme de message avec des boutons approuver et rejeter. Un appui sur un bouton résout l'approbation, en plus de la décision dans l'application.",
+          "infoOptional": "Optionnel. L'approbation reste aussi disponible dans l'application.",
+          "enableAria": "Activer la délégation via un canal externe",
+          "channelLabel": "Canal",
+          "chatIdLabel": "ID du chat",
+          "chatIdHint": "ID du chat ou du groupe de destination. Prend en charge les expressions '{{...}}'.",
+          "messageLabel": "Modèle de message",
+          "messagePlaceholder": "Par défaut, le contexte d'approbation",
+          "allowedUserIdsLabel": "IDs d'utilisateurs autorisés",
+          "allowedUserIdsHint": "IDs d'utilisateurs Telegram séparés par des virgules. Laissez vide pour permettre à quiconque dans le chat de décider."
+        }
       }
     },
     "databaseNode": {

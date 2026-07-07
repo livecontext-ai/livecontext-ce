@@ -8,7 +8,6 @@ import FirstLoginGuard from '../FirstLoginGuard';
 
 const mocks = vi.hoisted(() => ({
   pathname: '/en/app/chat',
-  search: '',
   replace: vi.fn(),
   apiClient: {
     get: vi.fn(),
@@ -25,7 +24,12 @@ const mocks = vi.hoisted(() => ({
 vi.mock('next/navigation', () => ({
   usePathname: () => mocks.pathname,
   useRouter: () => ({ replace: mocks.replace }),
-  useSearchParams: () => new URLSearchParams(mocks.search),
+  // Regression pin: useSearchParams() in this root-layout guard forces every
+  // static page into client-side rendering (empty server HTML). The guard must
+  // read window.location instead - throwing here catches any reintroduction.
+  useSearchParams: () => {
+    throw new Error('useSearchParams must not be called in FirstLoginGuard (forces CSR bailout of every page)');
+  },
 }));
 
 vi.mock('@/hooks/useAuthGuard', () => ({
@@ -47,7 +51,7 @@ vi.mock('@/components/LoadingSpinner', () => ({
 describe('CE FirstLoginGuard', () => {
   beforeEach(() => {
     mocks.pathname = '/en/app/chat';
-    mocks.search = '';
+    window.history.replaceState(null, '', '/');
     mocks.replace.mockReset();
     mocks.apiClient.get.mockReset();
     mocks.apiClient.post.mockReset();

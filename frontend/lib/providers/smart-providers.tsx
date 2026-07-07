@@ -32,6 +32,7 @@ import { SessionGate } from '../../components/auth/SessionGate';
 // No need to import old providers - everything is managed by Resource Managers
 import { IS_CE } from '@/lib/edition';
 import { resetAnalytics } from '@/lib/analytics/analytics';
+import { isPublicMarketingPath } from './publicMarketingPath';
 
 // CE deployments use embedded auth; cloud uses OIDC. Single source of truth from
 // `lib/edition` (built-in build-time resolution + dual-read shim, see edition.ts).
@@ -436,6 +437,7 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
   children,
   queryClient,
 }) => {
+  const pathname = usePathname();
   // Use unified auth (OIDC or embedded depending on NEXT_PUBLIC_AUTH_MODE)
   const oidc = useUnifiedAuth();
   const [initializationComplete, setInitializationComplete] = useState(false);
@@ -1110,7 +1112,11 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
   // broken app shell. "Sign in" passes resetLoopGuards so this explicit retry starts
   // from a clean loop budget (an automatic redirect would instead respect the
   // circuit breaker).
-  if (effectiveSessionExpired || (!isAuthenticated && initializationComplete)) {
+  // Public marketing/docs pages are never replaced by the blocking auth UI:
+  // they must server-render their real content (see isPublicMarketingPath).
+  const publicMarketingPage = isPublicMarketingPath(pathname);
+
+  if (!publicMarketingPage && (effectiveSessionExpired || (!isAuthenticated && initializationComplete))) {
     // `effectiveSessionExpired` is the ONLY signal that a previously-valid session
     // ended (cross-tab logout, the persisted OIDC user vanished, or the
     // login-redirect loop breaker tripped) - so it alone drives the "session
@@ -1134,7 +1140,7 @@ const ResourceManagerProvider: React.FC<{ children: ReactNode; queryClient: Quer
   }
 
   // Show a full-screen spinner while OIDC is loading (e.g. redirect back from Keycloak)
-  if (isLoading) {
+  if (!publicMarketingPage && isLoading) {
     return (
       <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-[var(--bg-primary)]">
         <LoadingSpinner size="lg" />

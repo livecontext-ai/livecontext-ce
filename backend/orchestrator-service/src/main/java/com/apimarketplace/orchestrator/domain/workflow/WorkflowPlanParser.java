@@ -892,7 +892,22 @@ public final class WorkflowPlanParser {
         long timeoutMs = data.get("timeoutMs") instanceof Number
             ? ((Number) data.get("timeoutMs")).longValue() : 86400000L; // default 24h
         String contextTemplate = data.get("contextTemplate") instanceof String s ? s : "";
-        return new Core.ApprovalConfig(approverRoles, requiredApprovals, timeoutMs, contextTemplate);
+        Core.ApprovalDelegation delegation = parseApprovalDelegation(data.get("delegation"));
+        return new Core.ApprovalConfig(approverRoles, requiredApprovals, timeoutMs, contextTemplate, delegation);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Core.ApprovalDelegation parseApprovalDelegation(Object raw) {
+        if (!(raw instanceof Map<?, ?> map)) return null;
+        Map<String, Object> data = (Map<String, Object>) map;
+        String channel = data.get("channel") instanceof String s ? s : "";
+        Long credentialId = data.get("credentialId") instanceof Number n ? n.longValue() : null;
+        String chatId = data.get("chatId") instanceof String s ? s : "";
+        String messageTemplate = data.get("messageTemplate") instanceof String s ? s : "";
+        List<String> allowedUserIds = data.get("allowedUserIds") instanceof List
+            ? ((List<Object>) data.get("allowedUserIds")).stream().map(String::valueOf).collect(Collectors.toList())
+            : List.of();
+        return new Core.ApprovalDelegation(channel, credentialId, chatId, messageTemplate, allowedUserIds);
     }
 
     @SuppressWarnings("unchecked")

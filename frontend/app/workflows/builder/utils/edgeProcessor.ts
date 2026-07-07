@@ -324,11 +324,33 @@ function registerUserApprovalNode(
     ? data.approvalContextTemplate
     : undefined;
 
+  // Optional external-channel delegation (v1: telegram). Emitted only when the
+  // author actually selected a channel; a toggled-off section leaves node data
+  // without approvalDelegation and the plan without approval.delegation.
+  const rawDelegation = data.approvalDelegation;
+  let delegation: Record<string, unknown> | undefined;
+  if (rawDelegation && typeof rawDelegation === 'object'
+    && typeof rawDelegation.channel === 'string' && rawDelegation.channel.trim() !== '') {
+    delegation = { channel: rawDelegation.channel };
+    if (typeof rawDelegation.credentialId === 'number') delegation.credentialId = rawDelegation.credentialId;
+    if (typeof rawDelegation.chatId === 'string' && rawDelegation.chatId.trim() !== '') {
+      delegation.chatId = rawDelegation.chatId;
+    }
+    if (typeof rawDelegation.messageTemplate === 'string' && rawDelegation.messageTemplate.trim() !== '') {
+      delegation.messageTemplate = rawDelegation.messageTemplate;
+    }
+    const allowedUserIds = Array.isArray(rawDelegation.allowedUserIds)
+      ? rawDelegation.allowedUserIds.filter((id: unknown): id is string => typeof id === 'string' && id.trim() !== '')
+      : [];
+    if (allowedUserIds.length > 0) delegation.allowedUserIds = allowedUserIds;
+  }
+
   const approvalBlock: Record<string, unknown> = {};
   if (approverRoles && approverRoles.length > 0) approvalBlock.approverRoles = approverRoles;
   if (requiredApprovals !== undefined) approvalBlock.requiredApprovals = requiredApprovals;
   if (timeoutMs !== undefined) approvalBlock.timeoutMs = timeoutMs;
   if (contextTemplate !== undefined) approvalBlock.contextTemplate = contextTemplate;
+  if (delegation !== undefined) approvalBlock.delegation = delegation;
 
   upsertControlNode(
     ctx.plan,

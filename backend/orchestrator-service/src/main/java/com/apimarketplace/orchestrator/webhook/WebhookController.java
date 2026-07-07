@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.webhook;
 
+import com.apimarketplace.orchestrator.services.approvalchannel.ApprovalCallbackInterceptor;
 import com.apimarketplace.trigger.client.webhook.WebhookAuthService;
 import com.apimarketplace.trigger.client.webhook.WebhookConfig;
 import jakarta.servlet.http.HttpServletRequest;
@@ -38,13 +39,16 @@ public class WebhookController {
     private final WebhookDispatchService dispatchService;
     private final WebhookAuthService authService;
     private final WebhookResponseRegistry webhookResponseRegistry;
+    private final ApprovalCallbackInterceptor approvalCallbackInterceptor;
 
     public WebhookController(WebhookDispatchService dispatchService,
                              WebhookAuthService authService,
-                             WebhookResponseRegistry webhookResponseRegistry) {
+                             WebhookResponseRegistry webhookResponseRegistry,
+                             ApprovalCallbackInterceptor approvalCallbackInterceptor) {
         this.dispatchService = dispatchService;
         this.authService = authService;
         this.webhookResponseRegistry = webhookResponseRegistry;
+        this.approvalCallbackInterceptor = approvalCallbackInterceptor;
     }
 
     /**
@@ -88,6 +92,19 @@ public class WebhookController {
                 logger.info("Platform webhook verification for token={}, echoing challenge", tokenPreview);
                 return ResponseEntity.ok().contentType(MediaType.TEXT_PLAIN).body(challenge);
             }
+        }
+
+        // 0b. Delegated-approval callback diversion. A Telegram bot has ONE global
+        //     webhook URL, usually the workflow trigger's, so approval button clicks
+        //     (callback_query with our namespaced lcapr: callback_data) arrive HERE.
+        //     They resolve the approval signal and are NOT dispatched to the workflow
+        //     (dispatching would open a spurious epoch on the host workflow). Handled
+        //     async; 200 immediately (Telegram retries non-2xx aggressively).
+        //     Ordinary callback_query payloads (no lcapr: prefix) are unaffected.
+        if (approvalCallbackInterceptor.isApprovalCallback(payload)) {
+            logger.info("Approval callback diverted from webhook token={}", tokenPreview);
+            approvalCallbackInterceptor.handleAsync(payload);
+            return ResponseEntity.ok(Map.of("status", "approval_callback_handled"));
         }
 
         // 1. Get webhook configuration from workflow plan

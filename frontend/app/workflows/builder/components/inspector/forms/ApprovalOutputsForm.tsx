@@ -6,6 +6,8 @@ import { useTranslations } from 'next-intl';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ExpressionEditor } from '@/components/ui/expression-editor';
+import type { ApprovalDelegation } from '../../../types';
+import { ApprovalDelegationSection } from './ApprovalDelegationSection';
 
 /** Syntax example for the approval context (code/syntax token, intentionally not translated). */
 const CONTEXT_TEMPLATE_PLACEHOLDER =
@@ -17,6 +19,8 @@ interface ApprovalOutputsFormProps {
   handleTimeoutChange: (timeoutMs: number | undefined) => void;
   approvalContextTemplate?: string;
   handleContextTemplateChange: (template: string | undefined) => void;
+  approvalDelegation?: ApprovalDelegation;
+  handleDelegationChange: (delegation: ApprovalDelegation | undefined) => void;
 }
 
 function formatDuration(ms: number): string {
@@ -48,6 +52,8 @@ export function ApprovalOutputsForm({
   handleTimeoutChange,
   approvalContextTemplate,
   handleContextTemplateChange,
+  approvalDelegation,
+  handleDelegationChange,
 }: ApprovalOutputsFormProps) {
   const t = useTranslations('workflowBuilder.forms');
   const duration = approvalTimeoutMs ?? 0;
@@ -180,6 +186,13 @@ export function ApprovalOutputsForm({
           </div>
         </div>
       )}
+
+      {/* Delegate via external channel (optional, v1: Telegram) */}
+      <ApprovalDelegationSection
+        isRunMode={isRunMode}
+        approvalDelegation={approvalDelegation}
+        handleDelegationChange={handleDelegationChange}
+      />
     </div>
   );
 }

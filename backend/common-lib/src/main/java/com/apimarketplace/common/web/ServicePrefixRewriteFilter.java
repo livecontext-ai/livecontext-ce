@@ -101,6 +101,11 @@ public class ServicePrefixRewriteFilter implements Filter {
         if (uri.startsWith("/webhook/")) {
             return "/api/internal/webhook/" + uri.substring("/webhook/".length());
         }
+        // Delegated-approval channel callback - mirrors the cloud gateway's
+        // approval-callback-public route (payload capability token is the auth).
+        if (uri.startsWith("/approval-callback/")) {
+            return "/api/internal/approval-callback/" + uri.substring("/approval-callback/".length());
+        }
         if (uri.startsWith("/chat/")) {
             return "/api/internal/chat/" + uri.substring("/chat/".length());
         }

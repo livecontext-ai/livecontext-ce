@@ -139,8 +139,20 @@ export default function NodesPage() {
           <strong>User Approval</strong> supports multi-level approval (require more than one
           approver) and a configurable timeout that defaults to 24 hours when unset. Its declared
           outputs are <code>approver_roles</code>, <code>required_approvals</code>,{' '}
-          <code>expires_at</code>, <code>selected_port</code>, and <code>approval_context</code>.
+          <code>expires_at</code>, <code>selected_port</code>, <code>approval_context</code>, and{' '}
+          <code>delegated_channel</code>.
         </p>
+        <Callout variant="info">
+          A User Approval node can also <strong>delegate the decision to Telegram</strong>: enable
+          the &quot;Delegate via external channel&quot; section, pick your Telegram bot credential
+          and a chat id, and the pending approval is sent as a message with inline Approve/Reject
+          buttons. Tapping a button resolves the approval exactly like an in-app decision (the
+          message is then edited with the verdict and its buttons removed), and in-app resolution
+          keeps working in parallel. The message body defaults to the resolved{' '}
+          <code>contextTemplate</code>; an optional allow-list restricts which Telegram users may
+          decide. When delegation is configured the channel name is emitted as the{' '}
+          <code>delegated_channel</code> output.
+        </Callout>
         <Callout variant="info">
           You can give a User Approval node a <code>contextTemplate</code> (literal text mixed with{' '}
           <code>{'{{...}}'}</code> expressions), rendered when the run pauses and shown to the

@@ -114,6 +114,23 @@ const nextConfig = {
     ];
   },
 
+  // RSC/flight and router-prefetch responses must NEVER be stored by shared
+  // caches: Next differentiates them from document requests by HEADERS only
+  // (`Vary: rsc, next-router-...`), Cloudflare ignores Vary, and static routes
+  // send `s-maxage=31536000` on the flight response too - so one client-side
+  // navigation cached a `text/x-component` payload under the page URL and
+  // served it as the DOCUMENT to every visitor and crawler (happened to /fr
+  // in prod). Middleware cannot override the Cache-Control of a prerendered
+  // response, so the header is pinned here per request-header condition.
+  async headers() {
+    const noStore = [{ key: 'Cache-Control', value: 'private, no-store' }];
+    return ['rsc', 'next-router-prefetch', 'next-router-segment-prefetch'].map((header) => ({
+      source: '/:path*',
+      has: [{ type: 'header', key: header }],
+      headers: noStore,
+    }));
+  },
+
   // Redirects configuration
   async redirects() {
     return [

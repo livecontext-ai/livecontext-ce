@@ -2,6 +2,7 @@ package com.apimarketplace.orchestrator.execution.v2.nodes;
 
 import com.apimarketplace.orchestrator.domain.execution.SignalConfig;
 import com.apimarketplace.orchestrator.domain.execution.SignalType;
+import com.apimarketplace.orchestrator.domain.workflow.Core;
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
 import com.apimarketplace.orchestrator.execution.v2.engine.ServiceRegistry;
 import com.apimarketplace.orchestrator.execution.v2.services.UnifiedSignalService;
@@ -38,6 +39,12 @@ public class UserApprovalNode extends BaseNode {
     private final long timeoutMs;
     /** Template (literal + {{...}}) resolved at yield and shown to the human approver. May be blank. */
     private final String contextTemplate;
+    /**
+     * Optional external-channel delegation (v1: Telegram inline buttons). When configured,
+     * the resolved block is embedded in the signal_config at yield so the channel notifier
+     * (AFTER_COMMIT listener) can send the message statelessly. Null = in-app approval only.
+     */
+    private final Core.ApprovalDelegation delegation;
 
     // Port targets: "approved" -> [nodes], "rejected" -> [nodes], "timeout" -> [nodes]
     private final Map<String, List<ExecutionNode>> portTargets;
@@ -50,11 +57,18 @@ public class UserApprovalNode extends BaseNode {
 
     public UserApprovalNode(String nodeId, List<String> approverRoles,
                             int requiredApprovals, long timeoutMs, String contextTemplate) {
+        this(nodeId, approverRoles, requiredApprovals, timeoutMs, contextTemplate, null);
+    }
+
+    public UserApprovalNode(String nodeId, List<String> approverRoles,
+                            int requiredApprovals, long timeoutMs, String contextTemplate,
+                            Core.ApprovalDelegation delegation) {
         super(nodeId, NodeType.APPROVAL);
         this.approverRoles = approverRoles != null ? List.copyOf(approverRoles) : List.of();
         this.requiredApprovals = Math.max(1, requiredApprovals);
         this.timeoutMs = timeoutMs;
         this.contextTemplate = contextTemplate != null ? contextTemplate : "";
+        this.delegation = delegation != null && delegation.isConfigured() ? delegation : null;
         this.portTargets = new HashMap<>();
     }
 
@@ -86,9 +100,16 @@ public class UserApprovalNode extends BaseNode {
             String effectiveDagTriggerId = SignalContextResolver.resolveDagTriggerId(nodeId, dagTriggerId, context);
             int effectiveEpoch = SignalContextResolver.resolveEpoch(epoch, context);
 
-            Map<String, Object> signalConfig = SignalConfig.userApproval(
+            // External-channel delegation: resolve chatId/message templates against the
+            // execution context FROZEN at the pause (same soft semantics as contextTemplate:
+            // a malformed template never fails the node) and embed the resolved block in the
+            // signal_config. The channel notifier reads it back from the signal row.
+            Map<String, Object> resolvedDelegation = buildResolvedDelegation(context);
+
+            Map<String, Object> signalConfig = SignalConfig.userApprovalWithDelegation(
                 approverRoles, requiredApprovals,
-                timeoutMs > 0 ? Duration.ofMillis(timeoutMs) : Duration.ofHours(24));
+                timeoutMs > 0 ? Duration.ofMillis(timeoutMs) : Duration.ofHours(24),
+                resolvedDelegation);
 
             // Split context: persist the current item alongside the signal so the
             // approver can SEE what each per-item approval refers to (the signals
@@ -126,6 +147,11 @@ public class UserApprovalNode extends BaseNode {
             if (approvalContext != null && !approvalContext.isBlank()) {
                 output.put("approval_context", approvalContext);
             }
+            // Advertise the delegated channel so downstream steps (and the resolved output,
+            // mirrored by SignalResumeService.buildSignalResolutionOutput) can branch on it.
+            if (resolvedDelegation != null) {
+                output.put("delegated_channel", resolvedDelegation.get("channel"));
+            }
 
             return NodeExecutionResult.awaitingSignal(nodeId, SignalType.USER_APPROVAL, output);
 
@@ -137,6 +163,36 @@ public class UserApprovalNode extends BaseNode {
                 buildFailureOutput(resolvedParams, e.getMessage()),
                 0L);
         }
+    }
+
+    /**
+     * Build the resolved delegation block for signal_config, or null when the node
+     * has no configured delegation. chatId and messageTemplate resolve with the same
+     * soft semantics as contextTemplate ({@link SignalContextResolver#resolveApprovalContext}):
+     * a malformed template falls back (chatId: raw configured string; message: omitted,
+     * the notifier then uses the resolved approval context) and NEVER fails the node.
+     */
+    private Map<String, Object> buildResolvedDelegation(ExecutionContext context) {
+        if (delegation == null) {
+            return null;
+        }
+        Map<String, Object> block = new LinkedHashMap<>();
+        block.put("channel", delegation.channel());
+        if (delegation.credentialId() != null) {
+            block.put("credentialId", delegation.credentialId());
+        }
+        String resolvedChatId = SignalContextResolver.resolveApprovalContext(
+            delegation.chatId(), context, templateAdapter);
+        block.put("chatId", resolvedChatId != null ? resolvedChatId : delegation.chatId());
+        String resolvedMessage = SignalContextResolver.resolveApprovalContext(
+            delegation.messageTemplate(), context, templateAdapter);
+        if (resolvedMessage != null && !resolvedMessage.isBlank()) {
+            block.put("message", resolvedMessage);
+        }
+        if (!delegation.allowedUserIds().isEmpty()) {
+            block.put("allowedUserIds", delegation.allowedUserIds());
+        }
+        return block;
     }
 
     private Map<String, Object> buildFailureOutput(Map<String, Object> resolvedParams, String error) {
@@ -306,6 +362,7 @@ public class UserApprovalNode extends BaseNode {
     public int getRequiredApprovals() { return requiredApprovals; }
     public long getTimeoutMs() { return timeoutMs; }
     public String getContextTemplate() { return contextTemplate; }
+    public Core.ApprovalDelegation getDelegation() { return delegation; }
 
     // ========================================================================
     // SERVICE INJECTION (via ExecutionServiceInjector)
@@ -349,15 +406,17 @@ public class UserApprovalNode extends BaseNode {
         private int requiredApprovals = 1;
         private long timeoutMs = 86400000L; // 24h default
         private String contextTemplate = "";
+        private Core.ApprovalDelegation delegation;
 
         public Builder nodeId(String nodeId) { this.nodeId = nodeId; return this; }
         public Builder approverRoles(List<String> approverRoles) { this.approverRoles = approverRoles; return this; }
         public Builder requiredApprovals(int requiredApprovals) { this.requiredApprovals = requiredApprovals; return this; }
         public Builder timeoutMs(long timeoutMs) { this.timeoutMs = timeoutMs; return this; }
         public Builder contextTemplate(String contextTemplate) { this.contextTemplate = contextTemplate; return this; }
+        public Builder delegation(Core.ApprovalDelegation delegation) { this.delegation = delegation; return this; }
 
         public UserApprovalNode build() {
-            return new UserApprovalNode(nodeId, approverRoles, requiredApprovals, timeoutMs, contextTemplate);
+            return new UserApprovalNode(nodeId, approverRoles, requiredApprovals, timeoutMs, contextTemplate, delegation);
         }
     }
 

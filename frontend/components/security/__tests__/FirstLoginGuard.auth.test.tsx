@@ -8,7 +8,6 @@ import FirstLoginGuard from '../FirstLoginGuard';
 
 const mocks = vi.hoisted(() => ({
   pathname: '/fr/app/chat',
-  search: '',
   replace: vi.fn(),
   authGuard: {
     isAuthenticated: false,
@@ -24,7 +23,13 @@ const mocks = vi.hoisted(() => ({
 vi.mock('next/navigation', () => ({
   usePathname: () => mocks.pathname,
   useRouter: () => ({ replace: mocks.replace }),
-  useSearchParams: () => new URLSearchParams(mocks.search),
+  // Regression pin: FirstLoginGuard wraps the whole tree from the root layout,
+  // and useSearchParams() there opts every static page out of server rendering
+  // (empty-body HTML, the SEO killer fixed in the landing-SEO pass). The query
+  // string must come from window.location instead.
+  useSearchParams: () => {
+    throw new Error('useSearchParams must not be called in FirstLoginGuard (forces CSR bailout of every page)');
+  },
 }));
 
 vi.mock('@/hooks/useAuthGuard', () => ({
@@ -46,7 +51,7 @@ vi.mock('@/components/LoadingSpinner', () => ({
 describe('FirstLoginGuard app authentication redirect', () => {
   beforeEach(() => {
     mocks.pathname = '/fr/app/chat';
-    mocks.search = '';
+    window.history.replaceState(null, '', '/');
     mocks.replace.mockReset();
     mocks.apiClient.get.mockReset();
     mocks.authGuard = {
@@ -62,7 +67,7 @@ describe('FirstLoginGuard app authentication redirect', () => {
   });
 
   it('redirects anonymous protected app routes to localized login with returnTo', async () => {
-    mocks.search = 'draft=1';
+    window.history.replaceState(null, '', '/fr/app/chat?draft=1');
 
     renderGuard();
 

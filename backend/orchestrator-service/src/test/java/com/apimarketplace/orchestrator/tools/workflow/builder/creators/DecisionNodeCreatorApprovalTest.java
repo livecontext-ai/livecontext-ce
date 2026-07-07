@@ -95,4 +95,76 @@ class DecisionNodeCreatorApprovalTest {
         assertThat(r.success()).isTrue();
         assertThat(firstApprovalConfig()).doesNotContainKey("contextTemplate");
     }
+
+    @Test
+    @DisplayName("delegation map is passed through verbatim into the approval config")
+    @SuppressWarnings("unchecked")
+    void delegationPassedThroughToApprovalConfig() {
+        Map<String, Object> delegation = new LinkedHashMap<>();
+        delegation.put("channel", "telegram");
+        delegation.put("credentialId", 42);
+        delegation.put("chatId", "{{trigger:start.output.chat_id}}");
+        Map<String, Object> p = new LinkedHashMap<>();
+        p.put("label", "Manager Review");
+        p.put("delegation", delegation);
+
+        ToolExecutionResult r = creator.executeAddApproval(session, p);
+
+        assertThat(r.success()).isTrue();
+        Map<String, Object> stored = (Map<String, Object>) firstApprovalConfig().get("delegation");
+        assertThat(stored)
+            .containsEntry("channel", "telegram")
+            .containsEntry("credentialId", 42);
+    }
+
+    @Test
+    @DisplayName("delegation is echoed in the agent-visible saved_params")
+    @SuppressWarnings("unchecked")
+    void delegationEchoedInSavedParams() {
+        Map<String, Object> delegation = new LinkedHashMap<>();
+        delegation.put("channel", "telegram");
+        delegation.put("credentialId", 42);
+        delegation.put("chatId", "123456");
+        Map<String, Object> p = new LinkedHashMap<>();
+        p.put("label", "Manager Review");
+        p.put("delegation", delegation);
+
+        ToolExecutionResult r = creator.executeAddApproval(session, p);
+
+        assertThat(r.success()).isTrue();
+        Map<String, Object> data = (Map<String, Object>) r.data();
+        Map<String, Object> savedParams = (Map<String, Object>) data.get("saved_params");
+        assertThat((Map<String, Object>) savedParams.get("delegation"))
+            .as("the agent only learns what was stored from saved_params; it must echo delegation")
+            .containsEntry("channel", "telegram");
+    }
+
+    @Test
+    @DisplayName("regression: no delegation param -> approval config and saved_params omit the key")
+    @SuppressWarnings("unchecked")
+    void noDelegationOmitsKey() {
+        Map<String, Object> p = new LinkedHashMap<>();
+        p.put("label", "Manager Review");
+
+        ToolExecutionResult r = creator.executeAddApproval(session, p);
+
+        assertThat(r.success()).isTrue();
+        assertThat(firstApprovalConfig()).doesNotContainKey("delegation");
+        Map<String, Object> data = (Map<String, Object>) r.data();
+        Map<String, Object> savedParams = (Map<String, Object>) data.get("saved_params");
+        assertThat(savedParams).doesNotContainKey("delegation");
+    }
+
+    @Test
+    @DisplayName("an empty delegation map is treated as absent (no delegation key stored)")
+    void emptyDelegationMapTreatedAsAbsent() {
+        Map<String, Object> p = new LinkedHashMap<>();
+        p.put("label", "Manager Review");
+        p.put("delegation", new LinkedHashMap<>());
+
+        ToolExecutionResult r = creator.executeAddApproval(session, p);
+
+        assertThat(r.success()).isTrue();
+        assertThat(firstApprovalConfig()).doesNotContainKey("delegation");
+    }
 }

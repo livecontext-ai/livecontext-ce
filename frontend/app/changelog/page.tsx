@@ -28,6 +28,7 @@ export const revalidate = 1800;
 export const metadata = {
   title: 'Changelog - LiveContext',
   description: 'What we shipped, when. Product updates and release notes.',
+  alternates: { canonical: '/changelog' },
   robots: IS_CE ? { index: false, follow: false } : undefined,
 };
 

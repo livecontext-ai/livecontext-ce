@@ -278,12 +278,41 @@ public record Core(
         List<String> approverRoles,  // Required roles (e.g., ["manager"])
         int requiredApprovals,       // Threshold for multi-level (default 1)
         long timeoutMs,              // Timeout in ms (e.g., 86400000 = 24h)
-        String contextTemplate       // Template (literal + {{...}}) shown to the human approver
+        String contextTemplate,      // Template (literal + {{...}}) shown to the human approver
+        ApprovalDelegation delegation // Optional external-channel delegation (null = in-app only)
     ) {
         public ApprovalConfig {
             approverRoles = approverRoles == null ? List.of() : List.copyOf(approverRoles);
             requiredApprovals = Math.max(1, requiredApprovals);
             contextTemplate = contextTemplate == null ? "" : contextTemplate;
+        }
+    }
+
+    /**
+     * External-channel delegation for a user approval node: the pending approval is
+     * pushed to the channel (v1: a Telegram message with inline approve/reject
+     * buttons) and the button click resolves the signal, in addition to the in-app
+     * resolution paths. {@code chatId} and {@code messageTemplate} are
+     * template-capable ({{...}}), resolved at yield time like {@code contextTemplate}.
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record ApprovalDelegation(
+        String channel,              // Channel id (v1: "telegram")
+        Long credentialId,           // User credential id of the channel bot (BYOK)
+        String chatId,               // Destination chat id (template-capable)
+        String messageTemplate,      // Optional message body; blank = resolved approval context
+        List<String> allowedUserIds  // Optional allowlist of channel user ids; empty = anyone in chat
+    ) {
+        public ApprovalDelegation {
+            channel = channel == null ? "" : channel.trim().toLowerCase(java.util.Locale.ROOT);
+            chatId = chatId == null ? "" : chatId;
+            messageTemplate = messageTemplate == null ? "" : messageTemplate;
+            allowedUserIds = allowedUserIds == null ? List.of() : List.copyOf(allowedUserIds);
+        }
+
+        /** True when the author actually selected a channel (the section is optional). */
+        public boolean isConfigured() {
+            return !channel.isBlank();
         }
     }
 

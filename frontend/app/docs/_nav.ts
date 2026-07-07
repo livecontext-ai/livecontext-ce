@@ -123,3 +123,22 @@ export function isActiveDocPath(pathname: string | null | undefined, href: strin
   if (href === '/') return pathname === '/';
   return pathname === href || pathname.startsWith(href + '/');
 }
+
+/**
+ * Normalize a pathname to the clean docs IA form used by `DOCS_PAGES` hrefs
+ * (`/docs/agents` and `/agents` both become `/agents`; `/docs` becomes `/`).
+ *
+ * Needed because the docs routes live at `/docs/*` but are SERVED at clean
+ * paths on the docs subdomain via a middleware rewrite: at build time (SSG)
+ * `usePathname()` reports the internal `/docs/...` route, while in the browser
+ * it reports the clean URL. Components that render pathname-dependent markup
+ * (sidebar active state, prev/next) MUST normalize through this helper or the
+ * server HTML and the client render disagree - a React #418 hydration mismatch
+ * on every docs page.
+ */
+export function cleanDocsPathname(pathname: string | null | undefined): string {
+  if (!pathname) return '/';
+  if (pathname === '/docs') return '/';
+  if (pathname.startsWith('/docs/')) return pathname.slice('/docs'.length);
+  return pathname;
+}

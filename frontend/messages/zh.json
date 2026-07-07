@@ -6955,7 +6955,21 @@
         "contextInfoTitle": "审批上下文",
         "contextInfoBody": "展示给审批者，让其了解正在审批的内容。在工作流暂停时解析。",
         "contextInfoVariables": "使用表达式插入工作流数据，例如：",
-        "contextInfoOptional": "推荐填写。即使留空，运行仍可正常进行。"
+        "contextInfoOptional": "推荐填写。即使留空，运行仍可正常进行。",
+        "delegation": {
+          "title": "通过外部渠道委派",
+          "infoTitle": "外部渠道委派",
+          "infoBody": "将待处理的审批以带有批准和拒绝按钮的消息形式发送到 Telegram 聊天。点按按钮即可完成审批，与应用内决定并行有效。",
+          "infoOptional": "可选。审批同时仍可在应用内处理。",
+          "enableAria": "启用外部渠道委派",
+          "channelLabel": "渠道",
+          "chatIdLabel": "聊天 ID",
+          "chatIdHint": "目标聊天或群组的 ID。支持 '{{...}}' 表达式。",
+          "messageLabel": "消息模板",
+          "messagePlaceholder": "默认为审批上下文",
+          "allowedUserIdsLabel": "允许的用户 ID",
+          "allowedUserIdsHint": "以逗号分隔的 Telegram 用户 ID。留空则聊天中的任何人都可以决定。"
+        }
       }
     },
     "databaseNode": {

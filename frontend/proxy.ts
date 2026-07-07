@@ -66,7 +66,35 @@ function withApiProxyCors(request: NextRequest, response: NextResponse): NextRes
   return response;
 }
 
+/**
+ * True for React Server Component (flight) and router-prefetch requests.
+ * Next.js differentiates these from document requests by HEADERS only (see
+ * the `Vary: rsc, next-router-...` it emits), and they share the page URL.
+ */
+function isRscRequest(request: NextRequest): boolean {
+  return Boolean(
+    request.headers.get('rsc')
+    || request.headers.get('next-router-prefetch')
+    || request.headers.get('next-router-segment-prefetch'),
+  );
+}
+
 export function proxy(request: NextRequest) {
+  const response = routeRequest(request);
+
+  // Flight/prefetch responses must NEVER be stored by shared caches (see the
+  // headers() block in next.config.mjs - the PRIMARY guard, since middleware
+  // cannot override the Cache-Control of a prerendered response). This
+  // covers what next.config cannot: responses the middleware itself issues
+  // for RSC-headered requests (redirects, API-proxy rewrites).
+  if (response && isRscRequest(request)) {
+    response.headers.set('cache-control', 'private, no-store');
+  }
+
+  return response;
+}
+
+function routeRequest(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   if (isApiProxyPath(pathname) && request.method === 'OPTIONS') {

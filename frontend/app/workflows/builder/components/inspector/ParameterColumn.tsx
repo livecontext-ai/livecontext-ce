@@ -33,7 +33,7 @@ import { NodeSettingsSection } from './NodeSettingsSection';
 import { nodeSupportsPolicy } from '../../utils/nodePolicy';
 import { ResolvedParamsView } from './outputs/ResolvedParamsView';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
-import type { BuilderNodeData, ConditionRow, SwitchCaseRow, OptionChoice, ApprovalOutput } from '../../types';
+import type { ApprovalDelegation, BuilderNodeData, ConditionRow, SwitchCaseRow, OptionChoice, ApprovalOutput } from '../../types';
 
 interface ParameterColumnProps {
   // Core node props
@@ -117,11 +117,13 @@ interface ParameterColumnProps {
   currentApprovalOutputs?: ApprovalOutput[];
   approvalTimeoutMs?: number;
   approvalContextTemplate?: string;
+  approvalDelegation?: ApprovalDelegation;
   handleAddApprovalOutput?: () => void;
   handleDeleteApprovalOutput?: (id: string) => void;
   handleRenameApprovalOutput?: (id: string, label: string) => void;
   handleApprovalTimeoutChange?: (timeoutMs: number | undefined) => void;
   handleApprovalContextTemplateChange?: (template: string | undefined) => void;
+  handleApprovalDelegationChange?: (delegation: ApprovalDelegation | undefined) => void;
 
   // Parameter expressions
   getParamExpression?: (key: string) => string;
@@ -200,10 +202,12 @@ export const ParameterColumn = (props: ParameterColumnProps) => {
     currentApprovalOutputs,
     approvalTimeoutMs,
     approvalContextTemplate,
+    approvalDelegation,
     handleAddApprovalOutput, handleDeleteApprovalOutput,
     handleRenameApprovalOutput,
     handleApprovalTimeoutChange,
     handleApprovalContextTemplateChange,
+    handleApprovalDelegationChange,
     // Params
     getParamExpression, handleParamExpressionChange,
     getToolParamExpression, handleToolParamExpressionChange,
@@ -556,6 +560,8 @@ export const ParameterColumn = (props: ParameterColumnProps) => {
               handleTimeoutChange={handleApprovalTimeoutChange!}
               approvalContextTemplate={approvalContextTemplate}
               handleContextTemplateChange={handleApprovalContextTemplateChange!}
+              approvalDelegation={approvalDelegation}
+              handleDelegationChange={handleApprovalDelegationChange!}
             />
           ) : null}
 

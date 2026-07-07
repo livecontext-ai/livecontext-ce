@@ -6,7 +6,7 @@ import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, C
 import { useTranslations } from 'next-intl';
 import clsx from 'clsx';
 import type { Node, Edge } from 'reactflow';
-import type { BuilderNodeData } from '../../types';
+import type { ApprovalDelegation, BuilderNodeData } from '../../types';
 import type { Connection } from './useInspectorConnections';
 import { InputColumn } from './InputColumn';
 import { ParameterColumn } from './ParameterColumn';
@@ -147,6 +147,8 @@ interface InspectorDesktopContentProps {
   approvalTimeoutMs?: number;
   handleApprovalContextTemplateChange?: (template: string | undefined) => void;
   approvalContextTemplate?: string;
+  handleApprovalDelegationChange?: (delegation: ApprovalDelegation | undefined) => void;
+  approvalDelegation?: ApprovalDelegation;
 
   // Interface props
   getEditorExpression?: () => string;
@@ -292,6 +294,8 @@ export function InspectorDesktopContent({
   approvalTimeoutMs,
   handleApprovalContextTemplateChange,
   approvalContextTemplate,
+  handleApprovalDelegationChange,
+  approvalDelegation,
   getEditorExpression,
   handleEditorExpressionChange,
   onBreadcrumbChange,
@@ -549,6 +553,8 @@ export function InspectorDesktopContent({
               handleApprovalTimeoutChange={handleApprovalTimeoutChange}
               approvalContextTemplate={approvalContextTemplate}
               handleApprovalContextTemplateChange={handleApprovalContextTemplateChange}
+              approvalDelegation={approvalDelegation}
+              handleApprovalDelegationChange={handleApprovalDelegationChange}
             />
           )}
         </div>

@@ -44,15 +44,17 @@ export const metadata: Metadata = {
     'data automation',
     'AI marketplace',
     'LLM chat',
+    'n8n alternative',
+    'Zapier alternative',
+    'Make alternative',
+    'self-hosted automation',
   ],
   authors: [{ name: 'LiveContext' }],
-  alternates: {
-    canonical: SITE_URL,
-    languages: {
-      en: `${SITE_URL}/en`,
-      fr: `${SITE_URL}/fr`,
-    },
-  },
+  // No global `alternates` here on purpose: a root-level canonical is inherited
+  // by every page that does not override it, which used to tell Google that
+  // /about, /contact, /changelog, /compare/* and the locale landing pages were
+  // all "the same page" as the apex root (Search Console: "Alternate page with
+  // proper canonical tag"). Each public page now declares its own canonical.
   openGraph: {
     type: 'website',
     siteName: 'LiveContext',

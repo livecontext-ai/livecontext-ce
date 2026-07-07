@@ -42,7 +42,11 @@ const LoadingSpinner = React.memo<LoadingSpinnerProps>(({
 
   return (
     <>
-      <style jsx>{pulseAnimation}</style>
+      {/* Plain <style>, NOT <style jsx>: styled-jsx has no SSR registry in the
+          App Router (`jsx-undefined` server-side vs real hash client-side =
+          hydration mismatch on the server-rendered auth spinners). The
+          keyframes are global anyway. */}
+      <style>{pulseAnimation}</style>
       <div className={`flex items-center ${className}`}>
         <div className={`${sizeClasses[size]} ${spinnerColor} animate-spin`}>
           <svg

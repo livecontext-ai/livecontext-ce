@@ -90,6 +90,85 @@ class SignalConfigTest {
     }
 
     @Nested
+    @DisplayName("userApprovalWithDelegation()")
+    class UserApprovalWithDelegationTests {
+
+        @Test
+        @DisplayName("Adds the delegation block to the approval config")
+        void addsDelegationBlock() {
+            Map<String, Object> delegation = Map.of(
+                "channel", "telegram",
+                "credentialId", 42L,
+                "chatId", "123456");
+
+            Map<String, Object> config = SignalConfig.userApprovalWithDelegation(
+                List.of("manager"), 1, Duration.ofHours(24), delegation);
+
+            assertEquals("USER_APPROVAL", config.get("type"));
+            assertEquals(delegation, config.get("delegation"));
+        }
+
+        @Test
+        @DisplayName("regression: null delegation produces a config identical to plain userApproval")
+        void nullDelegationIdenticalToUserApproval() {
+            Map<String, Object> plain = SignalConfig.userApproval(
+                List.of("manager"), 1, Duration.ofHours(24));
+
+            Map<String, Object> withNull = SignalConfig.userApprovalWithDelegation(
+                List.of("manager"), 1, Duration.ofHours(24), null);
+
+            assertEquals(plain, withNull);
+            assertFalse(withNull.containsKey("delegation"));
+        }
+
+        @Test
+        @DisplayName("regression: empty delegation map produces a config identical to plain userApproval")
+        void emptyDelegationIdenticalToUserApproval() {
+            Map<String, Object> plain = SignalConfig.userApproval(
+                List.of("manager"), 1, Duration.ofHours(24));
+
+            Map<String, Object> withEmpty = SignalConfig.userApprovalWithDelegation(
+                List.of("manager"), 1, Duration.ofHours(24), Map.of());
+
+            assertEquals(plain, withEmpty);
+            assertFalse(withEmpty.containsKey("delegation"));
+        }
+
+        @Test
+        @DisplayName("getDelegation() returns the stored delegation map")
+        void getDelegationReturnsMap() {
+            Map<String, Object> delegation = Map.of("channel", "telegram", "chatId", "123");
+            Map<String, Object> config = SignalConfig.userApprovalWithDelegation(
+                null, 1, null, delegation);
+
+            assertEquals(delegation, SignalConfig.getDelegation(config));
+        }
+
+        @Test
+        @DisplayName("getDelegation() returns null for a non-delegated approval config")
+        void getDelegationReturnsNullWhenAbsent() {
+            Map<String, Object> config = SignalConfig.userApproval(null, 1, null);
+
+            assertNull(SignalConfig.getDelegation(config));
+        }
+
+        @Test
+        @DisplayName("getDelegation() returns null for a null config")
+        void getDelegationReturnsNullForNullConfig() {
+            assertNull(SignalConfig.getDelegation(null));
+        }
+
+        @Test
+        @DisplayName("getDelegation() returns null when the delegation value is not a map")
+        void getDelegationReturnsNullForNonMapValue() {
+            Map<String, Object> config = SignalConfig.userApproval(null, 1, null);
+            config.put("delegation", "telegram");
+
+            assertNull(SignalConfig.getDelegation(config));
+        }
+    }
+
+    @Nested
     @DisplayName("webhookWait()")
     class WebhookWaitTests {
 

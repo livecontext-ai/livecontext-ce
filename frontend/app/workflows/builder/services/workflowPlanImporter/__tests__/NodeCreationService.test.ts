@@ -281,6 +281,68 @@ describe('NodeCreationService - user_approval round-trip passthrough', () => {
     expect(node.data.requiredApprovals).toBeUndefined();
     expect(node.data.approverRoles).toEqual(['manager']);
   });
+
+  it('maps a full approval.delegation block to approvalDelegation (round-trip)', () => {
+    const node = createApprovalNode({
+      type: 'approval',
+      label: 'Review',
+      approval: {
+        requiredApprovals: 1,
+        delegation: {
+          channel: 'telegram',
+          credentialId: 123,
+          chatId: '{{trigger:form.output.chat_id}}',
+          messageTemplate: 'Approve {{trigger:form.output.amount}}?',
+          allowedUserIds: ['12345678', '87654321'],
+        },
+      },
+    });
+    expect(node.data.approvalDelegation).toEqual({
+      channel: 'telegram',
+      credentialId: 123,
+      chatId: '{{trigger:form.output.chat_id}}',
+      messageTemplate: 'Approve {{trigger:form.output.amount}}?',
+      allowedUserIds: ['12345678', '87654321'],
+    });
+  });
+
+  it('omits approvalDelegation when the plan has no delegation block', () => {
+    const node = createApprovalNode({
+      type: 'approval',
+      label: 'Review',
+      approval: { requiredApprovals: 1 },
+    });
+    expect(node.data.approvalDelegation).toBeUndefined();
+  });
+
+  it('omits approvalDelegation when delegation has a blank channel', () => {
+    const node = createApprovalNode({
+      type: 'approval',
+      label: 'Review',
+      approval: { delegation: { channel: '  ', credentialId: 123, chatId: '-100' } },
+    });
+    expect(node.data.approvalDelegation).toBeUndefined();
+  });
+
+  it('drops blank/malformed optional delegation fields but keeps the channel', () => {
+    const node = createApprovalNode({
+      type: 'approval',
+      label: 'Review',
+      approval: {
+        delegation: {
+          channel: 'telegram',
+          credentialId: '123',
+          chatId: '   ',
+          messageTemplate: '',
+          allowedUserIds: ['', 42, null, '12345678'],
+        },
+      },
+    });
+    expect(node.data.approvalDelegation).toEqual({
+      channel: 'telegram',
+      allowedUserIds: ['12345678'],
+    });
+  });
 });
 
 /**
