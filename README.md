@@ -6,6 +6,11 @@ Describe the job in chat and LiveContext builds it in front of you: a workflow y
 AI agents with scoped access and budgets you control, and a small app your team actually uses.
 Chat, Workflow, Agent and App in one self-hosted platform. No code to write, nothing to stitch together.
 
+**An open-source, self-hosted alternative to n8n, Zapier and Make, with AI agents built in.**
+
+[![GitHub stars](https://img.shields.io/github/stars/livecontext-ai/livecontext-ce?style=flat&logo=github&color=e11d48)](https://github.com/livecontext-ai/livecontext-ce/stargazers)
+[![Latest release](https://img.shields.io/github/v/release/livecontext-ai/livecontext-ce?color=16a34a)](https://github.com/livecontext-ai/livecontext-ce/releases/latest)
+[![Discussions](https://img.shields.io/github/discussions/livecontext-ai/livecontext-ce?color=2496ED)](https://github.com/livecontext-ai/livecontext-ce/discussions)
 ![Java 21](https://img.shields.io/badge/Java-21-e11d48.svg)
 ![Next.js](https://img.shields.io/badge/Next.js-16-000000.svg)
 ![Docker Compose](https://img.shields.io/badge/Docker%20Compose-ready-2496ED.svg)
@@ -14,6 +19,8 @@ Chat, Workflow, Agent and App in one self-hosted platform. No code to write, not
 [![Watch LiveContext build an automation from a single chat message](frontend/public/landing/videos/builder-built-by-chat.gif)](https://livecontext.ai)
 
 <sub>The builder, built by chat. <a href="frontend/public/landing/videos/builder-built-by-chat.mp4">Watch the full demo</a> &middot; <a href="https://livecontext.ai">Try the hosted version</a></sub>
+
+<sub>⭐ If LiveContext looks useful, <a href="https://github.com/livecontext-ai/livecontext-ce">give it a star</a>. It helps other teams find it.</sub>
 
 ## Build it once. It runs as all four.
 
@@ -143,3 +150,9 @@ Please report vulnerabilities privately. See [SECURITY.md](SECURITY.md).
 ## License
 
 See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+---
+
+⭐ **If LiveContext is useful to you, star the repo.** It is the simplest way to help other teams
+discover it, and it means a lot to a small team. Questions or ideas? Open a
+[Discussion](https://github.com/livecontext-ai/livecontext-ce/discussions).
