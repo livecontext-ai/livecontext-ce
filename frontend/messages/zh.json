@@ -613,6 +613,8 @@
           "BRIDGE_LOW_CREDIT": "{count, plural, one {# 个低额度桥接} other {# 个低额度桥接}}",
           "ORG_INVITATION_PENDING": "{count, plural, one {# 个组织邀请} other {# 个组织邀请}}"
         },
+        "approvalOpen": "打开",
+        "approvalReview": "审核",
         "deleteRow": "删除",
         "prevPage": "上一页",
         "nextPage": "下一页",
@@ -1480,6 +1482,7 @@
     },
     "acquire": "安装",
     "acquiring": "正在安装……",
+    "open": "打开",
     "emptyAgents": "尚无已分享的代理",
     "emptyAgentsHint": "成为第一个分享代理的人！",
     "emptyApplications": "尚无已分享的应用",
@@ -4792,7 +4795,9 @@
       "approve": "批准",
       "reject": "拒绝",
       "viewContext": "查看完整上下文",
-      "reviewAll": "审查 {count} 项审批"
+      "reviewAll": "审查 {count} 项审批",
+      "noPending": "没有待审批的项目。",
+      "loadError": "无法加载待审批项。"
     }
   },
   "files": {
@@ -9203,7 +9208,8 @@
     },
     "card": {
       "epochs": "{count, plural, other {# 个 epoch}}",
-      "runs": "{count, plural, other {# 次运行}}"
+      "runs": "{count, plural, other {# 次运行}}",
+      "reviewApprovals": "审核审批"
     },
     "columns": {
       "draft": "草稿",
@@ -9248,7 +9254,8 @@
       "live": "已上线",
       "paused": "已暂停",
       "running": "运行中",
-      "timeout": "超时"
+      "timeout": "超时",
+      "needsApproval": "需要审批"
     },
     "subtitle": "{count, plural, other {# 个工作流}}",
     "title": "工作流看板",

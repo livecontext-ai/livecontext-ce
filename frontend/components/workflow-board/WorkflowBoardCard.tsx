@@ -4,7 +4,8 @@ import React, { useState } from 'react';
 import { useTranslations } from 'next-intl';
 // Locale-aware router (next-intl) - card navigation must preserve the active locale.
 import { useRouter } from '@/i18n/navigation';
-import { AlertTriangle, Calendar, Clock, Globe, Workflow as WorkflowIcon } from 'lucide-react';
+import { AlertTriangle, Calendar, Clock, Globe, MessageSquareQuote, Workflow as WorkflowIcon } from 'lucide-react';
+import { RunApprovalsDialog } from '@/components/approvals/RunApprovalsDialog';
 import { WorkflowNodeIcons } from '@/components/WorkflowNodeIcons';
 import { ShowcasePreview } from '@/components/marketplace/ShowcasePreview';
 import { VisibilityBadge } from '@/components/ui/VisibilityBadge';
@@ -32,6 +33,10 @@ export function WorkflowBoardCard({ card, isDragging, onDragStart }: WorkflowBoa
   // renders. If that render fails (no showcase, retention 404, cross-tenant) we fall back to the
   // node-icon view so the card never renders empty.
   const [previewFailed, setPreviewFailed] = useState(false);
+  // Needs-review cards can open the run's approval review modal in place,
+  // without navigating into the workflow.
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const canReviewApprovals = card.column === 'needsReview' && !!card.productionRunId;
   const showInterfacePreview = !!card.sourcePublicationId && !previewFailed;
   // Own published-as-application rows carry the publication's showcase run + interface → render via
   // the AUTHENTICATED per-run path, which works at ANY publication visibility (the run is the
@@ -48,6 +53,7 @@ export function WorkflowBoardCard({ card, isDragging, onDragStart }: WorkflowBoa
   const acquiredShowcase = showInterfacePreview && !useShowcaseRun;
 
   return (
+    <>
     <div
       draggable
       onDragStart={(e) => {
@@ -178,8 +184,35 @@ export function WorkflowBoardCard({ card, isDragging, onDragStart }: WorkflowBoa
             </>
           )}
         </div>
+        {canReviewApprovals && (
+          <button
+            type="button"
+            data-testid="board-card-review-approvals"
+            onClick={(e) => {
+              // Never fall through to the card's open-workflow navigation.
+              e.stopPropagation();
+              setReviewOpen(true);
+            }}
+            className="mt-1.5 w-full flex items-center justify-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-500/20 dark:text-amber-300 dark:hover:bg-amber-500/30 transition-colors"
+          >
+            <MessageSquareQuote className="h-3 w-3" />
+            {t('card.reviewApprovals')}
+          </button>
+        )}
       </div>
     </div>
+    {/* Sibling of the card root, NOT a child: React synthetic events bubble
+        through portals up the REACT tree, so a dialog nested in the card div
+        would re-trigger the card's open-workflow onClick. Mounted lazily so
+        closed cards never fetch signals. */}
+    {canReviewApprovals && reviewOpen && (
+      <RunApprovalsDialog
+        runId={card.productionRunId!}
+        open={reviewOpen}
+        onOpenChange={setReviewOpen}
+      />
+    )}
+    </>
   );
 }
 
@@ -198,6 +231,14 @@ function RunStatusBadge({ status, t }: { status: string; t: (key: string) => str
       <span className="inline-flex items-center gap-0.5 text-blue-600 dark:text-blue-400">
         <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
         {t('status.running')}
+      </span>
+    );
+  }
+  if (lower === 'awaiting_signal') {
+    return (
+      <span className="inline-flex items-center gap-0.5 text-amber-600 dark:text-amber-400">
+        <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
+        {t('status.needsApproval')}
       </span>
     );
   }

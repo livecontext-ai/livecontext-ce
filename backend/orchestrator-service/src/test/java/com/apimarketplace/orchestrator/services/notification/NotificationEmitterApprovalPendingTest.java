@@ -97,6 +97,12 @@ class NotificationEmitterApprovalPendingTest {
         return wf;
     }
 
+    private WorkflowEntity workflowPinnedWithProductionRun(Integer pinnedVersion, UUID productionRunId) {
+        WorkflowEntity wf = workflowPinned(pinnedVersion);
+        wf.setProductionRunId(productionRunId);
+        return wf;
+    }
+
     private WorkflowRunEntity runWithMetadata(Map<String, Object> metadata, Integer planVersion) {
         WorkflowRunEntity run = new WorkflowRunEntity();
         // id is JPA-generated and has no public setter - reflection set it for the test.
@@ -176,55 +182,105 @@ class NotificationEmitterApprovalPendingTest {
     }
 
     @Test
-    @DisplayName("Editor run metadata → skip")
+    @DisplayName("Editor run NOT promoted to production (production_run_id differs) → skip")
     void skipsForEditorRun() {
         Map<String, Object> meta = new HashMap<>();
         meta.put("__editorRun__", true);
         when(workflowRunRepository.findByRunIdPublic(RUN_PUBLIC))
                 .thenReturn(Optional.of(runWithMetadata(meta, PINNED_VERSION)));
+        // The workflow's production run is a DIFFERENT run: this editor run is
+        // a plain builder iteration and must stay silent.
+        when(workflowRepository.findById(WORKFLOW_ID))
+                .thenReturn(Optional.of(workflowPinnedWithProductionRun(
+                        PINNED_VERSION, UUID.fromString("00000000-0000-0000-0000-00000000dead"))));
 
         emitter.onApprovalPending(event(null));
 
         verifyNoInteractions(redisPublisher);
+        verify(entityManager, never()).createNativeQuery(anyString());
     }
 
     @Test
-    @DisplayName("Version replay metadata → skip (Integer or any value)")
+    @DisplayName("Editor run with NO production run on the workflow → skip")
+    void skipsForEditorRunWhenWorkflowHasNoProductionRun() {
+        Map<String, Object> meta = new HashMap<>();
+        meta.put("__editorRun__", true);
+        when(workflowRunRepository.findByRunIdPublic(RUN_PUBLIC))
+                .thenReturn(Optional.of(runWithMetadata(meta, PINNED_VERSION)));
+        when(workflowRepository.findById(WORKFLOW_ID))
+                .thenReturn(Optional.of(workflowPinnedWithProductionRun(PINNED_VERSION, null)));
+
+        emitter.onApprovalPending(event(null));
+
+        verifyNoInteractions(redisPublisher);
+        verify(entityManager, never()).createNativeQuery(anyString());
+    }
+
+    @Test
+    @DisplayName("REGRESSION: pin-promoted editor run (production_run_id == run id) → INSERT + publish. "
+            + "The pin promotes the editor run without stripping __editorRun__; its approvals used to never notify")
+    void emitsForPinPromotedEditorRun() {
+        Map<String, Object> meta = new HashMap<>();
+        meta.put("__editorRun__", true);
+        when(workflowRunRepository.findByRunIdPublic(RUN_PUBLIC))
+                .thenReturn(Optional.of(runWithMetadata(meta, PINNED_VERSION)));
+        when(workflowRepository.findById(WORKFLOW_ID))
+                .thenReturn(Optional.of(workflowPinnedWithProductionRun(PINNED_VERSION, RUN_ID)));
+        when(nativeQuery.getResultList()).thenReturn(List.of(42L));
+
+        emitter.onApprovalPending(event(null));
+
+        verify(redisPublisher).publishNotification(eq(TENANT_ID),
+                eq("notification.created"), any());
+    }
+
+    @Test
+    @DisplayName("Version replay metadata → skip (Integer or any value), even on the production run")
     void skipsForVersionReplay() {
         Map<String, Object> meta = new HashMap<>();
         meta.put("__versionReplay__", 5);   // Integer value, key presence is what matters
         when(workflowRunRepository.findByRunIdPublic(RUN_PUBLIC))
                 .thenReturn(Optional.of(runWithMetadata(meta, PINNED_VERSION)));
+        // Stub the workflow AS the production run: replay exclusion must win anyway.
+        when(workflowRepository.findById(WORKFLOW_ID))
+                .thenReturn(Optional.of(workflowPinnedWithProductionRun(PINNED_VERSION, RUN_ID)));
 
         emitter.onApprovalPending(event(null));
 
         verifyNoInteractions(redisPublisher);
+        verify(entityManager, never()).createNativeQuery(anyString());
     }
 
     @Test
-    @DisplayName("Agent-initiated metadata → skip")
+    @DisplayName("Agent-initiated metadata → skip, even on the production run")
     void skipsForAgentInitiated() {
         Map<String, Object> meta = new HashMap<>();
         meta.put("__agentInitiated__", true);
         when(workflowRunRepository.findByRunIdPublic(RUN_PUBLIC))
                 .thenReturn(Optional.of(runWithMetadata(meta, PINNED_VERSION)));
+        when(workflowRepository.findById(WORKFLOW_ID))
+                .thenReturn(Optional.of(workflowPinnedWithProductionRun(PINNED_VERSION, RUN_ID)));
 
         emitter.onApprovalPending(event(null));
 
         verifyNoInteractions(redisPublisher);
+        verify(entityManager, never()).createNativeQuery(anyString());
     }
 
     @Test
-    @DisplayName("Showcase run prefix → skip")
+    @DisplayName("Showcase run prefix → skip, even on the production run")
     void skipsForShowcaseRun() {
         WorkflowRunEntity run = runWithMetadata(new HashMap<>(), PINNED_VERSION);
         run.setRunIdPublic("showcase_demo_123");
         when(workflowRunRepository.findByRunIdPublic(RUN_PUBLIC))
                 .thenReturn(Optional.of(run));
+        when(workflowRepository.findById(WORKFLOW_ID))
+                .thenReturn(Optional.of(workflowPinnedWithProductionRun(PINNED_VERSION, RUN_ID)));
 
         emitter.onApprovalPending(event(null));
 
         verifyNoInteractions(redisPublisher);
+        verify(entityManager, never()).createNativeQuery(anyString());
     }
 
     @Test

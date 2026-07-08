@@ -142,6 +142,7 @@ export function LandingHeader({ extra, siteBaseUrl }: { extra?: React.ReactNode;
         <nav className="hidden md:flex items-center gap-8 text-sm" style={{ color: 'var(--text-secondary)' }}>
           <LandingNavAnchor targetId="marketplace" baseUrl={siteBaseUrl} className="hover:opacity-80 transition-opacity cursor-pointer">Marketplace</LandingNavAnchor>
           <LandingNavAnchor targetId="pricing" baseUrl={siteBaseUrl} className="hover:opacity-80 transition-opacity cursor-pointer">Pricing</LandingNavAnchor>
+          <Link href={withBase(siteBaseUrl, '/blog')} className="hover:opacity-80 transition-opacity">Blog</Link>
           <Link href={withBase(siteBaseUrl, '/changelog')} className="hover:opacity-80 transition-opacity">Changelog</Link>
           <Link href={siteBaseUrl ? '/' : '/docs'} prefetch={false} className="hover:opacity-80 transition-opacity">Docs</Link>
         </nav>
@@ -180,7 +181,7 @@ export function LandingFooter({ siteBaseUrl }: { siteBaseUrl?: string } = {}) {
             Built for the way you work.
           </p>
 
-          <div className="mt-5 flex flex-wrap items-center gap-2">
+          <div className="mt-5 grid grid-cols-3 gap-2 w-fit mx-auto">
             <a
               href="https://www.linkedin.com/company/livecontext/"
               target="_blank"
@@ -256,6 +257,7 @@ export function LandingFooter({ siteBaseUrl }: { siteBaseUrl?: string } = {}) {
                 Pricing
               </SignInButton>
             </li>
+            <li><Link href={withBase(siteBaseUrl, '/blog')}>Blog</Link></li>
             <li><Link href={withBase(siteBaseUrl, '/changelog')}>Changelog</Link></li>
             <li><Link href={siteBaseUrl ? '/' : '/docs'} prefetch={false}>Docs</Link></li>
           </ul>
@@ -270,6 +272,17 @@ export function LandingFooter({ siteBaseUrl }: { siteBaseUrl?: string } = {}) {
           <p className="text-[11px] uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>Company</p>
           <ul className="space-y-2" style={{ color: 'var(--text-secondary)' }}>
             <li><Link href={withBase(siteBaseUrl, '/about')}>About</Link></li>
+            <li>
+              <span className="inline-flex items-center gap-1.5" style={{ color: 'var(--text-muted)' }}>
+                Careers
+                <span
+                  className="inline-flex items-center rounded-full px-1.5 py-px text-[10px] font-medium uppercase tracking-wide"
+                  style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }}
+                >
+                  Soon
+                </span>
+              </span>
+            </li>
             <li><Link href={withBase(siteBaseUrl, '/contact')}>Contact</Link></li>
             <li>173 rue de Courcelles, 75017 Paris</li>
           </ul>

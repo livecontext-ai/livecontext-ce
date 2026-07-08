@@ -6,11 +6,11 @@ import { useRouter } from 'next/navigation';
 import { CheckCircle, X, Gift, Coins, AlertTriangle, AppWindow, Monitor, Workflow, PackagePlus, Table2, Link2, Bot, Zap, Network, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useTranslations } from 'next-intl';
-import { publicationService } from '@/lib/api/orchestrator/publication.service';
 import type { WorkflowPublication } from '@/lib/api/orchestrator/types';
 import { isCeMode } from '@/lib/format-cost';
 import { PublisherAvatar } from '@/components/marketplace/PublisherAvatar';
 import { track } from '@/lib/analytics/analytics';
+import { useMarketplaceInstallStore } from '@/lib/stores/marketplace-install-store';
 
 type ModalState = 'confirm' | 'processing' | 'success' | 'error' | 'link-required' | 'insufficient-credits';
 
@@ -21,6 +21,23 @@ interface AcquirePublicationModalProps {
   onSuccess?: (workflowId: string) => void;
   /** CE remote mode: acquire from cloud marketplace instead of local */
   ceMode?: boolean;
+  /**
+   * Inline-progress mode (marketplace grid + preview header): confirming the
+   * install CLOSES the modal instead of showing the in-modal progress bar -
+   * the caller renders the same progress on the publication CARD (the
+   * interface preview un-greys as the gauge fills, via the shared
+   * marketplace-install store). Error states (error / link-required /
+   * insufficient-credits) are still rendered by this modal: the caller
+   * re-mounts it while the store holds a terminal error. The success screen
+   * is skipped too - the card flips to its "Open" button instead.
+   */
+  inlineProgress?: boolean;
+  /**
+   * Fired once when an inline-progress install actually starts from the
+   * confirm screen (not on retry). Lets the preview page navigate back to
+   * /app/marketplace so the user watches the card's progress there.
+   */
+  onInstallStarted?: () => void;
 }
 
 export default function AcquirePublicationModal({
@@ -29,34 +46,81 @@ export default function AcquirePublicationModal({
   publication,
   onSuccess,
   ceMode,
+  inlineProgress,
+  onInstallStarted,
 }: AcquirePublicationModalProps) {
   const t = useTranslations('modals.acquire');
   const router = useRouter();
-  const [state, setState] = useState<ModalState>('confirm');
-  const [error, setError] = useState<string | null>(null);
-  const [acquiredWorkflowId, setAcquiredWorkflowId] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
-  // Install progress (0-100) - drives the download bar shown during the
-  // 'processing' state. The bar's animation duration is randomized between
-  // 5-10s on each acquire, while the real HTTP call runs in parallel; the
-  // success screen is gated on BOTH the animation reaching 100% AND the
-  // call returning, so a slow backend never lies and a fast backend never
-  // looks instantaneous.
-  const [progress, setProgress] = useState(0);
-  const mountedRef = useRef(true);
-  const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // The install state machine (simulated 5-10s progress + acquire call +
+  // error mapping) lives in the SHARED marketplace-install store so it
+  // survives this modal closing/unmounting (inline-progress mode) and page
+  // navigation. This component is a view over that store.
+  const active = useMarketplaceInstallStore((s) => s.active);
+  const startInstall = useMarketplaceInstallStore((s) => s.startInstall);
+  const clearInstall = useMarketplaceInstallStore((s) => s.clear);
+  const isMyInstall = active?.publication.id === publication.id;
+  const state: ModalState = isMyInstall
+    ? active.status === 'installing'
+      ? 'processing'
+      : active.status
+    : 'confirm';
+  const progress = isMyInstall ? active.progress : 0;
+  const error = isMyInstall ? active.error : null;
+  const acquiredId = isMyInstall ? active.acquiredId : null;
+
+  // Notify the caller exactly once per completed install (non-inline flow -
+  // in inline mode the modal is already closed and the caller watches the
+  // store directly). `sawInstallingRef` gates the notification on having
+  // observed THIS install actually run during this mount: a lingering
+  // 'success' left in the store by another consumer must never fire onSuccess
+  // on mount (in ChatCore that would auto-approve a tool authorization for an
+  // install this modal never ran).
+  const successNotifiedRef = useRef(false);
+  const sawInstallingRef = useRef(false);
+  useEffect(() => {
+    if (isMyInstall && active.status === 'installing') {
+      sawInstallingRef.current = true;
+    }
+    if (isMyInstall && active.status === 'success' && active.acquiredId) {
+      if (sawInstallingRef.current && !successNotifiedRef.current) {
+        successNotifiedRef.current = true;
+        onSuccess?.(active.acquiredId);
+      }
+      return;
+    }
+    if (!isMyInstall) {
+      successNotifiedRef.current = false;
+      sawInstallingRef.current = false;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMyInstall, active?.status, active?.acquiredId]);
+
+  // Lingering TERMINAL state hygiene on the open transition (a fresh open must
+  // start at the confirm screen, not replay another consumer's outcome):
+  // - 'success' is always dropped (the inline consumer that wanted it has
+  //   already had its chance; a fresh open means the user is re-installing).
+  // - errors are dropped only for NON-inline consumers: the inline flow
+  //   deliberately re-mounts this modal to DISPLAY those error screens, so
+  //   dropping them there would make errors vanish.
+  const wasOpenRef = useRef(false);
+  useEffect(() => {
+    if (isOpen && !wasOpenRef.current) {
+      const current = useMarketplaceInstallStore.getState().active;
+      if (current?.publication.id === publication.id) {
+        const isTerminal = current.status !== 'installing';
+        if (current.status === 'success' || (isTerminal && !inlineProgress && !sawInstallingRef.current)) {
+          clearInstall();
+        }
+      }
+    }
+    wasOpenRef.current = isOpen;
+  }, [isOpen, publication.id, clearInstall, inlineProgress]);
 
   useEffect(() => {
     setMounted(true);
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      setMounted(false);
-      if (progressIntervalRef.current) {
-        clearInterval(progressIntervalRef.current);
-        progressIntervalRef.current = null;
-      }
-    };
+    return () => setMounted(false);
   }, []);
 
   if (!isOpen || !mounted) return null;
@@ -67,142 +131,31 @@ export default function AcquirePublicationModal({
   const isSkill = publication.publicationType === 'SKILL';
   const isTable = publication.publicationType === 'TABLE';
   const isInterface = publication.publicationType === 'INTERFACE';
-  // TABLE / INTERFACE / SKILL go through `/publications/acquire-resource/{id}`,
-  // not the workflow `/acquire` endpoint. Routing is keyed on publicationType
-  // so the modal stays a single entry point for every install path (the
-  // alternative - duplicating the progress bar in ResourceMarketplaceGrid +
-  // MarketplacePage.handleReinstall - would drift fast).
-  const isResource =
-    isTable ||
-    isInterface ||
-    isSkill;
 
-  const handleConfirm = async () => {
-    setError(null);
-    setState('processing');
-    setProgress(0);
+  // Another publication is mid-install: the store is single-flight, so
+  // confirming would be silently dropped - disable the CTA instead of lying.
+  const otherInstallRunning = !isMyInstall && active?.status === 'installing';
 
-    track('app_install_started', {
-      publication_id: publication.id,
-      publication_type: publication.publicationType ?? null,
-      is_free: isFree,
-      ce_mode: Boolean(ceMode),
-    });
-
-    // Roll a 5-10s "install" duration. The progress bar eases from 0 to 95%
-    // over this window via easeOutCubic so the early ramp feels fast and the
-    // last 30% takes its time - looks like a real download/install. The
-    // remaining 5% is reserved for a final snap-to-100 once the HTTP call
-    // returns (so a backend slower than the visual budget keeps the bar at
-    // 95% rather than lying about completion).
-    const minDuration = 5000;
-    const maxDuration = 10000;
-    const targetDuration = minDuration + Math.floor(Math.random() * (maxDuration - minDuration + 1));
-    const startTime = performance.now();
-
-    if (progressIntervalRef.current) {
-      clearInterval(progressIntervalRef.current);
+  const handleConfirm = () => {
+    const fromConfirm = state === 'confirm';
+    const started = startInstall(publication, { ceMode, inline: Boolean(inlineProgress) });
+    if (!started) return; // another install is running - keep the modal as-is
+    if (inlineProgress && fromConfirm) {
+      // Return to the page: the caller's card takes over progress rendering.
+      onClose();
+      onInstallStarted?.();
     }
-    progressIntervalRef.current = setInterval(() => {
-      if (!mountedRef.current) return;
-      const elapsed = performance.now() - startTime;
-      const ratio = Math.min(elapsed / targetDuration, 1);
-      const eased = 1 - Math.pow(1 - ratio, 3); // easeOutCubic
-      setProgress(Math.min(95, eased * 95));
-      if (ratio >= 1 && progressIntervalRef.current) {
-        clearInterval(progressIntervalRef.current);
-        progressIntervalRef.current = null;
-      }
-    }, 50);
-
-    // CE-cloud (ceMode): the publication lives on the cloud, so EVERY type -
-    // agent, resource, workflow - installs through the unified remote acquire
-    // (/publications/remote/{id}/acquire). That endpoint charges the linked
-    // cloud account for paid publications (insufficient funds → an error here),
-    // clones the right payload locally, and returns the matching id
-    // (agentId / resourceId / workflowId) the success handler reads below.
-    // Off CE-cloud, each type keeps its own local acquire endpoint.
-    const acquireCall = ceMode
-      ? publicationService.acquireRemotePublication(publication.id)
-      : isAgent
-        ? publicationService.acquireAgentPublication(publication.id)
-        : isResource
-          ? publicationService.acquireResourcePublication(publication.id)
-          : publicationService.acquirePublication(publication.id);
-
-    try {
-      const result = await acquireCall;
-      if (!mountedRef.current) return;
-
-      // Wait until the visual minimum has elapsed before showing success -
-      // a sub-second backend response would otherwise flash the bar past
-      // and feel jarring.
-      const remaining = Math.max(0, targetDuration - (performance.now() - startTime));
-      if (remaining > 0) {
-        await new Promise((r) => setTimeout(r, remaining));
-      }
-      if (!mountedRef.current) return;
-
-      if (progressIntervalRef.current) {
-        clearInterval(progressIntervalRef.current);
-        progressIntervalRef.current = null;
-      }
-      // Snap to 100% then a short hold so the user sees the bar fill.
-      setProgress(100);
-      await new Promise((r) => setTimeout(r, 300));
-      if (!mountedRef.current) return;
-
-      // Result shape varies by acquire endpoint - agent → {agentId},
-      // resource → {resourceId, type}, workflow/remote → {workflowId, ...}.
-      // The success handler only needs the canonical id; downstream consumers
-      // route by publication type from their own context.
-      const id = isAgent
-        ? (result as { agentId: string }).agentId
-        : isResource
-          ? (result as { resourceId: string }).resourceId
-          : (result as { workflowId: string }).workflowId;
-      setAcquiredWorkflowId(id);
-      setState('success');
-      track('app_install_succeeded', {
-        publication_id: publication.id,
-        publication_type: publication.publicationType ?? null,
-        is_free: isFree,
-        acquired_id: id,
-        duration_ms: Math.round(performance.now() - startTime),
-      });
-      onSuccess?.(id);
-    } catch (err: any) {
-      if (progressIntervalRef.current) {
-        clearInterval(progressIntervalRef.current);
-        progressIntervalRef.current = null;
-      }
-      if (!mountedRef.current) return;
-      let outcome: string;
-      if (err.status === 403 && err.code === 'CLOUD_ACCOUNT_NOT_LINKED') {
-        setState('link-required');
-        outcome = 'link_required';
-      } else if (err.status === 402) {
-        setState('insufficient-credits');
-        outcome = 'insufficient_credits';
-      } else {
-        setError(err.message || t('errorMessage'));
-        setState('error');
-        outcome = 'error';
-      }
-      track('app_install_failed', {
-        publication_id: publication.id,
-        publication_type: publication.publicationType ?? null,
-        outcome,
-        error_code: err?.code ?? (err?.status != null ? String(err.status) : null),
-      });
-    }
+    // Inline retry (state was 'error'): the caller keeps this modal mounted
+    // only while the store holds a terminal error, so flipping the store back
+    // to 'installing' unmounts it naturally - no onClose here (it would race
+    // the caller's derived mount condition).
   };
 
   const handleClose = () => {
-    if (state === 'processing') return; // prevent close while in-flight
-    setState('confirm');
-    setError(null);
-    setAcquiredWorkflowId(null);
+    if (state === 'processing' && !inlineProgress) return; // prevent close while in-flight
+    if (isMyInstall && active.status !== 'installing') {
+      clearInstall();
+    }
     onClose();
   };
 
@@ -210,7 +163,7 @@ export default function AcquirePublicationModal({
     track('app_post_install_opened', {
       publication_id: publication.id,
       publication_type: publication.publicationType ?? null,
-      acquired_id: acquiredWorkflowId,
+      acquired_id: acquiredId,
     });
     handleClose();
     // Route to the post-install destination that matches the resource type so
@@ -238,6 +191,12 @@ export default function AcquirePublicationModal({
     handleClose();
     router.push('/app/settings/cloud-account');
   };
+
+  // Inline-progress mode: processing renders on the caller's CARD and success
+  // flips the card to its "Open" button - the modal stays out of the way.
+  if (inlineProgress && (state === 'processing' || state === 'success')) {
+    return null;
+  }
 
   // Processing state - install progress bar (5-10s simulated duration). The
   // bar drives perception of work happening even when the backend responds
@@ -573,7 +532,7 @@ export default function AcquirePublicationModal({
           <Button onClick={handleClose} variant="outline" className="flex-1">
             {t('cancel')}
           </Button>
-          <Button onClick={handleConfirm} className="flex-1">
+          <Button onClick={handleConfirm} disabled={otherInstallRunning} className="flex-1">
             {isFree ? t('addToApplications') : (isCeMode ? t('purchaseForDollar', { amount: publication.creditsPerUse }) : t('purchaseFor', { credits: publication.creditsPerUse }))}
           </Button>
         </div>

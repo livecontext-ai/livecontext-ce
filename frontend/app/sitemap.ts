@@ -2,6 +2,8 @@ import type { MetadataRoute } from 'next';
 import { IS_CE } from '@/lib/edition';
 import { COMPARISONS } from './compare/_lib/comparisons';
 import { DOCS_PAGES } from './docs/_nav';
+import { getAllPosts } from '@/lib/blog/posts';
+import { blogHreflang } from '@/lib/blog/localized';
 
 // Configurable at deploy time; falls back to the production domain.
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://livecontext.ai';
@@ -26,6 +28,10 @@ const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://livecontext.ai';
  *    (currently placeholder content) - kept at a modest priority.
  *  - Documentation - one entry per live docs page, enumerated from the docs IA
  *    (`app/docs/_nav.ts`) so the sitemap and the sidebar never drift apart.
+ *  - Blog - the index and one entry per post, enumerated from the post registry
+ *    (`lib/blog/posts.ts`). Unlike the other marketing pages the blog IS
+ *    translated (en canonical at `/blog`, localized under `/<locale>/blog`), so
+ *    each entry carries a reciprocal hreflang cluster (`blogHreflang`).
  *
  * Excluded (also disallowed in robots.ts):
  *  - Auth-gated app (`/app/*`), `/onboarding`, `/ce-setup`, `/workflows/*`,
@@ -81,5 +87,24 @@ export default function sitemap(): MetadataRoute.Sitemap {
     priority: page.href === '/' ? 0.6 : 0.5,
   }));
 
-  return [...landing, ...compare, ...pages, ...docs];
+  // Blog: en canonical URLs, each with the full hreflang cluster so Google
+  // discovers every translated version. Article lastModified = its publish date.
+  const blog: MetadataRoute.Sitemap = [
+    {
+      url: `${SITE_URL}/blog`,
+      lastModified: now,
+      changeFrequency: 'weekly',
+      priority: 0.7,
+      alternates: { languages: blogHreflang(SITE_URL, '') },
+    },
+    ...getAllPosts().map((post) => ({
+      url: `${SITE_URL}/blog/${post.slug}`,
+      lastModified: new Date(`${post.date}T00:00:00Z`),
+      changeFrequency: 'monthly' as const,
+      priority: 0.7,
+      alternates: { languages: blogHreflang(SITE_URL, `/${post.slug}`) },
+    })),
+  ];
+
+  return [...landing, ...compare, ...pages, ...docs, ...blog];
 }

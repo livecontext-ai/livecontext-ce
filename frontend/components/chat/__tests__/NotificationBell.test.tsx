@@ -169,6 +169,13 @@ vi.mock('@/hooks/useSharedConversations', () => ({
   },
 }));
 
+// The run-level approval review modal is covered by its own test file; here
+// we only assert the bell wires it with the notification's runIdPublic.
+vi.mock('@/components/approvals/RunApprovalsDialog', () => ({
+  RunApprovalsDialog: ({ runId, open }: { runId: string; open: boolean }) =>
+    open ? <div data-testid="run-approvals-dialog" data-run-id={runId} /> : null,
+}));
+
 describe('NotificationBell - tabs Inbox/Activity', () => {
   beforeEach(() => {
     pushMock.mockReset();
@@ -1089,5 +1096,63 @@ describe('NotificationBell - tabs Inbox/Activity', () => {
     fireEvent.click(screen.getByText('triggersTab'));
 
     expect(screen.getByText('-')).toBeTruthy();
+  });
+
+  describe('APPROVAL_PENDING inbox actions', () => {
+    const approvalItem = {
+      subjectId: 'wf-2',
+      subjectName: 'Refund flow',
+      subjectType: 'WORKFLOW' as const,
+      runIdPublic: 'run_appr_1',
+      category: 'APPROVAL_PENDING' as const,
+      severity: 'info' as const,
+      count: 3,
+      firstEventAt: '2026-05-08T08:00:00Z',
+      lastEventAt: '2026-05-08T09:00:00Z',
+      unread: true,
+    };
+
+    it('approval rows show the Open + Review actions; other categories do not', () => {
+      inboxMock.current = {
+        ...inboxMock.current,
+        items: [approvalItem, ...inboxMock.current.items],
+      };
+      render(<NotificationBell />);
+      fireEvent.click(screen.getByRole('button', { name: 'title' }));
+      // Exactly one approval row -> exactly one pair of action buttons
+      // (the RUN_FAILED baseline row must not grow actions).
+      expect(screen.getAllByTestId('inbox-approval-open')).toHaveLength(1);
+      expect(screen.getAllByTestId('inbox-approval-review')).toHaveLength(1);
+    });
+
+    it('Open navigates to the workflow run, same target as the row click', () => {
+      inboxMock.current = { ...inboxMock.current, items: [approvalItem] };
+      render(<NotificationBell />);
+      fireEvent.click(screen.getByRole('button', { name: 'title' }));
+      fireEvent.click(screen.getByTestId('inbox-approval-open'));
+      expect(pushMock).toHaveBeenCalledWith('/app/workflow/wf-2/run/run_appr_1');
+    });
+
+    it('Review opens the run approvals modal in place - no navigation, popover closed', () => {
+      inboxMock.current = { ...inboxMock.current, items: [approvalItem] };
+      render(<NotificationBell />);
+      fireEvent.click(screen.getByRole('button', { name: 'title' }));
+      fireEvent.click(screen.getByTestId('inbox-approval-review'));
+      expect(pushMock).not.toHaveBeenCalled();
+      expect(screen.getByTestId('run-approvals-dialog').getAttribute('data-run-id')).toBe('run_appr_1');
+      // The popover collapsed so the modal is not fighting it for focus.
+      expect(screen.queryByText('inboxTab')).toBeNull();
+    });
+
+    it('renders NO actions when the approval notification lacks a runIdPublic', () => {
+      inboxMock.current = {
+        ...inboxMock.current,
+        items: [{ ...approvalItem, runIdPublic: undefined }],
+      };
+      render(<NotificationBell />);
+      fireEvent.click(screen.getByRole('button', { name: 'title' }));
+      expect(screen.queryByTestId('inbox-approval-open')).toBeNull();
+      expect(screen.queryByTestId('inbox-approval-review')).toBeNull();
+    });
   });
 });

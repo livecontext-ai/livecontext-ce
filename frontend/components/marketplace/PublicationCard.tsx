@@ -1,9 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { memo, useState, useEffect } from 'react';
 import Link from 'next/link';
-import { Coins, Gift, Package, Download, CheckCircle, Network, Zap, Workflow, Monitor, Table, Star } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { Coins, Gift, Package, Download, CheckCircle, Network, Zap, Workflow, Monitor, Table, Star, ArrowUpRight } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { track } from '@/lib/analytics/analytics';
 import type { WorkflowPublication } from '@/lib/api';
 import { publicationService } from '@/lib/api/orchestrator/publication.service';
 import { ShowcasePreview } from '@/components/marketplace/ShowcasePreview';
@@ -215,16 +217,37 @@ export interface PublicationCardProps {
    * Off for marketplace/Explore cards, which keep the anonymous cross-tenant-safe render.
    */
   acquired?: boolean;
+  /**
+   * Live install progress (0-100) from the shared marketplace-install store, or null/undefined
+   * when this publication is not installing. While set, the thumbnail preview is greyed out and
+   * un-greys left-to-right as the gauge fills (same simulated 5-10s ramp the install modal used),
+   * with the modal's progress bar + percentage rendered at the bottom of the thumbnail.
+   */
+  installProgress?: number | null;
+  /**
+   * Destination of the "Open" button that REPLACES the Install button once the publication is
+   * installed (e.g. /app/applications/{publicationId}). Callers pass it only when the viewer
+   * actually has the installed resource; omitted → no Open button (badge only).
+   */
+  openHref?: string;
 }
 
-export function PublicationCard({ publication, currentUserId, ownedByMe, onAcquire, isAcquired, showStats, mine, remote, acquired }: PublicationCardProps) {
+// memo: during an install the shared store ticks progress every 50ms and the
+// whole grid re-renders; memo confines that to the ONE card whose
+// installProgress prop actually changes (iframe previews make a full-grid
+// re-render at 20Hz genuinely expensive).
+export const PublicationCard = memo(function PublicationCard({ publication, currentUserId, ownedByMe, onAcquire, isAcquired, showStats, mine, remote, acquired, installProgress, openHref }: PublicationCardProps) {
   const t = useTranslations('marketplace');
+  const router = useRouter();
   const displayMode = publication.displayMode || 'WORKFLOW';
   const isAgent = displayMode === 'AGENT';
   const hasInterfacePreview = displayMode !== 'WORKFLOW';
   const isOwn = ownedByMe ?? (!!currentUserId && publication.publisherId === currentUserId);
   const isFree = !publication.creditsPerUse || publication.creditsPerUse === 0;
-  const canAcquire = !isOwn && !isAcquired && !!onAcquire;
+  const isInstalling = installProgress != null;
+  const clampedProgress = isInstalling ? Math.min(100, Math.max(0, installProgress)) : 0;
+  const canAcquire = !isOwn && !isAcquired && !!onAcquire && !isInstalling;
+  const showOpen = !!openHref && !isInstalling;
 
   // Preview destination: agents open the dedicated agent-preview page; every other
   // publication type goes through the unified /preview route.
@@ -290,6 +313,45 @@ export function PublicationCard({ publication, currentUserId, ownedByMe, onAcqui
             {t('installed')}
           </span>
         ) : null}
+
+        {/* Install-in-progress: the preview starts fully greyed out and un-greys
+            left-to-right as the gauge fills - the veil's left edge tracks the
+            progress, so the revealed strip shows the interface in full color.
+            The bar + percentage at the bottom reuse the exact loading system of
+            the (former in-modal) install progress screen. */}
+        {isInstalling && (
+          <div data-testid="publication-card-install-progress" className="absolute inset-0 z-20 pointer-events-none">
+            <div
+              className="absolute inset-y-0 right-0 bg-white/40 dark:bg-slate-900/50"
+              style={{
+                left: `${clampedProgress}%`,
+                backdropFilter: 'grayscale(1)',
+                WebkitBackdropFilter: 'grayscale(1)',
+                // Smooth out the 50ms store tick so the reveal reads as a
+                // continuous sweep rather than discrete jumps.
+                transition: 'left 100ms linear',
+              }}
+            />
+            <div className="absolute inset-x-4 bottom-3 flex flex-col items-center gap-1">
+              <div
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(clampedProgress)}
+                aria-label={t('acquiring')}
+                className="w-full h-2.5 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden ring-1 ring-slate-300/50 dark:ring-slate-600/60"
+              >
+                <div
+                  className="h-full bg-[var(--accent-primary)] shadow-[0_0_8px_var(--accent-primary)]"
+                  style={{ width: `${clampedProgress}%`, transition: 'width 100ms linear' }}
+                />
+              </div>
+              <span className="text-[11px] font-medium text-theme-primary tabular-nums rounded px-1.5 backdrop-blur bg-white/80 dark:bg-black/50 border border-white/40 dark:border-white/10">
+                {Math.round(clampedProgress)}%
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Footer - always visible below the thumbnail (mirrors /app/interface card layout) */}
@@ -308,7 +370,29 @@ export function PublicationCard({ publication, currentUserId, ownedByMe, onAcqui
               </span>
             )}
           </div>
-          {canAcquire ? (
+          {showOpen ? (
+            // Installed → the Install button's slot becomes an "Open" button
+            // that jumps straight to the installed application. A nested <a>
+            // inside the card's Link is invalid HTML, so navigate imperatively.
+            <button
+              type="button"
+              data-testid="publication-card-open"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                track('app_post_install_opened', {
+                  publication_id: publication.id,
+                  publication_type: publication.publicationType ?? null,
+                  acquired_id: null,
+                });
+                router.push(openHref!);
+              }}
+              className="inline-flex items-center gap-1 h-[22px] px-2 rounded-full text-[11px] font-medium bg-[var(--accent-primary)] text-[var(--bg-primary)] hover:brightness-110 active:scale-95 transition-[filter,transform] shrink-0"
+            >
+              <ArrowUpRight className="h-3 w-3" />
+              {t('open')}
+            </button>
+          ) : canAcquire ? (
             <button
               type="button"
               onClick={(e) => { e.preventDefault(); e.stopPropagation(); onAcquire!(publication); }}
@@ -376,4 +460,4 @@ export function PublicationCard({ publication, currentUserId, ownedByMe, onAcqui
       </div>
     </Link>
   );
-}
+});

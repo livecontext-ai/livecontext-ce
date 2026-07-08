@@ -7,7 +7,7 @@ import { routing } from '@/i18n/routing';
 // public site (landing, /compare, /about, docs...), leaving nothing for
 // crawlers that do not execute JavaScript. The auth context is still provided;
 // public chrome (Sign in buttons) reads it and settles right after hydration.
-const PUBLIC_MARKETING_PREFIXES = ['/compare', '/about', '/contact', '/legal', '/changelog', '/docs'];
+const PUBLIC_MARKETING_PREFIXES = ['/compare', '/about', '/contact', '/legal', '/changelog', '/docs', '/blog'];
 
 export function isPublicMarketingPath(pathname: string | null): boolean {
   if (!pathname) return false;

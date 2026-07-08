@@ -17,15 +17,22 @@ type Resolution = 'APPROVED' | 'REJECTED';
 interface ApprovalContextDialogProps {
   /** Live, ordered pending USER_APPROVAL signals to review (split/iteration -> many). */
   signals: PendingSignal[];
-  /** Per-node resolver: resolves one pending signal by its itemId + epoch. */
-  resolve: (resolution: Resolution, itemId?: string, epoch?: number) => Promise<void>;
+  /**
+   * Resolver for one pending signal by its itemId + epoch. `nodeId` is the
+   * signal's node: single-node callers (the approval node UI) can ignore it,
+   * run-level callers (board / inbox review) need it to route the resolution.
+   */
+  resolve: (resolution: Resolution, itemId?: string, epoch?: number, nodeId?: string) => Promise<void>;
   /** Which signal to open on (defaults to the first). */
   initialSignalId?: number | string;
-  /** The clickable preview (usually the truncated text + an expand affordance). */
-  children: React.ReactNode;
+  /** The clickable preview (usually the truncated text + an expand affordance). Omit in controlled mode. */
+  children?: React.ReactNode;
   /** Classes for the trigger button (caller controls the inline look). */
   className?: string;
   'data-testid'?: string;
+  /** Controlled visibility: when provided (with onOpenChange), no trigger is rendered. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 function itemIndexOf(s: PendingSignal): number {
@@ -78,9 +85,17 @@ export function ApprovalContextDialog({
   children,
   className,
   'data-testid': testId,
+  open: controlledOpen,
+  onOpenChange,
 }: ApprovalContextDialogProps) {
   const tRun = useTranslations('runMode');
-  const [open, setOpen] = React.useState(false);
+  const [internalOpen, setInternalOpen] = React.useState(false);
+  const isControlled = controlledOpen !== undefined;
+  const open = isControlled ? controlledOpen : internalOpen;
+  const setOpen = React.useCallback((next: boolean) => {
+    if (!isControlled) setInternalOpen(next);
+    onOpenChange?.(next);
+  }, [isControlled, onOpenChange]);
   const [activeId, setActiveId] = React.useState<number | string | undefined>(initialSignalId);
   const [resolving, setResolving] = React.useState<Resolution | null>(null);
 
@@ -96,7 +111,7 @@ export function ApprovalContextDialog({
   // Nothing left to review -> close.
   React.useEffect(() => {
     if (open && sorted.length === 0) setOpen(false);
-  }, [open, sorted.length]);
+  }, [open, sorted.length, setOpen]);
 
   let activeIndex = sorted.findIndex((s) => s.id === activeId);
   if (activeIndex < 0) activeIndex = 0; // the active item was resolved/removed -> snap to first remaining
@@ -122,7 +137,7 @@ export function ApprovalContextDialog({
     const nextSignal = sorted[activeIndex + 1] ?? sorted[activeIndex - 1] ?? null;
     setResolving(resolution);
     try {
-      await resolve(resolution, current.itemId, current.epoch);
+      await resolve(resolution, current.itemId, current.epoch, current.nodeId);
       // Advance only on success; the WS update then drops the resolved signal.
       if (nextSignal && nextSignal.id !== current.id) setActiveId(nextSignal.id);
     } catch {
@@ -134,22 +149,24 @@ export function ApprovalContextDialog({
 
   return (
     <>
-      <button
-        type="button"
-        data-testid={testId}
-        // Stop propagation so opening the modal never selects/drags the node or
-        // the review row beneath the trigger. nodrag/nopan keep ReactFlow calm.
-        onClick={(e) => {
-          e.stopPropagation();
-          setOpen(true);
-        }}
-        onMouseDown={(e) => e.stopPropagation()}
-        title={tRun('approvalBar.viewContext')}
-        aria-label={tRun('approvalBar.viewContext')}
-        className={className}
-      >
-        {children}
-      </button>
+      {children != null && (
+        <button
+          type="button"
+          data-testid={testId}
+          // Stop propagation so opening the modal never selects/drags the node or
+          // the review row beneath the trigger. nodrag/nopan keep ReactFlow calm.
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpen(true);
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+          title={tRun('approvalBar.viewContext')}
+          aria-label={tRun('approvalBar.viewContext')}
+          className={className}
+        >
+          {children}
+        </button>
+      )}
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-xl">

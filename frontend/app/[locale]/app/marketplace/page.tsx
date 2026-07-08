@@ -18,6 +18,7 @@ import LoadingSpinner from '@/components/LoadingSpinner';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { matchesVisibilityFilter, type VisibilityFilter } from '@/lib/utils/visibility';
 import AcquirePublicationModal from '@/components/marketplace/AcquirePublicationModal';
+import { useMarketplaceInstallStore } from '@/lib/stores/marketplace-install-store';
 import { IS_CE } from '@/lib/edition';
 import { useCeCloudLinkStatus } from '@/hooks/useCeCloudLinkStatus';
 import { cloudLinkService } from '@/lib/api/cloud-link.service';
@@ -43,6 +44,17 @@ function ExploreTab({ remote = false }: { remote?: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [acquireTarget, setAcquireTarget] = useState<WorkflowPublication | null>(null);
   const [acquiredIds, setAcquiredIds] = useState<Set<string>>(new Set());
+  // Publications installed during THIS visit: flips the card to installed/"Open"
+  // immediately and keeps it there even if the acquiredIds refetch fails.
+  const [justInstalledIds, setJustInstalledIds] = useState<Set<string>>(new Set());
+  // Shared install state machine (progress lives on the CARD, not in the modal).
+  // Only INLINE installs (started from the marketplace grid / preview header)
+  // are rendered and consumed here - a full-modal install (ChatCore) owns its
+  // own lifecycle and must not be stolen or double-surfaced by this tab.
+  const rawActiveInstall = useMarketplaceInstallStore((s) => s.active);
+  const activeInstall = rawActiveInstall?.inline ? rawActiveInstall : null;
+  const clearInstall = useMarketplaceInstallStore((s) => s.clear);
+  const consumeInstallSuccess = useMarketplaceInstallStore((s) => s.consumeSuccess);
   const [displayFilter, setDisplayFilter] = useState<'apps' | 'agents' | 'interfaces' | 'tables' | 'skills'>('apps');
   // Display-type filter chips (Applications / Agents / Interfaces / Tables / Skills) are hidden
   // for now: only Applications are surfaced in the marketplace. The chips and their logic are kept
@@ -55,7 +67,11 @@ function ExploreTab({ remote = false }: { remote?: boolean }) {
   useOrgScopedReset(() => {
     setPublications([]);
     setAcquiredIds(new Set());
+    setJustInstalledIds(new Set());
     setError(null);
+    // An install finishing after the switch belongs to the PREVIOUS workspace:
+    // kill it so its success can't mark a card installed under the new one.
+    clearInstall();
   });
 
   // Fetch acquired publication IDs to hide them from explore. Skipped when
@@ -140,9 +156,31 @@ function ExploreTab({ remote = false }: { remote?: boolean }) {
     return () => clearTimeout(timer);
   }, [isAuthLoading, searchQuery, searchPublications, fetchPublications, selectedCategory]);
 
-  const handleAcquireSuccess = useCallback(() => {
-    fetchAcquiredIds();
-  }, [fetchAcquiredIds]);
+  // Install completed (the machine runs in the shared store, the modal is
+  // already closed): flip the card to installed/"Open" right away, refresh the
+  // server-side acquired set, then CONSUME the success so the progress overlay
+  // (parked at 100%) disappears. consumeSuccess (not clear) because the finally
+  // runs after an async refetch: by then the user may have started installing
+  // another app, and clear() would kill that machine.
+  useEffect(() => {
+    if (activeInstall?.status !== 'success') return;
+    const pubId = activeInstall.publication.id;
+    setJustInstalledIds((prev) => {
+      const next = new Set(prev);
+      next.add(pubId);
+      return next;
+    });
+    void fetchAcquiredIds().finally(() => consumeInstallSuccess(pubId));
+  }, [activeInstall?.status, activeInstall?.publication.id, fetchAcquiredIds, consumeInstallSuccess]);
+
+  // Terminal install errors surface through the SAME modal (error /
+  // link-required / insufficient-credits screens): re-mount it while the store
+  // holds one - also catches installs started from the preview page, whose
+  // modal unmounted on navigation back to this page.
+  const installErrorPublication =
+    activeInstall && activeInstall.status !== 'installing' && activeInstall.status !== 'success'
+      ? activeInstall.publication
+      : null;
 
 
   const filteredPublications = useMemo(() => {
@@ -267,7 +305,12 @@ function ExploreTab({ remote = false }: { remote?: boolean }) {
 
       {!isLoading && filteredPublications.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-          {filteredPublications.map((publication) => (
+          {filteredPublications.map((publication) => {
+            const isInstalled = acquiredIds.has(publication.id) || justInstalledIds.has(publication.id);
+            const isThisInstalling =
+              activeInstall?.publication.id === publication.id &&
+              (activeInstall.status === 'installing' || activeInstall.status === 'success');
+            return (
             <PublicationCard
               key={publication.id}
               publication={publication}
@@ -288,20 +331,36 @@ function ExploreTab({ remote = false }: { remote?: boolean }) {
               // browse but not acquire. Omitting the handler hides the CTA
               // button inside the hover overlay of PublicationCard.
               onAcquire={isAuthenticated ? setAcquireTarget : undefined}
-              isAcquired={acquiredIds.has(publication.id)}
+              isAcquired={isInstalled}
+              // Live install → the card's preview un-greys as the gauge fills
+              // (kept through the brief 'success' window at 100% so the card
+              // never flashes back to an Install button before the flip).
+              installProgress={isThisInstalling ? activeInstall.progress : null}
+              // Installed application → the Install slot becomes "Open". The
+              // applications route resolves the acquired clone from the
+              // publication id, so no clone id is needed here.
+              openHref={
+                isInstalled && (publication.displayMode || 'WORKFLOW') === 'APPLICATION'
+                  ? `/app/applications/${publication.id}`
+                  : undefined
+              }
             />
-          ))}
+            );
+          })}
         </div>
       )}
 
       {/* Install modal - remote (linked CE) installs go through the CE remote
-          acquire path (/publications/remote/{id}/acquire) via ceMode. */}
-      {acquireTarget && (
+          acquire path (/publications/remote/{id}/acquire) via ceMode.
+          inlineProgress: confirming closes the modal and the card renders the
+          progress; the modal re-mounts by itself (installErrorPublication) to
+          show terminal error screens. */}
+      {(acquireTarget || installErrorPublication) && (
         <AcquirePublicationModal
-          isOpen={!!acquireTarget}
+          isOpen
+          inlineProgress
           onClose={() => setAcquireTarget(null)}
-          publication={acquireTarget}
-          onSuccess={handleAcquireSuccess}
+          publication={acquireTarget ?? installErrorPublication!}
           ceMode={remote}
         />
       )}
@@ -436,9 +495,20 @@ export function MyPurchasesTab({ remote = false }: { remote?: boolean }) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Re-install routes through AcquirePublicationModal so the user sees the
-  // same 5-10s download progress bar as a fresh install. Previous flow used
-  // an inline RefreshCw spinner which lacked any progress feedback.
+  // same 5-10s download progress bar as a fresh install (inlineProgress: the
+  // bar renders on the purchase CARD, exactly like the Explore tab).
   const [reinstallTarget, setReinstallTarget] = useState<WorkflowPublication | null>(null);
+  // Same inline-only gating as ExploreTab: this tab renders/consumes only the
+  // installs it (or the marketplace preview header) started.
+  const rawActiveInstall = useMarketplaceInstallStore((s) => s.active);
+  const activeInstall = rawActiveInstall?.inline ? rawActiveInstall : null;
+  const clearInstall = useMarketplaceInstallStore((s) => s.clear);
+  const consumeInstallSuccess = useMarketplaceInstallStore((s) => s.consumeSuccess);
+
+  // A workspace switch orphans any in-flight install started here.
+  useOrgScopedReset(() => {
+    clearInstall();
+  });
 
   const fetchPurchases = useCallback(async () => {
     setIsLoading(true);
@@ -504,15 +574,26 @@ export function MyPurchasesTab({ remote = false }: { remote?: boolean }) {
     setReinstallTarget(publication);
   }, []);
 
-  const handleReinstallSuccess = useCallback(() => {
-    // Close the modal BEFORE refetching. fetchPurchases flips isLoading, which makes
-    // this tab return its skeleton (unmounting the modal); leaving reinstallTarget set
-    // would then REMOUNT the modal in its initial 'confirm' state once loading clears,
-    // so the install prompt reappeared right after a successful reinstall. Clearing the
-    // target first lets the modal stay closed and the refreshed list show "Installed".
+  // Reinstall completed (machine in the shared store, modal closed at confirm):
+  // refresh the purchases so hasActiveWorkflow flips the card to installed,
+  // THEN consume the success. (fetchPurchases swaps the grid for its loading
+  // skeletons during the refetch; the refreshed list comes back already
+  // "Installed", so no intermediate Install button is ever shown.) consumeSuccess
+  // rather than clear(): the finally is async and must never kill an install
+  // the user started in the meantime.
+  useEffect(() => {
+    if (activeInstall?.status !== 'success') return;
+    const pubId = activeInstall.publication.id;
     setReinstallTarget(null);
-    void fetchPurchases();
-  }, [fetchPurchases]);
+    void fetchPurchases().finally(() => consumeInstallSuccess(pubId));
+  }, [activeInstall?.status, activeInstall?.publication.id, fetchPurchases, consumeInstallSuccess]);
+
+  // Same error-surfacing contract as the Explore tab: terminal install errors
+  // re-mount the acquire modal on their dedicated screens.
+  const installErrorPublication =
+    activeInstall && activeInstall.status !== 'installing' && activeInstall.status !== 'success'
+      ? activeInstall.publication
+      : null;
 
   if (isLoading) {
     return (
@@ -563,6 +644,9 @@ export function MyPurchasesTab({ remote = false }: { remote?: boolean }) {
         // the user no longer has installed stays reinstallable from the frozen
         // snapshot - gating on `=== 'ACTIVE'` wrongly hid the button after delete.
         const canReinstall = pub.status !== 'REJECTED' && !purchase.hasActiveWorkflow;
+        const isThisInstalling =
+          activeInstall?.publication.id === pub.id &&
+          (activeInstall.status === 'installing' || activeInstall.status === 'success');
         return (
           <PublicationCard
             key={purchase.publicationId}
@@ -577,15 +661,23 @@ export function MyPurchasesTab({ remote = false }: { remote?: boolean }) {
             // Cloud purchase: route the card's showcase render + publisher avatar through
             // the cloud proxy (the synth carries remote=true; local purchases omit it).
             remote={pub.remote}
+            // Reinstall in progress → same un-greying preview + gauge as Explore.
+            installProgress={isThisInstalling ? activeInstall.progress : null}
+            // Installed application purchase → jump straight to the app.
+            openHref={
+              purchase.hasActiveWorkflow && (pub.displayMode || 'WORKFLOW') === 'APPLICATION'
+                ? `/app/applications/${pub.id}`
+                : undefined
+            }
           />
         );
       })}
-      {reinstallTarget && (
+      {(reinstallTarget || installErrorPublication) && (
         <AcquirePublicationModal
-          isOpen={!!reinstallTarget}
+          isOpen
+          inlineProgress
           onClose={() => setReinstallTarget(null)}
-          publication={reinstallTarget}
-          onSuccess={handleReinstallSuccess}
+          publication={reinstallTarget ?? installErrorPublication!}
           ceMode={remote}
         />
       )}

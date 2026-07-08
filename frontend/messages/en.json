@@ -649,6 +649,8 @@
           "BRIDGE_LOW_CREDIT": "{count, plural, one {# low-credit bridge} other {# low-credit bridges}}",
           "ORG_INVITATION_PENDING": "{count, plural, one {# organization invitation} other {# organization invitations}}"
         },
+        "approvalOpen": "Open",
+        "approvalReview": "Review",
         "deleteRow": "Delete",
         "prevPage": "Previous page",
         "nextPage": "Next page",
@@ -1550,6 +1552,7 @@
     "own": "Your publication",
     "acquire": "Install",
     "acquiring": "Installing...",
+    "open": "Open",
     "noLandingPreview": "No preview available",
     "previewUnavailable": "Preview not available",
     "skillInstructionsLabel": "Instructions",
@@ -5009,7 +5012,9 @@
       "approve": "Approve",
       "reject": "Reject",
       "viewContext": "View full context",
-      "reviewAll": "Review {count} approvals"
+      "reviewAll": "Review {count} approvals",
+      "noPending": "Nothing left to approve.",
+      "loadError": "Couldn't load pending approvals."
     }
   },
   "files": {
@@ -9215,7 +9220,8 @@
     },
     "card": {
       "runs": "{count, plural, one {# run} other {# runs}}",
-      "epochs": "{count, plural, one {# epoch} other {# epochs}}"
+      "epochs": "{count, plural, one {# epoch} other {# epochs}}",
+      "reviewApprovals": "Review approvals"
     },
     "status": {
       "live": "Live",
@@ -9223,7 +9229,8 @@
       "paused": "Paused",
       "completed": "Completed",
       "failed": "Failed",
-      "timeout": "Timeout"
+      "timeout": "Timeout",
+      "needsApproval": "Needs approval"
     },
     "sort": {
       "lastExecuted": "Last executed",

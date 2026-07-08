@@ -613,6 +613,8 @@
           "BRIDGE_LOW_CREDIT": "{count, plural, one {# bridge con poco crédito} other {# bridges con poco crédito}}",
           "ORG_INVITATION_PENDING": "{count, plural, one {# invitación de organización} other {# invitaciones de organización}}"
         },
+        "approvalOpen": "Abrir",
+        "approvalReview": "Revisar",
         "deleteRow": "Eliminar",
         "prevPage": "Página anterior",
         "nextPage": "Página siguiente",
@@ -1480,6 +1482,7 @@
     },
     "acquire": "Instalar",
     "acquiring": "Instalando...",
+    "open": "Abrir",
     "emptyAgents": "Aún no hay agentes compartidos",
     "emptyAgentsHint": "¡Sé el primero en compartir un agente!",
     "emptyApplications": "Aún no hay aplicaciones compartidas",
@@ -4792,7 +4795,9 @@
       "approve": "Aprobar",
       "reject": "Rechazar",
       "viewContext": "Ver el contexto completo",
-      "reviewAll": "Revisar {count} aprobaciones"
+      "reviewAll": "Revisar {count} aprobaciones",
+      "noPending": "No queda nada por aprobar.",
+      "loadError": "No se pudieron cargar las aprobaciones pendientes."
     }
   },
   "files": {
@@ -9203,7 +9208,8 @@
     },
     "card": {
       "epochs": "{count, plural, one {# época} other {# épocas}}",
-      "runs": "{count, plural, one {# ejecución} other {# ejecuciones}}"
+      "runs": "{count, plural, one {# ejecución} other {# ejecuciones}}",
+      "reviewApprovals": "Revisar aprobaciones"
     },
     "columns": {
       "draft": "Borrador",
@@ -9248,7 +9254,8 @@
       "live": "En vivo",
       "paused": "Pausado",
       "running": "En ejecución",
-      "timeout": "Tiempo de espera"
+      "timeout": "Tiempo de espera",
+      "needsApproval": "Requiere aprobación"
     },
     "subtitle": "{count, plural, one {# flujo de trabajo} other {# flujos de trabajo}}",
     "title": "Tablero de flujos de trabajo",

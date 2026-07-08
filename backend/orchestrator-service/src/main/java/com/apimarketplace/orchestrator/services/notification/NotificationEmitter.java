@@ -62,7 +62,11 @@ import java.util.UUID;
  *   <li>{@code run.metadata} excludes runs with {@code __editorRun__=true},
  *       {@code __versionReplay__} key present (Integer or any value), and
  *       {@code __agentInitiated__=true} (filter retained even though no
- *       producer exists today - guards future regression).</li>
+ *       producer exists today - guards future regression). Exception: an
+ *       {@code __editorRun__} run that IS the workflow's current production
+ *       run ({@code workflow.production_run_id}) is NOT excluded - a pin
+ *       promotes the editor run without stripping the flag, and the promoted
+ *       run's fires are production fires.</li>
  *   <li>{@code run.run_id_public} not starting with {@code "showcase_"}.</li>
  * </ul>
  *
@@ -127,6 +131,13 @@ public class NotificationEmitter {
         this.meterRegistry = meterRegistry;
     }
 
+    // @Order(0): must observe workflow.production_run_id BEFORE
+    // RunTerminationListener (default = lowest precedence) rearms the pin on
+    // this same event. Rearm re-points production_run_id away from the
+    // just-failed run, and the promoted-editor-run override in isExcludedRun
+    // compares against that column - emitting after the rearm would re-silence
+    // the exact RUN_FAILED notification the override unlocks.
+    @org.springframework.core.annotation.Order(0)
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onRunTerminated(WorkflowRunTerminatedEvent event) {
@@ -214,7 +225,7 @@ public class NotificationEmitter {
         }
         WorkflowRunEntity run = runOpt.get();
 
-        if (isExcludedRun(run)) return;
+        if (isExcludedRun(run, workflow)) return;
 
         String tenantId = run.getTenantId();
         if (tenantId == null) {
@@ -319,7 +330,7 @@ public class NotificationEmitter {
         }
         WorkflowRunEntity run = runOpt.get();
 
-        if (isExcludedRun(run)) return;
+        if (isExcludedRun(run, workflow)) return;
 
         // tenantId: event may carry an explicit override (rare - used by
         // legacy republish paths that synthesize an event without a live run
@@ -485,17 +496,21 @@ public class NotificationEmitter {
         if (runOpt.isEmpty()) return;
         WorkflowRunEntity run = runOpt.get();
 
-        if (isExcludedRun(run)) return;
-
         String tenantId = run.getTenantId();
         if (tenantId == null) return;
 
         UUID workflowId = run.getWorkflow() != null ? run.getWorkflow().getId() : null;
         if (workflowId == null) return;
 
+        // Workflow loaded BEFORE the exclusion check: the editor-run override
+        // needs workflow.production_run_id to recognize a promoted run.
         Optional<WorkflowEntity> wfOpt = workflowRepository.findById(workflowId);
         if (wfOpt.isEmpty()) return;
-        Integer pinned = wfOpt.get().getPinnedVersion();
+        WorkflowEntity workflow = wfOpt.get();
+
+        if (isExcludedRun(run, workflow)) return;
+
+        Integer pinned = workflow.getPinnedVersion();
         if (pinned == null || run.getPlanVersion() == null
                 || !pinned.equals(run.getPlanVersion())) return;
 
@@ -616,16 +631,27 @@ public class NotificationEmitter {
                 && run.getRunIdPublic().startsWith(SHOWCASE_RUN_PREFIX);
     }
 
-    private static boolean isExcludedByMetadata(Map<String, Object> meta) {
+    /**
+     * A pin PROMOTES an existing run (almost always the editor run the user
+     * tested with) to production and never strips its {@code __editorRun__}
+     * metadata, so the flag alone cannot mean "editor iteration": when the
+     * run IS the workflow's current production run
+     * ({@code workflow.production_run_id}), its fires are production fires
+     * and must notify like any other. Every other exclusion (showcase,
+     * version replay, agent-initiated, unpromoted editor run) stays silent.
+     */
+    private static boolean isExcludedRun(WorkflowRunEntity run, WorkflowEntity workflow) {
+        if (isShowcaseRun(run)) return true;
+        Map<String, Object> meta = run.getMetadata();
         if (meta == null) return false;
-        if (Boolean.TRUE.equals(meta.get(META_EDITOR_RUN))) return true;
         if (meta.containsKey(META_VERSION_REPLAY)) return true;
         if (Boolean.TRUE.equals(meta.get(META_AGENT_INITIATED))) return true;
+        if (Boolean.TRUE.equals(meta.get(META_EDITOR_RUN))) {
+            return workflow == null
+                    || workflow.getProductionRunId() == null
+                    || !workflow.getProductionRunId().equals(run.getId());
+        }
         return false;
-    }
-
-    private static boolean isExcludedRun(WorkflowRunEntity run) {
-        return isShowcaseRun(run) || isExcludedByMetadata(run.getMetadata());
     }
 
     /**

@@ -8,7 +8,9 @@ Chat, Workflow, Agent and App in one self-hosted platform. No code to write, not
 
 **An open-source, self-hosted alternative to n8n, Zapier and Make, with AI agents built in.**
 
+[![GitHub stars](https://img.shields.io/github/stars/livecontext-ai/livecontext-ce?style=flat&logo=github&color=e11d48)](https://github.com/livecontext-ai/livecontext-ce/stargazers)
 [![Latest release](https://img.shields.io/github/v/release/livecontext-ai/livecontext-ce?color=16a34a)](https://github.com/livecontext-ai/livecontext-ce/releases/latest)
+[![Discussions](https://img.shields.io/github/discussions/livecontext-ai/livecontext-ce?color=2496ED)](https://github.com/livecontext-ai/livecontext-ce/discussions)
 ![Java 21](https://img.shields.io/badge/Java-21-e11d48.svg)
 ![Next.js](https://img.shields.io/badge/Next.js-16-000000.svg)
 ![Docker Compose](https://img.shields.io/badge/Docker%20Compose-ready-2496ED.svg)

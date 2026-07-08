@@ -7,6 +7,9 @@ import type { WorkflowPublication } from '@/lib/api/orchestrator/types';
 
 // Echo translation keys so we can assert on 'installed' / 'acquire' without locale strings.
 vi.mock('next-intl', () => ({ useTranslations: () => (key: string) => key }));
+// PublicationCard navigates imperatively (Open button) + tracks the click.
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock('@/lib/analytics/analytics', () => ({ track: vi.fn() }));
 vi.mock('next/link', () => ({ default: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
 // Heavy children - not under test here; render nothing / passthrough.
 vi.mock('@/components/marketplace/ShowcasePreview', () => ({ ShowcasePreview: () => null }));

@@ -21,6 +21,7 @@ import type { RecentActivityItem, ResourceKind } from '@/lib/api/orchestrator/re
 import { RESOURCE_KIND_ORDER } from '@/lib/api/orchestrator/recent-activity.service';
 import { shareLinkUrl, type SharedLink } from '@/lib/api/sharing.service';
 import { formatUtcDate, parseUtcAware } from '@/lib/utils/dateFormatters';
+import { RunApprovalsDialog } from '@/components/approvals/RunApprovalsDialog';
 
 // 4-tab bell:
 //   - 'inbox'    - actionable signals (failed runs, expired creds, etc.)
@@ -164,6 +165,16 @@ export function NotificationBell() {
     router.push(notificationHref(item));
   };
 
+  // APPROVAL_PENDING rows: review the run's pending approvals in a modal
+  // right from the header, without navigating into the workflow. The dialog
+  // lives OUTSIDE the popover (which closes when the modal opens).
+  const [reviewRunId, setReviewRunId] = useState<string | null>(null);
+  const handleReviewApprovals = (item: NotificationItem) => {
+    if (!item.runIdPublic) return;
+    setOpen(false);
+    setReviewRunId(item.runIdPublic);
+  };
+
   const handleAutomationClick = (automation: ActiveAutomation) => {
     setOpen(false);
     router.push(resourceHref(automation));
@@ -189,6 +200,7 @@ export function NotificationBell() {
   };
 
   return (
+    <>
     <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <Button
@@ -259,6 +271,7 @@ export function NotificationBell() {
               items={items}
               onRowClick={handleRowClick}
               onDeleteRow={handleDeleteRow}
+              onReviewApprovals={handleReviewApprovals}
               t={t}
             />
             {/* Footer: "Mark all read" on the left + pagination chevrons on
@@ -390,6 +403,17 @@ export function NotificationBell() {
         )}
       </PopoverContent>
     </Popover>
+    {/* Mounted lazily: no signal fetch until a Review action is clicked. */}
+    {reviewRunId != null && (
+      <RunApprovalsDialog
+        runId={reviewRunId}
+        open
+        onOpenChange={(next) => {
+          if (!next) setReviewRunId(null);
+        }}
+      />
+    )}
+    </>
   );
 }
 
@@ -911,11 +935,13 @@ function InboxList({
   items,
   onRowClick,
   onDeleteRow,
+  onReviewApprovals,
   t,
 }: {
   items: NotificationItem[];
   onRowClick: (item: NotificationItem) => void;
   onDeleteRow: (e: React.MouseEvent, item: NotificationItem) => void;
+  onReviewApprovals: (item: NotificationItem) => void;
   t: InboxT;
 }) {
   if (items.length === 0) {
@@ -995,6 +1021,43 @@ function InboxList({
             <span className="block text-xs text-theme-muted truncate">
               {categoryLabel(item.category, item.count, t)} · {formatRelativePast(item.lastEventAt, t)}
             </span>
+            {/* Approval rows carry two explicit actions: open the workflow /
+                app (same as the row click) and review the pending approvals
+                in a modal without leaving the current page. pointer-events
+                re-enabled locally - the text container disables them so the
+                row overlay receives clicks. */}
+            {item.category === 'APPROVAL_PENDING' && item.runIdPublic && (
+              <span className="mt-1 flex items-center gap-1.5 pointer-events-auto">
+                <button
+                  type="button"
+                  data-testid="inbox-approval-open"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRowClick(item);
+                  }}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium
+                             bg-gray-100 text-gray-700 hover:bg-gray-200
+                             dark:bg-gray-700/60 dark:text-gray-200 dark:hover:bg-gray-700 transition-colors"
+                >
+                  <ExternalLink className="h-3 w-3" />
+                  {t('approvalOpen')}
+                </button>
+                <button
+                  type="button"
+                  data-testid="inbox-approval-review"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onReviewApprovals(item);
+                  }}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium
+                             bg-amber-100 text-amber-700 hover:bg-amber-200
+                             dark:bg-amber-500/20 dark:text-amber-300 dark:hover:bg-amber-500/30 transition-colors"
+                >
+                  <MessagesSquare className="h-3 w-3" />
+                  {t('approvalReview')}
+                </button>
+              </span>
+            )}
           </span>
           {/* Trash icon - appears on row hover only, deletes this single
               bucket via the bulk endpoint with a 1-element list. */}

@@ -214,7 +214,7 @@ describe('UserApprovalNode - pending-signal row context', () => {
     fireEvent.click(getByTestId('approval-node-review-all'));
     expect(getByTestId('approval-context-dialog-text').textContent).toBe('Approve Alice');
     await act(async () => { fireEvent.click(getByTestId('approval-modal-approve')); });
-    expect(resolveApproval).toHaveBeenCalledWith('APPROVED', '0', 1);
+    expect(resolveApproval).toHaveBeenCalledWith('APPROVED', '0', 1, 'core:approve');
   });
 
   it("clicking an item row publishes the review target (node id + signal's epoch + 0-based itemIndex)", () => {
@@ -264,6 +264,92 @@ describe('UserApprovalNode - pending-signal row context', () => {
     const buttons = row.querySelectorAll(':scope > div > button');
     fireEvent.click(buttons[0]); // per-item approve
     expect(resolveApproval).toHaveBeenCalledWith('APPROVED', '0', 3);
+  });
+});
+
+/**
+ * Regression: the split UI (Review-all modal + per-item list) was gated on
+ * `pendingSignals.length > 1`, so resolving the second-to-last item unmounted
+ * the OPEN review modal with one item still pending ("the modal disappears on
+ * the last item"). The gate is now sticky until every signal is resolved.
+ */
+describe('UserApprovalNode - split UI survives down to the last pending item', () => {
+  const nodeProps = {
+    data: { id: 'approval-1', label: 'Approve items' } as any,
+    selected: false,
+    id: 'approval-1',
+    type: 'approval', zIndex: 0, isConnectable: true, dragging: false, xPos: 0, yPos: 0,
+  } as const;
+
+  it('keeps the OPEN review modal mounted when pending signals shrink from 2 to 1', () => {
+    mockExec = execAwaiting([
+      signal({ id: 1, itemId: '0', epoch: 1, approvalContext: 'Approve Alice' }),
+      signal({ id: 2, itemId: '1', epoch: 1, approvalContext: 'Approve Bob' }),
+    ]);
+    const utils = render(<UserApprovalNode {...nodeProps} />);
+    fireEvent.click(utils.getByTestId('approval-node-review-all'));
+    expect(utils.getByTestId('approval-context-dialog-text').textContent).toBe('Approve Alice');
+
+    // Item 0 resolves elsewhere (WS update) - only item 1 remains pending.
+    mockExec = execAwaiting([
+      signal({ id: 2, itemId: '1', epoch: 1, approvalContext: 'Approve Bob' }),
+    ]);
+    utils.rerender(<UserApprovalNode {...nodeProps} />);
+
+    // Pre-fix this unmounted the dialog; it must stay open on the last item.
+    expect(utils.getByTestId('approval-context-dialog-text').textContent).toBe('Approve Bob');
+  });
+
+  it('keeps the per-item list and Review-all trigger mounted at 1 remaining', () => {
+    mockExec = execAwaiting([
+      signal({ id: 1, itemId: '0' }),
+      signal({ id: 2, itemId: '1' }),
+    ]);
+    const utils = render(<UserApprovalNode {...nodeProps} />);
+    fireEvent.click(utils.getByText('Show 2 items'));
+    expect(utils.getByTestId('signal-item-review-1')).toBeTruthy();
+
+    mockExec = execAwaiting([signal({ id: 2, itemId: '1' })]);
+    utils.rerender(<UserApprovalNode {...nodeProps} />);
+
+    expect(utils.getByTestId('signal-item-review-2')).toBeTruthy();
+    expect(utils.getByTestId('approval-node-review-all')).toBeTruthy();
+  });
+
+  it('does NOT inherit the split UI when a fresh epoch\'s single approval replaces the last split item (1->1 swap)', () => {
+    mockExec = execAwaiting([
+      signal({ id: 1, itemId: '0', epoch: 1 }),
+      signal({ id: 2, itemId: '1', epoch: 1 }),
+    ]);
+    const utils = render(<UserApprovalNode {...nodeProps} />);
+    expect(utils.getByTestId('approval-node-review-all')).toBeTruthy();
+
+    // Both split items resolve and, in the same WS batch, a NEW epoch's single
+    // non-split approval registers: different signal id, no shared batch.
+    mockExec = execAwaiting([
+      signal({ id: 9, itemId: '0', epoch: 2, approvalContext: 'Fresh single approval' }),
+    ]);
+    utils.rerender(<UserApprovalNode {...nodeProps} />);
+
+    // Split presentation must be gone; the single-approval context chip shows.
+    expect(utils.queryByTestId('approval-node-review-all')).toBeNull();
+    expect(utils.getByTestId('approval-node-context').textContent).toContain('Fresh single approval');
+    expect(utils.getByText('Approve')).toBeTruthy(); // not "Approve All (1)"
+  });
+
+  it('dismantles the split UI once every signal is resolved (0 remaining)', () => {
+    mockExec = execAwaiting([
+      signal({ id: 1, itemId: '0' }),
+      signal({ id: 2, itemId: '1' }),
+    ]);
+    const utils = render(<UserApprovalNode {...nodeProps} />);
+    fireEvent.click(utils.getByText('Show 2 items'));
+
+    mockExec = { ...execAwaiting([]), isAwaitingSignal: false };
+    utils.rerender(<UserApprovalNode {...nodeProps} />);
+
+    expect(utils.queryByTestId('approval-node-review-all')).toBeNull();
+    expect(utils.queryByTestId('signal-item-review-1')).toBeNull();
   });
 });
 

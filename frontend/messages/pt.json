@@ -613,6 +613,8 @@
           "BRIDGE_LOW_CREDIT": "{count, plural, one {# bridge com pouco crédito} other {# bridges com pouco crédito}}",
           "ORG_INVITATION_PENDING": "{count, plural, one {# convite de organização} other {# convites de organização}}"
         },
+        "approvalOpen": "Abrir",
+        "approvalReview": "Revisar",
         "deleteRow": "Excluir",
         "prevPage": "Página anterior",
         "nextPage": "Próxima página",
@@ -1480,6 +1482,7 @@
     },
     "acquire": "Instalar",
     "acquiring": "Instalando...",
+    "open": "Abrir",
     "emptyAgents": "Ainda não há agentes compartilhados",
     "emptyAgentsHint": "Seja o primeiro a compartilhar um agente!",
     "emptyApplications": "Ainda não há aplicações compartilhadas",
@@ -4792,7 +4795,9 @@
       "approve": "Aprovar",
       "reject": "Rejeitar",
       "viewContext": "Ver o contexto completo",
-      "reviewAll": "Revisar {count} aprovações"
+      "reviewAll": "Revisar {count} aprovações",
+      "noPending": "Nada mais para aprovar.",
+      "loadError": "Não foi possível carregar as aprovações pendentes."
     }
   },
   "files": {
@@ -9203,7 +9208,8 @@
     },
     "card": {
       "epochs": "{count, plural, one {# época} other {# épocas}}",
-      "runs": "{count, plural, one {# execução} other {# execuções}}"
+      "runs": "{count, plural, one {# execução} other {# execuções}}",
+      "reviewApprovals": "Revisar aprovações"
     },
     "columns": {
       "draft": "Rascunho",
@@ -9248,7 +9254,8 @@
       "live": "Ao vivo",
       "paused": "Pausado",
       "running": "Em execução",
-      "timeout": "Tempo esgotado"
+      "timeout": "Tempo esgotado",
+      "needsApproval": "Requer aprovação"
     },
     "subtitle": "{count, plural, one {# fluxo de trabalho} other {# fluxos de trabalho}}",
     "title": "Quadro de fluxos de trabalho",

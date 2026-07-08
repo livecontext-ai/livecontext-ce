@@ -191,6 +191,70 @@ class NotificationEmitterTest {
     }
 
     @Test
+    @DisplayName("REGRESSION: pin-promoted editor run (production_run_id == run id) DOES fire RUN_FAILED - "
+            + "the pin never strips __editorRun__, so the flag alone must not silence the production run")
+    void editorRunPromotedToProductionFires() throws Exception {
+        Map<String, Object> meta = new HashMap<>();
+        meta.put("__editorRun__", Boolean.TRUE);
+        WorkflowRunEntity run = runWithMetadata(meta);
+        Field idField = WorkflowRunEntity.class.getDeclaredField("id");
+        idField.setAccessible(true);
+        idField.set(run, RUN_ID);
+        WorkflowEntity wf = workflowPinned(PINNED_VERSION);
+        wf.setProductionRunId(RUN_ID);
+
+        when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(wf));
+        when(workflowRunRepository.findById(RUN_ID)).thenReturn(Optional.of(run));
+        when(nativeQuery.getResultList()).thenReturn(List.of(42L));
+
+        emitter.onRunTerminated(event(RunStatus.FAILED, PINNED_VERSION));
+
+        verify(redisPublisher).publishNotification(eq(TENANT_ID), eq("notification.created"), any());
+    }
+
+    @Test
+    @DisplayName("Editor run whose id DIFFERS from production_run_id stays excluded on run-terminal")
+    void editorRunDifferentFromProductionRunStaysExcluded() throws Exception {
+        Map<String, Object> meta = new HashMap<>();
+        meta.put("__editorRun__", Boolean.TRUE);
+        WorkflowRunEntity run = runWithMetadata(meta);
+        Field idField = WorkflowRunEntity.class.getDeclaredField("id");
+        idField.setAccessible(true);
+        idField.set(run, RUN_ID);
+        WorkflowEntity wf = workflowPinned(PINNED_VERSION);
+        wf.setProductionRunId(UUID.fromString("00000000-0000-0000-0000-00000000dead"));
+
+        when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(wf));
+        when(workflowRunRepository.findById(RUN_ID)).thenReturn(Optional.of(run));
+
+        emitter.onRunTerminated(event(RunStatus.FAILED, PINNED_VERSION));
+
+        verifyNoInteractions(redisPublisher);
+        verify(entityManager, never()).createNativeQuery(anyString());
+    }
+
+    @Test
+    @DisplayName("Epoch-failed: pin-promoted editor run DOES fire (filter parity with run-terminal)")
+    void epochFailedEditorRunPromotedToProductionFires() throws Exception {
+        Map<String, Object> meta = new HashMap<>();
+        meta.put("__editorRun__", Boolean.TRUE);
+        WorkflowRunEntity run = runWithMetadata(meta);
+        Field idField = WorkflowRunEntity.class.getDeclaredField("id");
+        idField.setAccessible(true);
+        idField.set(run, RUN_ID);
+        WorkflowEntity wf = workflowPinned(PINNED_VERSION);
+        wf.setProductionRunId(RUN_ID);
+
+        when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(wf));
+        when(workflowRunRepository.findById(RUN_ID)).thenReturn(Optional.of(run));
+        when(nativeQuery.getResultList()).thenReturn(List.of(1L));
+
+        emitter.onEpochFailed(epochEvent(2, PINNED_VERSION));
+
+        verify(redisPublisher).publishNotification(eq(TENANT_ID), eq("notification.created"), any());
+    }
+
+    @Test
     @DisplayName("Version-replay key existence excludes - works when value is Integer (not boolean)")
     void versionReplayKeyExistenceExcludesIntegerValue() {
         Map<String, Object> meta = new HashMap<>();

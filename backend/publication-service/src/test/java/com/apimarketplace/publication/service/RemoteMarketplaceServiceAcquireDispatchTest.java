@@ -22,9 +22,14 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 
+import com.apimarketplace.auth.client.entitlement.EntitlementGuard;
+import com.apimarketplace.auth.client.entitlement.ResourceType;
+
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.function.LongSupplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -33,7 +38,10 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -70,13 +78,21 @@ class RemoteMarketplaceServiceAcquireDispatchTest {
 
     @BeforeEach
     void setUp() {
+        // entitlementGuard = null: mirrors the local acquire path's optional quota guard
+        // (absent -> the editable twin is created without a WORKFLOW-quota gate). The
+        // quota-denied branch gets its own service instance in the Twin nested class.
         service = new RemoteMarketplaceService(
                 CLOUD_API_URL, snapshotCloneService, receiptRepository,
                 cloudLinkService, new ObjectMapper(), authClient,
-                agentPublicationService, resourcePublicationService, orchestratorClient, restTemplate);
+                agentPublicationService, resourcePublicationService, orchestratorClient, null, restTemplate);
         // Default: no existing local clone (fresh acquire) and no prior receipt. The clone
         // guard (existsBySourcePublication) returns false by default; pin the receipt lenient.
         lenient().when(receiptRepository.existsByOrganizationIdAndPublicationId(ORG, PUB)).thenReturn(false);
+        // Every WORKFLOW acquire now also mints the decoupled editable twin (#2a parity
+        // with the local path); default it to success so the dispatch tests stay focused.
+        lenient().when(snapshotCloneService.duplicateToEditableWorkflow(
+                        any(), anyString(), any(), any(), any(), any(), any(UUID.class), any()))
+                .thenReturn(new HashMap<>(Map.of("workflowId", "twin-1")));
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
@@ -391,6 +407,155 @@ class RemoteMarketplaceServiceAcquireDispatchTest {
                     .hasMessageContaining("not yet supported");
 
             verifyNoInteractions(resourcePublicationService, agentPublicationService, snapshotCloneService);
+            verify(receiptRepository, never()).save(any());
+        }
+    }
+
+    @Nested
+    @DisplayName("editable WORKFLOW twin (#2a parity with the local acquire path)")
+    class EditableTwin {
+
+        private static final String TWIN_ROW_1 = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        private static final String TWIN_ROW_2 = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+        private void stubWorkflowSnapshot() {
+            stubFreeSnapshot(Map.of(
+                    "publicationType", "WORKFLOW",
+                    "planSnapshot", Map.of("name", "My Flow"),
+                    "title", "Cloud Flow",
+                    "description", "A flow",
+                    "creditsPerUse", 0));
+            when(snapshotCloneService.cloneFromSnapshot(any(), eq(TENANT), eq(PUB), eq("Cloud Flow"), any(), any(), eq(ORG)))
+                    .thenReturn(new HashMap<>(Map.of("workflowId", "w1")));
+        }
+
+        @Test
+        @DisplayName("WORKFLOW acquire ALSO mints the decoupled editable twin (file namespace = publication id, lineage = application clone id)")
+        void workflowAcquireCreatesTwin() {
+            stubWorkflowSnapshot();
+
+            Map<String, Object> result = service.acquirePublication(PUB, TENANT, ORG);
+
+            assertThat(result).containsEntry("workflowId", "w1");
+            // fileNamespaceId = the cloud publication id (the snapshot's file refs live
+            // under _publications/{pub}/); lineage = the application clone's workflow id.
+            ArgumentCaptor<Map<String, Object>> twinPlan = ArgumentCaptor.captor();
+            verify(snapshotCloneService).duplicateToEditableWorkflow(
+                    twinPlan.capture(), eq(TENANT), eq(ORG), eq("Cloud Flow"), eq("A flow"), any(), eq(PUB), eq("w1"));
+            // The twin clones the SAME extracted planSnapshot the application clone used -
+            // not the whole cloud response envelope.
+            ArgumentCaptor<Map<String, Object>> appPlan = ArgumentCaptor.captor();
+            verify(snapshotCloneService).cloneFromSnapshot(
+                    appPlan.capture(), eq(TENANT), eq(PUB), eq("Cloud Flow"), any(), any(), eq(ORG));
+            assertThat(twinPlan.getValue()).isSameAs(appPlan.getValue());
+            assertThat(twinPlan.getValue()).containsEntry("name", "My Flow");
+        }
+
+        @Test
+        @DisplayName("guard present + quota OK → the twin mints and the quota supplier counts WORKFLOWS by org")
+        void guardPresentQuotaOkMintsTwin() {
+            EntitlementGuard guard = mock(EntitlementGuard.class);
+            // Let check() actually consult its supplier so the counter wiring is exercised.
+            doAnswer(inv -> {
+                ((LongSupplier) inv.getArgument(2)).getAsLong();
+                return null;
+            }).when(guard).check(eq(TENANT), eq(ResourceType.WORKFLOW), any());
+            when(orchestratorClient.countWorkflowsByOrg(ORG)).thenReturn(3L);
+            RemoteMarketplaceService guarded = new RemoteMarketplaceService(
+                    CLOUD_API_URL, snapshotCloneService, receiptRepository,
+                    cloudLinkService, new ObjectMapper(), authClient,
+                    agentPublicationService, resourcePublicationService, orchestratorClient, guard, restTemplate);
+            stubWorkflowSnapshot();
+
+            Map<String, Object> result = guarded.acquirePublication(PUB, TENANT, ORG);
+
+            assertThat(result).containsEntry("workflowId", "w1");
+            verify(orchestratorClient).countWorkflowsByOrg(ORG);
+            verify(snapshotCloneService).duplicateToEditableWorkflow(
+                    any(), eq(TENANT), eq(ORG), eq("Cloud Flow"), eq("A flow"), any(), eq(PUB), eq("w1"));
+        }
+
+        @Test
+        @DisplayName("AGENT / TABLE acquires never mint a twin (application-backed workflows only)")
+        void nonWorkflowTypesNeverMintTwin() {
+            stubFreeSnapshot(Map.of(
+                    "publicationType", "TABLE",
+                    "planSnapshot", Map.of("name", "My Table"),
+                    "title", "Cloud Table",
+                    "creditsPerUse", 0));
+            when(resourcePublicationService.acquireResourceFromCloudSnapshot(eq(PublicationType.TABLE), any(), eq(TENANT), eq(PUB), eq(ORG), eq(0)))
+                    .thenReturn(new HashMap<>(Map.of("resourceId", "r1", "type", "TABLE")));
+
+            service.acquirePublication(PUB, TENANT, ORG);
+
+            verify(snapshotCloneService, never()).duplicateToEditableWorkflow(
+                    any(), anyString(), any(), any(), any(), any(), any(UUID.class), any());
+        }
+
+        @Test
+        @DisplayName("twin clone failure (AcquireCloneFailedException) → acquire still succeeds; ONLY the twin's own rows are compensated")
+        void twinFailureCompensatedAcquireUnaffected() {
+            stubWorkflowSnapshot();
+            when(snapshotCloneService.duplicateToEditableWorkflow(
+                            any(), anyString(), any(), any(), any(), any(), any(UUID.class), any()))
+                    .thenThrow(new AcquireCloneFailedException(Set.of(TWIN_ROW_1, TWIN_ROW_2), new RuntimeException("clone died")));
+
+            Map<String, Object> result = service.acquirePublication(PUB, TENANT, ORG);
+
+            // The acquire is untouched: result + receipt as if the twin never existed.
+            assertThat(result).containsEntry("workflowId", "w1");
+            verify(receiptRepository).save(any(PublicationReceiptEntity.class));
+            // Compensation deletes EXACTLY the rows the failed twin created.
+            verify(orchestratorClient).deleteDecoupledDuplicateWorkflow(UUID.fromString(TWIN_ROW_1), TENANT, ORG);
+            verify(orchestratorClient).deleteDecoupledDuplicateWorkflow(UUID.fromString(TWIN_ROW_2), TENANT, ORG);
+        }
+
+        @Test
+        @DisplayName("twin generic error → acquire still succeeds, nothing to compensate")
+        void twinGenericErrorSwallowed() {
+            stubWorkflowSnapshot();
+            when(snapshotCloneService.duplicateToEditableWorkflow(
+                            any(), anyString(), any(), any(), any(), any(), any(UUID.class), any()))
+                    .thenThrow(new IllegalStateException("orchestrator down"));
+
+            Map<String, Object> result = service.acquirePublication(PUB, TENANT, ORG);
+
+            assertThat(result).containsEntry("workflowId", "w1");
+            verify(orchestratorClient, never()).deleteDecoupledDuplicateWorkflow(any(UUID.class), anyString(), any());
+        }
+
+        @Test
+        @DisplayName("WORKFLOW quota reached → the twin is skipped, the application acquire is unaffected")
+        void quotaDeniedSkipsTwinKeepsAcquire() {
+            EntitlementGuard guard = mock(EntitlementGuard.class);
+            RemoteMarketplaceService guarded = new RemoteMarketplaceService(
+                    CLOUD_API_URL, snapshotCloneService, receiptRepository,
+                    cloudLinkService, new ObjectMapper(), authClient,
+                    agentPublicationService, resourcePublicationService, orchestratorClient, guard, restTemplate);
+            doThrow(new RuntimeException("WORKFLOW quota exceeded"))
+                    .when(guard).check(eq(TENANT), eq(ResourceType.WORKFLOW), any());
+            stubWorkflowSnapshot();
+
+            Map<String, Object> result = guarded.acquirePublication(PUB, TENANT, ORG);
+
+            assertThat(result).containsEntry("workflowId", "w1");
+            verify(receiptRepository).save(any(PublicationReceiptEntity.class));
+            verify(snapshotCloneService, never()).duplicateToEditableWorkflow(
+                    any(), anyString(), any(), any(), any(), any(), any(UUID.class), any());
+        }
+
+        @Test
+        @DisplayName("reinstall (receipt held, clone deleted) mints a fresh twin too - parity with the local path")
+        void reinstallMintsTwinToo() {
+            when(receiptRepository.existsByOrganizationIdAndPublicationId(ORG, PUB)).thenReturn(true);
+            stubWorkflowSnapshot();
+
+            Map<String, Object> result = service.acquirePublication(PUB, TENANT, ORG);
+
+            assertThat(result).containsEntry("workflowId", "w1");
+            verify(snapshotCloneService).duplicateToEditableWorkflow(
+                    any(), eq(TENANT), eq(ORG), eq("Cloud Flow"), eq("A flow"), any(), eq(PUB), eq("w1"));
+            // Reinstall still writes no duplicate receipt.
             verify(receiptRepository, never()).save(any());
         }
     }

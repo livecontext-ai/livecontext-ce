@@ -31,6 +31,7 @@ const svc = vi.hoisted(() => ({
 vi.mock('@/lib/api/orchestrator/publication.service', () => ({ publicationService: svc }));
 
 import AcquirePublicationModal from '../AcquirePublicationModal';
+import { useMarketplaceInstallStore } from '@/lib/stores/marketplace-install-store';
 
 function pub(overrides: Partial<WorkflowPublication> = {}): WorkflowPublication {
   return {
@@ -59,6 +60,10 @@ describe('AcquirePublicationModal - processing / success / progress (fake timers
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Kill any machine left over in the module-global install store (a
+    // never-resolving acquire from a previous test would otherwise make
+    // startInstall a no-op and leak its 'installing' state into this test).
+    useMarketplaceInstallStore.getState().clear();
     nowValue = 0;
     vi.useFakeTimers();
     // Deterministic 5000ms target duration (5000 + floor(0 * range)).
@@ -185,6 +190,21 @@ describe('AcquirePublicationModal - processing / success / progress (fake timers
     fireEvent.click(screen.getByRole('button', { name: 'goToApplications' }));
     expect(routerPush).toHaveBeenCalledWith('/app/applications');
   });
+
+  it('inlineProgress: success renders NO success screen - the card takes over', async () => {
+    const onClose = vi.fn();
+    render(<AcquirePublicationModal isOpen inlineProgress publication={pub()} onClose={onClose} />);
+    clickAddToApplications();
+    // Confirm closed the modal view immediately (the caller's card shows progress).
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    await driveToSuccess();
+    expect(screen.queryByText('successTitle')).not.toBeInTheDocument();
+    expect(screen.queryByText('processingTitle')).not.toBeInTheDocument();
+    // The store carries the terminal success for the page to consume.
+    expect(useMarketplaceInstallStore.getState().active?.status).toBe('success');
+    expect(useMarketplaceInstallStore.getState().active?.acquiredId).toBe('w1');
+  });
 });
 
 // -------------------------------------------------------------------------
@@ -195,6 +215,8 @@ describe('AcquirePublicationModal - processing / success / progress (fake timers
 describe('AcquirePublicationModal - routing / errors / view (real timers)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Same store hygiene as the fake-timers block above.
+    useMarketplaceInstallStore.getState().clear();
     resetSvc();
   });
 
@@ -297,5 +319,143 @@ describe('AcquirePublicationModal - routing / errors / view (real timers)', () =
     expect(screen.getByText('oneTimeCost')).toBeInTheDocument();
     expect(screen.queryByText('freeApplication')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'purchaseFor' })).toBeInTheDocument();
+  });
+});
+
+// -------------------------------------------------------------------------
+// inlineProgress mode (marketplace grid / preview header): confirm closes the
+// modal and the CARD renders the progress; the modal only re-appears for the
+// terminal error screens.
+// -------------------------------------------------------------------------
+describe('AcquirePublicationModal - inlineProgress mode (real timers)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useMarketplaceInstallStore.getState().clear();
+    resetSvc();
+  });
+
+  afterEach(() => cleanup());
+
+  it('confirm starts the install, closes the modal, fires onInstallStarted - no processing screen', () => {
+    svc.acquirePublication.mockReturnValue(new Promise(() => {})); // stays installing
+    const onClose = vi.fn();
+    const onInstallStarted = vi.fn();
+    render(
+      <AcquirePublicationModal
+        isOpen
+        inlineProgress
+        publication={pub()}
+        onClose={onClose}
+        onInstallStarted={onInstallStarted}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'addToApplications' }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onInstallStarted).toHaveBeenCalledTimes(1);
+    expect(useMarketplaceInstallStore.getState().active?.status).toBe('installing');
+    expect(screen.queryByText('processingTitle')).not.toBeInTheDocument();
+  });
+
+  it('still renders the error screen inline when the acquire fails; retry does not re-close', async () => {
+    svc.acquirePublication.mockRejectedValueOnce(Object.assign(new Error('boom'), { status: 500 }));
+    const onClose = vi.fn();
+    render(<AcquirePublicationModal isOpen inlineProgress publication={pub()} onClose={onClose} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'addToApplications' }));
+    await waitFor(() => expect(screen.getByText('errorTitle')).toBeInTheDocument());
+    expect(screen.getByText('boom')).toBeInTheDocument();
+
+    // Retry restarts the machine WITHOUT another onClose (the caller derives
+    // the modal's mount from the store status, not from a close event).
+    onClose.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'retry' }));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(useMarketplaceInstallStore.getState().active?.status).toBe('installing');
+  });
+
+  it('a lingering success for this publication is dropped on a fresh open (confirm screen shows)', () => {
+    useMarketplaceInstallStore.setState({
+      active: {
+        publication: pub(),
+        ceMode: false,
+        inline: true,
+        status: 'success',
+        progress: 100,
+        acquiredId: 'w1',
+        error: null,
+      },
+    });
+    render(<AcquirePublicationModal isOpen publication={pub()} onClose={() => {}} />);
+
+    expect(screen.getByRole('button', { name: 'addToApplications' })).toBeInTheDocument();
+    expect(useMarketplaceInstallStore.getState().active).toBeNull();
+  });
+
+  it('a lingering success does NOT fire onSuccess on mount (stale-state guard)', () => {
+    useMarketplaceInstallStore.setState({
+      active: {
+        publication: pub(),
+        ceMode: false,
+        inline: true,
+        status: 'success',
+        progress: 100,
+        acquiredId: 'w1',
+        error: null,
+      },
+    });
+    const onSuccess = vi.fn();
+    render(<AcquirePublicationModal isOpen publication={pub()} onClose={() => {}} onSuccess={onSuccess} />);
+
+    // The modal never observed this install running, so the stale success must
+    // not be reported (in ChatCore it would auto-approve a tool authorization).
+    expect(onSuccess).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'addToApplications' })).toBeInTheDocument();
+  });
+
+  it('a lingering inline ERROR is dropped on a fresh NON-inline open (confirm, not the error screen)', () => {
+    useMarketplaceInstallStore.setState({
+      active: {
+        publication: pub(),
+        ceMode: false,
+        inline: true,
+        status: 'error',
+        progress: 40,
+        acquiredId: null,
+        error: 'boom from the marketplace',
+      },
+    });
+    render(<AcquirePublicationModal isOpen publication={pub()} onClose={() => {}} />);
+
+    expect(screen.queryByText('errorTitle')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'addToApplications' })).toBeInTheDocument();
+    expect(useMarketplaceInstallStore.getState().active).toBeNull();
+  });
+
+  it('an INLINE open keeps the terminal error visible (the caller re-mounts the modal to show it)', () => {
+    useMarketplaceInstallStore.setState({
+      active: {
+        publication: pub(),
+        ceMode: false,
+        inline: true,
+        status: 'error',
+        progress: 40,
+        acquiredId: null,
+        error: 'boom from the marketplace',
+      },
+    });
+    render(<AcquirePublicationModal isOpen inlineProgress publication={pub()} onClose={() => {}} />);
+
+    expect(screen.getByText('errorTitle')).toBeInTheDocument();
+    expect(screen.getByText('boom from the marketplace')).toBeInTheDocument();
+  });
+
+  it('the confirm CTA is disabled while ANOTHER publication is installing (no silent drop)', () => {
+    svc.acquirePublication.mockReturnValue(new Promise(() => {}));
+    useMarketplaceInstallStore.getState().startInstall(pub({ id: 'other-pub' }));
+    render(<AcquirePublicationModal isOpen publication={pub()} onClose={() => {}} />);
+
+    expect(screen.getByRole('button', { name: 'addToApplications' })).toBeDisabled();
   });
 });

@@ -77,14 +77,14 @@ describe('ApprovalContextDialog (interactive review modal)', () => {
     fireEvent.click(screen.getByTestId('trigger'));
     expect(screen.queryByTestId('approval-modal-position')).toBeNull();
     await act(async () => { fireEvent.click(screen.getByTestId('approval-modal-approve')); });
-    expect(resolve).toHaveBeenCalledWith('APPROVED', '0', 2);
+    expect(resolve).toHaveBeenCalledWith('APPROVED', '0', 2, 'core:approve');
   });
 
   it('Reject calls resolve with REJECTED + the item id/epoch', async () => {
     const { resolve } = renderDialog([sig({ id: 1, itemId: '0', epoch: 3, approvalContext: 'Approve Alice' })]);
     fireEvent.click(screen.getByTestId('trigger'));
     await act(async () => { fireEvent.click(screen.getByTestId('approval-modal-reject')); });
-    expect(resolve).toHaveBeenCalledWith('REJECTED', '0', 3);
+    expect(resolve).toHaveBeenCalledWith('REJECTED', '0', 3, 'core:approve');
   });
 
   it('multiple pending: shows position, Prev disabled at start, and Next steps forward', () => {
@@ -131,7 +131,7 @@ describe('ApprovalContextDialog (interactive review modal)', () => {
     ]);
     fireEvent.click(screen.getByTestId('trigger'));
     await act(async () => { fireEvent.click(screen.getByTestId('approval-modal-approve')); });
-    expect(resolve).toHaveBeenCalledWith('APPROVED', '0', 1);
+    expect(resolve).toHaveBeenCalledWith('APPROVED', '0', 1, 'core:approve');
     // The modal moved on to item 2 (Bob) without closing.
     expect(screen.getByTestId('approval-context-dialog-text').textContent).toBe('Approve Bob');
     expect(screen.getByTestId('approval-modal-item').textContent).toBe('Item 2');
@@ -177,5 +177,70 @@ describe('ApprovalContextDialog (interactive review modal)', () => {
       </ApprovalContextDialog>,
     );
     expect(screen.queryByTestId('approval-context-dialog-text')).toBeNull();
+  });
+});
+
+/**
+ * Controlled mode: the run-level review (board cards, header inbox) drives
+ * visibility from outside and reviews signals across SEVERAL approval nodes,
+ * so the resolver must receive each signal's nodeId.
+ */
+describe('ApprovalContextDialog - controlled mode', () => {
+  it('renders no trigger and follows the open prop', () => {
+    const { rerender } = render(
+      <ApprovalContextDialog
+        signals={[sig({ id: 1, itemId: '0', approvalContext: 'Approve Alice' })]}
+        resolve={vi.fn()}
+        open={false}
+        onOpenChange={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('trigger')).toBeNull();
+    expect(screen.queryByTestId('approval-context-dialog-text')).toBeNull();
+    rerender(
+      <ApprovalContextDialog
+        signals={[sig({ id: 1, itemId: '0', approvalContext: 'Approve Alice' })]}
+        resolve={vi.fn()}
+        open
+        onOpenChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('approval-context-dialog-text').textContent).toBe('Approve Alice');
+  });
+
+  it('routes each resolution with the signal\'s OWN nodeId (multi-node queue)', async () => {
+    const resolve = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ApprovalContextDialog
+        signals={[
+          sig({ id: 1, nodeId: 'core:approve_a', itemId: '0', epoch: 1, approvalContext: 'A' }),
+          sig({ id: 2, nodeId: 'core:approve_b', itemId: '1', epoch: 1, approvalContext: 'B' }),
+        ]}
+        resolve={resolve}
+        open
+        onOpenChange={vi.fn()}
+      />,
+    );
+    await act(async () => { fireEvent.click(screen.getByTestId('approval-modal-approve')); });
+    expect(resolve).toHaveBeenCalledWith('APPROVED', '0', 1, 'core:approve_a');
+    fireEvent.click(screen.getByTestId('approval-modal-next'));
+    await act(async () => { fireEvent.click(screen.getByTestId('approval-modal-reject')); });
+    expect(resolve).toHaveBeenCalledWith('REJECTED', '1', 1, 'core:approve_b');
+  });
+
+  it('notifies onOpenChange(false) once the queue empties', () => {
+    const onOpenChange = vi.fn();
+    const { rerender } = render(
+      <ApprovalContextDialog
+        signals={[sig({ id: 1, itemId: '0', approvalContext: 'Approve Alice' })]}
+        resolve={vi.fn()}
+        open
+        onOpenChange={onOpenChange}
+      />,
+    );
+    rerender(
+      <ApprovalContextDialog signals={[]} resolve={vi.fn()} open onOpenChange={onOpenChange} />,
+    );
+    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 });

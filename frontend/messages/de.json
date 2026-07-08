@@ -613,6 +613,8 @@
           "AGENT_TASK_AWAITING_REVIEW": "{count, plural, one {# Aufgabe wartet auf deine Prüfung} other {# Aufgaben warten auf deine Prüfung}}",
           "BRIDGE_LOW_CREDIT": "{count, plural, one {# Bridge mit wenig Guthaben} other {# Bridges mit wenig Guthaben}}"
         },
+        "approvalOpen": "Öffnen",
+        "approvalReview": "Prüfen",
         "deleteRow": "Löschen",
         "prevPage": "Vorherige Seite",
         "nextPage": "Nächste Seite",
@@ -1480,6 +1482,7 @@
     },
     "acquire": "Installieren",
     "acquiring": "Wird installiert...",
+    "open": "Öffnen",
     "emptyAgents": "Noch keine geteilten Agenten",
     "emptyAgentsHint": "Seien Sie der Erste, der einen Agenten teilt!",
     "emptyApplications": "Noch keine geteilten Anwendungen",
@@ -4792,7 +4795,9 @@
       "approve": "Genehmigen",
       "reject": "Ablehnen",
       "viewContext": "Vollständigen Kontext anzeigen",
-      "reviewAll": "{count} Genehmigungen prüfen"
+      "reviewAll": "{count} Genehmigungen prüfen",
+      "noPending": "Nichts mehr zu genehmigen.",
+      "loadError": "Ausstehende Genehmigungen konnten nicht geladen werden."
     }
   },
   "files": {
@@ -9203,7 +9208,8 @@
     },
     "card": {
       "epochs": "{count, plural, one {# Epoche} other {# Epochen}}",
-      "runs": "{count, plural, one {# Ausführung} other {# Ausführungen}}"
+      "runs": "{count, plural, one {# Ausführung} other {# Ausführungen}}",
+      "reviewApprovals": "Genehmigungen prüfen"
     },
     "columns": {
       "draft": "Entwurf",
@@ -9248,7 +9254,8 @@
       "live": "Live",
       "paused": "Pausiert",
       "running": "Läuft",
-      "timeout": "Zeitüberschreitung"
+      "timeout": "Zeitüberschreitung",
+      "needsApproval": "Genehmigung erforderlich"
     },
     "subtitle": "{count, plural, one {# Workflow} other {# Workflows}}",
     "title": "Workflow-Board",

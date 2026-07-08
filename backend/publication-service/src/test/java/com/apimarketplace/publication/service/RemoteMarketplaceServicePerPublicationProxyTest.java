@@ -64,7 +64,8 @@ class RemoteMarketplaceServicePerPublicationProxyTest {
                 CLOUD_API_URL, snapshotCloneService, receiptRepository,
                 cloudLinkService, new ObjectMapper(), authClient,
                 agentPublicationService, resourcePublicationService,
-                null /* orchestratorClient: unused by these read-proxy tests (no acquire) */, restTemplate);
+                null /* orchestratorClient: unused by these read-proxy tests (no acquire) */,
+                null /* entitlementGuard: acquire-only, unused here */, restTemplate);
     }
 
     private URI capturedStringUri() {

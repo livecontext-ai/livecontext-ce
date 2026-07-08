@@ -24,6 +24,8 @@ describe('isPublicMarketingPath', () => {
       '/changelog',
       '/docs',
       '/docs/agents',
+      '/blog',
+      '/blog/the-niche-data-advantage',
     ]) {
       expect(isPublicMarketingPath(path), path).toBe(true);
     }
@@ -51,5 +53,6 @@ describe('isPublicMarketingPath', () => {
   it('does not treat lookalike prefixes as public', () => {
     expect(isPublicMarketingPath('/aboutus')).toBe(false);
     expect(isPublicMarketingPath('/comparetool')).toBe(false);
+    expect(isPublicMarketingPath('/blogger')).toBe(false);
   });
 });

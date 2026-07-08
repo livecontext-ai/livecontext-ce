@@ -14,6 +14,9 @@ import { render, screen, cleanup } from '@testing-library/react';
 import type { WorkflowPublication } from '@/lib/api/orchestrator/types';
 
 vi.mock('next-intl', () => ({ useTranslations: () => (key: string) => key }));
+// PublicationCard navigates imperatively (Open button) + tracks the click.
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock('@/lib/analytics/analytics', () => ({ track: vi.fn() }));
 vi.mock('next/link', () => ({ default: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
 vi.mock('@/components/marketplace/ShowcasePreview', () => ({ ShowcasePreview: () => null }));
 vi.mock('@/components/marketplace/InterfacePreview', () => ({ InterfacePreview: () => null }));

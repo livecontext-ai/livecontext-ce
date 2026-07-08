@@ -52,6 +52,11 @@ export function MarketplaceHeaderActions({ publicationId, compact = false }: Mar
     : (isCeMode ? `$${credits}` : `${credits} ${t('marketplace.credits')}`);
 
   const isAgent = (publication.publicationType || 'WORKFLOW') === 'AGENT';
+  // Inline (on-card) install progress only works for publications that HAVE a
+  // card on the marketplace Explore grid - which surfaces APPLICATION display
+  // mode only. Agents, tables, interfaces, skills and bare workflows keep the
+  // classic full-modal progress + success screen.
+  const inlineInstall = (publication.displayMode || 'WORKFLOW') === 'APPLICATION' && !isAgent;
 
   return (
     <>
@@ -96,7 +101,16 @@ export function MarketplaceHeaderActions({ publicationId, compact = false }: Mar
           onClose={() => setIsAcquireModalOpen(false)}
           publication={publication}
           ceMode={remote}
+          // Applications: confirming returns the user to the marketplace grid,
+          // where the app's card previews un-grey as the install gauge fills
+          // (inlineProgress - the machine lives in the marketplace-install
+          // store, so it survives this navigation). Every other type has no
+          // card on the Explore grid, so it keeps the classic in-modal
+          // progress + success screen and the pre-existing success routing.
+          inlineProgress={inlineInstall}
+          onInstallStarted={() => router.push('/app/marketplace')}
           onSuccess={() => {
+            if (inlineInstall) return; // the marketplace card takes over
             if (isAgent) {
               router.push('/app/agent');
             } else {

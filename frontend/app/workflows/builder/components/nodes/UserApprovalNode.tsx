@@ -20,6 +20,7 @@ import { useNodeExecutionStatus } from '../../contexts/StepByStepContext';
 import { NodeBottomBar } from './NodeBottomBar';
 import { requestApprovalReview } from '../../services/approvalReviewStore';
 import { ApprovalContextDialog } from '../ApprovalContextDialog';
+import type { PendingSignal } from '@/lib/websocket/ws-types';
 
 /**
  * One-line preview of a pending signal's split-item context (e.g. the
@@ -121,6 +122,30 @@ export function UserApprovalNode({ data, selected, id }: NodeProps<BuilderNodeDa
   const pendingSignals = executionStatus.pendingSignals ?? [];
   const pendingCount = executionStatus.pendingSignalCount;
   const isSplitContext = pendingSignals.length > 1 && pendingSignals.some(s => s.itemId != null && s.itemId !== '0');
+
+  // Sticky split gate: isSplitContext needs length > 1, so resolving the
+  // second-to-last item would unmount the split UI (and the OPEN review
+  // dialog inside it) while one item is still pending. Once a split review
+  // starts, keep the split UI until every signal of THAT batch is resolved -
+  // the id set guards against a 1->1 swap where a fresh epoch's single
+  // (non-split) approval replaces the last split item and must NOT inherit
+  // the split presentation.
+  const [splitUiSticky, setSplitUiSticky] = React.useState(false);
+  const stickyBatchIdsRef = React.useRef<Set<PendingSignal['id']>>(new Set());
+  React.useEffect(() => {
+    if (isSplitContext) {
+      setSplitUiSticky(true);
+      stickyBatchIdsRef.current = new Set(pendingSignals.map((s) => s.id));
+    } else if (
+      pendingSignals.length === 0 ||
+      !isAwaitingSignal ||
+      !pendingSignals.some((s) => stickyBatchIdsRef.current.has(s.id))
+    ) {
+      setSplitUiSticky(false);
+      stickyBatchIdsRef.current = new Set();
+    }
+  }, [isSplitContext, pendingSignals, isAwaitingSignal]);
+  const showSplitUi = isSplitContext || (splitUiSticky && pendingSignals.length > 0);
 
   // In all-epoch view with multiple pending signals, show bulk labels
   const isBulk = viewingEpoch == null && pendingCount > 1;
@@ -260,7 +285,7 @@ export function UserApprovalNode({ data, selected, id }: NodeProps<BuilderNodeDa
           {/* Configured approval context (single approval). Labelled + clickable
               so it reads clearly ("this is what you're approving") and opens the
               full text in a modal. Per-item context shows in the list below. */}
-          {!isSplitContext && pendingSignals[0]?.approvalContext && (
+          {!showSplitUi && pendingSignals[0]?.approvalContext && (
             <ApprovalContextDialog
               signals={pendingSignals}
               resolve={executionStatus.resolveApproval}
@@ -294,7 +319,7 @@ export function UserApprovalNode({ data, selected, id }: NodeProps<BuilderNodeDa
               ) : (
                 <CheckCircle className="h-3.5 w-3.5" />
               )}
-              {isBulk || isSplitContext ? `Approve All (${pendingCount})` : 'Approve'}
+              {isBulk || showSplitUi ? `Approve All (${pendingCount})` : 'Approve'}
             </button>
             <button
               onClick={() => handleResolve('REJECTED')}
@@ -310,12 +335,12 @@ export function UserApprovalNode({ data, selected, id }: NodeProps<BuilderNodeDa
               ) : (
                 <XCircle className="h-3.5 w-3.5" />
               )}
-              {isBulk || isSplitContext ? `Reject All (${pendingCount})` : 'Reject'}
+              {isBulk || showSplitUi ? `Reject All (${pendingCount})` : 'Reject'}
             </button>
           </div>
 
           {/* Per-item toggle + list (split context only) */}
-          {isSplitContext && (
+          {showSplitUi && (
             <>
               {/* Open the review modal: walk every pending item (Prev/Next),
                   approve/reject each, auto-advancing to the next. */}

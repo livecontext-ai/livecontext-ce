@@ -236,6 +236,14 @@ function routeRequest(request: NextRequest) {
     return NextResponse.redirect(newUrl);
   }
 
+  // The blog is bilingual: English is canonical at /blog, and the translations
+  // live under /<locale>/blog. Keep the locale prefix for localized blog pages
+  // instead of stripping it (the default for marketing paths just below), so
+  // /fr/blog, /de/blog/<slug>, ... actually render.
+  if (locale && (pathnameWithoutLocale === '/blog' || pathnameWithoutLocale.startsWith('/blog/'))) {
+    return NextResponse.next();
+  }
+
   if (locale && pathnameWithoutLocale !== '/' && !requiresLocale(pathnameWithoutLocale)) {
     const newUrl = new URL(pathnameWithoutLocale, request.url);
     newUrl.search = request.nextUrl.search;

@@ -1,6 +1,7 @@
 package com.apimarketplace.publication.config;
 
 import com.apimarketplace.auth.client.AuthClient;
+import com.apimarketplace.auth.client.entitlement.EntitlementGuard;
 import com.apimarketplace.publication.repository.CeCloudLinkRepository;
 import com.apimarketplace.publication.repository.PublicationReceiptRepository;
 import com.apimarketplace.publication.service.AgentPublicationService;
@@ -9,6 +10,7 @@ import com.apimarketplace.publication.service.RemoteMarketplaceService;
 import com.apimarketplace.publication.service.ResourcePublicationService;
 import com.apimarketplace.publication.service.SnapshotCloneService;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -68,9 +70,13 @@ public class RemoteMarketplaceConfig {
             AuthClient authClient,
             AgentPublicationService agentPublicationService,
             ResourcePublicationService resourcePublicationService,
-            OrchestratorInternalClient orchestratorClient) {
+            OrchestratorInternalClient orchestratorClient,
+            ObjectProvider<EntitlementGuard> entitlementGuard) {
         return new RemoteMarketplaceService(
                 cloudApiUrl, snapshotCloneService, receiptRepository, cloudLinkService, objectMapper, authClient,
-                agentPublicationService, resourcePublicationService, orchestratorClient);
+                agentPublicationService, resourcePublicationService, orchestratorClient,
+                // Optional, mirroring the local acquire path: absent -> no WORKFLOW-quota
+                // gate on the editable twin (the twin is still created).
+                entitlementGuard.getIfAvailable());
     }
 }

@@ -31,6 +31,7 @@ const svc = vi.hoisted(() => ({
 vi.mock('@/lib/api/orchestrator/publication.service', () => ({ publicationService: svc }));
 
 import AcquirePublicationModal from '../AcquirePublicationModal';
+import { useMarketplaceInstallStore } from '@/lib/stores/marketplace-install-store';
 
 function pub(overrides: Partial<WorkflowPublication> = {}): WorkflowPublication {
   return {
@@ -50,6 +51,10 @@ function clickConfirm() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The install machine lives in the module-global marketplace-install store:
+  // clear() invalidates any pending machine from the previous test (its token
+  // dies) so every test starts from the 'confirm' screen.
+  useMarketplaceInstallStore.getState().clear();
   avatarProps.calls = [];
   svc.acquireRemotePublication.mockResolvedValue({ workflowId: 'w1', agentId: 'a1', resourceId: 'r1' });
   svc.acquireAgentPublication.mockResolvedValue({ agentId: 'a1' });

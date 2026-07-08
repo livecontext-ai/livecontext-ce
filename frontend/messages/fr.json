@@ -649,6 +649,8 @@
           "BRIDGE_LOW_CREDIT": "{count, plural, one {# bridge à crédit faible} other {# bridges à crédit faible}}",
           "ORG_INVITATION_PENDING": "{count, plural, one {# invitation d'organisation} other {# invitations d'organisation}}"
         },
+        "approvalOpen": "Ouvrir",
+        "approvalReview": "Examiner",
         "deleteRow": "Supprimer",
         "prevPage": "Page précédente",
         "nextPage": "Page suivante",
@@ -1550,6 +1552,7 @@
     "own": "Votre partage",
     "acquire": "Installer",
     "acquiring": "Installation...",
+    "open": "Ouvrir",
     "noLandingPreview": "Aucun aperçu disponible",
     "previewUnavailable": "Aperçu non disponible",
     "skillInstructionsLabel": "Instructions",
@@ -5009,7 +5012,9 @@
       "approve": "Approuver",
       "reject": "Rejeter",
       "viewContext": "Voir le contexte complet",
-      "reviewAll": "Examiner {count} approbations"
+      "reviewAll": "Examiner {count} approbations",
+      "noPending": "Plus rien à approuver.",
+      "loadError": "Impossible de charger les approbations en attente."
     }
   },
   "files": {
@@ -9215,7 +9220,8 @@
     },
     "card": {
       "runs": "{count, plural, one {# run} other {# runs}}",
-      "epochs": "{count, plural, one {# époque} other {# époques}}"
+      "epochs": "{count, plural, one {# époque} other {# époques}}",
+      "reviewApprovals": "Examiner les approbations"
     },
     "status": {
       "live": "Actif",
@@ -9223,7 +9229,8 @@
       "paused": "En pause",
       "completed": "Terminé",
       "failed": "Échoué",
-      "timeout": "Expiré"
+      "timeout": "Expiré",
+      "needsApproval": "Approbation requise"
     },
     "sort": {
       "lastExecuted": "Dernière exécution",
