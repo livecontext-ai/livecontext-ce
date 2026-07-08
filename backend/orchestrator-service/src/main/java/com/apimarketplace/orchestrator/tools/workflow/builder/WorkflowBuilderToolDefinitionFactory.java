@@ -66,6 +66,7 @@ public class WorkflowBuilderToolDefinitionFactory {
             intParam("max_bytes", "(for: get_node_output field-expand) Text window size, default & cap 128 KB.", false, null),
             intParam("limit", "Max results (for: list, runs). Default 25.", false, 25),
             intParam("offset", "Pagination offset (for: list); also the byte offset to expand a field from (for: get_node_output with field=)", false, 0),
+            stringParam("query", "Filter workflows by name or description (for: list). Case-insensitive substring match, applied before pagination.", false),
             arrayParam("topics", "Node type names to get help for (for: help). Example: ['agent', 'decision', 'interface']", false),
             objectParam("data_inputs", "Trigger payload for execute. Chat: {\"message\": \"hello\"}. Form: {field1: val1}. Webhook: any JSON.", false),
             stringParam("trigger_id", "Normalized trigger ID to fire (for: execute). E.g. 'trigger:my_webhook'. Defaults to first fireable trigger.", false),

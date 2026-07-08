@@ -6,6 +6,7 @@ import com.apimarketplace.agent.tools.ToolErrorCode;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionContext;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
 import com.apimarketplace.agent.tools.common.AgentListEnvelope;
+import com.apimarketplace.agent.tools.common.ToolParamUtils;
 import com.apimarketplace.common.scope.ScopeGuard;
 import com.apimarketplace.common.web.TenantResolver;
 import com.apimarketplace.orchestrator.domain.WorkflowEntity;
@@ -206,13 +207,12 @@ public class ApplicationCrudModule implements ToolModule {
     // ==================== MY ====================
     private ToolExecutionResult executeMy(String tenantId, Map<String, Object> parameters, ToolExecutionContext context) {
         // application.my = STANDARD caps (default=25 / max=50 / hintThreshold=100,
-        // hardRefuse auto=400). Empty suggestedFilters: `my` doesn't accept query/
-        // category - the scope IS the tenant. Hard-refuse never fires (no offset
-        // beyond hardRefuseOffset without a filter is plausible since the agent
-        // is paginating its own apps, but the wall is still a defensive backstop).
+        // hardRefuse auto=400). `query` (name/description substring) is the one
+        // refinement filter, so the `refine` hint suggests it on large result sets.
+        String query = getStringParam(parameters, "query");
         AgentListEnvelope.Spec spec = AgentListEnvelope.Spec.of(
                         AgentListEnvelope.Caps.STANDARD, "applications", "applications", "applications")
-                .withSuggestedFilters(List.of())
+                .withSuggestedFilters(List.of("query"))
                 .withNext(Map.of(
                         "run", "application(action='execute', application_id='<id>') - owned apps run directly, no acquire needed",
                         "details_with_schema", "application(action='get', application_id='<id>') - returns data_inputs_schema (field names + select options) before execute",
@@ -222,9 +222,10 @@ public class ApplicationCrudModule implements ToolModule {
                 ));
         AgentListEnvelope.Bounds bounds;
         try {
-            // Tenant-scoped - no general filter. Pass empty set; hard-refuse can fire
-            // past the default 400 wall, which is the right defensive behavior.
-            bounds = AgentListEnvelope.readBounds(parameters, spec, Set.of());
+            // Active-filter set is server-derived from the request (never a caller
+            // boolean) so the hard-refuse-without-filter guard uses the real truth.
+            Set<String> activeFilters = ToolParamUtils.hasQuery(query) ? Set.of("query") : Set.of();
+            bounds = AgentListEnvelope.readBounds(parameters, spec, activeFilters);
         } catch (AgentListEnvelope.InvalidParamsException e) {
             return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, e.code + ": " + e.getMessage());
         }
@@ -242,8 +243,20 @@ public class ApplicationCrudModule implements ToolModule {
             long total;
             List<Map<String, Object>> page;
             if (orgId != null && !orgId.isBlank()) {
-                List<UUID> pubIds = workflowRepository
-                        .findAcquiredByOrganizationId(orgId, WorkflowEntity.WorkflowType.APPLICATION).stream()
+                // Text search filters on the acquired WORKFLOW's name/description (the
+                // cheap local proxy for the app), BEFORE resolving pubIds, so we avoid a
+                // getPublicationById fan-out over the whole owned set just to filter. The
+                // cloned workflow name mirrors the app title at acquire/publish time; a
+                // publisher who set a marketplace title distinct from the workflow name is
+                // the only divergence, acceptable for a "my apps" name search.
+                List<WorkflowEntity> acquired = workflowRepository
+                        .findAcquiredByOrganizationId(orgId, WorkflowEntity.WorkflowType.APPLICATION);
+                if (ToolParamUtils.hasQuery(query)) {
+                    acquired = acquired.stream()
+                            .filter(w -> ToolParamUtils.matchesQuery(query, w.getName(), w.getDescription()))
+                            .toList();
+                }
+                List<UUID> pubIds = acquired.stream()
                         .map(WorkflowEntity::getSourcePublicationId)
                         .filter(java.util.Objects::nonNull)
                         .distinct()
@@ -256,8 +269,16 @@ public class ApplicationCrudModule implements ToolModule {
                         .toList();
             } else {
                 // No workspace scope (legacy personal / direct API without an org
-                // header) - preserve the original publisher-owned listing.
+                // header) - preserve the original publisher-owned listing. Here the full
+                // publication maps are already in memory, so filter on the actual
+                // marketplace title + description.
                 List<Map<String, Object>> published = publicationClient.getPublicationsByPublisher(tenantId);
+                if (ToolParamUtils.hasQuery(query)) {
+                    published = published.stream()
+                            .filter(pub -> ToolParamUtils.matchesQuery(query,
+                                    getStringParam(pub, "title"), getStringParam(pub, "description")))
+                            .toList();
+                }
                 total = published.size();
                 page = published.stream().skip(bounds.offset()).limit(bounds.limit()).toList();
             }

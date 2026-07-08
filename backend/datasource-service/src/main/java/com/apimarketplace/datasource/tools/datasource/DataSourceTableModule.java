@@ -6,6 +6,7 @@ import com.apimarketplace.agent.tools.ToolErrorCode;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionContext;
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
 import com.apimarketplace.agent.tools.common.ToolModule;
+import com.apimarketplace.agent.tools.common.ToolParamUtils;
 import com.apimarketplace.agent.tools.common.ToolRateLimiter;
 import com.apimarketplace.common.scope.ScopeGuard;
 import com.apimarketplace.datasource.config.DataSourceAgentDefaultsConfig;
@@ -308,21 +309,27 @@ public class DataSourceTableModule implements ToolModule {
                                              ToolExecutionContext context) {
         Integer limit = getIntParam(parameters, "limit", 25);
         Integer offset = getIntParam(parameters, "offset", 0);
+        // Text search: case-insensitive substring over name + description, applied
+        // BEFORE pagination so total/hasMore reflect the filtered set.
+        String query = ToolParamUtils.getStringParam(parameters, "query");
 
-        // Loop detection: only a repeat of the SAME page (same offset+limit) within the
-        // cooldown is treated as a redundant re-list. A pagination call advances offset,
+        // Loop detection: only a repeat of the SAME page (same offset+limit+query) within
+        // the cooldown is treated as a redundant re-list. A pagination call advances offset,
         // producing a new page key, so the agent can page through results freely - the
-        // first page's own response instructs "Use offset=N to see more.".
+        // first page's own response instructs "Use offset=N to see more.". The query is
+        // part of the key so a filtered re-list at the same offset is NOT mistaken for a
+        // redundant repeat of the unfiltered page.
         String conversationId = getConversationId(context);
         if (conversationId != null) {
             long now = clock.getAsLong();
             // Bound the cache to the active working set: entries past the cooldown can no
             // longer block anything, so drop them before recording this call. Without this,
             // an agent paging with many distinct offsets would grow the map unbounded
-            // (key = conversation+offset+limit, all agent-controlled).
+            // (key = conversation+offset+limit+query, all agent-controlled).
             recentListCalls.entrySet().removeIf(e -> now - e.getValue() >= LIST_COOLDOWN_MS);
 
-            String pageKey = conversationId + ":" + offset + ":" + limit;
+            String queryKey = ToolParamUtils.hasQuery(query) ? query.trim().toLowerCase(Locale.ROOT) : "";
+            String pageKey = conversationId + ":" + offset + ":" + limit + ":" + queryKey;
             Long lastCall = recentListCalls.get(pageKey);
             if (lastCall != null && (now - lastCall) < LIST_COOLDOWN_MS) {
                 return ToolExecutionResult.success(Map.of(
@@ -347,6 +354,12 @@ public class DataSourceTableModule implements ToolModule {
                     .toList();
                 log.info("Agent restriction: filtered tables to {}/{} allowed",
                     allDataSources.size(), allowedTableIds.size());
+            }
+
+            if (ToolParamUtils.hasQuery(query)) {
+                allDataSources = allDataSources.stream()
+                    .filter(ds -> ToolParamUtils.matchesQuery(query, ds.name(), ds.description()))
+                    .toList();
             }
 
             int total = allDataSources.size();

@@ -122,6 +122,7 @@ public class SkillToolsProvider implements ToolsProvider {
                 .build(),
             intParam("limit", "Max results to return (for: list)", false, 25),
             intParam("offset", "Pagination offset (for: list)", false, 0),
+            stringParam("query", "Filter skills by name or description (for: list). Case-insensitive substring match, applied before pagination.", false),
 
             // ==================== Marketplace publication (publish, unpublish) ====================
             stringParam("title", "Marketplace listing title - REQUIRED for publish", false),

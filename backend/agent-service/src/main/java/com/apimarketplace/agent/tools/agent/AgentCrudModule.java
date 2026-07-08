@@ -630,15 +630,16 @@ public class AgentCrudModule implements ToolModule {
 
     private ToolExecutionResult executeList(Map<String, Object> parameters, String tenantId, ToolExecutionContext context) {
         Map<String, Object> p = mergeParams(parameters);
-        // agent.list = STANDARD caps. Scope IS the tenant - no general filter, so
-        // empty suggestedFilters suppresses the misleading "narrow with query/category"
-        // hint that doesn't apply here.
+        // agent.list = STANDARD caps. `query` (name/description substring) is the one
+        // refinement filter, so the `refine` hint suggests it on large result sets.
+        String query = getStringParam(p, "query");
         AgentListEnvelope.Spec spec = AgentListEnvelope.Spec.of(
                         AgentListEnvelope.Caps.STANDARD, "agents", "agents", "agents")
-                .withSuggestedFilters(List.of());
+                .withSuggestedFilters(List.of("query"));
         AgentListEnvelope.Bounds bounds;
         try {
-            bounds = AgentListEnvelope.readBounds(p, spec, Set.of());
+            Set<String> activeFilters = hasQuery(query) ? Set.of("query") : Set.of();
+            bounds = AgentListEnvelope.readBounds(p, spec, activeFilters);
         } catch (AgentListEnvelope.InvalidParamsException e) {
             return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, e.code + ": " + e.getMessage());
         }
@@ -655,6 +656,14 @@ public class AgentCrudModule implements ToolModule {
                     .toList();
                 log.info("Agent restriction: filtered agents to {}/{} allowed",
                     allAgents.size(), allowedAgentIds.size());
+            }
+
+            // Text search: case-insensitive substring over name + description, applied
+            // BEFORE pagination so total/hasMore reflect the filtered set.
+            if (hasQuery(query)) {
+                allAgents = allAgents.stream()
+                    .filter(a -> matchesQuery(query, a.getName(), a.getDescription()))
+                    .toList();
             }
 
             long total = allAgents.size();

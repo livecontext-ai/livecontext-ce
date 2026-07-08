@@ -486,11 +486,12 @@ public class WorkflowCrudModule implements ToolModule {
 
     private ToolExecutionResult executeList(Map<String, Object> parameters, String tenantId, ToolExecutionContext context) {
         // workflow.list = STANDARD caps (default=25 / max=50 / hintThreshold=100,
-        // hardRefuse auto=400). No general filter - empty suggestedFilters suppresses
-        // the `refine` hint (the agent has no query/category to apply on workflows).
+        // hardRefuse auto=400). `query` (name/description substring) is the one
+        // refinement filter, so the `refine` hint suggests it on large result sets.
+        String query = getStringParam(parameters, "query");
         AgentListEnvelope.Spec spec = AgentListEnvelope.Spec.of(
                         AgentListEnvelope.Caps.STANDARD, "workflows", "workflows", "workflows")
-                .withSuggestedFilters(List.of())
+                .withSuggestedFilters(List.of("query"))
                 .withNext(Map.of(
                         "details_with_schema", "workflow(action='get', workflow_id='<id>') - returns full plan + data_inputs_schema for fireable triggers (list items only carry trigger_types; the schema is on get)",
                         "edit", "workflow(action='load', id='<id>')",
@@ -501,8 +502,10 @@ public class WorkflowCrudModule implements ToolModule {
                 ));
         AgentListEnvelope.Bounds bounds;
         try {
-            // No filter keys for this action (the result set IS the tenant's workflows).
-            bounds = AgentListEnvelope.readBounds(parameters, spec, Set.of());
+            // Active-filter set is server-derived from the request (never a caller
+            // boolean) so the hard-refuse-without-filter guard uses the real truth.
+            Set<String> activeFilters = hasQuery(query) ? Set.of("query") : Set.of();
+            bounds = AgentListEnvelope.readBounds(parameters, spec, activeFilters);
         } catch (AgentListEnvelope.InvalidParamsException e) {
             // Structured `code:` prefix lets the agent error-mapper parse the failure.
             // Bare-string failure here matches the rest of WorkflowCrudModule's convention
@@ -522,6 +525,14 @@ public class WorkflowCrudModule implements ToolModule {
                     .toList();
                 log.info("Agent restriction: filtered workflows to {}/{} allowed",
                     allWorkflows.size(), allowedWorkflowIds.size());
+            }
+
+            // Text search: case-insensitive substring over name + description, applied
+            // BEFORE pagination so total/hasMore reflect the filtered set.
+            if (hasQuery(query)) {
+                allWorkflows = allWorkflows.stream()
+                    .filter(w -> matchesQuery(query, w.getName(), w.getDescription()))
+                    .toList();
             }
 
             long total = allWorkflows.size();

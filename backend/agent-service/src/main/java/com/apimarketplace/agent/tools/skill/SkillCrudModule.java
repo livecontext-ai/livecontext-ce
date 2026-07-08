@@ -228,14 +228,17 @@ public class SkillCrudModule implements ToolModule {
 
     private ToolExecutionResult executeList(Map<String, Object> parameters, String tenantId) {
         Map<String, Object> p = mergeParams(parameters);
-        // skill.list = STANDARD caps. No general filter (the set is default skills +
-        // tenant skills) - empty suggestedFilters suppresses the `refine` hint.
+        // skill.list = STANDARD caps. `query` (name/description substring) is the one
+        // refinement filter across default + tenant skills, so the `refine` hint
+        // suggests it on large result sets.
+        String query = getStringParam(p, "query");
         AgentListEnvelope.Spec spec = AgentListEnvelope.Spec.of(
                         AgentListEnvelope.Caps.STANDARD, "skills", "skills", "skills")
-                .withSuggestedFilters(List.of());
+                .withSuggestedFilters(List.of("query"));
         AgentListEnvelope.Bounds bounds;
         try {
-            bounds = AgentListEnvelope.readBounds(p, spec, Set.of());
+            Set<String> activeFilters = hasQuery(query) ? Set.of("query") : Set.of();
+            bounds = AgentListEnvelope.readBounds(p, spec, activeFilters);
         } catch (AgentListEnvelope.InvalidParamsException e) {
             return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, e.code + ": " + e.getMessage());
         }
@@ -266,6 +269,15 @@ public class SkillCrudModule implements ToolModule {
             List<Map<String, Object>> allSummaries = new ArrayList<>();
             allSummaries.addAll(defaultSkillSummaries);
             allSummaries.addAll(userSkillSummaries);
+
+            // Text search: case-insensitive substring over name + description, applied
+            // BEFORE pagination so total/hasMore reflect the filtered set.
+            if (hasQuery(query)) {
+                allSummaries = allSummaries.stream()
+                    .filter(s -> matchesQuery(query,
+                        (String) s.get("name"), (String) s.get("description")))
+                    .toList();
+            }
 
             return ToolExecutionResult.success(
                     AgentListEnvelope.paginateInMemory(allSummaries, bounds, spec));

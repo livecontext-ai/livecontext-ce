@@ -99,7 +99,7 @@ public class ApplicationToolsProvider implements ToolsProvider {
                 .build(),
             stringParam("workflow_id", "Workflow ID - UUID (for: create). Auto-detected from context if viewing a workflow.", false),
             stringParam("application_id", "Application ID - UUID (for: get, acquire, execute, runs, visualize)", false),
-            stringParam("query", "Search query to filter by title or description (for: search)", false),
+            stringParam("query", "Filter by title/name or description (for: search, my). Case-insensitive substring; for 'my' it is applied before pagination.", false),
             stringParam("category", "Category slug to filter (for: search)", false),
             stringParam("title", "Title override (for: create, visualize)", false),
             stringParam("description", "Description override (for: create)", false),

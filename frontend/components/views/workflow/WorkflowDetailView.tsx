@@ -99,6 +99,29 @@ export function WorkflowDetailView({ workflowId, runId: runIdProp, autoOpenApp }
     setWorkflowName(info.name);
   }, []);
 
+  // ── Flip the main canvas into run mode when the agent (chatting in the
+  // workflow panel) launches THIS workflow. Every agent-run of a workflow emits
+  // a global `sidePanelAutoOpen` marker (`type:'workflow_run'`, `id`=workflowId,
+  // `runId`). On chat pages AppHeader reacts to it by opening the run in a side
+  // panel, but that handler is gated to chat pages - so on the workflow page
+  // nothing reacted and the left canvas stayed in edit mode while the run
+  // executed. Navigate to the run URL (exactly what the Run toggle does for this
+  // non-embedded canvas); the shared workflow layout stays mounted, so the panel
+  // chat keeps streaming. Only a run of THIS workflow flips the canvas - a
+  // different workflow's run is not this canvas's concern. ──
+  useEffect(() => {
+    if (isPreviewOnly) return;
+    const handleWorkflowRunAutoOpen = (event: CustomEvent<{ type: string; id: string; runId?: string }>) => {
+      const { type, id, runId: eventRunId } = event.detail;
+      if (type !== 'workflow_run' || !eventRunId) return;
+      if (id !== workflowId) return;
+      if (effectiveRunId === eventRunId) return; // already bound to this run
+      router.push(`/app/workflow/${workflowId}/run/${eventRunId}`);
+    };
+    window.addEventListener('sidePanelAutoOpen', handleWorkflowRunAutoOpen as EventListener);
+    return () => window.removeEventListener('sidePanelAutoOpen', handleWorkflowRunAutoOpen as EventListener);
+  }, [workflowId, effectiveRunId, isPreviewOnly, router]);
+
   // ── Dispatch triggerData changes to WorkflowPanelContent ──
   useEffect(() => {
     const dataToDispatch = runIdProp ? triggerData : null;

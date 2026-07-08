@@ -110,6 +110,7 @@ public class InterfaceToolsProvider implements ToolsProvider {
             stringParam("js_template", "JavaScript - REQUIRED for create (empty string '' if none needed). Runs inside iframe after HTML renders. Use for: iterating arrays, conditional display, charts, DOM manipulation. Access resolved data via window.__RESOLVED_DATA__ object. Action buttons (forms/clicks bound to triggers) are handled by auto-injected bridge script - js_template is for CUSTOM logic only.", false),
             intParam("limit", "Max results to return (for: list)", false, 25),
             intParam("offset", "Pagination offset (for: list)", false, 0),
+            stringParam("query", "Filter interfaces by name or description (for: list). Case-insensitive substring match, applied before pagination.", false),
 
             // ==================== Patch (surgical search/replace edits) ====================
             // Avoids re-sending a whole template to change a few lines. Edits one template

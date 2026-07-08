@@ -181,7 +181,7 @@ export function LandingFooter({ siteBaseUrl }: { siteBaseUrl?: string } = {}) {
             Built for the way you work.
           </p>
 
-          <div className="mt-5 grid grid-cols-3 gap-2 w-fit mx-auto">
+          <div className="mt-5 flex flex-wrap items-center justify-start gap-1.5 sm:gap-2">
             <a
               href="https://www.linkedin.com/company/livecontext/"
               target="_blank"

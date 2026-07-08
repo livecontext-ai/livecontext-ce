@@ -375,6 +375,44 @@ class AgentCrudModuleTest {
         }
 
         @Test
+        @DisplayName("query filters agents by name OR description (case-insensitive) before pagination")
+        @SuppressWarnings("unchecked")
+        void queryFiltersByNameAndDescription() {
+            UUID a = UUID.randomUUID();
+            UUID b = UUID.randomUUID();
+            UUID c = UUID.randomUUID();
+            AgentEntity byName = mockAgent(a, "Invoice Assistant");
+            AgentEntity byDesc = mockAgent(b, "Ops Bot");
+            byDesc.setDescription("handles invoices too");
+            AgentEntity noMatch = mockAgent(c, "Weather Bot");
+            when(agentService.listAgents(TENANT, null, null))
+                    .thenReturn(List.of(byName, byDesc, noMatch));
+
+            Map<String, Object> data = (Map<String, Object>) module
+                    .execute("list", Map.of("query", "invoice"), TENANT, ctx()).get().data();
+            List<Map<String, Object>> items = (List<Map<String, Object>>) data.get("agents");
+            assertThat(items).extracting(m -> m.get("id"))
+                    .containsExactlyInAnyOrder(a.toString(), b.toString());
+            assertThat(data.get("total")).isEqualTo(2L);
+            assertThat(data.get("count")).isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("query with no matches returns empty + broaden hint")
+        @SuppressWarnings("unchecked")
+        void queryNoMatchReturnsEmpty() {
+            when(agentService.listAgents(TENANT, null, null))
+                    .thenReturn(List.of(mockAgent(UUID.randomUUID(), "Invoice Assistant")));
+
+            Map<String, Object> data = (Map<String, Object>) module
+                    .execute("list", Map.of("query", "zzz-no-such"), TENANT, ctx()).get().data();
+            assertThat(data.get("count")).isEqualTo(0);
+            assertThat(data.get("total")).isEqualTo(0L);
+            Map<String, Object> hint = (Map<String, Object>) data.get("hint");
+            assertThat(hint.get("action")).isEqualTo("broaden");
+        }
+
+        @Test
         @DisplayName("Emits canonical AgentListEnvelope keys (PR3 migration)")
         @SuppressWarnings("unchecked")
         void listEmitsCanonicalEnvelope() {

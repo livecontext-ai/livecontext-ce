@@ -2,6 +2,7 @@ package com.apimarketplace.agent.tools.common;
 
 import java.math.BigDecimal;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -62,6 +63,40 @@ public final class ToolParamUtils {
     public static String getStringParam(Map<String, Object> params, String key) {
         Object val = params.get(key);
         return val instanceof String str ? str : null;
+    }
+
+    /**
+     * Case-insensitive substring match of a free-text list filter ({@code query})
+     * against one or more resource fields (typically name + description).
+     *
+     * <p>Returns {@code true} when {@code query} is {@code null} or blank - a blank
+     * filter matches everything, so callers can pass the raw param through without a
+     * null guard. Otherwise returns {@code true} iff at least one non-null field
+     * contains the trimmed, lower-cased query.
+     *
+     * <p>Centralized so every list action (workflow.list, interface.list, skill.list,
+     * agent.list, application.my, table.list) applies the SAME matching semantics -
+     * the agent gets one consistent {@code query} behavior across all list tools.
+     */
+    public static boolean matchesQuery(String query, String... fields) {
+        if (query == null) return true;
+        String q = query.trim().toLowerCase(Locale.ROOT);
+        if (q.isEmpty()) return true;
+        if (fields == null) return false;
+        for (String f : fields) {
+            if (f != null && f.toLowerCase(Locale.ROOT).contains(q)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * True when {@code query} is a non-blank, actionable filter. Use to decide whether
+     * to add {@code "query"} to the {@code AgentListEnvelope} active-filter set (which
+     * governs the hard-refuse-without-filter guard) so the check matches
+     * {@link #matchesQuery} exactly.
+     */
+    public static boolean hasQuery(String query) {
+        return query != null && !query.trim().isEmpty();
     }
 
     /**

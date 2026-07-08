@@ -187,6 +187,7 @@ public class DataSourceToolsProvider implements ToolsProvider {
                 .build(),
             intParam("limit", "Max results to return. Default 25 for list, 20 for query_rows. query_rows has NO offset - to page a large result, narrow with where instead of raising limit. (for: list, query_rows)", false, 25),
             intParam("offset", "Pagination offset (for: list ONLY - query_rows does not support it)", false, 0),
+            stringParam("query", "Filter tables by name or description (for: list). Case-insensitive substring match, applied before pagination. This filters the TABLE list, not row contents - use where/similarity for row queries.", false),
 
             // ==================== Marketplace publication (publish, unpublish) ====================
             stringParam("title", "Marketplace listing title - REQUIRED for publish", false),

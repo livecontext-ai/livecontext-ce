@@ -194,6 +194,38 @@ class SkillCrudModuleTest {
         }
 
         @Test
+        @DisplayName("query filters skills by name OR description (case-insensitive) before pagination")
+        @SuppressWarnings("unchecked")
+        void queryFiltersByNameAndDescription() {
+            // Unique tokens so no built-in default skill collides with the filter.
+            SkillEntity byName = mockSkill(UUID.randomUUID(), "ZzUnique Invoice Skill");
+            SkillEntity byDesc = mockSkill(UUID.randomUUID(), "Ordinary Name");
+            byDesc.setDescription("handles zzunique invoice work");
+            when(skillService.listSkills(TENANT)).thenReturn(List.of(byName, byDesc));
+
+            Map<String, Object> data = (Map<String, Object>) module
+                    .execute("list", Map.of("query", "zzunique invoice"), TENANT, ctx()).get().data();
+            List<Map<String, Object>> items = (List<Map<String, Object>>) data.get("skills");
+            assertThat(items).extracting(m -> m.get("name"))
+                    .containsExactlyInAnyOrder("ZzUnique Invoice Skill", "Ordinary Name");
+            assertThat(data.get("total")).isEqualTo(2L);
+        }
+
+        @Test
+        @DisplayName("query with no matches returns empty + broaden hint (defaults + user skills both filtered)")
+        @SuppressWarnings("unchecked")
+        void queryNoMatchReturnsEmpty() {
+            when(skillService.listSkills(TENANT)).thenReturn(List.of(mockSkill(UUID.randomUUID(), "Invoice")));
+
+            Map<String, Object> data = (Map<String, Object>) module
+                    .execute("list", Map.of("query", "zzz-no-such-skill"), TENANT, ctx()).get().data();
+            assertThat(data.get("count")).isEqualTo(0);
+            assertThat(data.get("total")).isEqualTo(0L);
+            Map<String, Object> hint = (Map<String, Object>) data.get("hint");
+            assertThat(hint.get("action")).isEqualTo("broaden");
+        }
+
+        @Test
         @DisplayName("Emits canonical AgentListEnvelope keys (PR3 migration)")
         @SuppressWarnings("unchecked")
         void listEmitsCanonicalEnvelope() {

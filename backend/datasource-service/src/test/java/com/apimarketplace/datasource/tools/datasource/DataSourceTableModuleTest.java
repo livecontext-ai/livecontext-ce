@@ -593,6 +593,46 @@ class DataSourceTableModuleTest {
             assertThat(data.get("total")).isEqualTo(2);
         }
 
+        private DataSource dsWithDesc(long id, String name, String description) {
+            return new DataSource(id, TENANT, name, description, DataSourceType.INLINE, Map.of(),
+                    DataSourceStatus.ACTIVE, null, null, TENANT, null, null, null, null, null, null);
+        }
+
+        @Test
+        @DisplayName("query filters tables by name OR description (case-insensitive) before pagination")
+        @SuppressWarnings("unchecked")
+        void queryFiltersByNameAndDescription() {
+            when(dataSourceService.getDataSources(TENANT, null, null)).thenReturn(List.of(
+                    dsWithDesc(1L, "Invoices", "totals"),
+                    dsWithDesc(2L, "Orders", "handles invoices too"),
+                    dsWithDesc(3L, "Weather", "forecasts")));
+
+            Map<String, Object> data = dataOf(module.execute("list", Map.of("query", "invoice"), TENANT, ctx()));
+            assertThat(data.get("count")).isEqualTo(2);
+            assertThat(data.get("total")).isEqualTo(2);
+            List<Map<String, Object>> tables = (List<Map<String, Object>>) data.get("dataSources");
+            assertThat(tables).extracting(m -> m.get("id")).containsExactlyInAnyOrder(1L, 2L);
+        }
+
+        @Test
+        @DisplayName("Loop guard: a filtered re-list at the same offset is NOT mistaken for a repeat of the unfiltered page")
+        @SuppressWarnings("unchecked")
+        void queryIsPartOfPageKey() {
+            when(dataSourceService.getDataSources(TENANT, null, null))
+                    .thenReturn(List.of(fakeDs(1L, "Invoices"), fakeDs(2L, "Orders")));
+            ToolExecutionContext context = ctxWithConversation("conv-query-key");
+
+            Map<String, Object> unfiltered = dataOf(
+                    module.execute("list", Map.of("offset", 0, "limit", 25), TENANT, context));
+            assertThat(unfiltered.get("status")).isEqualTo("OK");
+
+            // Same offset+limit but WITH a query -> different page key -> not ALREADY_LISTED.
+            Map<String, Object> filtered = dataOf(
+                    module.execute("list", Map.of("offset", 0, "limit", 25, "query", "invoice"), TENANT, context));
+            assertThat(filtered.get("status")).isEqualTo("OK");
+            assertThat(filtered.get("count")).isEqualTo(1);
+        }
+
         @Test
         @DisplayName("Pagination: advancing offset within the cooldown is NOT blocked (prod bug 2026-06-05)")
         void paginationWithNewOffsetIsNotBlocked() {

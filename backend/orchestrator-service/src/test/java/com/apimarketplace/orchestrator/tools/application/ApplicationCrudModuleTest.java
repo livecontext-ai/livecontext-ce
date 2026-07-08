@@ -249,6 +249,75 @@ class ApplicationCrudModuleTest {
     class MyListsWorkspaceApps {
 
         @Test
+        @DisplayName("query filters acquired apps by the workflow name BEFORE resolving publications (no fan-out for excluded apps)")
+        void myQueryFiltersAcquiredByWorkflowName() {
+            UUID invoicePub = UUID.randomUUID();
+            UUID weatherPub = UUID.randomUUID();
+            WorkflowEntity invoiceClone = mock(WorkflowEntity.class);
+            when(invoiceClone.getName()).thenReturn("Invoice Sync");
+            when(invoiceClone.getSourcePublicationId()).thenReturn(invoicePub);
+            WorkflowEntity weatherClone = mock(WorkflowEntity.class);
+            when(weatherClone.getName()).thenReturn("Weather Bot");
+            // Weather's publication id IS resolvable: pre-change (no filter) both pubIds are
+            // collected -> total=2 and getPublicationById(weatherPub) IS called, so the
+            // assertions below fail. Post-change the query filter drops Weather at the
+            // WorkflowEntity level, so getSourcePublicationId is never reached (lenient).
+            lenient().when(weatherClone.getSourcePublicationId()).thenReturn(weatherPub);
+            when(workflowRepository.findAcquiredByOrganizationId(CALLER_ORG_ID, WorkflowEntity.WorkflowType.APPLICATION))
+                    .thenReturn(List.of(invoiceClone, weatherClone));
+            Map<String, Object> pub = new HashMap<>();
+            pub.put("id", invoicePub.toString());
+            pub.put("title", "Invoice Sync");
+            when(publicationClient.getPublicationById(invoicePub)).thenReturn(pub);
+            lenient().when(credentialClient.getConfiguredIntegrations(TENANT_ID)).thenReturn(Set.of());
+
+            ToolExecutionResult result = module.execute("my", Map.of("query", "invoice"),
+                    TENANT_ID, contextWithOrg()).orElseThrow();
+
+            assertThat(result.success()).isTrue();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) result.data();
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> apps = (List<Map<String, Object>>) data.get("applications");
+            assertThat(apps).hasSize(1);
+            // total is computed from the FILTERED pubId set (1), not the raw acquired set (2).
+            assertThat(data.get("total")).isEqualTo(1L);
+            assertThat(apps.get(0).get("id")).isEqualTo(invoicePub.toString());
+            // The excluded (Weather) app's publication is never fetched - the filter runs
+            // on the workflow entity BEFORE the getPublicationById fan-out.
+            verify(publicationClient).getPublicationById(invoicePub);
+            verify(publicationClient, never()).getPublicationById(weatherPub);
+        }
+
+        @Test
+        @DisplayName("query filters the publisher list by title/description when there is no org scope")
+        void myQueryFiltersPublisherList() {
+            ToolExecutionContext noOrgCtx = new ToolExecutionContext(
+                    TENANT_ID, Map.of(), Map.of(), Set.of(), null, null, null, null);
+            Map<String, Object> invoiceApp = new HashMap<>();
+            invoiceApp.put("id", UUID.randomUUID().toString());
+            invoiceApp.put("title", "Invoice Tool");
+            Map<String, Object> weatherApp = new HashMap<>();
+            weatherApp.put("id", UUID.randomUUID().toString());
+            weatherApp.put("title", "Weather");
+            weatherApp.put("description", "forecasts");
+            when(publicationClient.getPublicationsByPublisher(TENANT_ID))
+                    .thenReturn(List.of(invoiceApp, weatherApp));
+            lenient().when(credentialClient.getConfiguredIntegrations(TENANT_ID)).thenReturn(Set.of());
+
+            ToolExecutionResult result = module.execute("my", Map.of("query", "invoice"),
+                    TENANT_ID, noOrgCtx).orElseThrow();
+
+            assertThat(result.success()).isTrue();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) result.data();
+            assertThat(data.get("total")).isEqualTo(1L);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> apps = (List<Map<String, Object>>) data.get("applications");
+            assertThat(apps).hasSize(1);
+        }
+
+        @Test
         @DisplayName("Lists the org's ACQUIRED apps - pre-fix a consumer who published nothing was told 'you have no applications'")
         void myListsAcquiredAppsNotJustPublished() {
             // contact@ prod report: user acquired ~10 apps, published none. Pre-fix

@@ -315,9 +315,10 @@ public class AgentToolsProvider implements ToolsProvider {
                         "self", "children", "all_visible")),
             boolParam("enabled", "Enable/disable a recurrence without deleting it (for: recurrence_update)", false, null),
 
-            // ==================== Message search (search_messages) ====================
+            // ==================== Text filter (list) + message search (search_messages) ====================
             stringParam("query",
-                "FTS query for search_messages. Required. Supports search-engine syntax: 'OR' (\"facture OR invoice\"), " +
+                "For list: filter agents by name or description (case-insensitive substring, applied before pagination). " +
+                "For search_messages (required there): FTS query supporting search-engine syntax - 'OR' (\"facture OR invoice\"), " +
                 "quoted phrases (\"\\\"docker networking\\\"\"), and '-negation' (\"refund -test\"). Max 500 chars.",
                 false),
             stringParam("since",

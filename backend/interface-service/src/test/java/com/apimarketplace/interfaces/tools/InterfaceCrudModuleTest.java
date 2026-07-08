@@ -534,6 +534,47 @@ class InterfaceCrudModuleTest {
         }
 
         @Test
+        @DisplayName("query filters interfaces by name OR description (case-insensitive) before pagination")
+        @SuppressWarnings("unchecked")
+        void queryFiltersByNameAndDescription() {
+            UUID a = UUID.randomUUID();
+            UUID b = UUID.randomUUID();
+            UUID c = UUID.randomUUID();
+            InterfaceEntity byName = fakeEntity(a, "Invoice Dashboard");
+            byName.setDescription("shows totals");
+            InterfaceEntity byDesc = fakeEntity(b, "Order Export");
+            byDesc.setDescription("handles invoices too");
+            InterfaceEntity noMatch = fakeEntity(c, "Weather Widget");
+            noMatch.setDescription("forecasts");
+            when(interfaceService.listInterfaces(eq(TENANT), isNull(), isNull(), isNull()))
+                .thenReturn(List.of(byName, byDesc, noMatch));
+
+            Optional<ToolExecutionResult> res = module.execute("list", Map.of("query", "invoice"), TENANT, ctx());
+            assertThat(res).isPresent();
+            Map<String, Object> data = (Map<String, Object>) res.get().data();
+            assertThat(data.get("count")).isEqualTo(2);
+            assertThat(data.get("total")).isEqualTo(2L);
+            List<Map<String, Object>> items = (List<Map<String, Object>>) data.get("interfaces");
+            assertThat(items).extracting(m -> m.get("id"))
+                .containsExactlyInAnyOrder(a.toString(), b.toString());
+        }
+
+        @Test
+        @DisplayName("query with no matches returns empty + broaden hint")
+        @SuppressWarnings("unchecked")
+        void queryNoMatchReturnsEmpty() {
+            when(interfaceService.listInterfaces(eq(TENANT), isNull(), isNull(), isNull()))
+                .thenReturn(List.of(fakeEntity(UUID.randomUUID(), "Invoice Dashboard")));
+
+            Optional<ToolExecutionResult> res = module.execute("list", Map.of("query", "zzz-no-such"), TENANT, ctx());
+            Map<String, Object> data = (Map<String, Object>) res.get().data();
+            assertThat(data.get("count")).isEqualTo(0);
+            assertThat(data.get("total")).isEqualTo(0L);
+            Map<String, Object> hint = (Map<String, Object>) data.get("hint");
+            assertThat(hint.get("action")).isEqualTo("broaden");
+        }
+
+        @Test
         @DisplayName("Should list all interfaces - canonical envelope (kind/offset/limit/hasMore)")
         @SuppressWarnings("unchecked")
         void shouldListAll() {

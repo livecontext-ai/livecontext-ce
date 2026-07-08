@@ -262,3 +262,35 @@ describe('WebSocketClient event payload normalization', () => {
     });
   });
 });
+
+describe('WebSocketClient snapshot on late subscribe', () => {
+  // Regression: a re-navigated / second-gateway-pod workflow canvas entered run
+  // mode but never painted the run. It subscribed to an ALREADY-open channel
+  // (`new=false`), so the snapshot request was skipped and it only received
+  // future deltas (Redis pub/sub does not replay) - rendering stale/empty.
+  const subFrames = (ws: MockWebSocket, channel: string) =>
+    ws.sent
+      .map((s) => JSON.parse(s))
+      .filter((e) => e.type === 'subscribe' && e.channel === channel);
+
+  it('re-requests a snapshot for a LATE handler joining an already-subscribed channel', async () => {
+    const ws = await bringUp();
+    wsClient.subscribe('workflow:run:r1', vi.fn());        // first: opens, no snapshot asked
+    wsClient.subscribe('workflow:run:r1', vi.fn(), true);  // late join: needs current state
+
+    const frames = subFrames(ws, 'workflow:run:r1');
+    expect(frames).toHaveLength(2);
+    expect(frames[0].payload?.requestSnapshot).toBeFalsy();
+    expect(frames[1].payload?.requestSnapshot).toBe(true);
+  });
+
+  it('does NOT re-subscribe when a late handler does not ask for a snapshot', async () => {
+    const ws = await bringUp();
+    wsClient.subscribe('workflow:run:r2', vi.fn(), true);  // opens + snapshot
+    wsClient.subscribe('workflow:run:r2', vi.fn());        // late, no snapshot → no extra frame
+
+    const frames = subFrames(ws, 'workflow:run:r2');
+    expect(frames).toHaveLength(1);
+    expect(frames[0].payload?.requestSnapshot).toBe(true);
+  });
+});

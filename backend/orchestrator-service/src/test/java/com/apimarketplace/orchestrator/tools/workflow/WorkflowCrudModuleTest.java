@@ -1180,6 +1180,69 @@ class WorkflowCrudModuleTest {
         }
 
         @Test
+        @DisplayName("query filters workflows by name OR description (case-insensitive) before pagination")
+        @SuppressWarnings("unchecked")
+        void queryFiltersByNameAndDescription() {
+            UUID a = UUID.randomUUID();
+            UUID b = UUID.randomUUID();
+            UUID c = UUID.randomUUID();
+            when(workflowService.listWorkflows(TENANT_ID, null, null))
+                    .thenReturn(List.of(
+                            workflow(a, "Invoice Sync", null, null),
+                            workflow(b, "Order Export", "handles invoices too", null),
+                            workflow(c, "Weather Bot", "forecasts", null)));
+            when(planVersionService.getCurrentVersion(any(UUID.class))).thenReturn(1);
+            when(publicationClient.findActivePublicationIdsByWorkflowIds(anyList(), eq(TENANT_ID)))
+                    .thenReturn(Map.of());
+            when(workflowRunRepository.findFirstByWorkflowIdOrderByStartedAtDesc(any(UUID.class)))
+                    .thenReturn(Optional.empty());
+
+            Map<String, Object> data = (Map<String, Object>) module
+                    .execute("list", Map.of("query", "invoice"), TENANT_ID, null).get().data();
+            List<Map<String, Object>> items = (List<Map<String, Object>>) data.get("workflows");
+            // "Invoice Sync" matches on name, "Order Export" matches on description;
+            // "Weather Bot" matches neither field and is excluded.
+            assertThat(items).extracting(m -> m.get("id"))
+                    .containsExactlyInAnyOrder(a.toString(), b.toString());
+            assertThat(data.get("total")).isEqualTo(2L);
+            assertThat(data.get("count")).isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("query with no matches returns empty set + broaden hint (total/hasMore reflect the filtered set)")
+        @SuppressWarnings("unchecked")
+        void queryNoMatchReturnsEmpty() {
+            when(workflowService.listWorkflows(TENANT_ID, null, null))
+                    .thenReturn(List.of(workflow(UUID.randomUUID(), "Invoice Sync", null, null)));
+
+            Map<String, Object> data = (Map<String, Object>) module
+                    .execute("list", Map.of("query", "zzz-no-such"), TENANT_ID, null).get().data();
+            assertThat(data.get("count")).isEqualTo(0);
+            assertThat(data.get("total")).isEqualTo(0L);
+            Map<String, Object> hint = (Map<String, Object>) data.get("hint");
+            assertThat(hint.get("action")).isEqualTo("broaden");
+        }
+
+        @Test
+        @DisplayName("blank/whitespace query is treated as no filter and returns all workflows")
+        @SuppressWarnings("unchecked")
+        void blankQueryReturnsAll() {
+            when(workflowService.listWorkflows(TENANT_ID, null, null))
+                    .thenReturn(List.of(workflow(UUID.randomUUID(), "Invoice Sync", null, null),
+                                        workflow(UUID.randomUUID(), "Weather Bot", null, null)));
+            when(planVersionService.getCurrentVersion(any(UUID.class))).thenReturn(1);
+            when(publicationClient.findActivePublicationIdsByWorkflowIds(anyList(), eq(TENANT_ID)))
+                    .thenReturn(Map.of());
+            when(workflowRunRepository.findFirstByWorkflowIdOrderByStartedAtDesc(any(UUID.class)))
+                    .thenReturn(Optional.empty());
+
+            Map<String, Object> data = (Map<String, Object>) module
+                    .execute("list", Map.of("query", "   "), TENANT_ID, null).get().data();
+            assertThat(data.get("count")).isEqualTo(2);
+            assertThat(data.get("total")).isEqualTo(2L);
+        }
+
+        @Test
         @DisplayName("drops tenantId from each summary (always equals caller, was noise)")
         @SuppressWarnings("unchecked")
         void dropsTenantIdFromSummary() {

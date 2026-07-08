@@ -403,12 +403,16 @@ public class InterfaceCrudModule implements ToolModule {
         // legacy ceiling is preserved as a comment for future audits. Callers passing
         // limit>50 are silently clamped (caps invariant) - agent UX favors a consistent
         // ceiling across all list actions over per-tool surprise capacity.
+        // `query` (name/description substring) is the one refinement filter, so the
+        // `refine` hint suggests it on large result sets.
+        String query = getStringParam(parameters, "query");
         AgentListEnvelope.Spec spec = AgentListEnvelope.Spec.of(
                         AgentListEnvelope.Caps.STANDARD, "interfaces", "interfaces", "interfaces")
-                .withSuggestedFilters(List.of());
+                .withSuggestedFilters(List.of("query"));
         AgentListEnvelope.Bounds bounds;
         try {
-            bounds = AgentListEnvelope.readBounds(parameters, spec, Set.of());
+            Set<String> activeFilters = hasQuery(query) ? Set.of("query") : Set.of();
+            bounds = AgentListEnvelope.readBounds(parameters, spec, activeFilters);
         } catch (AgentListEnvelope.InvalidParamsException e) {
             return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, e.code + ": " + e.getMessage());
         }
@@ -439,6 +443,14 @@ public class InterfaceCrudModule implements ToolModule {
                     .toList();
                 log.info("Agent restriction: filtered interfaces to {}/{} allowed",
                     allInterfaces.size(), allowedInterfaceIds.size());
+            }
+
+            // Text search: case-insensitive substring over name + description, applied
+            // BEFORE pagination so total/hasMore reflect the filtered set.
+            if (hasQuery(query)) {
+                allInterfaces = allInterfaces.stream()
+                    .filter(i -> matchesQuery(query, i.getName(), i.getDescription()))
+                    .toList();
             }
 
             long total = allInterfaces.size();
