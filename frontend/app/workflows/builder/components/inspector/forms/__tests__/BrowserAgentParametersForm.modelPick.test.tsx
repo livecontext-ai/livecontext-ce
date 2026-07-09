@@ -10,6 +10,13 @@ vi.mock('next-intl', () => ({
   useTranslations: () => (key: string) => key,
 }));
 
+// The form reads optional-component availability via useFeatureCapabilities,
+// which pulls in useAppAuth (needs AppDataProvider). Model selection is
+// independent of it, so stub the neutral "unknown" state (null => no banner).
+vi.mock('@/hooks/useFeatureCapabilities', () => ({
+  useFeatureCapabilities: () => ({ capabilities: null, isLoading: false }),
+}));
+
 // ModelPicker pulls in useModels (network) + a heavy dropdown. Stub it as a
 // button that, on click, fires onChange with a fixed target model. Also expose
 // the current `value` (provider/id) so a test can assert what the picker

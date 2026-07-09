@@ -39,6 +39,8 @@ import { ServiceApprovalCard } from '../ServiceApprovalCard';
 import { ModelSelectorDropdown } from '@/components/chat/ModelSelectorDropdown';
 import { NoProviderCta } from '@/components/ai/NoProviderCta';
 import { ComposerLeadingControl } from '@/components/chat/ComposerLeadingControl';
+import { resolveConversationAgentId } from '@/lib/chat/linkedAgent';
+import { useLinkedAgentLoader } from '@/hooks/chat/useLinkedAgentLoader';
 import { useSidePanelSafe } from '@/contexts/SidePanelContext';
 import { buildAgentConfigPanelTab } from '@/lib/sidePanel/agentConfigPanelTab';
 import { PROVIDER_ICON_MAP } from '@/lib/ai-providers/providerIcons';
@@ -316,51 +318,32 @@ export function ChatPageV2({ conversationIdFromParams, enableDataSource = false 
     }
   }, [conversationIdFromParams, isAuthenticated, isReady, loadConversationAndMessages]);
 
-  // Load linked agent data when conversation loads (to show avatar in header)
-  const loadedAgentForConversationRef = useRef<string | null>(null);
-  useEffect(() => {
-    // Clear agent state when navigating to new chat (no conversationIdFromParams)
-    if (!conversationIdFromParams) {
-      if (loadedAgentForConversationRef.current !== null) {
-        loadedAgentForConversationRef.current = null;
-        state.setAgentName(null);
-        state.setAgentAvatarUrl(null);
-        state.setAgentIdFromConversation(null);
-      }
-      return;
-    }
-
-    // Wait for isReady to ensure token is available for API call
-    if (!isAuthenticated || !isReady) return;
-    if (loadedAgentForConversationRef.current === conversationIdFromParams) return;
-
-    loadedAgentForConversationRef.current = conversationIdFromParams;
-    state.setIsLoadingAgent(true);
-
-    orchestratorApi.getAgentByConversationId(conversationIdFromParams)
-      .then((agent) => {
-        if (agent) {
-          state.setAgentName(agent.name);
-          state.setAgentAvatarUrl(agent.avatarUrl || null);
-          state.setAgentIdFromConversation(agent.id);
-        }
-      })
-      .catch((err: any) => {
-        // 404 means no agent linked - this is normal
-        if (err?.status !== 404 && !err?.message?.includes('404')) {
-          console.error('Error loading linked agent:', err);
-        }
-        // Clear agent state if no agent linked
-        state.setAgentName(null);
-        state.setAgentAvatarUrl(null);
-        state.setAgentIdFromConversation(null);
-        // Do NOT reset ref here - resetting causes infinite retry loops on transient errors (429, 5xx).
-        // The ref will naturally reset when the user navigates to a different conversation.
-      })
-      .finally(() => {
-        state.setIsLoadingAgent(false);
-      });
-  }, [conversationIdFromParams, isAuthenticated, isReady, state]);
+  // Load the agent linked to this conversation (to show its avatar in the composer).
+  // Resolve via the conversation's OWN forward link (conversations.agent_id) and fall back
+  // to the reverse by-conversation lookup only when it is not yet known. The forward link
+  // is authoritative and supports an agent owning several conversations; the reverse
+  // agents.conversation_id column is single-valued and frequently null, so a pure
+  // by-conversation lookup misses those agents and the composer wrongly falls back to the
+  // model selector. Mirrors AppHeader. Prefer the freshly loaded currentConversation, then
+  // the shared sidebar list, so the agent resolves as soon as either source knows it.
+  const linkedAgentId = resolveConversationAgentId({
+    conversationId: conversationIdFromParams,
+    currentConversation,
+    conversations,
+  });
+  const applyLinkedAgent = useCallback((agent: import('@/lib/api/orchestrator').Agent | null) => {
+    state.setAgentName(agent?.name ?? null);
+    state.setAgentAvatarUrl(agent?.avatarUrl || null);
+    state.setAgentIdFromConversation(agent?.id ?? null);
+  }, [state]);
+  useLinkedAgentLoader({
+    conversationId: conversationIdFromParams,
+    linkedAgentId,
+    isAuthenticated,
+    isReady,
+    onAgentResolved: applyLinkedAgent,
+    onLoadingChange: state.setIsLoadingAgent,
+  });
 
   // Auto-scroll refs
   const previousConversationIdRef = useRef<string | null>(null);
@@ -655,6 +638,9 @@ export function ChatPageV2({ conversationIdFromParams, enableDataSource = false 
     chatConfig,
     onChatConfigChange: handleChatConfigChange,
     isAgentConversation: !!(agentIdFromConversation || agentId),
+    // Forward-link agent (with sidebar fallback) so the composer's agent-scoped skills/
+    // options match the header, even before the full conversation object has loaded.
+    linkedAgentId,
   };
 
   const showWelcomeMessage = !conversationIdFromParams && !currentConversationId && messages.length === 0 && !isLoadingConversation && !isStreamingThisConversation && !handlers.isStartingStream;

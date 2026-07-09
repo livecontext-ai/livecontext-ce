@@ -101,7 +101,7 @@ class BrowserAgentNodeObservabilityTest {
 
         assertThatThrownBy(() -> node.acceptServices(registryWith(null, agentClient)))
             .isInstanceOf(IllegalStateException.class)
-            .hasMessageContaining("BrowserAgentModule")
+            .hasMessageContaining("no browser stack is available")
             .hasMessageContaining("websearch.enabled");
     }
 

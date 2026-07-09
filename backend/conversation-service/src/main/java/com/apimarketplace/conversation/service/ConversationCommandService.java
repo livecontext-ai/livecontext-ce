@@ -32,6 +32,7 @@ public class ConversationCommandService {
     private final MessageRepository messageRepository;
     private final ConversationMapper conversationMapper;
     private final WorkflowContextProvider workflowContextProvider;
+    private final UserChatDefaultsService userChatDefaultsService;
     // Self-reference so we can call {@link #createConversationInNewTransaction} through the
     // Spring proxy. Without the proxy the class-level {@code @Transactional} short-circuits
     // and the inner REQUIRES_NEW propagation is silently ignored - the whole point of the
@@ -42,11 +43,13 @@ public class ConversationCommandService {
                                       MessageRepository messageRepository,
                                       ConversationMapper conversationMapper,
                                       WorkflowContextProvider workflowContextProvider,
+                                      UserChatDefaultsService userChatDefaultsService,
                                       @Lazy ConversationCommandService self) {
         this.conversationRepository = conversationRepository;
         this.messageRepository = messageRepository;
         this.conversationMapper = conversationMapper;
         this.workflowContextProvider = workflowContextProvider;
+        this.userChatDefaultsService = userChatDefaultsService;
         this.self = self;
     }
 
@@ -189,6 +192,13 @@ public class ConversationCommandService {
         newConversation.setProvider(provider);
         newConversation.setWorkflowId(workflowId);
         newConversation.setActive(true);
+        // Seed the chat defaults the user set in Preferences (V312). A workflow-assistant
+        // conversation has agentId == null, so AgentContextBuilder re-reads this stored
+        // chat_config on every turn (systemPrompt / webSearch / toolsMode / defaultSkillIds /
+        // temperature / turn limits ...). Without this seed the row starts with chat_config =
+        // null and inherits none of the user's preferences, unlike a composer conversation.
+        newConversation.setChatConfig(
+                userChatDefaultsService.seedNewConversationConfig(userId, organizationId, null));
 
         try {
             return self != null

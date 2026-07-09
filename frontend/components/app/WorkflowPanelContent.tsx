@@ -15,6 +15,7 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { Sparkles, MessageSquare, FileText, AppWindow, Workflow } from 'lucide-react';
 import { usePathname } from '@/i18n/navigation';
 import { ChatCore } from '@/components/chat/ChatCore';
+import { WelcomeTitle } from '@/app/shared/components';
 import { ModelSelectorDropdown, PROVIDER_ICON_MAP } from '@/components/chat/ModelSelectorDropdown';
 import { NoProviderCta } from '@/components/ai/NoProviderCta';
 import { TriggerTabContent } from '@/components/chat/TriggerTabContent';
@@ -49,6 +50,10 @@ interface CachedPanelData {
   triggerActiveId?: string;
   triggerReadySteps: Set<string>;
   triggerRunStatus?: string;
+  /** Run id the canvas is bound to, reported via triggerData. Lets the
+   *  Application/interface resolve its run when the run is bound IN PLACE
+   *  (agent-launched overlay) - there is no /run/ URL to read it from. */
+  triggerRunId?: string;
   triggerStepByStep: boolean;
   applicationConfigs: ApplicationConfig[];
   agentConfigs: unknown[];
@@ -96,6 +101,7 @@ if (typeof window !== 'undefined') {
     c.triggerActiveId = d.activeTriggerId;
     c.triggerReadySteps = d.readySteps ?? new Set();
     c.triggerRunStatus = d.runStatus;
+    c.triggerRunId = d.runId;
     c.triggerStepByStep = d.isStepByStepMode ?? false;
   }) as EventListener);
 
@@ -228,6 +234,7 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
   const [triggerActiveId, setTriggerActiveId] = useState<string | undefined>(() => myCache.triggerActiveId);
   const [triggerReadySteps, setTriggerReadySteps] = useState<Set<string>>(() => myCache.triggerReadySteps);
   const [triggerRunStatus, setTriggerRunStatus] = useState<string | undefined>(() => myCache.triggerRunStatus);
+  const [triggerRunId, setTriggerRunId] = useState<string | undefined>(() => myCache.triggerRunId);
   const [triggerStepByStep, setTriggerStepByStep] = useState(() => myCache.triggerStepByStep);
   const [applicationConfigs, setApplicationConfigs] = useState<ApplicationConfig[]>(() => myCache.applicationConfigs);
 
@@ -288,6 +295,7 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
       setTriggerActiveId(d.activeTriggerId);
       setTriggerReadySteps(d.readySteps ?? new Set());
       setTriggerRunStatus(d.runStatus);
+      setTriggerRunId(d.runId);
       setTriggerStepByStep(d.isStepByStepMode ?? false);
     };
     window.addEventListener('workflowPanelTriggerDataChange', handler as EventListener);
@@ -547,7 +555,10 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
   }, []);
 
   // ── Run ID from pathname (fallback to prop for application mode and marketplace preview) ──
-  const currentRunId = pathname?.match(/\/workflow\/[^\/]+\/run\/([^\/]+)/)?.[1] || runIdProp || null;
+  // URL /run/<id> first (explicit run page), then the prop, then the in-place run
+  // id reported by the canvas via triggerData (agent-launched overlay has no /run/
+  // URL - without this the Application/interface has no run and shows "not available").
+  const currentRunId = pathname?.match(/\/workflow\/[^\/]+\/run\/([^\/]+)/)?.[1] || runIdProp || triggerRunId || null;
 
   // ── Tab count & position ──
   const tabCount = 1 /* AI Chat */ + visibleTriggerConfigs.length
@@ -712,6 +723,8 @@ function WorkflowPanelInner({ workflowId, runId: runIdProp, workflowCanvasSlot, 
           externalInputValue={suggestionPrompt || undefined}
           onExternalInputConsumed={handleSuggestionConsumed}
           leadingControl={leadingControl}
+          welcomeLayout
+          welcomeTitle={<WelcomeTitle>{t('workflowBuilder.canvas.emptyTitle')}</WelcomeTitle>}
         />
       ) : activeTabId === APP_TAB_ID ? (
         <ApplicationCarousel

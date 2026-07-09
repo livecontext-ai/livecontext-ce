@@ -9,6 +9,7 @@ import { useAuthGuard } from "@/hooks/useAuthGuard";
 import { useAuth } from "@/lib/providers/smart-providers";
 import { useUserProfile } from "@/hooks/useUserProfile";
 import { useTheme, type ThemePreference } from "@/components/ThemeProvider";
+import { useSidePanelLayoutSafe, type SidePanelPosition } from "@/contexts/SidePanelLayoutContext";
 import { useSubscription } from "@/lib/hooks/smart-hooks-complete";
 import { OverviewPageSkeleton } from "@/components/skeletons";
 import { ScheduledChangeAlert } from "@/components/billing";
@@ -113,6 +114,9 @@ export default function SettingsOverviewPage() {
 
   // App theme (light / dark / auto) - shown in General Preferences below the language.
   const { themePreference, setTheme } = useTheme();
+
+  // Where the unified side panel docks (right / bottom) - shown below the theme.
+  const { position: sidePanelPosition, setPosition: setSidePanelPosition } = useSidePanelLayoutSafe();
 
   // All useState hooks first
   const [activeTab, setActiveTab] = useState("profile");
@@ -806,6 +810,33 @@ export default function SettingsOverviewPage() {
                       <SelectItem value="light">{t('preferences.themeLight')}</SelectItem>
                       <SelectItem value="dark">{t('preferences.themeDark')}</SelectItem>
                       <SelectItem value="auto">{t('preferences.themeAuto')}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Side panel position - persisted client-side (localStorage), scoped per
+                    workspace. 'right' docks the panel to the side (resizes width); 'bottom'
+                    docks it under the content (resizes height). The header toggle icon
+                    mirrors the choice. */}
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-4">
+                  <div>
+                    <h4 className="font-medium text-theme-primary">
+                      {t('preferences.sidePanelPosition')}
+                    </h4>
+                    <p className="text-sm text-theme-secondary">
+                      {t('preferences.sidePanelPositionDescription')}
+                    </p>
+                  </div>
+                  <Select
+                    value={sidePanelPosition}
+                    onValueChange={(value) => setSidePanelPosition(value as SidePanelPosition)}
+                  >
+                    <SelectTrigger className="w-full sm:w-[200px]" data-testid="side-panel-position-select">
+                      <SelectValue placeholder={t('preferences.sidePanelPosition')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="right">{t('preferences.sidePanelPositionRight')}</SelectItem>
+                      <SelectItem value="bottom">{t('preferences.sidePanelPositionBottom')}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>

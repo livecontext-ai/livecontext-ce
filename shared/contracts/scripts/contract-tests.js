@@ -320,10 +320,8 @@ testGroup('Split Node Contract', () => {
     test('Has current_index output', outputNames.includes('current_index'));
     test('Has item_count output', outputNames.includes('item_count'));
     test('Has split_id output', outputNames.includes('split_id'));
-    test('Has split_strategy output', outputNames.includes('split_strategy'));
-    test('Has max_items output', outputNames.includes('max_items'));
+    test('Has spawn_reason output', outputNames.includes('spawn_reason'));
     test('Has terminated output', outputNames.includes('terminated'));
-    test('Has exit_reason output', outputNames.includes('exit_reason'));
   }
 });
 

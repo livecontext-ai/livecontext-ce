@@ -15,6 +15,7 @@ import { orchestratorApi } from '@/lib/api/orchestrator';
 import { QueuedMessageBar } from './QueuedMessageBar';
 import { MAX_QUEUE_SIZE, type QueuedMessage } from '@/lib/stores/message-queue-store';
 import { readDraft, writeDraft, clearDraft } from '@/lib/chat/draftStorage';
+import { fetchLinkedAgent, canFetchLinkedAgent } from '@/lib/chat/linkedAgent';
 
 export interface AnalyzeBadge {
   id: string;
@@ -64,6 +65,11 @@ export interface MessageComposerProps {
    *  Used to host the model selector (model conversations) or the agent avatar
    *  (agent conversations). DM / public / trigger callers omit it. */
   leadingControl?: React.ReactNode;
+  /** The agent linked to this conversation via the conversation's forward link
+   *  (conversations.agent_id). When provided it is preferred over the reverse
+   *  by-conversation lookup, which misses agents whose single-valued
+   *  agents.conversation_id is null (e.g. an agent owning several conversations). */
+  linkedAgentId?: string | null;
 }
 
 export function MessageComposer({
@@ -87,6 +93,7 @@ export function MessageComposer({
   onSendNow,
   onReorderQueue,
   leadingControl,
+  linkedAgentId,
 }: MessageComposerProps) {
   const t = useTranslations();
   const isMobile = useMobileDetection();
@@ -121,11 +128,18 @@ export function MessageComposer({
 
   // Resolve the agent linked to this conversation (if any). When present, the options
   // and skills tabs target the agent entity instead of per-conversation local prefs.
+  // Prefer the conversation's forward link (linkedAgentId, from conversations.agent_id):
+  // the reverse by-conversation lookup misses agents whose single-valued
+  // agents.conversation_id is null, which would wrongly scope skills/options to the
+  // conversation instead of the agent.
   const linkedAgentQuery = useQuery({
-    queryKey: ['linked-agent', conversationId],
-    queryFn: () => (conversationId ? orchestratorApi.getAgentByConversationId(conversationId) : Promise.resolve(null)),
-    enabled: !minimal && !!conversationId,
+    queryKey: ['linked-agent', conversationId, linkedAgentId ?? null],
+    queryFn: () => fetchLinkedAgent(orchestratorApi, { linkedAgentId, conversationId }),
+    enabled: !minimal && canFetchLinkedAgent({ linkedAgentId, conversationId }),
     staleTime: 60_000,
+    // A 404 (agent deleted / not visible) is a definitive "no linked agent" -> show the
+    // model selector; do not retry (getAgent rejects; some 404s carry no numeric status).
+    retry: false,
   });
   const linkedAgent = linkedAgentQuery.data;
   const agentIdForConversation: string | null = linkedAgent?.id ?? null;

@@ -2,7 +2,17 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 
 export function useMouseResize(
   setPanelWidth: (width: number) => void,
-  options: { minWidth?: number; maxFraction?: number; onResizeEnd?: () => void } = {}
+  options: {
+    minWidth?: number;
+    maxFraction?: number;
+    onResizeEnd?: () => void;
+    /**
+     * Resize axis. 'x' (default) resizes WIDTH from the right edge of the viewport
+     * (right-docked panel). 'y' resizes HEIGHT from the bottom edge (bottom-docked
+     * panel). `minWidth`/`maxFraction` apply to the active axis' size in both cases.
+     */
+    axis?: 'x' | 'y';
+  } = {}
 ) {
   const [isResizing, setIsResizing] = useState(false);
   const hasManuallyResizedRef = useRef(false);
@@ -17,9 +27,16 @@ export function useMouseResize(
   useEffect(() => {
     if (!isResizing) return;
 
+    const axis = optsRef.current.axis ?? 'x';
     const handleMouseMove = (e: MouseEvent) => {
-      const screenWidth = window.innerWidth;
       const min = optsRef.current.minWidth ?? 280;
+      if (axis === 'y') {
+        const screenHeight = window.innerHeight;
+        const max = screenHeight * (optsRef.current.maxFraction ?? 0.6);
+        setPanelWidthRef.current(Math.max(min, Math.min(max, screenHeight - e.clientY)));
+        return;
+      }
+      const screenWidth = window.innerWidth;
       const max = screenWidth * (optsRef.current.maxFraction ?? 0.6);
       setPanelWidthRef.current(Math.max(min, Math.min(max, screenWidth - e.clientX)));
     };
@@ -41,7 +58,7 @@ export function useMouseResize(
     const prevUserSelect = document.body.style.userSelect;
     const prevCursor = document.body.style.cursor;
     document.body.style.userSelect = 'none';
-    document.body.style.cursor = 'ew-resize';
+    document.body.style.cursor = axis === 'y' ? 'ns-resize' : 'ew-resize';
 
     return () => {
       window.removeEventListener('mousemove', handleMouseMove);

@@ -347,6 +347,7 @@ export function ChatPageLayout({
                 hideWorkflowToggle={messageHistoryProps.hideWorkflowToggle}
                 hideDataSourceToggle={messageHistoryProps.hideDataSourceToggle}
                 leadingControl={composerProps.leadingControl}
+                linkedAgentId={composerProps.linkedAgentId}
                 className="flex-1 min-h-0"
               />
               {activityOpen && conversationId && (

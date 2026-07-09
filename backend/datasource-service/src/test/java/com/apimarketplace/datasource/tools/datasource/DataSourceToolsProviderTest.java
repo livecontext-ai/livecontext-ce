@@ -119,7 +119,7 @@ class DataSourceToolsProviderTest {
             List<String> names = provider.getTools().get(0).parameters().stream().map(p -> p.name()).toList();
             assertThat(names).containsExactlyInAnyOrder(
                     "action", "table_id", "name", "description", "data", "rows", "columns",
-                    "where", "set", "similarity", "limit", "offset",
+                    "where", "set", "similarity", "limit", "offset", "query",
                     "title", "interface_id", "visibility", "credits_per_use");
         }
 

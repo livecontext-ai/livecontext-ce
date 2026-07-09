@@ -10,6 +10,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { useSidePanelSafe } from '@/contexts/SidePanelContext';
+import { useSidePanelLayoutSafe } from '@/contexts/SidePanelLayoutContext';
 import { useMouseResize } from '@/hooks/useMouseResize';
 import { useMobileDetection } from '@/hooks/useMobileDetection';
 import { PanelResizeHandle } from '@/components/ui/PanelResizeHandle';
@@ -58,15 +59,24 @@ export function SidePanel() {
   const panelRef = useRef<HTMLDivElement>(null);
   const isMobile = useMobileDetection();
 
-  // Dispatch fitView so the workflow canvas recenters after panel width changes
+  // Dock position preference (Settings > Preferences). 'bottom' only takes effect on
+  // desktop - on mobile the panel keeps its fixed full-screen overlay regardless.
+  const { position } = useSidePanelLayoutSafe();
+  const isBottom = position === 'bottom' && !isMobile;
+
+  // Dispatch fitView so the workflow canvas recenters after the panel size changes
   const dispatchFitView = useCallback(() => {
     window.dispatchEvent(new CustomEvent('workflowViewFitView', {
       detail: { animated: true },
     }));
   }, []);
 
-  // Resize via shared hook - trigger fitView when manual resize ends
-  const resizeOptions = React.useMemo(() => ({ onResizeEnd: dispatchFitView }), [dispatchFitView]);
+  // Resize via shared hook - trigger fitView when manual resize ends. In bottom mode we
+  // resize HEIGHT (y axis) from the top edge; otherwise WIDTH (x axis) from the left edge.
+  const resizeOptions = React.useMemo(
+    () => ({ onResizeEnd: dispatchFitView, axis: (isBottom ? 'y' : 'x') as 'x' | 'y', minWidth: isBottom ? 200 : undefined }),
+    [dispatchFitView, isBottom],
+  );
   const { isResizing, startResize, hasManuallyResizedRef } = useMouseResize(setPanelWidth, resizeOptions);
 
   // Lazy rendering: track whether content has been mounted at least once
@@ -85,9 +95,17 @@ export function SidePanel() {
     }
   }, [isOpen, hasBeenOpened]);
 
-  // Default width calculation: uses active tab's preferredWidth or 35%, clamped to [320, max]
+  // Default size along the active axis. Right mode: width from the tab's preferredWidth
+  // (or 35%), clamped to [320, 70%]. Bottom mode: height at 40% of the viewport, clamped
+  // to [240, 70%] (preferredWidth is a width fraction, so it is not reused for height).
   const calculatePanelWidth = useCallback((preferred?: number) => {
-    if (typeof window === 'undefined') return 384;
+    if (typeof window === 'undefined') return isBottom ? 360 : 384;
+    if (isBottom) {
+      const screenHeight = window.innerHeight;
+      const maxHeight = Math.floor(screenHeight * 0.7);
+      const minHeight = 240;
+      return Math.max(minHeight, Math.min(maxHeight, Math.floor(screenHeight * 0.4)));
+    }
     const screenWidth = window.innerWidth;
     if (screenWidth < 768) return screenWidth;
     const fraction = preferred || 0.35;
@@ -95,7 +113,7 @@ export function SidePanel() {
     const minWidth = 320;
     const calculated = Math.floor(screenWidth * fraction);
     return Math.max(minWidth, Math.min(maxWidth, calculated));
-  }, []);
+  }, [isBottom]);
 
   // Read latest panelWidth from a ref so the window-resize effect doesn't
   // re-attach on every drag tick.
@@ -108,15 +126,24 @@ export function SidePanel() {
     const handleResize = () => {
       if (isResizing) return; // never fight an active drag
       if (hasManuallyResizedRef.current) {
-        const maxWidth = window.innerWidth * 0.7;
-        if (panelWidthRef.current > maxWidth) setPanelWidth(maxWidth);
+        const maxExtent = (isBottom ? window.innerHeight : window.innerWidth) * 0.7;
+        if (panelWidthRef.current > maxExtent) setPanelWidth(maxExtent);
         return;
       }
       setPanelWidth(calculatePanelWidth(activeTab?.preferredWidth));
     };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, [isOpen, calculatePanelWidth, activeTab?.preferredWidth, isResizing]);
+  }, [isOpen, calculatePanelWidth, activeTab?.preferredWidth, isResizing, isBottom]);
+
+  // Switching dock position (right <-> bottom) invalidates the stored px size, which is
+  // axis-specific. Drop any manual resize and recompute the default for the new axis.
+  useEffect(() => {
+    hasManuallyResizedRef.current = false;
+    if (isOpen) setPanelWidth(calculatePanelWidth(activeTab?.preferredWidth));
+    // Recompute only when the axis flips - not on every tab/size change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isBottom]);
 
   // Sync width with open/close
   useEffect(() => {
@@ -147,7 +174,7 @@ export function SidePanel() {
     const panel = panelRef.current;
     if (!panel) return;
     const handleTransitionEnd = (e: TransitionEvent) => {
-      if (e.propertyName === 'width') {
+      if (e.propertyName === 'width' || e.propertyName === 'height') {
         dispatchFitView();
       }
     };
@@ -328,12 +355,13 @@ export function SidePanel() {
         <div className="fixed inset-0 bg-black/50 z-[38] md:hidden" onClick={close} />
       )}
 
-      {/* Resize handle - fixed at left edge of panel */}
+      {/* Resize handle - left edge (right dock) or top edge (bottom dock) */}
       {!isMobile && isOpen && isVisible && (
         <PanelResizeHandle
           panelWidth={currentWidth}
           isResizing={isResizing}
           onResizeStart={startResize}
+          orientation={isBottom ? 'bottom' : 'right'}
         />
       )}
 
@@ -343,7 +371,7 @@ export function SidePanel() {
       {isResizing && (
         <div
           className="fixed inset-0 z-[99]"
-          style={{ cursor: 'ew-resize' }}
+          style={{ cursor: isBottom ? 'ns-resize' : 'ew-resize' }}
           aria-hidden="true"
         />
       )}
@@ -352,12 +380,15 @@ export function SidePanel() {
       <div
         ref={panelRef}
         className={cn(
-          'bg-theme-primary overflow-hidden flex-shrink-0 border-l border-theme',
+          'bg-theme-primary overflow-hidden flex-shrink-0 border-theme',
+          isBottom ? 'w-full border-t' : 'border-l',
           isMobile && 'fixed right-0 top-0 h-full z-[40]',
         )}
         style={{
-          width: `${currentWidth}px`,
-          transition: isResizing ? 'none' : 'width 0.3s ease-in-out',
+          // Bottom dock resizes HEIGHT (full width); right dock resizes WIDTH (full height).
+          ...(isBottom
+            ? { height: `${currentWidth}px`, transition: isResizing ? 'none' : 'height 0.3s ease-in-out' }
+            : { width: `${currentWidth}px`, transition: isResizing ? 'none' : 'width 0.3s ease-in-out' }),
           // Safe area insets for notch devices
           ...(isMobile ? {
             paddingTop: 'env(safe-area-inset-top, 0px)',

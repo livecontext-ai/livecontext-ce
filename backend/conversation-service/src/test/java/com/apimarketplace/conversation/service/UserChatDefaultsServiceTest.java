@@ -163,4 +163,75 @@ class UserChatDefaultsServiceTest {
         service.get("u1", "orgA");
         verify(repository, never()).save(any());
     }
+
+    // ====================================================================
+    // seedNewConversationConfig - the fallback that gives workflow-assistant
+    // conversations the user's Preferences chat defaults (they bypass the
+    // composer, which is the only other place that seeds chat_config).
+    // ====================================================================
+
+    @Test
+    @DisplayName("seedNewConversationConfig falls back to the stored defaults when no explicit config is given")
+    void seedFallsBackToStoredDefaults() {
+        Map<String, Object> stored = new LinkedHashMap<>();
+        stored.put("webSearch", false);
+        stored.put("systemPrompt", "Be concise.");
+        when(repository.findByUserIdAndOrganizationId("u1", "orgA"))
+                .thenReturn(Optional.of(new UserChatDefaults("u1", "orgA", stored)));
+
+        Map<String, Object> seeded = service.seedNewConversationConfig("u1", "orgA", null);
+
+        // Without this fallback a workflow-assistant conversation started with chat_config=null
+        // and inherited none of the user's Preferences.
+        assertThat(seeded).containsEntry("webSearch", false).containsEntry("systemPrompt", "Be concise.");
+    }
+
+    @Test
+    @DisplayName("seedNewConversationConfig returns a COPY of the stored defaults (mutating it cannot corrupt the cached row)")
+    void seedReturnsDefensiveCopy() {
+        Map<String, Object> stored = new LinkedHashMap<>();
+        stored.put("webSearch", false);
+        UserChatDefaults row = new UserChatDefaults("u1", "orgA", stored);
+        when(repository.findByUserIdAndOrganizationId("u1", "orgA")).thenReturn(Optional.of(row));
+
+        Map<String, Object> seeded = service.seedNewConversationConfig("u1", "orgA", null);
+        seeded.put("temperature", 0.9); // caller mutates the returned map
+
+        assertThat(seeded).isNotSameAs(row.getConfig());
+        assertThat(row.getConfig()).doesNotContainKey("temperature"); // stored row untouched
+    }
+
+    @Test
+    @DisplayName("seedNewConversationConfig returns null when neither an explicit config nor a stored default exists (column stays unset)")
+    void seedReturnsNullWhenNothingToSeed() {
+        when(repository.findByUserIdAndOrganizationId("u1", "orgA")).thenReturn(Optional.empty());
+
+        Map<String, Object> seeded = service.seedNewConversationConfig("u1", "orgA", null);
+
+        assertThat(seeded).isNull();
+    }
+
+    @Test
+    @DisplayName("seedNewConversationConfig keeps a non-empty explicit config verbatim and never reads the stored defaults")
+    void seedPrefersExplicitConfig() {
+        Map<String, Object> explicit = Map.of("temperature", 0.2);
+
+        Map<String, Object> seeded = service.seedNewConversationConfig("u1", "orgA", explicit);
+
+        assertThat(seeded).isSameAs(explicit);
+        verify(repository, never()).findByUserIdAndOrganizationId(any(), any());
+    }
+
+    @Test
+    @DisplayName("seedNewConversationConfig treats an EMPTY explicit config as absent and falls back to the stored defaults")
+    void seedTreatsEmptyExplicitAsAbsent() {
+        Map<String, Object> stored = new LinkedHashMap<>();
+        stored.put("webSearch", false);
+        when(repository.findByUserIdAndOrganizationId("u1", "orgA"))
+                .thenReturn(Optional.of(new UserChatDefaults("u1", "orgA", stored)));
+
+        Map<String, Object> seeded = service.seedNewConversationConfig("u1", "orgA", new HashMap<>());
+
+        assertThat(seeded).containsEntry("webSearch", false);
+    }
 }

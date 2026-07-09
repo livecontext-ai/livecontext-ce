@@ -43,6 +43,7 @@ class ConversationCommandServiceAgentTest {
     @Mock private ConversationRepository conversationRepository;
     @Mock private MessageRepository messageRepository;
     @Mock private WorkflowContextProvider workflowContextProvider;
+    @Mock private UserChatDefaultsService userChatDefaultsService;
     /** Stands in for the Spring proxy self-reference so REQUIRES_NEW dispatch is observable. */
     @Mock private ConversationCommandService self;
 
@@ -56,7 +57,8 @@ class ConversationCommandServiceAgentTest {
     @BeforeEach
     void setUp() {
         service = new ConversationCommandService(
-            conversationRepository, messageRepository, conversationMapper, workflowContextProvider, self);
+            conversationRepository, messageRepository, conversationMapper, workflowContextProvider,
+            userChatDefaultsService, self);
     }
 
     private Conversation agentConv(String id, String userId, String orgId, boolean active) {
@@ -131,6 +133,28 @@ class ConversationCommandServiceAgentTest {
             assertThat(inserted.getUserId()).isEqualTo(USER);
             assertThat(inserted.getActive()).isTrue();
             assertThat(inserted.getTitle()).isEqualTo("Sales Agent");
+        }
+
+        @Test
+        @DisplayName("does NOT seed the user's chat defaults - an agent conversation derives its config from the AgentEntity")
+        void agentConversationIsNotSeededFromUserDefaults() {
+            when(conversationRepository
+                    .findByOrganizationIdStrictAndAgentIdAndActiveTrueOrderByCreatedAtAsc(ORG, AGENT))
+                    .thenReturn(List.of());
+            when(workflowContextProvider.getAgentName(AGENT, USER)).thenReturn("Sales Agent");
+            ConversationDto created = new ConversationDto();
+            created.setId("conv-new");
+            when(self.createConversationInNewTransaction(any())).thenReturn(created);
+
+            service.createAgentConversation(USER, ORG, AGENT, "gpt-4", "openai", null);
+
+            // The chat-defaults seed is a general-chat concern (workflow assistant). Agent
+            // conversations must keep deriving temperature/systemPrompt/tools/skills from the
+            // AgentEntity, so this path must never consult user_chat_defaults.
+            verify(userChatDefaultsService, never()).seedNewConversationConfig(any(), any(), any());
+            ArgumentCaptor<ConversationDto> captor = ArgumentCaptor.forClass(ConversationDto.class);
+            verify(self).createConversationInNewTransaction(captor.capture());
+            assertThat(captor.getValue().getChatConfig()).isNull();
         }
 
         @Test

@@ -2,7 +2,8 @@
 
 import React, { useMemo, useState, useEffect } from "react";
 import { SelectedModel, AIModel } from "@/hooks/useModels";
-import { PanelLeft, PanelRight, ChevronLeft, ChevronRight, Home, Sparkles, Minimize2, Play, FileText, Pencil, Globe, ArrowLeft, Download, List } from "lucide-react";
+import { PanelLeft, PanelRight, PanelBottom, ChevronLeft, ChevronRight, Home, Sparkles, Minimize2, Play, FileText, Pencil, Globe, ArrowLeft, Download, List } from "lucide-react";
+import { useSidePanelLayoutSafe } from "@/contexts/SidePanelLayoutContext";
 import { useConversationActivity } from "@/contexts/ConversationActivityContext";
 import LoadingSpinner from "@/components/LoadingSpinner";
 import { AvatarDisplay } from "@/components/agents/AvatarPicker";
@@ -223,6 +224,10 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   onFilesDownload,
   filesDownloading = false,
 }) => {
+  // Dock position preference - the toggle icon mirrors where the panel opens
+  // (right edge -> PanelRight, bottom edge -> PanelBottom).
+  const { position: sidePanelPosition } = useSidePanelLayoutSafe();
+  const SidePanelToggleIcon = sidePanelPosition === 'bottom' ? PanelBottom : PanelRight;
   const t = useTranslations();
   const { isOpen: isActivityOpen, toggle: toggleActivity } = useConversationActivity();
 
@@ -971,7 +976,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
               title={t('sidePanel.addTab')}
               className="w-8 h-8 text-black dark:text-white"
             >
-              <PanelRight className="w-4 h-4" />
+              <SidePanelToggleIcon className="w-4 h-4" />
             </Button>
           )}
         </div>
@@ -1254,7 +1259,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
               title={t('sidePanel.addTab')}
               className="w-8 h-8 text-black dark:text-white"
             >
-              <PanelRight className="w-4 h-4" />
+              <SidePanelToggleIcon className="w-4 h-4" />
             </Button>
           )}
         </div>

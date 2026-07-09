@@ -37,6 +37,7 @@ import type { BuilderNodeData, PaletteDragItem } from '../types';
 import type { ConnectionType } from './ConnectionTypeSelector';
 import { generateWorkflowPlan } from '../utils/workflowPlanGenerator';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
+import { useSidePanelSafe } from '@/contexts/SidePanelContext';
 import { isEmbeddedWorkflowCanvas } from '@/lib/workflow/canvasEmbedding';
 import { useSvgSafeId } from '@/hooks/useSvgSafeId';
 import LoadingSpinner from '@/components/LoadingSpinner';
@@ -343,6 +344,9 @@ export function BuilderCanvas({
   // Embedded = mounted outside this workflow's /app/workflow/<id> page (e.g.
   // a SidePanel tab on a chat page). Same heuristic as WorkflowModeToggle.
   const isEmbedded = isEmbeddedWorkflowCanvas(pathname, workflowId);
+  // When the right side panel is open, its AI Chat tab already shows the (now
+  // centered) composer, so the empty-canvas hero would be a duplicate - hide it.
+  const isSidePanelOpen = useSidePanelSafe()?.isOpen ?? false;
   // ReactFlow's <Background> builds its SVG <pattern> id from the store rfId,
   // which is "1" for every <ReactFlow> mounted without an explicit id. With
   // several canvases mounted at once (keepMounted SidePanel tabs), every
@@ -1084,7 +1088,7 @@ export function BuilderCanvas({
                 canvases (SidePanel tabs) have their own AI Chat sub-tab; while
                 an agent initializes a plan there, the canvas is briefly empty
                 and this composer must not flash over it. */}
-            {nodes.length === 0 && !isFullscreen && !isLoadingWorkflow && !isLocked && !isEmbedded && (
+            {nodes.length === 0 && !isFullscreen && !isLoadingWorkflow && !isLocked && !isEmbedded && !isSidePanelOpen && (
               <>
                 <Panel position="top-center" className="relative z-[50] w-full hidden sm:block" style={{ pointerEvents: 'none' }}>
                   <EmptyCanvasChat

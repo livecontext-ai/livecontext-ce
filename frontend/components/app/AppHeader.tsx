@@ -35,6 +35,7 @@ import { useTranslations } from 'next-intl';
 import { PROVIDER_ICON_MAP } from '@/lib/ai-providers/providerIcons';
 import { buildWorkflowPanelTab, useAutoRegisterWorkflowPanelTab } from '@/lib/sidePanel/workflowPanelTab';
 import { buildAgentConfigPanelTab } from '@/lib/sidePanel/agentConfigPanelTab';
+import { fetchLinkedAgent } from '@/lib/chat/linkedAgent';
 import {
   emitFilesDetailCommand,
   emitFilesFolderNavigate,
@@ -211,17 +212,10 @@ export function AppHeader() {
       }
     };
 
-    // Use agentId from shared conversations (primary path - conversation stores agentId)
-    if (resolvedAgentId) {
-      orchestratorApi.getAgent(resolvedAgentId)
-        .then(applyAgent)
-        .catch(() => applyAgent(null));
-      return;
-    }
-
-    // Fallback: reverse lookup via agent entity's conversationId field
-    orchestratorApi.getAgentByConversationId(conversationId)
-      .then(applyAgent)
+    // Prefer the conversation's forward link (conversations.agent_id, resolvedAgentId);
+    // fall back to the reverse by-conversation lookup only when it is unknown.
+    fetchLinkedAgent(orchestratorApi, { linkedAgentId: resolvedAgentId, conversationId })
+      .then((agent) => applyAgent(agent ?? null))
       .catch(() => applyAgent(null));
   }, [conversationId, resolvedAgentId]);
 

@@ -173,8 +173,7 @@ describe('Node Contracts - Schema Alignment', () => {
       expect(outputNames).toContain('current_index');
       expect(outputNames).toContain('item_count');
       expect(outputNames).toContain('split_id');
-      expect(outputNames).toContain('split_strategy');
-      expect(outputNames).toContain('exit_reason');
+      expect(outputNames).toContain('spawn_reason');
       expect(outputNames).toContain('terminated');
     });
 

@@ -71,6 +71,14 @@ export interface ChatCoreProps {
   // When provided, replaces the default empty state
   emptyStateContent?: React.ReactNode;
 
+  // Welcome-hero empty state (like the main /app/chat page): when true AND the
+  // conversation is empty, the composer is centered in the messages area with an
+  // optional title above it, instead of the small placeholder + bottom composer.
+  // Once a conversation is active the composer docks at the bottom as usual.
+  welcomeLayout?: boolean;
+  // Title node rendered above the centered composer in the welcome layout.
+  welcomeTitle?: React.ReactNode;
+
   // Workflow-specific (optional)
   workflowId?: string;
 
@@ -96,6 +104,10 @@ export interface ChatCoreProps {
 
   // Control rendered in the composer, left of the mic (model selector / agent avatar).
   leadingControl?: React.ReactNode;
+  // Agent linked to this conversation (conversations.agent_id), resolved by the caller.
+  // Preferred over deriving it from `conversation` so the composer matches the header even
+  // before the full conversation object has loaded (the caller can read a sidebar cache).
+  linkedAgentId?: string | null;
 }
 
 export function ChatCore({
@@ -111,6 +123,8 @@ export function ChatCore({
   hideDataSourceToggle = false,
   emptyStateMessage,
   emptyStateContent,
+  welcomeLayout = false,
+  welcomeTitle,
   workflowId,
   externalInputValue,
   onExternalInputConsumed,
@@ -127,6 +141,7 @@ export function ChatCore({
   onRunWorkflow,
   onDeleteVisualization: onDeleteVisualizationProp,
   leadingControl,
+  linkedAgentId,
 }: ChatCoreProps) {
   const t = useTranslations();
   const streaming = useStreaming();
@@ -837,6 +852,38 @@ export function ChatCore({
   const showEmptyState = !conversationId && messages.length === 0 && !isStreamingThisConversation && !isLoading;
   const shouldRenderHistory = conversationId || messages.length > 0 || isStreamingThisConversation || isLoading;
 
+  // Welcome-hero layout is active only on the empty state; when it is, the composer
+  // is centered in the messages area (below) and NOT docked at the bottom. An
+  // explicit custom `emptyStateContent` takes precedence over the welcome hero.
+  const showWelcomeLayout = welcomeLayout && showEmptyState && !emptyStateContent;
+
+  // Composer is built once and placed either centered (welcome layout) or docked
+  // at the bottom (normal layout). Only one instance is mounted at a time.
+  const composer = (
+    <MessageComposer
+      inputValue={inputValue}
+      onInputChange={setInputValue}
+      onSendMessage={handleSendMessage}
+      onKeyPress={handleKeyPress}
+      isStreaming={isStreamingThisConversation}
+      isStreamStarting={isStreamStarting}
+      onStopStream={handleStopStream}
+      showAttachmentMenu={showAttachmentMenu}
+      onShowAttachmentMenu={setShowAttachmentMenu}
+      fullWidth={true}
+      conversationId={conversationId ?? undefined}
+      queuedMessages={queue}
+      shouldEnqueue={shouldEnqueue}
+      onEnqueueMessage={handleEnqueueMessage}
+      onRemoveQueuedMessage={handleRemoveFromQueue}
+      onEditQueuedMessage={handleEditQueuedMessage}
+      onSendNow={handleSendNow}
+      onReorderQueue={handleReorderQueue}
+      leadingControl={leadingControl}
+      linkedAgentId={linkedAgentId ?? conversation?.agentId ?? null}
+    />
+  );
+
   return (
     <div className={`flex flex-col h-full min-h-0 overflow-hidden ${className}`}>
       {/* Messages area */}
@@ -866,8 +913,24 @@ export function ChatCore({
           </div>
         )}
 
-        <div className="mx-auto max-w-4xl w-full px-2">
-          {showEmptyState ? (
+        <div className={`mx-auto max-w-4xl w-full px-2${showWelcomeLayout ? ' h-full' : ''}`}>
+          {showWelcomeLayout ? (
+            // Welcome hero: centered composer with an optional title above it,
+            // mirroring the main /app/chat empty-state layout.
+            <div className="flex flex-col justify-center h-full">
+              {welcomeTitle && (
+                <div className="text-center max-w-md mx-auto mb-8">{welcomeTitle}</div>
+              )}
+              <div className="w-full relative">
+                <div className="absolute inset-x-4 -top-4 h-4 rounded-t-[32px] bg-gradient-to-r from-transparent via-white/80 to-transparent blur-xl opacity-40 dark:from-transparent dark:via-white/10 dark:to-transparent" />
+                <div className="relative flex items-end justify-center">
+                  <div className="max-w-3xl w-full">
+                    {composer}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : showEmptyState ? (
             emptyStateContent ? (
               // Custom empty state content (e.g., welcome message with ActivityFeed)
               <div className="h-full">{emptyStateContent}</div>
@@ -944,30 +1007,13 @@ export function ChatCore({
         </div>
       </div>
 
-      {/* Message composer - centered with max width to match messages */}
-      <div className="flex-shrink-0 mx-auto max-w-4xl w-full">
-        <MessageComposer
-          inputValue={inputValue}
-          onInputChange={setInputValue}
-          onSendMessage={handleSendMessage}
-          onKeyPress={handleKeyPress}
-          isStreaming={isStreamingThisConversation}
-          isStreamStarting={isStreamStarting}
-          onStopStream={handleStopStream}
-          showAttachmentMenu={showAttachmentMenu}
-          onShowAttachmentMenu={setShowAttachmentMenu}
-          fullWidth={true}
-          conversationId={conversationId ?? undefined}
-          queuedMessages={queue}
-          shouldEnqueue={shouldEnqueue}
-          onEnqueueMessage={handleEnqueueMessage}
-          onRemoveQueuedMessage={handleRemoveFromQueue}
-          onEditQueuedMessage={handleEditQueuedMessage}
-          onSendNow={handleSendNow}
-          onReorderQueue={handleReorderQueue}
-          leadingControl={leadingControl}
-        />
-      </div>
+      {/* Message composer - centered with max width to match messages. Hidden in
+          the welcome layout, where the composer is rendered centered above. */}
+      {!showWelcomeLayout && (
+        <div className="flex-shrink-0 mx-auto max-w-4xl w-full">
+          {composer}
+        </div>
+      )}
 
       {/* Toast notifications - lives at ChatCore level so toasts survive ServiceApprovalCard unmount */}
       <ToastContainer toasts={toasts} onRemoveToast={removeToast} />

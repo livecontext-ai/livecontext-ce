@@ -12,6 +12,7 @@ import type { AgentSnapshotConfig } from '@/app/workflows/builder/types/agentSna
 import { UnsavedChangesModal } from '@/components/modals/UnsavedChangesModal';
 import { WorkflowRunCanvas, type RunInfoChangeData } from '@/components/workflow/WorkflowRunCanvas';
 import { useUnsavedChanges } from '@/app/workflows/builder/hooks/state';
+import { markRunAsJustExecuted } from '@/app/workflows/builder/hooks/useWorkflowLoader';
 import { useSidePanelSafe } from '@/contexts/SidePanelContext';
 import { setPendingActivateTab } from '@/components/app/WorkflowPanelContent';
 import { Table, Bot, Workflow } from 'lucide-react';
@@ -48,7 +49,7 @@ interface WorkflowDetailViewProps {
 export function WorkflowDetailView({ workflowId, runId: runIdProp, autoOpenApp }: WorkflowDetailViewProps) {
   const router = useRouter();
   const { isAuthenticated, isAuthChecking } = useAuthGuard();
-  const { isPreviewOnly, runId: contextRunId } = useWorkflowMode();
+  const { isPreviewOnly, runId: contextRunId, setRunId } = useWorkflowMode();
   const effectiveRunId = contextRunId || runIdProp || null;
   const sidePanel = useSidePanelSafe();
 
@@ -99,16 +100,21 @@ export function WorkflowDetailView({ workflowId, runId: runIdProp, autoOpenApp }
     setWorkflowName(info.name);
   }, []);
 
-  // ── Flip the main canvas into run mode when the agent (chatting in the
-  // workflow panel) launches THIS workflow. Every agent-run of a workflow emits
-  // a global `sidePanelAutoOpen` marker (`type:'workflow_run'`, `id`=workflowId,
-  // `runId`). On chat pages AppHeader reacts to it by opening the run in a side
-  // panel, but that handler is gated to chat pages - so on the workflow page
-  // nothing reacted and the left canvas stayed in edit mode while the run
-  // executed. Navigate to the run URL (exactly what the Run toggle does for this
-  // non-embedded canvas); the shared workflow layout stays mounted, so the panel
-  // chat keeps streaming. Only a run of THIS workflow flips the canvas - a
-  // different workflow's run is not this canvas's concern. ──
+  // ── Overlay the live run on the main canvas when the agent (chatting in the
+  // workflow panel) launches THIS workflow. Every agent-run emits a global
+  // `sidePanelAutoOpen` marker (`type:'workflow_run'`, `id`=workflowId, `runId`).
+  // On chat pages AppHeader reacts to it, but that handler is gated to chat pages,
+  // so on the workflow page nothing reacted and the left canvas stayed in edit
+  // mode while the run executed.
+  //
+  // We flip IN PLACE, not by navigating: `setRunId` binds the run without a URL
+  // change, and `markRunAsJustExecuted` tells the loader to KEEP the current
+  // canvas plan (the one the agent just saved) instead of reloading the run's
+  // plan. So the run statuses overlay on the existing nodes with zero refresh -
+  // the user's canvas view and context are preserved. (An earlier version did a
+  // `router.push` to the run URL, which reloaded the plan and wiped the context.)
+  // Only a run of THIS workflow flips the canvas - a different workflow's run is
+  // not this canvas's concern. ──
   useEffect(() => {
     if (isPreviewOnly) return;
     const handleWorkflowRunAutoOpen = (event: CustomEvent<{ type: string; id: string; runId?: string }>) => {
@@ -116,15 +122,23 @@ export function WorkflowDetailView({ workflowId, runId: runIdProp, autoOpenApp }
       if (type !== 'workflow_run' || !eventRunId) return;
       if (id !== workflowId) return;
       if (effectiveRunId === eventRunId) return; // already bound to this run
-      router.push(`/app/workflow/${workflowId}/run/${eventRunId}`);
+      markRunAsJustExecuted(eventRunId); // keep the current plan - overlay, don't reload
+      setRunId(eventRunId);              // bind run in place (no navigation)
     };
     window.addEventListener('sidePanelAutoOpen', handleWorkflowRunAutoOpen as EventListener);
     return () => window.removeEventListener('sidePanelAutoOpen', handleWorkflowRunAutoOpen as EventListener);
-  }, [workflowId, effectiveRunId, isPreviewOnly, router]);
+  }, [workflowId, effectiveRunId, isPreviewOnly, setRunId]);
 
   // ── Dispatch triggerData changes to WorkflowPanelContent ──
+  // Gate on `effectiveRunId`, NOT `runIdProp`: an agent-launched run is now bound
+  // IN PLACE (setRunId, no /run/ URL), so `runIdProp` is undefined during that
+  // run and gating on it dropped the trigger/application/agent sub-tabs to []
+  // (they never appeared in the workflow panel). `effectiveRunId` is set for both
+  // a URL run and an in-place run, and null in edit mode - so configs flow in
+  // either run mode and stay empty while editing. (Same reason
+  // WorkflowBuilderPanelContent forwards its canvas configs un-gated.)
   useEffect(() => {
-    const dataToDispatch = runIdProp ? triggerData : null;
+    const dataToDispatch = effectiveRunId ? triggerData : null;
     window.dispatchEvent(new CustomEvent('workflowPanelTriggerDataChange', {
       detail: {
         workflowId,
@@ -132,26 +146,29 @@ export function WorkflowDetailView({ workflowId, runId: runIdProp, autoOpenApp }
         activeTriggerId: dataToDispatch?.activeTriggerId,
         readySteps: dataToDispatch?.readySteps ?? new Set(),
         runStatus: dataToDispatch?.runStatus,
+        // Forward the canvas's bound run id so the panel's Application/interface can
+        // resolve its run when it is bound IN PLACE (no /run/ URL to read it from).
+        runId: dataToDispatch?.runId,
         isStepByStepMode: dataToDispatch?.isStepByStepMode,
       },
     }));
-  }, [triggerData, runIdProp, workflowId]);
+  }, [triggerData, effectiveRunId, workflowId]);
 
   // ── Dispatch applicationConfigs changes to WorkflowPanelContent ──
   useEffect(() => {
-    const configs = runIdProp ? applicationConfigs : [];
+    const configs = effectiveRunId ? applicationConfigs : [];
     window.dispatchEvent(new CustomEvent('workflowPanelApplicationConfigsChange', {
       detail: { workflowId, configs },
     }));
-  }, [applicationConfigs, runIdProp, workflowId]);
+  }, [applicationConfigs, effectiveRunId, workflowId]);
 
   // ── Dispatch agentConfigs changes to WorkflowPanelContent ──
   useEffect(() => {
-    const configs = runIdProp ? agentConfigs : [];
+    const configs = effectiveRunId ? agentConfigs : [];
     window.dispatchEvent(new CustomEvent('workflowPanelAgentConfigsChange', {
       detail: { workflowId, configs },
     }));
-  }, [agentConfigs, runIdProp, workflowId]);
+  }, [agentConfigs, effectiveRunId, workflowId]);
 
   // ── Intercept trigger/application tab open events to ensure SidePanel is open ──
   useEffect(() => {
@@ -162,7 +179,7 @@ export function WorkflowDetailView({ workflowId, runId: runIdProp, autoOpenApp }
         sidePanel.setActiveTab('workflow-panel');
       } else {
         // Set pending tab and open via the AppHeader's Sparkles handler
-        const match = (runIdProp ? triggerData?.configs : [])?.find(
+        const match = (effectiveRunId ? triggerData?.configs : [])?.find(
           c => c.type === event.detail.triggerType
         );
         if (match) {
@@ -198,7 +215,7 @@ export function WorkflowDetailView({ workflowId, runId: runIdProp, autoOpenApp }
       window.removeEventListener('workflowOpenTriggerTab', handleOpenTriggerTab as EventListener);
       window.removeEventListener('workflowOpenApplicationTab', handleOpenApplicationTab as EventListener);
     };
-  }, [sidePanel?.isOpen, triggerData, applicationConfigs, runIdProp, effectiveRunId]);
+  }, [sidePanel?.isOpen, triggerData, applicationConfigs, effectiveRunId]);
 
   // ── Listen for datasource tab open requests (from step focus on table nodes) ──
   useEffect(() => {

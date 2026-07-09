@@ -370,6 +370,12 @@ export function WorkflowModeToggle({
     } else {
       if (isEmbedded) {
         setRunId(null);
+      } else if (pathname && !pathname.includes('/run/')) {
+        // In-place run overlay (agent-launched: the run is bound via setRunId
+        // with NO /run/ URL, so the canvas can show run mode while the URL stays
+        // on the edit page). router.push to the edit URL would be a no-op here,
+        // so clear the binding directly to return to edit mode.
+        setRunId(null);
       } else {
         router.push(`/app/workflow/${workflowId}`);
       }
@@ -716,7 +722,14 @@ export function WorkflowModeToggle({
                                 <span className="text-[10px] text-gray-500 dark:text-gray-400 flex-shrink-0">⊘{step.statusCounts!.skipped}</span>
                               )}
                               {(step.statusCounts?.running ?? 0) > 0 && (
-                                <span className="text-[10px] text-blue-600 dark:text-blue-400 flex-shrink-0">⟳{step.statusCounts!.running}</span>
+                                <span className="inline-flex items-center gap-1 text-[10px] text-blue-600 dark:text-blue-400 flex-shrink-0">
+                                  {/* Same blue pulse as the epoch row (not a spinning refresh icon) */}
+                                  <span className="relative flex h-1.5 w-1.5">
+                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+                                    <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-blue-500" />
+                                  </span>
+                                  {step.statusCounts!.running}
+                                </span>
                               )}
                               {(step.statusCounts?.awaitingSignal ?? 0) > 0 && (
                                 <span className="inline-flex items-center gap-px text-[10px] text-amber-500 dark:text-amber-400 flex-shrink-0">
@@ -725,7 +738,10 @@ export function WorkflowModeToggle({
                               )}
                               {/* Live status indicators (when no terminal counts yet) */}
                               {step.status === 'running' && !(step.statusCounts?.running) && (
-                                <Loader2 className="w-3 h-3 text-blue-500 dark:text-blue-400 animate-spin flex-shrink-0" />
+                                <span className="relative flex h-1.5 w-1.5 flex-shrink-0" aria-label="running">
+                                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+                                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-blue-500" />
+                                </span>
                               )}
                               {step.status === 'awaiting_signal' && !(step.statusCounts?.awaitingSignal) && (
                                 <PauseCircle className="w-3 h-3 text-amber-500 dark:text-amber-400 flex-shrink-0" />

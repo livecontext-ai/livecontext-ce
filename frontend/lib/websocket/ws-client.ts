@@ -157,21 +157,9 @@ class WebSocketClient {
 
     console.log(`[WS:client] subscribe ch=${channel} new=${isNewChannel} status=${this._status} snapshot=${!!requestSnapshot} handlers=${handlers.size}`);
 
-    if (this._status === 'connected') {
-      if (isNewChannel) {
-        // First subscriber opens the channel (and pulls a snapshot if asked).
-        this.sendSubscribe(channel, requestSnapshot);
-      } else if (requestSnapshot) {
-        // A LATER subscriber joining an already-open channel still needs the
-        // current state. Redis pub/sub does not replay, so without re-requesting
-        // a snapshot this handler would only ever receive FUTURE deltas and
-        // render stale/empty. This is the real cause of a re-navigated (or
-        // second-gateway-pod) workflow canvas entering run mode but never
-        // painting the run: the channel was already subscribed by an earlier
-        // connection, so `new=false` skipped the snapshot. Re-sending subscribe
-        // with requestSnapshot is idempotent server-side (state is state).
-        this.sendSubscribe(channel, true);
-      }
+    // Send subscribe message to server if connected and this is the first handler
+    if (isNewChannel && this._status === 'connected') {
+      this.sendSubscribe(channel, requestSnapshot);
     }
 
     return () => {

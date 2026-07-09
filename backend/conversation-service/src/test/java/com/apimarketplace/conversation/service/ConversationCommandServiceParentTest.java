@@ -32,6 +32,7 @@ class ConversationCommandServiceParentTest {
     @Mock private ConversationRepository conversationRepository;
     @Mock private MessageRepository messageRepository;
     @Mock private WorkflowContextProvider workflowContextProvider;
+    @Mock private UserChatDefaultsService userChatDefaultsService;
 
     private final ConversationMapper conversationMapper = new ConversationMapper();
     private ConversationCommandService service;
@@ -39,7 +40,8 @@ class ConversationCommandServiceParentTest {
     @BeforeEach
     void setUp() {
         service = new ConversationCommandService(
-            conversationRepository, messageRepository, conversationMapper, workflowContextProvider, null);
+            conversationRepository, messageRepository, conversationMapper, workflowContextProvider,
+            userChatDefaultsService, null);
     }
 
     @Nested

@@ -203,7 +203,7 @@ class BrowserAgentNodeRelayTest {
 
         assertThatThrownBy(() -> node.acceptServices(registry))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("BrowserAgentModule")
+                .hasMessageContaining("no browser stack is available")
                 .hasMessageContaining("websearch.enabled");
     }
 }
