@@ -183,9 +183,17 @@ public class OAuth2Controller {
     public void callback(
             HttpServletResponse response,
             @RequestParam(value = "code", required = false) String code,
+            @RequestParam(value = "auth_code", required = false) String authCode,
             @RequestParam(value = "state", required = false) String state,
             @RequestParam(value = "error", required = false) String error,
             @RequestParam(value = "error_description", required = false) String errorDescription) throws IOException {
+
+        // Most providers return the authorization code as `code` (RFC 6749). TikTok for Business
+        // returns it as `auth_code`; fall back to that so the callback works for both. The token
+        // request re-sends the value under the provider's configured code param name.
+        if ((code == null || code.isBlank()) && authCode != null && !authCode.isBlank()) {
+            code = authCode;
+        }
 
         log.info("OAuth2 callback received - code: {}, state: {}, error: {}",
                 code != null ? "present" : "null", state, error);

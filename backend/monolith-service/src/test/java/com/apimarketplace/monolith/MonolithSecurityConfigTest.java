@@ -208,6 +208,79 @@ class MonolithSecurityConfigTest {
         assertThat(forwarded.getHeader("X-Share-Resource-Id")).isEqualTo(resourceId.toString());
     }
 
+    @Test
+    @DisplayName("monolithSecurityFilter bean api-key resolver forwards the resolved key scopes as X-Api-Key-Scopes")
+    void monolithSecurityFilterApiKeyResolverForwardsScopes() throws Exception {
+        GatewayFilterProperties properties = mock(GatewayFilterProperties.class);
+        when(properties.getPublicPaths()).thenReturn(List.of());
+        JwtKeyPairManager keyPairManager = mock(JwtKeyPairManager.class);
+        SharedLinkService sharedLinkService = mock(SharedLinkService.class);
+        ApiKeyService apiKeyService = mock(ApiKeyService.class);
+
+        String plaintext = "lc_live_" + "a".repeat(64);
+        com.apimarketplace.auth.dto.UserResolutionResponse resolved =
+                new com.apimarketplace.auth.dto.UserResolutionResponse();
+        resolved.setUserId(42L);
+        resolved.setProviderId("local:owner@example.com");
+        resolved.setEmail("owner@example.com");
+        resolved.setActive(true);
+        resolved.setApiKeyScopes(List.of("workflow", "table"));
+        when(apiKeyService.resolveByPlaintextKey(plaintext)).thenReturn(resolved);
+
+        MonolithSecurityFilter filter = new MonolithSecurityConfig()
+                .monolithSecurityFilter(properties, keyPairManager, sharedLinkService, apiKeyService);
+
+        // A SCOPED key is confined to the MCP streamable endpoint (it 403s on any
+        // other path), so the scope-forwarding assertion must run against /mcp.
+        MockHttpServletRequest request = externalRequest("/mcp");
+        request.addHeader("X-API-Key", plaintext);
+        // A spoofed inbound copy must be replaced by the resolved scopes, never forwarded.
+        request.addHeader("X-Api-Key-Scopes", "admin,everything");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+        filter.doFilter(request, response, capturingChain(captured));
+
+        assertThat(response.getStatus()).isEqualTo(200);
+        HttpServletRequest forwarded = (HttpServletRequest) captured.get();
+        assertThat(forwarded.getHeader("X-User-ID")).isEqualTo("42");
+        assertThat(forwarded.getHeader("X-Api-Key-Scopes")).isEqualTo("workflow,table");
+    }
+
+    @Test
+    @DisplayName("monolithSecurityFilter bean api-key resolver leaves the header absent for a full-access key")
+    void monolithSecurityFilterApiKeyResolverFullAccessLeavesHeaderAbsent() throws Exception {
+        GatewayFilterProperties properties = mock(GatewayFilterProperties.class);
+        when(properties.getPublicPaths()).thenReturn(List.of());
+        JwtKeyPairManager keyPairManager = mock(JwtKeyPairManager.class);
+        SharedLinkService sharedLinkService = mock(SharedLinkService.class);
+        ApiKeyService apiKeyService = mock(ApiKeyService.class);
+
+        String plaintext = "lc_live_" + "b".repeat(64);
+        com.apimarketplace.auth.dto.UserResolutionResponse resolved =
+                new com.apimarketplace.auth.dto.UserResolutionResponse();
+        resolved.setUserId(42L);
+        resolved.setProviderId("local:owner@example.com");
+        resolved.setActive(true);
+        // Legacy/full-access key: apiKeyScopes stays null.
+        when(apiKeyService.resolveByPlaintextKey(plaintext)).thenReturn(resolved);
+
+        MonolithSecurityFilter filter = new MonolithSecurityConfig()
+                .monolithSecurityFilter(properties, keyPairManager, sharedLinkService, apiKeyService);
+
+        MockHttpServletRequest request = externalRequest("/api/workflows");
+        request.addHeader("X-API-Key", plaintext);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+        filter.doFilter(request, response, capturingChain(captured));
+
+        assertThat(response.getStatus()).isEqualTo(200);
+        HttpServletRequest forwarded = (HttpServletRequest) captured.get();
+        assertThat(forwarded.getHeader("X-User-ID")).isEqualTo("42");
+        assertThat(forwarded.getHeader("X-Api-Key-Scopes")).isNull();
+    }
+
     private static MockHttpServletRequest externalRequest(String path) {
         MockHttpServletRequest request = new MockHttpServletRequest("GET", path);
         request.setRemoteAddr("203.0.113.10");

@@ -284,45 +284,38 @@ export function NodeCreatorPanel({ isOpen, onClose, onSelectNode, currentWorkflo
 
   if (!isOpen) return null;
 
+  const hasBreadcrumb = selectedCategoryId || navigationLevel !== 'categories';
+
   return (
     <TooltipProvider delayDuration={1000}>
-      <Button onClick={onClose} variant="secondary" size="sm" className="hidden sm:flex absolute top-0 -left-10 h-8 w-8 p-0 rounded-full z-[100] bg-[var(--bg-primary)] hover:bg-[var(--text-primary)] hover:text-[var(--bg-primary)] shadow-none">
-        <X className="h-4 w-4" />
-      </Button>
-
       <div data-node-creator-panel className="w-[min(340px,calc(100vw-48px))] max-h-[90vh] rounded-[32px] bg-white/80 dark:bg-gray-800/80 backdrop-blur flex flex-col pointer-events-auto overflow-hidden relative z-[100]"
         onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'none'; }}
         onDrop={(e) => { e.preventDefault(); e.stopPropagation(); }}>
 
-        {/* Breadcrumb */}
-        {(selectedCategoryId || navigationLevel !== 'categories') && (
-          <div className="px-5 pt-3 flex-shrink-0">
-            <nav className="flex items-center gap-1.5 text-sm" aria-label="Breadcrumb">
-              {breadcrumbItems.map((item, index) => {
-                const isLast = index === breadcrumbItems.length - 1;
-                const isClickable = item.onClick && !isLast;
-                return (
-                  <React.Fragment key={index}>
-                    {index > 0 && <span className="text-gray-400 dark:text-gray-500 flex-shrink-0">/</span>}
-                    {index === 0 ? (
-                      <button onClick={item.onClick} className="inline-flex items-center justify-center h-6 w-6 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors flex-shrink-0" title={t('backToHome')}>
-                        <Layers className="h-4 w-4 text-gray-600 dark:text-gray-400" />
-                      </button>
-                    ) : (
-                      <button onClick={item.onClick} className={clsx("px-1.5 py-0.5 rounded text-sm transition-colors truncate", item.isActive ? "text-gray-900 dark:text-gray-100 cursor-default" : isClickable ? "text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100" : "text-gray-500 dark:text-gray-400")} disabled={item.isActive || !isClickable}>
-                        {item.label}
-                      </button>
-                    )}
-                  </React.Fragment>
-                );
-              })}
-            </nav>
-          </div>
-        )}
-
-        {/* Mobile close button - inside panel for small screens where -left-10 clips */}
-        <div className="sm:hidden flex justify-end px-3 pt-3 pb-0 flex-shrink-0">
-          <Button onClick={onClose} variant="ghost" size="sm" className="h-7 w-7 p-0 rounded-full">
+        {/* Top bar: breadcrumb (left, when present) + a single in-flow close button
+            (right). One close for every screen size - no floating offset that clips. */}
+        <div className="flex items-center justify-between gap-2 px-5 pt-3 flex-shrink-0">
+          <nav className="flex min-w-0 flex-1 items-center gap-1.5 text-sm" aria-label="Breadcrumb">
+            {hasBreadcrumb && breadcrumbItems.map((item, index) => {
+              const isLast = index === breadcrumbItems.length - 1;
+              const isClickable = item.onClick && !isLast;
+              return (
+                <React.Fragment key={index}>
+                  {index > 0 && <span className="text-gray-400 dark:text-gray-500 flex-shrink-0">/</span>}
+                  {index === 0 ? (
+                    <button onClick={item.onClick} className="inline-flex items-center justify-center h-6 w-6 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors flex-shrink-0" title={t('backToHome')}>
+                      <Layers className="h-4 w-4 text-gray-600 dark:text-gray-400" />
+                    </button>
+                  ) : (
+                    <button onClick={item.onClick} className={clsx("px-1.5 py-0.5 rounded text-sm transition-colors truncate", item.isActive ? "text-gray-900 dark:text-gray-100 cursor-default" : isClickable ? "text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100" : "text-gray-500 dark:text-gray-400")} disabled={item.isActive || !isClickable}>
+                      {item.label}
+                    </button>
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </nav>
+          <Button onClick={onClose} variant="ghost" size="icon" className="h-7 w-7 flex-shrink-0" title={t('close')}>
             <X className="h-4 w-4" />
           </Button>
         </div>

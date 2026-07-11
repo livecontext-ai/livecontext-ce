@@ -59,10 +59,13 @@ export function SidePanel() {
   const panelRef = useRef<HTMLDivElement>(null);
   const isMobile = useMobileDetection();
 
-  // Dock position preference (Settings > Preferences). 'bottom' only takes effect on
+  // Dock position preference (Settings > Preferences). Both bottom variants
+  // ('bottom' = content width, 'bottom-full' = full viewport width) dock the panel at
+  // the bottom and render it identically (full width of its container, height-sized);
+  // only WHERE it is mounted differs (see AppShell). Bottom only takes effect on
   // desktop - on mobile the panel keeps its fixed full-screen overlay regardless.
   const { position } = useSidePanelLayoutSafe();
-  const isBottom = position === 'bottom' && !isMobile;
+  const isBottom = (position === 'bottom' || position === 'bottom-full') && !isMobile;
 
   // Dispatch fitView so the workflow canvas recenters after the panel size changes
   const dispatchFitView = useCallback(() => {
@@ -379,6 +382,7 @@ export function SidePanel() {
       {/* Panel container - flex sibling on desktop, fixed overlay on mobile */}
       <div
         ref={panelRef}
+        data-testid="side-panel"
         className={cn(
           'bg-theme-primary overflow-hidden flex-shrink-0 border-theme',
           isBottom ? 'w-full border-t' : 'border-l',

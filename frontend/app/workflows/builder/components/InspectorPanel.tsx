@@ -36,7 +36,6 @@ import { useInspectorNavigation } from './inspector/useInspectorNavigation';
 import { useInspectorNavigationHandlers } from './inspector/useInspectorNavigationHandlers';
 import { useInspectorToolDetails } from './inspector/useInspectorToolDetails';
 import { AI_TYPES, CORE_LOGIC_TYPES, CORE_DIRECT_TYPES, TRIGGER_TYPES } from './inspector/nodeTypes';
-import { InspectorActionButtons } from './inspector/InspectorActionButtons';
 import { InspectorMultiSelection } from './inspector/InspectorMultiSelection';
 import { useInspectorViewMode } from './inspector/useInspectorViewMode';
 import { useInspectorLayout } from './inspector/useInspectorLayout';
@@ -679,27 +678,6 @@ export function InspectorPanel({ node, selectedNodeIds = [], onUpdate, onClose, 
       }}
       className="relative"
     >
-      {/* Desktop action buttons panel */}
-      <InspectorActionButtons
-        node={node}
-        isFullscreen={isFullscreen}
-        isAdvanced={isAdvanced}
-        isRunMode={isRunMode}
-        isInterfaceNode={isInterfaceNode}
-        isTriggerNode={isTriggerNode}
-        isTableSelected={isTableSelected}
-        dataSourceId={dataSourceData?.dataSourceId}
-        shouldForceSmallMode={shouldForceSmallMode}
-        hasGlobalValidationErrors={hasGlobalValidationErrors}
-        stepByStepStatus={stepByStepStatus}
-        onDeleteNode={onDeleteNode}
-        onDuplicateNode={onDuplicateNode}
-        onAdvancedChange={onAdvancedChange}
-        onFullscreenChange={onFullscreenChange}
-        onClose={onClose}
-        onMinimize={() => onMinimizedChange?.(true)}
-        onReportNode={handleReportNode}
-      />
       <div
         ref={panelRef}
         data-inspector-panel
@@ -753,6 +731,8 @@ export function InspectorPanel({ node, selectedNodeIds = [], onUpdate, onClose, 
           isTriggerNode={isTriggerNode}
           isInterfaceNode={isInterfaceNode}
           shouldForceSmallMode={shouldForceSmallMode}
+          isTableSelected={!!isTableSelected}
+          dataSourceId={dataSourceData?.dataSourceId}
           triggerNavigationLevel={triggerNavigationLevel}
           selectedDataSourceId={selectedDataSourceId}
           dataSources={dataSources}

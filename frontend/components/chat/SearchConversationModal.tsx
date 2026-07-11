@@ -11,8 +11,8 @@ import { useTranslations } from 'next-intl';
 import { Conversation } from "@/lib/api/conversationApi";
 import { conversationApi } from "@/lib/api/conversationApi";
 import { useTheme } from "../ThemeProvider";
-import { Input } from "../ui/input";
 import { Button } from "../ui/button";
+import { SearchField } from "@/components/ui/search-field";
 import { cn } from "@/lib/utils";
 import { formatUtcDateTime } from "@/lib/utils/dateFormatters";
 import { conversationDisplayTitle } from "@/lib/utils/conversationTitle";
@@ -29,6 +29,7 @@ export const SearchConversationModal: React.FC<
 > = ({ isOpen, onClose, onConversationSelect, currentConversationId }) => {
   const { theme } = useTheme();
   const t = useTranslations('chat.search');
+  const tSearch = useTranslations('globalSearch');
   const [searchTerm, setSearchTerm] = useState("");
   const [searchType, setSearchType] = useState<"title" | "content">("content");
   const [hasSearched, setHasSearched] = useState(false);
@@ -194,14 +195,14 @@ export const SearchConversationModal: React.FC<
     >
       <div
         ref={modalRef}
-        className="bg-theme-primary border border-theme rounded-3xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col animate-in fade-in-0 zoom-in-95 duration-300"
+        className="bg-theme-primary border border-theme rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.16)] w-full max-w-3xl max-h-[85vh] flex flex-col animate-in fade-in-0 zoom-in-95 duration-200"
       >
         {/* Header */}
         <div className="flex items-center justify-between p-6 bg-theme-secondary/30">
           <div className="flex items-center space-x-4">
             <Search className="w-6 h-6 text-theme-primary" />
             <div>
-              <h2 className="text-2xl font-semibold text-theme-primary">
+              <h2 className="text-xl font-semibold text-theme-primary">
                 {t('title')}
               </h2>
               <p className="text-theme-secondary">
@@ -221,29 +222,25 @@ export const SearchConversationModal: React.FC<
 
         {/* Search Input */}
         <div className="p-6 bg-theme-secondary/20">
-          <div className="relative">
-            <div className="relative">
-              <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-theme-secondary z-10" />
-              <Input
-                ref={inputRef}
-                type="text"
-                placeholder={t('placeholder')}
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-12 pr-4 py-4 text-lg"
-              />
-            </div>
-          </div>
+          <SearchField
+            ref={inputRef}
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            onClear={() => setSearchTerm("")}
+            clearLabel={tSearch('clear')}
+            placeholder={t('placeholder')}
+            autoFocus
+          />
 
           {/* Search Type Toggle - Same style as WorkflowMessagesPanel tabs */}
           <div className="flex items-center justify-center mt-8">
             <div
               ref={tabsContainerRef}
-              className="relative inline-flex items-center gap-0.5 p-1 bg-theme-tertiary rounded-full"
+              className="relative inline-flex items-center gap-0.5 p-1 bg-theme-tertiary rounded-2xl"
             >
               {/* Animated slider background */}
               <div
-                className="absolute top-1 bottom-1 rounded-full bg-[var(--bg-primary)] transition-all duration-300 ease-out"
+                className="absolute top-1 bottom-1 rounded-xl bg-[var(--bg-primary)] transition-all duration-200 ease-out"
                 style={{
                   left: `${sliderStyle.left}px`,
                   width: `${sliderStyle.width}px`,
@@ -257,7 +254,7 @@ export const SearchConversationModal: React.FC<
                 type="button"
                 onClick={() => handleSearchTypeChange("content")}
                 className={cn(
-                  "relative z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-all duration-200",
+                  "relative z-10 flex h-9 items-center gap-1.5 px-3 rounded-xl text-sm font-medium transition-all duration-200",
                   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 outline-none",
                   searchType === "content"
                     ? "text-[var(--text-primary)]"
@@ -279,7 +276,7 @@ export const SearchConversationModal: React.FC<
                 type="button"
                 onClick={() => handleSearchTypeChange("title")}
                 className={cn(
-                  "relative z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-all duration-200",
+                  "relative z-10 flex h-9 items-center gap-1.5 px-3 rounded-xl text-sm font-medium transition-all duration-200",
                   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 outline-none",
                   searchType === "title"
                     ? "text-[var(--text-primary)]"

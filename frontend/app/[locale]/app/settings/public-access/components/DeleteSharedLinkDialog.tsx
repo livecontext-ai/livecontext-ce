@@ -42,7 +42,7 @@ export function DeleteSharedLinkDialog({
       onClick={handleClose}
     >
       <div
-        className="max-w-md w-full bg-theme-primary rounded-3xl shadow-2xl p-6 animate-in fade-in-0 zoom-in-95 duration-300 border border-theme"
+        className="max-w-md w-full bg-theme-primary rounded-3xl shadow-2xl p-6 animate-in fade-in-0 zoom-in-95 duration-300 border border-theme max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"

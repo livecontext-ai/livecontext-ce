@@ -103,7 +103,7 @@ export const CreateWorkflowModal: React.FC<CreateWorkflowModalProps> = ({
                 onClick={onClose}
             >
                 <div
-                    className="max-w-lg w-full bg-theme-primary rounded-3xl shadow-2xl p-8 animate-in fade-in-0 zoom-in-95 duration-300 border border-theme max-h-[90vh] overflow-y-auto"
+                    className="max-w-lg w-full bg-theme-primary rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.16)] p-6 animate-in fade-in-0 zoom-in-95 duration-200 border border-theme max-h-[90vh] overflow-y-auto"
                     onClick={(e) => e.stopPropagation()}
                 >
                     {/* Header */}
@@ -111,7 +111,7 @@ export const CreateWorkflowModal: React.FC<CreateWorkflowModalProps> = ({
                         <div className="w-16 h-16 bg-theme-secondary rounded-full flex items-center justify-center mx-auto mb-4">
                             <Workflow className="w-8 h-8 text-theme-primary" />
                         </div>
-                        <h3 className="text-2xl font-semibold text-theme-primary">{t('title')}</h3>
+                        <h3 className="text-xl font-semibold text-theme-primary">{t('title')}</h3>
                     </div>
 
                     {/* Form */}

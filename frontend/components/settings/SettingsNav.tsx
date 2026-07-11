@@ -134,10 +134,14 @@ export function SettingsNav() {
                                 safeNavigate(item.href);
                             }}
                             className={cn(
-                                'group flex items-center gap-1.5 md:gap-2 px-2.5 md:px-3 py-2 rounded-lg text-sm transition-all duration-200 md:w-full text-left whitespace-nowrap md:whitespace-normal flex-shrink-0',
+                                // min-h-9 = the app standard control height; py-2 lets long
+                                // labels wrap to two lines on desktop without clipping.
+                                'group flex items-center gap-1.5 md:gap-2 min-h-9 px-2.5 md:px-3 py-2 rounded-lg text-sm transition-colors duration-150 md:w-full text-left whitespace-nowrap md:whitespace-normal flex-shrink-0',
+                                // Same tokens as the app sidebar rows: bg-surface-hover for
+                                // both the active state and the hover, so the two navs match.
                                 isActive
-                                    ? 'bg-theme-secondary text-theme-primary'
-                                    : 'text-theme-secondary hover:bg-gray-200 dark:hover:bg-gray-700 hover:text-theme-primary'
+                                    ? 'bg-surface-hover text-theme-primary font-medium'
+                                    : 'text-theme-secondary hover:bg-surface-hover hover:text-theme-primary'
                             )}
                         >
                             <Icon className="w-4 h-4 flex-shrink-0" />

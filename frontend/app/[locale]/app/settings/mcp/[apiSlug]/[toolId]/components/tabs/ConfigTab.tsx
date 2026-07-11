@@ -160,7 +160,7 @@ const ConfigTab: React.FC<ConfigTabProps> = ({
                         showValidation={true}
                     />
                 ) : (
-                    <div className="flex h-10 w-full rounded-md border border-input bg-muted/30 px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-foreground/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 opacity-100 text-foreground">
+                    <div className="flex h-9 w-full items-center rounded-md border border-input bg-muted/30 px-3 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-foreground/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 opacity-100 text-foreground">
                         {toolState?.endpoint ? (api?.baseUrl ? `${api.baseUrl}${toolState.endpoint}` : toolState.endpoint) : t('placeholders.notSet')}
                     </div>
                 )}

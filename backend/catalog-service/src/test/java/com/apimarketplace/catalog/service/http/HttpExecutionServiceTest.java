@@ -155,6 +155,37 @@ class HttpExecutionServiceTest {
 
             assertEquals("http://other-host.internal/raw", result);
         }
+
+        /**
+         * Dynamic-URL escape hatch: an endpoint whose path BEGINS with a {placeholder}
+         * takes its full request URL from a runtime parameter (a provider-issued signed
+         * URL from a prior call - TikTok upload_url, WhatsApp media_url). Prepending
+         * baseUrl would corrupt it into "https://base/https://provider/...".
+         */
+        @Test
+        @DisplayName("Dynamic-URL endpoint ({upload_url}) bypasses baseUrl concatenation")
+        void dynamicUrlEndpointBypassesBaseUrl() {
+            ApiEntity api = createTestApi("https://open.tiktokapis.com/v2");
+            ApiToolEntity tool = createTestTool("{upload_url}");
+
+            String result = service.buildFullUrl(api, tool);
+
+            assertEquals("{upload_url}", result,
+                "A placeholder-led endpoint must be returned verbatim so path substitution "
+                + "can install the runtime URL - never baseUrl + '{placeholder}'.");
+        }
+
+        /** Regression guard: a placeholder in the MIDDLE of a path keeps normal concatenation. */
+        @Test
+        @DisplayName("Endpoint with a mid-path placeholder still concatenates with baseUrl")
+        void midPathPlaceholderStillConcatenates() {
+            ApiEntity api = createTestApi("https://api.example.com/v1");
+            ApiToolEntity tool = createTestTool("/users/{userId}/posts");
+
+            String result = service.buildFullUrl(api, tool);
+
+            assertEquals("https://api.example.com/v1/users/{userId}/posts", result);
+        }
     }
 
     // ========================================================================
@@ -447,6 +478,62 @@ class HttpExecutionServiceTest {
 
             assertEquals("http://api.example.com/buckets/my-bucket/objects/images/2025/photo.jpg", result,
                 "Untagged params must keep '/' literal - strict must be strictly opt-in.");
+        }
+
+        // =====================================================================
+        // Verbatim path encoding (opt-in via param extras.encoding = "verbatim").
+        // For dynamic-URL endpoints whose path IS the placeholder ({upload_url},
+        // {media_url}), the value is a provider-signed full URL carrying its own
+        // query string: conservative's '?' → %3F would corrupt the signature.
+        // =====================================================================
+
+        /**
+         * TikTok FILE_UPLOAD flow: the init call returns a signed upload_url with a
+         * query string; the PUT tool's endpoint is exactly "{upload_url}". The value
+         * must be installed byte-identical - '?' and '=' untouched.
+         */
+        @Test
+        @DisplayName("Verbatim-tagged path param installs a signed URL byte-identical (TikTok upload_url)")
+        void verbatimTaggedParamKeepsQueryStringIntact() {
+            String url = "{upload_url}"; // buildFullUrl output for a dynamic-URL endpoint
+            ApiToolEntity tool = createTestTool("{upload_url}");
+
+            ApiToolParameterEntity uploadUrlParam = new ApiToolParameterEntity();
+            uploadUrlParam.setName("upload_url");
+            uploadUrlParam.setParameterType("path");
+            uploadUrlParam.setDataType("string");
+            uploadUrlParam.setExtras("{\"encoding\":\"verbatim\"}");
+            when(apiToolParameterRepository.findByApiToolId(tool.getId()))
+                .thenReturn(List.of(uploadUrlParam));
+
+            String signedUrl =
+                "https://open-upload.tiktokapis.com/video/?upload_id=68亿&upload_token=Xza123%2F#frag";
+            ArrayNode parameters = objectMapper.createArrayNode();
+            parameters.add(objectMapper.createObjectNode().put("upload_url", signedUrl));
+
+            String result = service.processPathParameters(url, tool, parameters);
+
+            assertEquals(signedUrl, result,
+                "Verbatim must apply NO encoding: '?', '=', '%', '#' and unicode all pass through, "
+                + "otherwise the provider's URL signature breaks.");
+        }
+
+        /** Conservative would corrupt a signed URL - pinned so the bug class stays visible. */
+        @Test
+        @DisplayName("Untagged full-URL value gets '?' percent-encoded (why verbatim exists)")
+        void untaggedFullUrlValueIsCorruptedByConservative() {
+            String url = "{media_url}";
+            ApiToolEntity tool = createTestTool("{media_url}");
+
+            ArrayNode parameters = objectMapper.createArrayNode();
+            parameters.add(objectMapper.createObjectNode()
+                .put("media_url", "https://lookaside.fbsbx.com/whatsapp/m?mid=abc"));
+
+            String result = service.processPathParameters(url, tool, parameters);
+
+            assertEquals("https://lookaside.fbsbx.com/whatsapp/m%3Fmid=abc", result,
+                "Without the verbatim tag the conservative encoder escapes '?' - this documents "
+                + "why dynamic-URL params must declare extras.encoding=verbatim.");
         }
     }
 

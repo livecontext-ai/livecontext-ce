@@ -55,6 +55,15 @@ public class UserResolutionResponse {
     private String defaultOrganizationRole;
 
     /**
+     * MCP tool names the authenticating API key may call. Populated ONLY when the
+     * resolution came from a SCOPED multi API key (auth.api_keys row with non-null
+     * scopes); {@code null} for JWT auth and for legacy/full-access keys. The
+     * gateway forwards it downstream as the {@code X-Api-Key-Scopes} header
+     * (comma-joined) so services can enforce least-privilege tool access.
+     */
+    private List<String> apiKeyScopes;
+
+    /**
      * All non-deleted orgs the user is a member of, with their role per-org.
      * Used by the gateway to validate active-org claims sent by the frontend
      * (PR0.5 of the org/membership redesign - see {@link OrgMembershipDto}).
@@ -142,6 +151,9 @@ public class UserResolutionResponse {
 
     public BigDecimal getRemainingCredits() { return remainingCredits; }
     public void setRemainingCredits(BigDecimal remainingCredits) { this.remainingCredits = remainingCredits; }
+
+    public List<String> getApiKeyScopes() { return apiKeyScopes; }
+    public void setApiKeyScopes(List<String> apiKeyScopes) { this.apiKeyScopes = apiKeyScopes; }
 
     public boolean hasCredits() {
         return remainingCredits != null && remainingCredits.compareTo(BigDecimal.ZERO) > 0;

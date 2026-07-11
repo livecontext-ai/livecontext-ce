@@ -50,6 +50,10 @@ interface StreamStatus {
 }
 
 interface ChatHeaderProps {
+  /** Centered search bar (desktop / tablet). Rendered between the breadcrumb zone and the right-side actions. */
+  searchSlot?: React.ReactNode;
+  /** Compact search trigger (mobile). Rendered first in the mobile right-side action group. */
+  mobileSearchSlot?: React.ReactNode;
   selectedModel: SelectedModel;
   onModelChange: (model: SelectedModel) => void;
   /** Per-conversation reasoning effort (CLI/bridge models). "" = inherit. */
@@ -130,6 +134,9 @@ interface ChatHeaderProps {
   onToggleAgentConfigPanel?: () => void;
   /** Show the Conversation Activity toggle (left of the bell) - true only in a conversation. */
   showActivityToggle?: boolean;
+  /** Whether the unified side panel is currently open (any tab, any dock). Drives the
+   *  pressed state of the desktop dock buttons and the switch-dock-while-open behavior. */
+  isSidePanelOpen?: boolean;
   // Files focused-viewer props - back/prev/next/download live in the header
   // (next to the bell) so the media itself renders full-bleed with no chrome.
   // `isFilesDetail` shows the Back button (file open OR inside a folder, V313);
@@ -152,6 +159,8 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   // onReasoningEffortChange, hideModelSelector) are no longer rendered here -
   // that UI moved into the message composer. The props stay on the interface so
   // existing callers (AppHeader, tests) keep compiling; they are simply not read.
+  searchSlot,
+  mobileSearchSlot,
   sidebarOpen,
   onSidebarToggle,
   // Stream status props
@@ -213,6 +222,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   showAgentConfigPanel = false,
   onToggleAgentConfigPanel,
   showActivityToggle = false,
+  isSidePanelOpen = false,
   // Files focused-viewer props
   isFilesDetail = false,
   isFileOpen = false,
@@ -224,10 +234,35 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   onFilesDownload,
   filesDownloading = false,
 }) => {
-  // Dock position preference - the toggle icon mirrors where the panel opens
-  // (right edge -> PanelRight, bottom edge -> PanelBottom).
-  const { position: sidePanelPosition } = useSidePanelLayoutSafe();
-  const SidePanelToggleIcon = sidePanelPosition === 'bottom' ? PanelBottom : PanelRight;
+  // Dock layout state. Desktop shows TWO dock buttons (bottom, then right at the far
+  // edge): each opens the panel at its dock; clicking the active dock's button closes;
+  // clicking the other dock's button while open just repositions the panel. Which
+  // bottom variant the bottom button opens comes from the `bottomMode` preference
+  // (Settings > Preferences). Mobile keeps a single toggle (the panel is a fixed
+  // overlay there, so the dock is inert) whose icon mirrors the active position:
+  // PanelRight only for 'right', PanelBottom for every bottom variant.
+  const {
+    position: sidePanelPosition,
+    setPosition: setSidePanelPosition,
+    bottomMode: sidePanelBottomMode,
+  } = useSidePanelLayoutSafe();
+  const SidePanelToggleIcon = sidePanelPosition === 'right' ? PanelRight : PanelBottom;
+  const activeDock: 'right' | 'bottom' = sidePanelPosition === 'right' ? 'right' : 'bottom';
+  const handleDockToggle = (dock: 'right' | 'bottom') => {
+    const target = dock === 'right' ? 'right' : sidePanelBottomMode;
+    // Setting the position first is deliberate even on a close click: it normalizes
+    // a legacy-stored bottom variant to the current bottomMode preference, so the
+    // next open lands on the preferred variant.
+    setSidePanelPosition(target);
+    // Same dock (or panel closed): delegate open/close to the page-specific toggle.
+    // Different dock while open: reposition only - the panel stays open.
+    if (!isSidePanelOpen || activeDock === dock) {
+      onToggleAgentConfigPanel?.();
+    }
+  };
+  const dockButtonClass = (pressed: boolean) => `w-8 h-8 ${pressed
+    ? 'bg-black text-white hover:bg-black dark:bg-white dark:text-black dark:hover:bg-white'
+    : 'text-black dark:text-white'}`;
   const t = useTranslations();
   const { isOpen: isActivityOpen, toggle: toggleActivity } = useConversationActivity();
 
@@ -743,8 +778,21 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
           )}
         </div>
 
-        {/* Right side - Minimize Button and Messages Panel Toggle Button */}
-        <div className="hidden md:flex items-center gap-1.5 lg:gap-2 flex-shrink-0">
+        {/* Centered global search - desktop / tablet. Fixed-width center column so the
+            pill stays visually centered between the breadcrumb zone and the actions. */}
+        {searchSlot && (
+          <div className="hidden md:flex flex-none justify-center px-1 w-72 lg:w-96 xl:w-[26rem] max-w-[34vw]">
+            {searchSlot}
+          </div>
+        )}
+
+        {/* Right side - Minimize Button and Messages Panel Toggle Button.
+            With a search slot, flex-1 + justify-end balances the flex-1 breadcrumb
+            zone so the slot in between stays visually centered; without one, the
+            legacy flex-shrink-0 layout is preserved for slotless callers. */}
+        <div className={searchSlot
+          ? "hidden md:flex items-center gap-1.5 lg:gap-2 flex-1 justify-end"
+          : "hidden md:flex items-center gap-1.5 lg:gap-2 flex-shrink-0"}>
           {showMinimizeButton && onMinimize && (
             <Button
               variant="ghost"
@@ -967,29 +1015,49 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
               toggle so the chat-home page surfaces unread state without
               relying on the message composer. */}
           <NotificationBell />
-          {/* Side panel toggle - hidden when panel is open (user closes via X in panel) */}
-          {onToggleAgentConfigPanel && !showAgentConfigPanel && (
-            <Button
-              onClick={onToggleAgentConfigPanel}
-              variant="ghost"
-              size="icon"
-              title={t('sidePanel.addTab')}
-              className="w-8 h-8 text-black dark:text-white"
-            >
-              <SidePanelToggleIcon className="w-4 h-4" />
-            </Button>
+          {/* Dock buttons - always visible: bottom dock, then right dock at the far
+              edge. The active dock's button shows pressed while the panel is open and
+              closes on click; the other button switches the dock without closing. */}
+          {onToggleAgentConfigPanel && (
+            <>
+              <Button
+                onClick={() => handleDockToggle('bottom')}
+                variant="ghost"
+                size="icon"
+                aria-pressed={isSidePanelOpen && activeDock === 'bottom'}
+                title={isSidePanelOpen && activeDock === 'bottom' ? t('common.close') : t('sidePanel.openBottom')}
+                className={dockButtonClass(isSidePanelOpen && activeDock === 'bottom')}
+                data-testid="dock-toggle-bottom"
+              >
+                <PanelBottom className="w-4 h-4" />
+              </Button>
+              <Button
+                onClick={() => handleDockToggle('right')}
+                variant="ghost"
+                size="icon"
+                aria-pressed={isSidePanelOpen && activeDock === 'right'}
+                title={isSidePanelOpen && activeDock === 'right' ? t('common.close') : t('sidePanel.openRight')}
+                className={dockButtonClass(isSidePanelOpen && activeDock === 'right')}
+                data-testid="dock-toggle-right"
+              >
+                <PanelRight className="w-4 h-4" />
+              </Button>
+            </>
           )}
         </div>
 
         {/* Mobile Layout - Hamburger and Model Selector on left */}
         {/* No overflow-hidden here: same reason as desktop - would clip the model dropdown. */}
         <div className="md:hidden flex items-center gap-3 flex-1 min-w-0">
-          <button
+          <Button
             onClick={onSidebarToggle}
-            className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-theme-tertiary transition-colors duration-300 cursor-pointer"
+            variant="ghost"
+            size="icon"
+            className="w-8 h-8"
+            title={t('sidebar.expandSidebar')}
           >
-            <PanelLeft className="w-4 h-4 text-theme-primary" />
-          </button>
+            <PanelLeft className="w-4 h-4" />
+          </Button>
 
           {/* Breadcrumb - Mobile - wrapped in overflow-hidden to clip long breadcrumbs
               and prevent overlap with right-side action buttons (matches desktop layout). */}
@@ -1047,6 +1115,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
 
         {/* Mobile Layout - Messages Panel Toggle Button on right */}
         <div className="md:hidden flex items-center gap-1.5 flex-shrink-0">
+          {mobileSearchSlot}
           {isInterfacePage && interfaceId && onEditInterface && (
             <Button
               variant="default"

@@ -15,12 +15,14 @@ import org.springframework.mock.web.MockHttpServletRequest;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -116,9 +118,9 @@ class McpStreamableHttpControllerTest {
     }
 
     @Test
-    @DisplayName("tools/list returns the registry tools")
+    @DisplayName("tools/list without a scopes header passes null scopes (full access)")
     void toolsListReturnsRegistryTools() throws Exception {
-        when(protocolService.listTools()).thenReturn(List.of(Map.of("name", "workflow")));
+        when(protocolService.listTools(isNull())).thenReturn(List.of(Map.of("name", "workflow")));
 
         ResponseEntity<Object> response = controller.handlePost(authenticatedRequest(), json(
                 "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}"));
@@ -131,8 +133,8 @@ class McpStreamableHttpControllerTest {
     @Test
     @DisplayName("tools/call executes the tool with the header-resolved tenant and org context")
     void toolsCallPassesTenantAndOrgContext() throws Exception {
-        when(protocolService.hasTool("workflow")).thenReturn(true);
-        when(protocolService.callTool(eq("workflow"), anyMap(), eq("42"), eq("org-1"), eq("OWNER")))
+        when(protocolService.hasTool(eq("workflow"), isNull())).thenReturn(true);
+        when(protocolService.callTool(eq("workflow"), anyMap(), eq("42"), eq("org-1"), eq("OWNER"), isNull()))
                 .thenReturn(Map.of("content", List.of(), "isError", false));
 
         ResponseEntity<Object> response = controller.handlePost(authenticatedRequest(), json(
@@ -142,13 +144,13 @@ class McpStreamableHttpControllerTest {
         Map<String, Object> result = (Map<String, Object>) body(response).get("result");
         assertThat(result.get("isError")).isEqualTo(false);
         verify(protocolService).callTool(eq("workflow"), eq(Map.of("action", "list")),
-                eq("42"), eq("org-1"), eq("OWNER"));
+                eq("42"), eq("org-1"), eq("OWNER"), isNull());
     }
 
     @Test
     @DisplayName("tools/call on an unknown tool returns invalid-params error")
     void toolsCallUnknownToolReturnsInvalidParams() throws Exception {
-        when(protocolService.hasTool("nope")).thenReturn(false);
+        when(protocolService.hasTool(eq("nope"), isNull())).thenReturn(false);
 
         ResponseEntity<Object> response = controller.handlePost(authenticatedRequest(), json(
                 "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"nope\"}}"));
@@ -171,8 +173,8 @@ class McpStreamableHttpControllerTest {
     @Test
     @DisplayName("a service exception during tools/call surfaces as internal JSON-RPC error")
     void toolsCallServiceExceptionReturnsInternalError() throws Exception {
-        when(protocolService.hasTool("workflow")).thenReturn(true);
-        when(protocolService.callTool(anyString(), anyMap(), anyString(), any(), any()))
+        when(protocolService.hasTool(eq("workflow"), isNull())).thenReturn(true);
+        when(protocolService.callTool(anyString(), anyMap(), anyString(), any(), any(), any()))
                 .thenThrow(new IllegalStateException("boom"));
 
         ResponseEntity<Object> response = controller.handlePost(authenticatedRequest(), json(
@@ -181,6 +183,102 @@ class McpStreamableHttpControllerTest {
         Map<String, Object> error = (Map<String, Object>) body(response).get("error");
         assertThat(error.get("code")).isEqualTo(-32603);
         assertThat((String) error.get("message")).contains("boom");
+    }
+
+    // ==================== API-key scopes ====================
+
+    private static MockHttpServletRequest scopedRequest(String scopesHeader) {
+        MockHttpServletRequest request = authenticatedRequest();
+        request.addHeader("X-Api-Key-Scopes", scopesHeader);
+        return request;
+    }
+
+    @Test
+    @DisplayName("tools/list with a scopes header passes the parsed scope set to the service")
+    void toolsListWithScopesHeaderPassesParsedScopes() throws Exception {
+        when(protocolService.listTools(eq(Set.of("workflow", "table"))))
+                .thenReturn(List.of(Map.of("name", "workflow"), Map.of("name", "table")));
+
+        ResponseEntity<Object> response = controller.handlePost(
+                scopedRequest("workflow,table"), json(
+                "{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"tools/list\"}"));
+
+        Map<String, Object> result = (Map<String, Object>) body(response).get("result");
+        assertThat((List<Map<String, Object>>) result.get("tools"))
+                .extracting(t -> t.get("name")).containsExactly("workflow", "table");
+        verify(protocolService).listTools(eq(Set.of("workflow", "table")));
+    }
+
+    @Test
+    @DisplayName("scope parsing trims whitespace, lowercases, and drops blank/trailing-comma tokens")
+    void scopeParsingNormalizesTokens() throws Exception {
+        when(protocolService.listTools(eq(Set.of("workflow", "table", "agent"))))
+                .thenReturn(List.of());
+
+        controller.handlePost(scopedRequest("  Workflow , TABLE ,, agent ,"), json(
+                "{\"jsonrpc\":\"2.0\",\"id\":21,\"method\":\"tools/list\"}"));
+
+        verify(protocolService).listTools(eq(Set.of("workflow", "table", "agent")));
+    }
+
+    @Test
+    @DisplayName("a present-but-empty scopes header means a zero-scope key: EMPTY set, not full access")
+    void emptyScopesHeaderMeansNoTools() throws Exception {
+        when(protocolService.listTools(eq(Set.of()))).thenReturn(List.of());
+
+        ResponseEntity<Object> response = controller.handlePost(scopedRequest("  "), json(
+                "{\"jsonrpc\":\"2.0\",\"id\":22,\"method\":\"tools/list\"}"));
+
+        Map<String, Object> result = (Map<String, Object>) body(response).get("result");
+        assertThat((List<Map<String, Object>>) result.get("tools")).isEmpty();
+        // The security-critical part: the service got an EMPTY set, never null.
+        verify(protocolService).listTools(eq(Set.of()));
+        verify(protocolService, never()).listTools(isNull());
+    }
+
+    @Test
+    @DisplayName("tools/call of an out-of-scope tool returns the same error as an unknown tool")
+    void toolsCallOutOfScopeToolLooksUnknown() throws Exception {
+        when(protocolService.hasTool(eq("workflow"), eq(Set.of("table")))).thenReturn(false);
+
+        ResponseEntity<Object> response = controller.handlePost(scopedRequest("table"), json(
+                "{\"jsonrpc\":\"2.0\",\"id\":23,\"method\":\"tools/call\",\"params\":{\"name\":\"workflow\"}}"));
+
+        Map<String, Object> error = (Map<String, Object>) body(response).get("error");
+        // Identical code + wording to the nonexistent-tool case: no enumeration signal.
+        assertThat(error.get("code")).isEqualTo(-32602);
+        assertThat(error.get("message")).isEqualTo("Unknown tool: workflow");
+        verify(protocolService, never()).callTool(anyString(), anyMap(), anyString(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("tools/call of an in-scope tool executes with the scope set threaded through")
+    void toolsCallInScopeToolExecutes() throws Exception {
+        when(protocolService.hasTool(eq("workflow"), eq(Set.of("workflow")))).thenReturn(true);
+        when(protocolService.callTool(eq("workflow"), anyMap(), eq("42"), eq("org-1"), eq("OWNER"),
+                eq(Set.of("workflow"))))
+                .thenReturn(Map.of("content", List.of(), "isError", false));
+
+        ResponseEntity<Object> response = controller.handlePost(scopedRequest("workflow"), json(
+                "{\"jsonrpc\":\"2.0\",\"id\":24,\"method\":\"tools/call\"," +
+                "\"params\":{\"name\":\"workflow\",\"arguments\":{\"action\":\"list\"}}}"));
+
+        Map<String, Object> result = (Map<String, Object>) body(response).get("result");
+        assertThat(result.get("isError")).isEqualTo(false);
+        verify(protocolService).callTool(eq("workflow"), eq(Map.of("action", "list")),
+                eq("42"), eq("org-1"), eq("OWNER"), eq(Set.of("workflow")));
+    }
+
+    @Test
+    @DisplayName("resources/list stays unscoped: a scoped key still sees the resource catalog")
+    void resourcesListIgnoresScopes() throws Exception {
+        when(protocolService.listResources()).thenReturn(List.of(Map.of("uri", "docs://tools")));
+
+        ResponseEntity<Object> response = controller.handlePost(scopedRequest("table"), json(
+                "{\"jsonrpc\":\"2.0\",\"id\":25,\"method\":\"resources/list\"}"));
+
+        Map<String, Object> result = (Map<String, Object>) body(response).get("result");
+        assertThat((List<Map<String, Object>>) result.get("resources")).hasSize(1);
     }
 
     // ==================== resources ====================
@@ -246,7 +344,7 @@ class McpStreamableHttpControllerTest {
 
         assertThat(response.getStatusCode().value()).isEqualTo(401);
         assertThat(response.getHeaders().getFirst(HttpHeaders.WWW_AUTHENTICATE)).isNotBlank();
-        verify(protocolService, never()).listTools();
+        verify(protocolService, never()).listTools(any());
     }
 
     // ==================== batch ====================

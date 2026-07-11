@@ -606,7 +606,7 @@ const APIMarketplaceTab: React.FC<APIMarketplaceTabProps> = ({
                             type="number"
                             value={config[`price${planName}` as keyof MonetizationConfig] as number || planData?.price || 0}
                             onChange={(e) => handlePlanPricingChange(planKey, 'price', parseFloat(e.target.value) || 0)}
-                            className="w-full px-3 py-2 bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
+                            className="w-full h-9 px-3 text-sm bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
                             min={0}
                             step={0.01}
                           />
@@ -630,7 +630,7 @@ const APIMarketplaceTab: React.FC<APIMarketplaceTabProps> = ({
                             type="number"
                             value={config[`quota${planName}` as keyof MonetizationConfig] as number || planData?.quota || 1000}
                             onChange={(e) => handlePlanPricingChange(planKey, 'quota', parseInt(e.target.value) || 1000)}
-                            className="w-full px-3 py-2 bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
+                            className="w-full h-9 px-3 text-sm bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
                             min={0}
                           />
                         ) : (
@@ -652,7 +652,7 @@ const APIMarketplaceTab: React.FC<APIMarketplaceTabProps> = ({
                           <select
                             value={(hardLimit ?? planData?.hardLimit) ? 'yes' : 'no'}
                             onChange={(e) => handleHardLimitChange(planKey, e.target.value === 'yes')}
-                            className="w-full px-3 py-2 bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
+                            className="w-full h-9 px-3 text-sm bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
                           >
                             <option value="no">{t('hardLimitOptions.no')}</option>
                             <option value="yes">{t('hardLimitOptions.yes')}</option>
@@ -685,7 +685,7 @@ const APIMarketplaceTab: React.FC<APIMarketplaceTabProps> = ({
                               step="0.01"
                               value={config[`overusageCost${planName}` as keyof MonetizationConfig] as number || planData?.overusageCost || 0}
                               onChange={(e) => handlePlanPricingChange(planKey, 'overusageCost', parseFloat(e.target.value) || 0)}
-                              className="w-full px-3 py-2 bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
+                              className="w-full h-9 px-3 text-sm bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
                               min={0}
                             />
                           ) : (
@@ -709,7 +709,7 @@ const APIMarketplaceTab: React.FC<APIMarketplaceTabProps> = ({
                             type="number"
                             value={config[`rps${planName}` as keyof MonetizationConfig] as number || planData?.rateLimitRequests || 1000}
                             onChange={(e) => handlePlanPricingChange(planKey, 'rps', parseInt(e.target.value) || 1000)}
-                            className="w-full px-3 py-2 bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
+                            className="w-full h-9 px-3 text-sm bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
                             min={0}
                           />
                         ) : (
@@ -731,7 +731,7 @@ const APIMarketplaceTab: React.FC<APIMarketplaceTabProps> = ({
                           <select
                             value={config[`rpsPeriod${planName}` as keyof MonetizationConfig] as string || planData?.rateLimitPeriod || 'hour'}
                             onChange={(e) => handleRpsPeriodChange(planKey, e.target.value as 'second' | 'minute' | 'hour' | 'day')}
-                            className="w-full px-3 py-2 bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
+                            className="w-full h-9 px-3 text-sm bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
                           >
                             <option value="second">{t('periods.second')}</option>
                             <option value="minute">{t('periods.minute')}</option>

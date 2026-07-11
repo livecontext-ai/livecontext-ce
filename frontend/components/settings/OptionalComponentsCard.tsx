@@ -17,7 +17,7 @@ interface ComponentRowProps {
 
 function ComponentRow({ icon: Icon, name, description, enabled, enabledLabel, disabledLabel, command }: ComponentRowProps) {
   return (
-    <div className="py-3 first:pt-0 last:pb-0">
+    <div>
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 min-w-0">
           <Icon className="h-3.5 w-3.5 shrink-0 text-theme-secondary" />
@@ -76,7 +76,7 @@ export default function OptionalComponentsCard() {
       ) : !capabilities ? (
         <p className="text-sm text-theme-secondary">{t('loadError')}</p>
       ) : (
-        <div className="divide-y divide-theme">
+        <div className="space-y-4">
           <ComponentRow
             icon={Camera}
             name={t('renderer')}

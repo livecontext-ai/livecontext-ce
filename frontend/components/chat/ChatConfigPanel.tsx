@@ -543,17 +543,7 @@ export function ChatConfigPanel({
               className="flex h-9 w-full items-center justify-between rounded-xl border border-theme bg-[var(--bg-primary)] px-3 text-sm text-theme-primary hover:bg-[var(--bg-secondary)] transition-colors"
             >
               <span>{config.webSearch === false ? t('disabled') : t('enabled')}</span>
-              <span
-                className={`relative w-8 h-4 rounded-full transition-colors flex-shrink-0 ${
-                  config.webSearch === false ? 'bg-gray-300 dark:bg-gray-600' : 'bg-black dark:bg-white'
-                }`}
-              >
-                <span
-                  className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white dark:bg-black transition-transform ${
-                    config.webSearch === false ? '' : 'translate-x-4'
-                  }`}
-                />
-              </span>
+              <Switch checked={config.webSearch !== false} presentational />
             </button>
           </div>
           {/* Image generation - opt-in (default off; cost per image varies 5-134 credits).
@@ -574,17 +564,7 @@ export function ChatConfigPanel({
               className="flex h-9 w-full items-center justify-between rounded-xl border border-theme bg-[var(--bg-primary)] px-3 text-sm text-theme-primary hover:bg-[var(--bg-secondary)] transition-colors"
             >
               <span>{config.imageGeneration?.enabled ? t('enabled') : t('disabled')}</span>
-              <span
-                className={`relative w-8 h-4 rounded-full transition-colors flex-shrink-0 ${
-                  config.imageGeneration?.enabled ? 'bg-black dark:bg-white' : 'bg-gray-300 dark:bg-gray-600'
-                }`}
-              >
-                <span
-                  className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white dark:bg-black transition-transform ${
-                    config.imageGeneration?.enabled ? 'translate-x-4' : ''
-                  }`}
-                />
-              </span>
+              <Switch checked={config.imageGeneration?.enabled ?? false} presentational />
             </button>
           </div>
           {/* Auto-authorize sensitive actions - general-chat scopes (conversation + the
@@ -604,17 +584,7 @@ export function ChatConfigPanel({
                 className="flex h-9 w-full items-center justify-between rounded-xl border border-theme bg-[var(--bg-primary)] px-3 text-sm text-theme-primary hover:bg-[var(--bg-secondary)] transition-colors"
               >
                 <span>{config.autoAuthorizeTools ? t('enabled') : t('disabled')}</span>
-                <span
-                  className={`relative w-8 h-4 rounded-full transition-colors flex-shrink-0 ${
-                    config.autoAuthorizeTools ? 'bg-black dark:bg-white' : 'bg-gray-300 dark:bg-gray-600'
-                  }`}
-                >
-                  <span
-                    className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white dark:bg-black transition-transform ${
-                      config.autoAuthorizeTools ? 'translate-x-4' : ''
-                    }`}
-                  />
-                </span>
+                <Switch checked={config.autoAuthorizeTools ?? false} presentational />
               </button>
             </div>
           )}

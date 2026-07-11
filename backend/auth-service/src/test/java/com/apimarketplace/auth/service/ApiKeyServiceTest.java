@@ -4,6 +4,7 @@ import com.apimarketplace.auth.domain.AuthProvider;
 import com.apimarketplace.auth.domain.User;
 import com.apimarketplace.auth.dto.ApiKeyResponse;
 import com.apimarketplace.auth.dto.UserResolutionResponse;
+import com.apimarketplace.auth.repository.ApiKeyRepository;
 import com.apimarketplace.auth.repository.UserRepository;
 import com.apimarketplace.common.security.CredentialEncryptionService;
 import org.junit.jupiter.api.BeforeEach;
@@ -32,6 +33,9 @@ class ApiKeyServiceTest {
     private UserRepository userRepository;
 
     @Mock
+    private ApiKeyRepository apiKeyRepository;
+
+    @Mock
     private CredentialEncryptionService encryptionService;
 
     @Mock
@@ -50,6 +54,7 @@ class ApiKeyServiceTest {
     void setUp() {
         apiKeyService = new ApiKeyService(
                 userRepository,
+                apiKeyRepository,
                 encryptionService,
                 userResolutionService,
                 gatewayCacheClient

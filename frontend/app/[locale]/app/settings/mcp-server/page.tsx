@@ -3,18 +3,17 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
 import { useAuth } from "@/lib/providers/smart-providers";
-import { useTranslations, useLocale } from "next-intl";
-import { AlertTriangle, Check, Copy, KeyRound, RefreshCw, User } from "lucide-react";
+import { useTranslations } from "next-intl";
+import { Check, Copy, User } from "lucide-react";
 import { McpIcon } from "@/components/icons/McpIcon";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/settings";
 import Toast, { useToast } from "@/components/Toast";
-import { formatUtcDate } from "@/lib/utils/dateFormatters";
 import {
   mcpServerService,
-  type ApiKeyInfo,
   type McpConnectionInfo,
 } from "@/lib/api/services/mcp-server.service";
+import { McpKeysManager } from "./McpKeysManager";
 
 /**
  * Settings > MCP Server: connect external MCP clients (Claude Code, Cursor, ...)
@@ -25,28 +24,18 @@ export default function McpServerPage() {
   const { loginWithRedirect } = useAuth();
   const t = useTranslations("mcpServer");
   const tSettings = useTranslations("settings");
-  const locale = useLocale();
   const { toasts, addToast, removeToast } = useToast();
 
   const [connection, setConnection] = useState<McpConnectionInfo | null>(null);
-  const [keyInfo, setKeyInfo] = useState<ApiKeyInfo | null>(null);
-  const [plaintextKey, setPlaintextKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [regenerating, setRegenerating] = useState(false);
-  const [confirmingRegenerate, setConfirmingRegenerate] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [conn, key] = await Promise.all([
-        mcpServerService.getConnection(),
-        mcpServerService.getCurrentApiKey(),
-      ]);
-      setConnection(conn);
-      setKeyInfo(key);
+      setConnection(await mcpServerService.getConnection());
     } catch {
       setError(t("errors.fetchFailed"));
     } finally {
@@ -67,27 +56,6 @@ export default function McpServerPage() {
     setTimeout(() => setCopiedKey((c) => (c === key ? null : c)), 1500);
   };
 
-  const handleRegenerate = async () => {
-    // A key already exists: first click arms an inline confirmation, because
-    // regenerating invalidates the previous key everywhere it is configured.
-    if (keyInfo?.active && !confirmingRegenerate) {
-      setConfirmingRegenerate(true);
-      return;
-    }
-    setConfirmingRegenerate(false);
-    setRegenerating(true);
-    try {
-      const result = await mcpServerService.regenerateApiKey();
-      setKeyInfo({ ...result, apiKey: null });
-      setPlaintextKey(result.apiKey);
-      addToast({ type: "success", title: t("toasts.keyGenerated"), message: t("apiKey.shownOnce") });
-    } catch {
-      addToast({ type: "error", title: t("toasts.keyGenerationFailed"), message: t("toasts.keyGenerationFailedMessage") });
-    } finally {
-      setRegenerating(false);
-    }
-  };
-
   const renderCopyButton = (key: string, value: string) => (
     <Button
       variant="ghost"
@@ -105,7 +73,7 @@ export default function McpServerPage() {
   );
 
   const mcpUrl = connection?.url ?? "";
-  const keyForSnippet = plaintextKey ?? t("snippet.keyPlaceholder");
+  const keyForSnippet = t("snippet.keyPlaceholder");
   const jsonSnippet = `{
   "mcpServers": {
     "livecontext": {
@@ -179,72 +147,12 @@ url = "${mcpUrl}"
         )}
       </section>
 
-      {/* API key */}
-      <section className="rounded-xl border border-theme bg-theme-secondary/50 p-5 space-y-3">
-        <div className="flex items-center justify-between gap-3">
-          <h2 className="text-sm font-semibold text-theme-primary flex items-center gap-2">
-            <KeyRound className="h-3.5 w-3.5" />
-            {t("apiKey.title")}
-          </h2>
-          <Button
-            size="sm"
-            className="h-8 px-3"
-            disabled={regenerating}
-            onClick={() => void handleRegenerate()}
-          >
-            <RefreshCw className={`w-4 h-4 mr-1 ${regenerating ? "animate-spin" : ""}`} />
-            {keyInfo?.active ? t("apiKey.regenerate") : t("apiKey.generate")}
-          </Button>
-        </div>
-        <p className="text-sm text-theme-secondary">{t("apiKey.description")}</p>
-
-        {confirmingRegenerate && (
-          <div className="flex items-start gap-2 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 p-3">
-            <AlertTriangle className="h-4 w-4 flex-shrink-0 text-amber-600 dark:text-amber-400 mt-0.5" />
-            <div className="flex-1 text-sm text-amber-800 dark:text-amber-200">
-              {t("apiKey.regenerateWarning")}
-              <div className="mt-2 flex gap-2">
-                <Button size="sm" className="h-7 px-3" onClick={() => void handleRegenerate()}>
-                  {t("apiKey.regenerateConfirm")}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-7 px-3"
-                  onClick={() => setConfirmingRegenerate(false)}
-                >
-                  {t("apiKey.regenerateCancel")}
-                </Button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {plaintextKey ? (
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <code className="flex-1 min-w-0 truncate rounded-lg bg-theme-tertiary px-3 py-2 text-sm font-mono text-theme-primary">
-                {plaintextKey}
-              </code>
-              {renderCopyButton("plaintext", plaintextKey)}
-            </div>
-            <p className="text-xs text-amber-600 dark:text-amber-400">{t("apiKey.shownOnce")}</p>
-          </div>
-        ) : keyInfo?.active ? (
-          <div className="flex items-center gap-3 text-sm">
-            <code className="rounded-lg bg-theme-tertiary px-3 py-2 font-mono text-theme-primary">
-              {keyInfo.maskedApiKey}
-            </code>
-            {keyInfo.createdAt && (
-              <span className="text-xs text-theme-muted">
-                {t("apiKey.createdAt", { date: formatUtcDate(keyInfo.createdAt, { locale }) })}
-              </span>
-            )}
-          </div>
-        ) : (
-          <p className="text-sm text-theme-muted">{t("apiKey.noKey")}</p>
-        )}
-      </section>
+      {/* API keys - the single key system (each key can be full-access or scoped to a
+          set of tools). No separate legacy single-key section: one coherent list. */}
+      <McpKeysManager
+        availableScopes={connection?.availableScopes ?? []}
+        onToast={(type, title, message) => addToast({ type, title, message })}
+      />
 
       {/* Client configuration */}
       <section className="rounded-xl border border-theme bg-theme-secondary/50 p-5 space-y-4">
@@ -281,9 +189,7 @@ url = "${mcpUrl}"
           </pre>
         </div>
 
-        {!plaintextKey && (
-          <p className="text-xs text-theme-muted">{t("snippet.placeholderHint")}</p>
-        )}
+        <p className="text-xs text-theme-muted">{t("snippet.placeholderHint")}</p>
       </section>
 
       {toasts.map((toast) => (

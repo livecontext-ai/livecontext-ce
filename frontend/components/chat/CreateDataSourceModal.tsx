@@ -115,7 +115,7 @@ const ColumnConfigInline: React.FC<ColumnConfigInlineProps> = ({ column, onChang
         <select
           value={dateFormat}
           onChange={(e) => onChange({ ...config, dateFormat: e.target.value })}
-          className="w-40 rounded-lg border border-theme bg-theme-primary px-2 py-1.5 text-sm text-theme-primary"
+          className="w-40 h-9 rounded-lg border border-theme bg-theme-primary px-2 text-sm text-theme-primary"
         >
           <option value="date">Date</option>
           <option value="datetime">Date + Time</option>
@@ -136,7 +136,7 @@ const ColumnConfigInline: React.FC<ColumnConfigInlineProps> = ({ column, onChang
           <select
             value={format}
             onChange={(e) => onChange({ ...config, format: e.target.value })}
-            className="w-36 rounded-lg border border-theme bg-theme-primary px-2 py-1.5 text-sm text-theme-primary"
+            className="w-36 h-9 rounded-lg border border-theme bg-theme-primary px-2 text-sm text-theme-primary"
           >
             <option value="plain">Plain</option>
             <option value="currency">Currency</option>
@@ -479,7 +479,7 @@ export const CreateDataSourceModal: React.FC<CreateDataSourceModalProps> = ({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-2xl bg-theme-primary rounded-3xl shadow-2xl animate-in fade-in-0 zoom-in-95 duration-300 border border-theme flex flex-col overflow-hidden max-h-[90vh]"
+        className="w-full max-w-2xl bg-theme-primary rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.16)] animate-in fade-in-0 zoom-in-95 duration-200 border border-theme flex flex-col overflow-hidden max-h-[90vh]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -490,7 +490,7 @@ export const CreateDataSourceModal: React.FC<CreateDataSourceModalProps> = ({
                 <TableIcon className="w-8 h-8 text-theme-primary" />
               </div>
             )}
-            <h3 className="text-2xl font-semibold text-theme-primary">{t('title')}</h3>
+            <h3 className="text-xl font-semibold text-theme-primary">{t('title')}</h3>
             <p className="text-sm text-theme-secondary mt-1">
               {currentStep === 1 ? t('stepInfoSubtitle') : t('stepColumnsSubtitle')}
             </p>

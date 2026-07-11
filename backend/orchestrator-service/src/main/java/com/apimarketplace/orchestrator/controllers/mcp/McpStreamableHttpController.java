@@ -13,9 +13,13 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Standard MCP <b>Streamable HTTP</b> transport: a single {@code /mcp} endpoint
@@ -52,6 +56,14 @@ public class McpStreamableHttpController {
     private static final int INTERNAL_ERROR = -32603;
     private static final int RESOURCE_NOT_FOUND = -32002;
 
+    /**
+     * Injected by the auth layer (cloud gateway / CE {@code MonolithSecurityFilter})
+     * ONLY when the request was authenticated with a SCOPED API key: a comma-separated,
+     * lowercase list of top-level tool names the key may use. Absent header = full
+     * access (JWT session or legacy/full-access key).
+     */
+    static final String API_KEY_SCOPES_HEADER = "X-Api-Key-Scopes";
+
     private final McpProtocolService protocolService;
     private final ObjectMapper objectMapper;
 
@@ -63,6 +75,7 @@ public class McpStreamableHttpController {
         }
         String orgId = headerOrNull(httpRequest, "X-Organization-ID");
         String orgRole = headerOrNull(httpRequest, "X-Organization-Role");
+        Set<String> scopes = parseScopes(httpRequest.getHeader(API_KEY_SCOPES_HEADER));
 
         // JSON-RPC batch (allowed up to protocol 2025-03-26): process each message,
         // answer only the ones that carry an id.
@@ -74,7 +87,7 @@ public class McpStreamableHttpController {
             }
             List<Map<String, Object>> responses = new ArrayList<>();
             for (JsonNode message : body) {
-                Map<String, Object> response = processMessage(message, tenantId, orgId, orgRole);
+                Map<String, Object> response = processMessage(message, tenantId, orgId, orgRole, scopes);
                 if (response != null) {
                     responses.add(response);
                 }
@@ -85,7 +98,7 @@ public class McpStreamableHttpController {
             return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(responses);
         }
 
-        Map<String, Object> response = processMessage(body, tenantId, orgId, orgRole);
+        Map<String, Object> response = processMessage(body, tenantId, orgId, orgRole, scopes);
         if (response == null) {
             // Notification (or client response): acknowledged with no body, per the transport spec.
             return ResponseEntity.accepted().build();
@@ -112,10 +125,36 @@ public class McpStreamableHttpController {
     // ==================== JSON-RPC dispatch ====================
 
     /**
+     * Parses the {@value #API_KEY_SCOPES_HEADER} header into the tool-scope set.
+     *
+     * <p>Semantics (security-relevant, do not soften): an ABSENT header means the
+     * request was not authenticated with a scoped key, so {@code null} = full
+     * access. A PRESENT header, however, always means "scoped key": tokens are
+     * split on commas, trimmed, lowercased, and blanks dropped, and if nothing
+     * parseable remains (empty or whitespace-only value) the result is the EMPTY
+     * set = access to NO tools. Treating a present-but-empty header as full access
+     * would silently grant a zero-scope key everything.</p>
+     *
+     * @return an immutable lowercase set of allowed tool names, possibly empty,
+     *         or {@code null} for full access.
+     */
+    static Set<String> parseScopes(String header) {
+        if (header == null) {
+            return null; // no scoped key involved: full access
+        }
+        return Arrays.stream(header.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .map(s -> s.toLowerCase(Locale.ROOT))
+                .collect(Collectors.toUnmodifiableSet());
+    }
+
+    /**
      * @return the JSON-RPC response for a request, or {@code null} for
      *         notifications / client responses (nothing to send back).
      */
-    private Map<String, Object> processMessage(JsonNode message, String tenantId, String orgId, String orgRole) {
+    private Map<String, Object> processMessage(JsonNode message, String tenantId, String orgId, String orgRole,
+                                               Set<String> scopes) {
         if (message == null || !message.isObject()) {
             return errorResponse(null, INVALID_REQUEST, "Invalid Request");
         }
@@ -141,8 +180,10 @@ public class McpStreamableHttpController {
             return switch (method) {
                 case "initialize" -> successResponse(idNode, initializeResult(params));
                 case "ping" -> successResponse(idNode, Map.of());
-                case "tools/list" -> successResponse(idNode, Map.of("tools", protocolService.listTools()));
-                case "tools/call" -> toolsCall(idNode, params, tenantId, orgId, orgRole);
+                case "tools/list" -> successResponse(idNode, Map.of("tools", protocolService.listTools(scopes)));
+                case "tools/call" -> toolsCall(idNode, params, tenantId, orgId, orgRole, scopes);
+                // Resources (schemas + tools docs) are deliberately NOT scope-filtered:
+                // any valid key can read them; scopes only restrict tool visibility/execution.
                 case "resources/list" -> successResponse(idNode, Map.of("resources", protocolService.listResources()));
                 case "resources/templates/list" -> successResponse(idNode, Map.of("resourceTemplates", List.of()));
                 case "resources/read" -> resourcesRead(idNode, params);
@@ -182,12 +223,15 @@ public class McpStreamableHttpController {
     }
 
     private Map<String, Object> toolsCall(JsonNode idNode, JsonNode params,
-                                          String tenantId, String orgId, String orgRole) throws Exception {
+                                          String tenantId, String orgId, String orgRole,
+                                          Set<String> scopes) throws Exception {
         String toolName = params != null && params.hasNonNull("name") ? params.get("name").asText() : null;
         if (toolName == null || toolName.isBlank()) {
             return errorResponse(idNode, INVALID_PARAMS, "tool name is required");
         }
-        if (!protocolService.hasTool(toolName)) {
+        // An out-of-scope tool is indistinguishable from a nonexistent one (same
+        // "Unknown tool" error): scoped keys must not be able to enumerate tools.
+        if (!protocolService.hasTool(toolName, scopes)) {
             return errorResponse(idNode, INVALID_PARAMS, "Unknown tool: " + toolName);
         }
 
@@ -196,7 +240,7 @@ public class McpStreamableHttpController {
                         objectMapper.getTypeFactory().constructMapType(Map.class, String.class, Object.class))
                 : Map.of();
 
-        return successResponse(idNode, protocolService.callTool(toolName, arguments, tenantId, orgId, orgRole));
+        return successResponse(idNode, protocolService.callTool(toolName, arguments, tenantId, orgId, orgRole, scopes));
     }
 
     private Map<String, Object> resourcesRead(JsonNode idNode, JsonNode params) {

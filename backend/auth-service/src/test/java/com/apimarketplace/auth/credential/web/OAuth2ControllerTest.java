@@ -48,6 +48,43 @@ class OAuth2ControllerTest {
     }
 
     @Test
+    @DisplayName("callback: TikTok-Business auth_code param is used when the RFC code param is absent")
+    void callback_fallsBackToAuthCode() throws Exception {
+        jakarta.servlet.http.HttpServletResponse response =
+                mock(jakarta.servlet.http.HttpServletResponse.class);
+        when(oAuth2Service.handleCallback("AC-123", "st-1")).thenReturn("https://app/ok");
+
+        controller.callback(response, null, "AC-123", "st-1", null, null);
+
+        verify(oAuth2Service).handleCallback("AC-123", "st-1");
+        verify(response).sendRedirect("https://app/ok");
+    }
+
+    @Test
+    @DisplayName("callback: the RFC code param wins when both code and auth_code are present")
+    void callback_prefersCodeOverAuthCode() throws Exception {
+        jakarta.servlet.http.HttpServletResponse response =
+                mock(jakarta.servlet.http.HttpServletResponse.class);
+        when(oAuth2Service.handleCallback("RFC-CODE", "st-2")).thenReturn("https://app/ok");
+
+        controller.callback(response, "RFC-CODE", "AC-should-be-ignored", "st-2", null, null);
+
+        verify(oAuth2Service).handleCallback("RFC-CODE", "st-2");
+    }
+
+    @Test
+    @DisplayName("callback: neither code nor auth_code → missing_code redirect, service never called")
+    void callback_missingBothCodes() throws Exception {
+        jakarta.servlet.http.HttpServletResponse response =
+                mock(jakarta.servlet.http.HttpServletResponse.class);
+
+        controller.callback(response, null, null, "st-3", null, null);
+
+        verify(oAuth2Service, never()).handleCallback(any(), any());
+        verify(response).sendRedirect(contains("error=missing_code"));
+    }
+
+    @Test
     @DisplayName("has-platform-credentials returns availability and the unverified-app warning flag")
     void hasPlatformCredentials_returnsAvailabilityWithWarningFlag() {
         when(oAuth2Service.getPlatformCredentialsAvailability("gmail"))

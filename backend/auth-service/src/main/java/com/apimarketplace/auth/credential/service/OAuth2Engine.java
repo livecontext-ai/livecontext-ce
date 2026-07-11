@@ -1,8 +1,11 @@
 package com.apimarketplace.auth.credential.service;
 
-import com.apimarketplace.auth.credential.domain.OAuth2Models.OAuth2TokenResponse;
 import com.apimarketplace.auth.credential.domain.OAuth2ProviderConfig;
+import com.apimarketplace.auth.credential.domain.OAuth2ProviderConfig.TokenExchangeConfig.RequestFormat;
+import com.apimarketplace.auth.credential.domain.OAuth2Models.OAuth2TokenResponse;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -51,9 +54,19 @@ public class OAuth2Engine {
      */
     public static final String UI_LOCALE_PLACEHOLDER = "{ui_locale}";
 
+    /**
+     * User-Agent sent on every token request (code exchange, refresh, client_credentials).
+     * Providers that bucket rate limits by agent, most notably Reddit's
+     * {@code www.reddit.com/api/v1/access_token}, return {@code 429 Too Many Requests} when the
+     * request carries the HTTP client's default agent (shared across every bot). A single
+     * descriptive agent is accepted by every provider, so it is set unconditionally rather than
+     * gated on a provider name (keeping with "provider quirks are config, not code").
+     */
+    static final String TOKEN_REQUEST_USER_AGENT = "LiveContext/1.0 (+https://livecontext.ai)";
+
     public record TokenRequest(
             String url,
-            HttpEntity<MultiValueMap<String, String>> entity
+            HttpEntity<?> entity
     ) {}
 
     /**
@@ -97,7 +110,7 @@ public class OAuth2Engine {
         StringBuilder url = new StringBuilder(config.authorizationUrl());
         url.append(config.authorizationUrl().contains("?") ? '&' : '?');
         appendParam(url, "response_type", "code", false);
-        appendParam(url, "client_id", clientId, true);
+        appendParam(url, config.clientIdParam(), clientId, true);
         appendParam(url, "redirect_uri", callbackUrl, true);
         appendParam(url, "state", state, true);
 
@@ -136,7 +149,7 @@ public class OAuth2Engine {
      * {@link OAuth2ProviderConfig#tokenAuthMethod()}. {@code codeVerifier} is added when PKCE
      * was used at authorize time.
      */
-    public HttpEntity<MultiValueMap<String, String>> buildTokenExchangeRequest(
+    public HttpEntity<?> buildTokenExchangeRequest(
             OAuth2ProviderConfig config,
             String code,
             String clientId,
@@ -146,7 +159,7 @@ public class OAuth2Engine {
     ) {
         MultiValueMap<String, String> body = new LinkedMultiValueMap<>();
         body.add("grant_type", "authorization_code");
-        body.add("code", code);
+        body.add(config.tokenExchange().codeParam(), code);
         body.add("redirect_uri", callbackUrl);
 
         if (codeVerifier != null) {
@@ -159,7 +172,7 @@ public class OAuth2Engine {
     /**
      * Assemble the POST body and headers for a refresh_token grant request.
      */
-    public HttpEntity<MultiValueMap<String, String>> buildRefreshRequest(
+    public HttpEntity<?> buildRefreshRequest(
             OAuth2ProviderConfig config,
             String refreshToken,
             String clientId,
@@ -175,7 +188,7 @@ public class OAuth2Engine {
     /**
      * Assemble the request body for a client_credentials token request.
      */
-    public HttpEntity<MultiValueMap<String, String>> buildClientCredentialsRequest(
+    public HttpEntity<?> buildClientCredentialsRequest(
             OAuth2ProviderConfig config,
             String clientId,
             String clientSecret
@@ -189,13 +202,17 @@ public class OAuth2Engine {
     public TokenRequest materializeTokenRequest(
             OAuth2ProviderConfig config,
             String tokenUrl,
-            HttpEntity<MultiValueMap<String, String>> request
+            HttpEntity<?> request
     ) {
         if (config.tokenParamsLocation() != OAuth2ProviderConfig.TokenParamsLocation.QUERY) {
             return new TokenRequest(tokenUrl, request);
         }
 
-        MultiValueMap<String, String> body = request.getBody();
+        // QUERY location only applies to the form-encoded body path (never JSON), so the body is a
+        // MultiValueMap here. tokenParamsLocation=QUERY and tokenRequestFormat=JSON is not a valid
+        // combination for any provider.
+        @SuppressWarnings("unchecked")
+        MultiValueMap<String, String> body = (MultiValueMap<String, String>) request.getBody();
         String resolvedUrl = appendQueryParams(tokenUrl, body);
         HttpEntity<MultiValueMap<String, String>> entityWithoutBody =
                 new HttpEntity<>(new LinkedMultiValueMap<>(), request.getHeaders());
@@ -208,6 +225,23 @@ public class OAuth2Engine {
      * structure (Slack's {@code authed_user.access_token}, Salesforce's {@code instance_url},
      * …) will be handled in PR 2 via {@code tokenResponseMapping}.
      */
+    public OAuth2TokenResponse parseTokenResponse(JsonNode body, OAuth2ProviderConfig config) {
+        String path = config.tokenExchange().responsePath();
+        if (path == null) {
+            return parseTokenResponse(body);
+        }
+        if (body == null || body.isMissingNode() || body.isNull()) {
+            throw new IllegalStateException("Token endpoint returned empty body");
+        }
+        // Non-RFC providers nest the token under a wrapper object (TikTok for Business: "data").
+        JsonNode nested = body.path(path);
+        if (nested.isMissingNode() || nested.isNull()) {
+            throw new IllegalStateException(
+                    "Token response missing '" + path + "' wrapper: " + body.toString());
+        }
+        return parseTokenResponse(nested);
+    }
+
     public OAuth2TokenResponse parseTokenResponse(JsonNode body) {
         if (body == null || body.isMissingNode() || body.isNull()) {
             throw new IllegalStateException("Token endpoint returned empty body");
@@ -268,16 +302,22 @@ public class OAuth2Engine {
 
     // ─────────────────────────── internals ───────────────────────────
 
-    private HttpEntity<MultiValueMap<String, String>> finalizeRequest(
+    private HttpEntity<?> finalizeRequest(
             OAuth2ProviderConfig config,
             MultiValueMap<String, String> body,
             String clientId,
             String clientSecret
     ) {
         HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
         headers.setAccept(java.util.List.of(MediaType.APPLICATION_JSON));
+        // A descriptive User-Agent on every token request. Some providers (Reddit's
+        // www.reddit.com/api/v1/access_token is the canonical case) rate-limit or reject
+        // requests carrying the HTTP client's default agent, so the code exchange / refresh
+        // 429s without one. A well-formed agent is universally accepted, so this is applied
+        // for all providers, not gated on any provider name.
+        headers.set(HttpHeaders.USER_AGENT, TOKEN_REQUEST_USER_AGENT);
 
+        String secretParam = config.tokenExchange().clientSecretParam();
         switch (config.tokenAuthMethod()) {
             case BASIC -> {
                 if (clientId != null && clientSecret != null) {
@@ -288,24 +328,40 @@ public class OAuth2Engine {
                 }
                 // client_id still goes in the body for PKCE public clients (RFC 7636 §4.2).
                 if (clientId != null) {
-                    body.add("client_id", clientId);
+                    body.add(config.clientIdParam(), clientId);
                 }
             }
             case POST -> {
                 if (clientId != null) {
-                    body.add("client_id", clientId);
+                    body.add(config.clientIdParam(), clientId);
                 }
                 if (clientSecret != null) {
-                    body.add("client_secret", clientSecret);
+                    body.add(secretParam, clientSecret);
                 }
             }
             case NONE -> {
                 // Public PKCE client - send only client_id, no secret.
                 if (clientId != null) {
-                    body.add("client_id", clientId);
+                    body.add(config.clientIdParam(), clientId);
                 }
             }
         }
+
+        // Non-RFC providers (TikTok for Business) want the same params as a JSON object body
+        // instead of form-urlencoded. Every value the flow assembled is single-valued, so a flat
+        // {key: value} JSON object is a faithful re-encoding.
+        if (config.tokenExchange().requestFormat() == RequestFormat.JSON) {
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            ObjectNode json = JsonNodeFactory.instance.objectNode();
+            body.forEach((key, values) -> {
+                if (values != null && !values.isEmpty() && values.get(0) != null) {
+                    json.put(key, values.get(0));
+                }
+            });
+            return new HttpEntity<>(json.toString(), headers);
+        }
+
+        headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
 
         return new HttpEntity<>(body, headers);
     }

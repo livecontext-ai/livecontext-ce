@@ -1,4 +1,15 @@
 {
+  "globalSearch": {
+    "placeholder": "Rechercher...",
+    "conversations": "Discussions",
+    "workflows": "Workflows",
+    "agents": "Agents",
+    "settings": "Paramètres",
+    "noResults": "Aucun résultat pour \"{query}\"",
+    "searching": "Recherche en cours...",
+    "untitled": "Sans titre",
+    "clear": "Effacer la recherche"
+  },
   "reward": {
     "page": {
       "title": "Parrainage",
@@ -378,6 +389,8 @@
   },
   "sidePanel": {
     "addTab": "Ajouter un onglet",
+    "openRight": "Ouvrir le panneau à droite",
+    "openBottom": "Ouvrir le panneau en bas",
     "searchPlaceholder": "Rechercher...",
     "applications": "Applications",
     "interfaces": "Interfaces",
@@ -386,6 +399,7 @@
     "noItems": "Aucun élément disponible",
     "errorLoading": "Échec du chargement",
     "aiChat": "Chat IA",
+    "welcomeTitle": "Comment puis-je vous aider ?",
     "agent": "Agent",
     "workflowPanel": "Panneau Workflow",
     "workflows": "Workflows",
@@ -4157,6 +4171,32 @@
       "createdAt": "Créée le {date}",
       "noKey": "Aucune clé API pour le moment. Générez-en une pour connecter un client MCP."
     },
+    "keys": {
+      "title": "Clés API",
+      "description": "Les requêtes vers l'endpoint MCP s'authentifient avec une clé API envoyée dans l'en-tête X-API-Key. Créez-en une par client, chacune en accès complet ou limitée aux outils dont elle a besoin, et révoquez-en une sans affecter les autres.",
+      "create": "Nouvelle clé",
+      "empty": "Aucune clé API pour le moment. Créez-en une pour connecter un client MCP.",
+      "fullAccess": "Accès complet",
+      "fullAccessHint": "Tous les outils MCP",
+      "scopedAccess": "Accès limité",
+      "scopedAccessHint": "Uniquement les outils que vous choisissez",
+      "createdAt": "Créée le {date}",
+      "revoke": "Révoquer",
+      "revokeConfirm": "Révoquer la clé",
+      "revokedTitle": "Clé révoquée",
+      "revokeFailed": "Impossible de révoquer la clé",
+      "createTitle": "Créer une clé API",
+      "createSubtitle": "Donnez un nom à la clé et choisissez ce à quoi elle peut accéder.",
+      "createdTitle": "Clé créée",
+      "nameLabel": "Nom",
+      "namePlaceholder": "p. ex. Cursor sur mon ordinateur portable",
+      "accessLabel": "Accès",
+      "limitLabel": "Limiter à certains outils",
+      "scopesLabel": "Outils",
+      "scopesRequired": "Choisissez au moins un outil.",
+      "cancel": "Annuler",
+      "done": "Terminé"
+    },
     "toasts": {
       "keyGenerated": "Clé API générée",
       "keyGenerationFailed": "Impossible de générer la clé API",
@@ -5071,6 +5111,7 @@
     "iterationLabel": "Élément {number}",
     "workflowFallback": "Workflow",
     "moveTo": "Déplacer vers…",
+    "virtualBulkExcluded": "Les dossiers de workflow ne peuvent qu'être supprimés - désélectionnez-les pour télécharger ou déplacer",
     "moveToFolderTitle": "Déplacer {count, plural, one {# élément} other {# éléments}}",
     "moveToRoot": "Niveau supérieur (racine)",
     "moveHere": "Déplacer ici",
@@ -5530,10 +5571,14 @@
       "themeLight": "Clair",
       "themeDark": "Sombre",
       "themeAuto": "Système",
-      "sidePanelPosition": "Position du panneau latéral",
-      "sidePanelPositionDescription": "Choisissez où le panneau latéral s'ouvre",
-      "sidePanelPositionRight": "Droite",
-      "sidePanelPositionBottom": "Bas",
+      "sidePanelDefaultPosition": "Position par défaut du panneau latéral",
+      "sidePanelDefaultPositionDescription": "Où le panneau latéral s'ouvre par défaut dans toute l'application",
+      "sidePanelDefaultPositionRight": "Droite",
+      "sidePanelDefaultPositionBottom": "Bas",
+      "sidePanelBottomMode": "Style du panneau inférieur",
+      "sidePanelBottomModeDescription": "Affichage du panneau quand il est ouvert en bas depuis l'en-tête",
+      "sidePanelBottomModeFull": "Pleine largeur (sous la barre latérale)",
+      "sidePanelBottomModeContent": "Largeur du contenu",
       "timezone": "Fuseau horaire",
       "timezoneDescription": "Définissez votre fuseau horaire local",
       "selectTimezone": "Sélectionner le fuseau horaire",
@@ -6836,7 +6881,8 @@
         "chat-trigger": "Chat",
         "schedule-trigger": "Planificateur",
         "form-trigger": "Formulaire"
-      }
+      },
+      "close": "Fermer"
     },
     "nodes": {
       "deleteNode": "Supprimer le nœud",

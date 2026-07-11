@@ -1,4 +1,15 @@
 {
+  "globalSearch": {
+    "placeholder": "Suchen...",
+    "conversations": "Chats",
+    "workflows": "Workflows",
+    "agents": "Agenten",
+    "settings": "Einstellungen",
+    "noResults": "Keine Ergebnisse für \"{query}\"",
+    "searching": "Suche läuft...",
+    "untitled": "Ohne Titel",
+    "clear": "Suche löschen"
+  },
   "reward": {
     "page": {
       "title": "Empfehlen und verdienen",
@@ -378,6 +389,8 @@
   },
   "sidePanel": {
     "addTab": "Tab hinzufügen",
+    "openRight": "Panel rechts öffnen",
+    "openBottom": "Panel unten öffnen",
     "searchPlaceholder": "Suchen...",
     "applications": "Anwendungen",
     "interfaces": "Schnittstellen",
@@ -386,6 +399,7 @@
     "noItems": "Keine Elemente verfügbar",
     "errorLoading": "Elemente konnten nicht geladen werden",
     "aiChat": "KI-Chat",
+    "welcomeTitle": "Wie kann ich Ihnen helfen?",
     "agent": "Agent",
     "workflowPanel": "Workflow-Bereich",
     "workflows": "Workflows",
@@ -3940,6 +3954,32 @@
       "createdAt": "Erstellt am {date}",
       "noKey": "Noch kein API-Schlüssel. Generieren Sie einen, um einen MCP-Client zu verbinden."
     },
+    "keys": {
+      "title": "API-Schlüssel",
+      "description": "Anfragen an den MCP-Endpunkt authentifizieren sich mit einem API-Schlüssel im X-API-Key-Header. Erstellen Sie einen pro Client, jeweils mit Vollzugriff oder auf die benötigten Tools beschränkt, und widerrufen Sie einen, ohne die anderen zu beeinträchtigen.",
+      "create": "Neuer Schlüssel",
+      "empty": "Noch keine API-Schlüssel. Erstellen Sie einen, um einen MCP-Client zu verbinden.",
+      "fullAccess": "Vollzugriff",
+      "fullAccessHint": "Alle MCP-Tools",
+      "scopedAccess": "Eingeschränkter Zugriff",
+      "scopedAccessHint": "Nur die von Ihnen ausgewählten Tools",
+      "createdAt": "Erstellt am {date}",
+      "revoke": "Widerrufen",
+      "revokeConfirm": "Schlüssel widerrufen",
+      "revokedTitle": "Schlüssel widerrufen",
+      "revokeFailed": "Der Schlüssel konnte nicht widerrufen werden",
+      "createTitle": "API-Schlüssel erstellen",
+      "createSubtitle": "Geben Sie dem Schlüssel einen Namen und wählen Sie, worauf er zugreifen darf.",
+      "createdTitle": "Schlüssel erstellt",
+      "nameLabel": "Name",
+      "namePlaceholder": "z. B. Cursor auf meinem Laptop",
+      "accessLabel": "Zugriff",
+      "limitLabel": "Auf bestimmte Tools beschränken",
+      "scopesLabel": "Tools",
+      "scopesRequired": "Wählen Sie mindestens ein Tool aus.",
+      "cancel": "Abbrechen",
+      "done": "Fertig"
+    },
     "toasts": {
       "keyGenerated": "API-Schlüssel generiert",
       "keyGenerationFailed": "API-Schlüssel konnte nicht generiert werden",
@@ -4854,6 +4894,7 @@
     "iterationLabel": "Element {number}",
     "workflowFallback": "Workflow",
     "moveTo": "Verschieben nach…",
+    "virtualBulkExcluded": "Workflow-Ordner können nur gelöscht werden - wählen Sie sie ab, um herunterzuladen oder zu verschieben",
     "moveToFolderTitle": "{count, plural, one {# Element} other {# Elemente}} verschieben",
     "moveToRoot": "Oberste Ebene (Stamm)",
     "moveHere": "Hierher verschieben",
@@ -5246,10 +5287,14 @@
       "themeLight": "Hell",
       "themeDark": "Dunkel",
       "themeAuto": "System",
-      "sidePanelPosition": "Position des Seitenpanels",
-      "sidePanelPositionDescription": "Wählen Sie, wo sich das Seitenpanel öffnet",
-      "sidePanelPositionRight": "Rechts",
-      "sidePanelPositionBottom": "Unten",
+      "sidePanelDefaultPosition": "Standardposition des Seitenpanels",
+      "sidePanelDefaultPositionDescription": "Wo sich das Seitenpanel in der gesamten App standardmäßig öffnet",
+      "sidePanelDefaultPositionRight": "Rechts",
+      "sidePanelDefaultPositionBottom": "Unten",
+      "sidePanelBottomMode": "Stil des unteren Panels",
+      "sidePanelBottomModeDescription": "Darstellung des Panels, wenn es über die Kopfzeile unten geöffnet wird",
+      "sidePanelBottomModeFull": "Volle Breite (unter der Seitenleiste)",
+      "sidePanelBottomModeContent": "Inhaltsbreite",
       "timezone": "Zeitzone",
       "timezoneDescription": "Legen Sie Ihre lokale Zeitzone fest",
       "selectTimezone": "Zeitzone auswählen",
@@ -6614,7 +6659,8 @@
         "chat-trigger": "Chat",
         "schedule-trigger": "Zeitplaner",
         "form-trigger": "Formular"
-      }
+      },
+      "close": "Schließen"
     },
     "nodes": {
       "deleteNode": "Knoten löschen",

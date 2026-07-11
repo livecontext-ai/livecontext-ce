@@ -152,6 +152,10 @@ interface VirtualFolderCardProps {
   label: string;
   /** Localized exact item count (built by the parent from {@code childCount}). */
   countLabel: string;
+  /** Selected state - shown with the same checkbox + ring the manual tile has. */
+  selected?: boolean;
+  /** Toggle selection (called with the entry's {@code virtualId} key). Omit on read-only surfaces. */
+  onToggleSelect?: (key: string) => void;
   /**
    * Delete this virtual folder (removes every file it groups). Omit to hide the delete affordance
    * (e.g. a read-only surface). The parent owns the confirmation + refresh.
@@ -163,17 +167,20 @@ interface VirtualFolderCardProps {
 
 /**
  * iOS-style VIRTUAL workflow-folder tile (Phase 2b). A computed grouping
- * (workflow → epoch → spawn → iteration) - it has NO real row, so it stays
- * navigation-only for drag/drop + bulk selection (no checkbox). Clicking it navigates deeper via its
- * {@code virtualId}. When {@code onDelete} is provided it gains a hover trash button so the whole
- * folder (all the files it groups) can be removed - the same delete affordance manual folders have.
- * Same 3×3 preview mosaic + footer as {@link FolderCard}.
+ * (workflow → epoch → spawn → iteration) - it has NO real row, so it can't be a
+ * drag/drop or move/rename target, but it DOES join the bulk selection (checkbox
+ * keyed by {@code virtualId}) so deleting it works exactly like any other row.
+ * Clicking it navigates deeper via its {@code virtualId}. When {@code onDelete}
+ * is provided it gains a hover trash button (used by surfaces without bulk
+ * selection). Same 3×3 preview mosaic + footer as {@link FolderCard}.
  */
 export const VirtualFolderCard = React.memo(function VirtualFolderCard({
   entry,
   onOpen,
   label,
   countLabel,
+  selected = false,
+  onToggleSelect,
   onDelete,
   deleteLabel,
 }: VirtualFolderCardProps) {
@@ -181,10 +188,29 @@ export const VirtualFolderCard = React.memo(function VirtualFolderCard({
 
   return (
     <div
-      className="group relative rounded-xl border border-theme bg-theme-secondary overflow-hidden cursor-pointer transition-colors hover:border-[var(--accent-primary)]"
+      className={`group relative rounded-xl border bg-theme-secondary overflow-hidden cursor-pointer transition-colors ${
+        selected
+          ? 'border-[var(--accent-primary)] ring-2 ring-[var(--accent-primary)]'
+          : 'border-theme hover:border-[var(--accent-primary)]'
+      }`}
       onClick={() => onOpen(entry)}
       title={label}
     >
+      {/* Selection checkbox - same affordance as the manual folder / file tiles. */}
+      {onToggleSelect && entry.virtualId && (
+        <div
+          className={`absolute top-2 left-2 z-10 transition-opacity ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+          onClick={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={() => onToggleSelect(entry.virtualId!)}
+            className="rounded border-slate-300 dark:border-slate-600 bg-white/80 dark:bg-slate-900/80"
+          />
+        </div>
+      )}
       {onDelete && (
         <button
           type="button"

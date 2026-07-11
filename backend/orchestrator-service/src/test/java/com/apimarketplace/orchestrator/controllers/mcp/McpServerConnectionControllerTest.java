@@ -44,7 +44,7 @@ class McpServerConnectionControllerTest {
     }
 
     @Test
-    @DisplayName("returns the public /mcp url, auth header name and tool count")
+    @DisplayName("returns the public /mcp url, auth header name and tool count (backward compatible)")
     void returnsConnectionMetadata() {
         when(protocolService.listTools()).thenReturn(List.of(Map.of(), Map.of()));
 
@@ -54,6 +54,43 @@ class McpServerConnectionControllerTest {
         assertThat(response.getBody().get("url")).isEqualTo("https://livecontext.example.com/mcp");
         assertThat(response.getBody().get("authHeader")).isEqualTo("X-API-Key");
         assertThat(response.getBody().get("toolCount")).isEqualTo(2);
+        assertThat(response.getBody().get("serverName")).isEqualTo("LiveContext Agent Tools");
+    }
+
+    @Test
+    @DisplayName("availableScopes lists each tool name with its description, sorted by name")
+    void availableScopesListsToolNamesAndDescriptions() {
+        when(protocolService.listTools()).thenReturn(List.of(
+                Map.of("name", "workflow", "description", "Manage workflows"),
+                Map.of("name", "agent", "description", "Manage agents")));
+
+        ResponseEntity<Map<String, Object>> response = controller.getConnection(requestWithUser("42"));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> scopes =
+                (List<Map<String, Object>>) response.getBody().get("availableScopes");
+        assertThat(scopes).extracting(s -> s.get("name")).containsExactly("agent", "workflow");
+        assertThat(scopes).extracting(s -> s.get("description"))
+                .containsExactly("Manage agents", "Manage workflows");
+    }
+
+    @Test
+    @DisplayName("scope descriptions are truncated to 200 chars and a missing description becomes empty")
+    void availableScopesTruncatesLongAndMissingDescriptions() {
+        String longDescription = "x".repeat(450);
+        when(protocolService.listTools()).thenReturn(List.of(
+                Map.of("name", "workflow", "description", longDescription),
+                Map.of("name", "table")));
+
+        ResponseEntity<Map<String, Object>> response = controller.getConnection(requestWithUser("42"));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> scopes =
+                (List<Map<String, Object>>) response.getBody().get("availableScopes");
+        assertThat(scopes.get(0).get("name")).isEqualTo("table");
+        assertThat(scopes.get(0).get("description")).isEqualTo("");
+        assertThat(scopes.get(1).get("name")).isEqualTo("workflow");
+        assertThat((String) scopes.get(1).get("description")).hasSize(200);
     }
 
     @Test

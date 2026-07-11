@@ -1,4 +1,15 @@
 {
+  "globalSearch": {
+    "placeholder": "Search...",
+    "conversations": "Chats",
+    "workflows": "Workflows",
+    "agents": "Agents",
+    "settings": "Settings",
+    "noResults": "No results for \"{query}\"",
+    "searching": "Searching...",
+    "untitled": "Untitled",
+    "clear": "Clear search"
+  },
   "reward": {
     "page": {
       "title": "Refer & earn",
@@ -378,6 +389,8 @@
   },
   "sidePanel": {
     "addTab": "Add tab",
+    "openRight": "Open panel on the right",
+    "openBottom": "Open panel at the bottom",
     "searchPlaceholder": "Search...",
     "applications": "Applications",
     "interfaces": "Interfaces",
@@ -386,6 +399,7 @@
     "noItems": "No items available",
     "errorLoading": "Failed to load items",
     "aiChat": "AI Chat",
+    "welcomeTitle": "How can I help you?",
     "agent": "Agent",
     "workflowPanel": "Workflow Panel",
     "workflows": "Workflows",
@@ -4157,6 +4171,32 @@
       "createdAt": "Created {date}",
       "noKey": "No API key yet. Generate one to connect an MCP client."
     },
+    "keys": {
+      "title": "API keys",
+      "description": "Requests to the MCP endpoint authenticate with an API key sent in the X-API-Key header. Create one per client, each full-access or limited to the tools it needs, and revoke any without affecting the others.",
+      "create": "New key",
+      "empty": "No API keys yet. Create one to connect an MCP client.",
+      "fullAccess": "Full access",
+      "fullAccessHint": "All MCP tools",
+      "scopedAccess": "Limited access",
+      "scopedAccessHint": "Only the tools you pick",
+      "createdAt": "Created {date}",
+      "revoke": "Revoke",
+      "revokeConfirm": "Revoke key",
+      "revokedTitle": "Key revoked",
+      "revokeFailed": "Could not revoke the key",
+      "createTitle": "Create an API key",
+      "createSubtitle": "Give the key a name and choose what it can access.",
+      "createdTitle": "Key created",
+      "nameLabel": "Name",
+      "namePlaceholder": "e.g. Cursor on my laptop",
+      "accessLabel": "Access",
+      "limitLabel": "Limit to specific tools",
+      "scopesLabel": "Tools",
+      "scopesRequired": "Pick at least one tool.",
+      "cancel": "Cancel",
+      "done": "Done"
+    },
     "toasts": {
       "keyGenerated": "API key generated",
       "keyGenerationFailed": "Could not generate the API key",
@@ -5071,6 +5111,7 @@
     "iterationLabel": "Item {number}",
     "workflowFallback": "Workflow",
     "moveTo": "Move to…",
+    "virtualBulkExcluded": "Workflow folders can only be deleted - unselect them to download or move",
     "moveToFolderTitle": "Move {count, plural, one {# item} other {# items}}",
     "moveToRoot": "Top level (root)",
     "moveHere": "Move here",
@@ -5530,10 +5571,14 @@
       "themeLight": "Light",
       "themeDark": "Dark",
       "themeAuto": "System",
-      "sidePanelPosition": "Side panel position",
-      "sidePanelPositionDescription": "Choose where the side panel opens",
-      "sidePanelPositionRight": "Right",
-      "sidePanelPositionBottom": "Bottom",
+      "sidePanelDefaultPosition": "Default side panel position",
+      "sidePanelDefaultPositionDescription": "Where the side panel opens by default across the app",
+      "sidePanelDefaultPositionRight": "Right",
+      "sidePanelDefaultPositionBottom": "Bottom",
+      "sidePanelBottomMode": "Bottom panel style",
+      "sidePanelBottomModeDescription": "How the panel renders when opened at the bottom from the header",
+      "sidePanelBottomModeFull": "Full width (under the sidebar)",
+      "sidePanelBottomModeContent": "Content width",
       "timezone": "Timezone",
       "timezoneDescription": "Set your local timezone",
       "selectTimezone": "Select timezone",
@@ -6836,7 +6881,8 @@
         "chat-trigger": "Chat",
         "schedule-trigger": "Scheduler",
         "form-trigger": "Form"
-      }
+      },
+      "close": "Close"
     },
     "nodes": {
       "deleteNode": "Delete node",

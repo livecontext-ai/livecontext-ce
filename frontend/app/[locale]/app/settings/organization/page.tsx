@@ -598,7 +598,7 @@ export default function OrganizationSettingsPage() {
                     <Input
                       value={newName}
                       onChange={(e) => setNewName(e.target.value)}
-                      className="h-11 w-full max-w-md text-xl font-semibold bg-white dark:bg-gray-800 border-black/10 dark:border-white/10"
+                      className="w-full max-w-md text-xl font-semibold bg-white dark:bg-gray-800 border-black/10 dark:border-white/10"
                       disabled={saving}
                       autoFocus
                     />
@@ -695,11 +695,11 @@ export default function OrganizationSettingsPage() {
           <div className="relative mb-6 flex max-w-full overflow-x-auto scrollbar-hide">
             <div
               ref={tabContainerRef}
-              className="relative mx-auto inline-flex w-max items-center gap-0.5 sm:gap-1 p-1 sm:p-1.5 bg-theme-tertiary rounded-full"
+              className="relative mx-auto inline-flex w-max items-center gap-0.5 sm:gap-1 p-1 sm:p-1.5 bg-theme-tertiary rounded-2xl"
             >
               {/* Slider highlight */}
               <div
-                className="absolute top-1 sm:top-1.5 bottom-1 sm:bottom-1.5 rounded-full bg-[var(--bg-primary)] transition-all duration-300 ease-out"
+                className="absolute top-1 sm:top-1.5 bottom-1 sm:bottom-1.5 rounded-xl bg-[var(--bg-primary)] transition-all duration-200 ease-out"
                 style={{
                   left: tabSliderStyle.left,
                   width: tabSliderStyle.width,
@@ -713,7 +713,7 @@ export default function OrganizationSettingsPage() {
                   type="button"
                   onClick={() => setActiveTab(tab.id)}
                   className={cn(
-                    "relative z-10 flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 py-1.5 sm:py-2 rounded-full text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 outline-none",
+                    "relative z-10 flex h-9 items-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 rounded-xl text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 outline-none",
                     activeTab === tab.id
                       ? "text-[var(--text-primary)]"
                       : "text-theme-secondary hover:text-theme-primary hover:bg-[var(--bg-primary)]/50"
@@ -1224,7 +1224,7 @@ export default function OrganizationSettingsPage() {
           hit the 5s cooldown (audit-B-M2). */}
       {isSwitchingOrg && (
         <div className="fixed inset-0 bg-black/20 backdrop-blur-sm flex items-center justify-center z-[9999] p-4">
-          <div className="max-w-md w-full bg-theme-primary rounded-3xl shadow-2xl p-8 border border-theme animate-in fade-in-0 zoom-in-95 duration-300">
+          <div className="max-w-md w-full bg-theme-primary rounded-3xl shadow-2xl p-8 border border-theme animate-in fade-in-0 zoom-in-95 duration-300 max-h-[90vh] overflow-y-auto">
             <div className="flex flex-col items-center text-center">
               <div className="w-16 h-16 bg-theme-secondary rounded-full flex items-center justify-center mb-4">
                 <RefreshCw className="h-7 w-7 text-theme-primary animate-spin" />

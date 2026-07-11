@@ -152,7 +152,7 @@ export default function ModelExecutionLinksPanel() {
   };
 
   const selectClass =
-    "text-sm rounded-md border border-theme bg-theme-primary px-2 py-1.5 text-theme-primary disabled:opacity-50";
+    "h-9 text-sm rounded-md border border-theme bg-theme-primary px-2 text-theme-primary disabled:opacity-50";
 
   return (
     <div className="space-y-4">

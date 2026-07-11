@@ -4,7 +4,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { usePathname, useRouter } from '@/i18n/navigation';
-import { Search, Trash2 } from 'lucide-react';
+import { Trash2 } from 'lucide-react';
+import { SearchField } from '@/components/ui/search-field';
 import { ConfirmDeleteModal } from '@/components/chat/ConfirmDeleteModal';
 import { dmApi, type DmInboxEvent, type DmThread } from '@/lib/api/dm-api';
 import { organizationApi, type OrganizationMember } from '@/lib/api/organization-api';
@@ -35,6 +36,7 @@ interface DmSidebarListProps {
  */
 export function DmSidebarList({ filter = 'all', searchOpen = false }: DmSidebarListProps) {
   const t = useTranslations('dm');
+  const tSearch = useTranslations('globalSearch');
   const router = useRouter();
   const pathname = usePathname();
   const { profile } = useUserProfile();
@@ -186,7 +188,7 @@ export function DmSidebarList({ filter = 'all', searchOpen = false }: DmSidebarL
         }}
         data-testid={`dm-thread-${th.id}`}
         data-active={isActiveThread(th.id) || undefined}
-        className={`group flex w-full cursor-pointer items-center gap-2 rounded-lg px-1 py-2 text-left transition-colors ${
+        className={`group flex w-full cursor-pointer items-center gap-2 rounded-lg px-1 py-1.5 my-0.5 text-left transition-colors ${
           isActiveThread(th.id) ? 'bg-surface-hover font-medium' : 'hover:bg-surface-hover'
         }`}
       >
@@ -196,7 +198,7 @@ export function DmSidebarList({ filter = 'all', searchOpen = false }: DmSidebarL
           size="sm"
           className="!h-6 !w-6 flex-shrink-0"
         />
-        <span className="min-w-0 flex-1 truncate text-sm text-theme-primary">{labelFor(th.otherUserId)}</span>
+        <span className="min-w-0 flex-1 truncate text-sm text-theme-secondary group-hover:text-theme-primary group-[.bg-surface-hover]:text-theme-primary transition-colors">{labelFor(th.otherUserId)}</span>
         {th.unreadCount > 0 && (
           <span className="flex-shrink-0 rounded-full bg-[var(--accent-primary)] px-1.5 text-xs font-medium text-white">
             {th.unreadCount}
@@ -225,15 +227,15 @@ export function DmSidebarList({ filter = 'all', searchOpen = false }: DmSidebarL
     <div className="sidebar-scroll flex-1 space-y-0.5 overflow-y-auto px-4">
       {/* Conversation search - toggled from the sidebar-header search button. */}
       {searchOpen && (
-        <div className="relative pb-1">
-          <Search className="pointer-events-none absolute left-2 top-1/2 mt-[-2px] h-3.5 w-3.5 -translate-y-1/2 text-theme-muted" />
-          <input
+        <div className="pb-1">
+          <SearchField
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onClear={() => setQuery('')}
+            clearLabel={tSearch('clear')}
             placeholder={t('searchPlaceholder')}
             data-testid="dm-search-input"
             autoFocus
-            className="w-full rounded-lg border border-theme bg-transparent py-1.5 pl-7 pr-2 text-sm text-theme-primary placeholder-theme-muted focus:outline-none"
           />
         </div>
       )}

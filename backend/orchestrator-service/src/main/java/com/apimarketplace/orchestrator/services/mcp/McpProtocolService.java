@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -43,7 +44,23 @@ public class McpProtocolService {
     private final ObjectProvider<AggregatedToolCatalog> aggregatedCatalogProvider;
     private final ObjectProvider<RemoteToolGateway> remoteToolGatewayProvider;
 
+    /** Unscoped variant kept for the legacy /api/mcp surface (full access). */
     public boolean hasTool(String toolName) {
+        return hasTool(toolName, null);
+    }
+
+    /**
+     * Whether the tool exists AND is visible to the caller's API-key scopes.
+     * A tool outside the scopes is reported exactly like a nonexistent one so
+     * that scoped keys cannot enumerate the tool catalog.
+     *
+     * @param scopes lowercase allowed tool names; {@code null} = full access
+     *               (no scoped key), an EMPTY set = access to no tools.
+     */
+    public boolean hasTool(String toolName, Set<String> scopes) {
+        if (!inScope(toolName, scopes)) {
+            return false;
+        }
         if (registry.hasTool(toolName)) {
             return true;
         }
@@ -51,13 +68,32 @@ public class McpProtocolService {
         return aggregated != null && aggregated.knows(toolName);
     }
 
+    /** Unscoped variant kept for the legacy /api/mcp surface (full access). */
+    public List<Map<String, Object>> listTools() {
+        return listTools(null);
+    }
+
     /**
      * All available tools in MCP {@code tools/list} format
      * ({@code name} / {@code description} / {@code inputSchema}): the local registry
      * UNION the aggregated sibling-service tools (cloud only). Local wins on a name
      * clash; the merged list is name-sorted for a stable ordering.
+     *
+     * @param scopes lowercase allowed tool names; when non-null the merged list is
+     *               filtered to tools whose name (lowercased) is in the set
+     *               ({@code null} = unfiltered, empty set = no tools).
      */
-    public List<Map<String, Object>> listTools() {
+    public List<Map<String, Object>> listTools(Set<String> scopes) {
+        List<Map<String, Object>> merged = mergedTools();
+        if (scopes == null) {
+            return merged;
+        }
+        return merged.stream()
+                .filter(tool -> inScope(String.valueOf(tool.get("name")), scopes))
+                .toList();
+    }
+
+    private List<Map<String, Object>> mergedTools() {
         List<Map<String, Object>> local = registry.getToolsInMcpFormat();
         AggregatedToolCatalog aggregated = aggregatedCatalogProvider.getIfAvailable();
         if (aggregated == null) {
@@ -75,6 +111,11 @@ public class McpProtocolService {
                 .toList();
     }
 
+    private static boolean inScope(String toolName, Set<String> scopes) {
+        return scopes == null
+                || (toolName != null && scopes.contains(toolName.toLowerCase(Locale.ROOT)));
+    }
+
     /**
      * Executes a tool and wraps the outcome as an MCP tool result
      * ({@code content} blocks + {@code isError}). Execution failures are reported
@@ -86,8 +127,28 @@ public class McpProtocolService {
                                         String tenantId,
                                         String orgId,
                                         String orgRole) throws JsonProcessingException {
+        // Unscoped variant kept for the legacy /api/mcp surface (full access).
+        return callTool(toolName, arguments, tenantId, orgId, orgRole, null);
+    }
+
+    /**
+     * Scope-aware execution ({@code scopes}: lowercase allowed tool names,
+     * {@code null} = full access). An out-of-scope tool fails with the SAME
+     * "Unknown tool" error as a nonexistent one (defence in depth behind the
+     * controller's {@link #hasTool(String, Set)} guard, and anti-enumeration).
+     */
+    public Map<String, Object> callTool(String toolName,
+                                        Map<String, Object> arguments,
+                                        String tenantId,
+                                        String orgId,
+                                        String orgRole,
+                                        Set<String> scopes) throws JsonProcessingException {
         ToolsProvider.ToolExecutionResult result;
-        if (registry.hasTool(toolName)) {
+        if (scopes != null && !hasTool(toolName, scopes)) {
+            result = ToolsProvider.ToolExecutionResult.failure(
+                    com.apimarketplace.agent.tools.ToolErrorCode.TOOL_NOT_FOUND,
+                    "Unknown tool: " + toolName);
+        } else if (registry.hasTool(toolName)) {
             // Local tool: execute in-process (fast path, also the only path in the monolith).
             ToolsProvider.ToolExecutionContext context = new ToolsProvider.ToolExecutionContext(
                     tenantId,
@@ -138,6 +199,11 @@ public class McpProtocolService {
 
     /**
      * Static resource catalog: schemas and the generated tools documentation.
+     *
+     * <p>Deliberately UNSCOPED: resources (and {@link #getResourceContent}) are
+     * readable by any authenticated key, scoped or not. API-key scopes restrict
+     * tool visibility/execution only; the schemas and docs carry no per-tenant
+     * data and are needed by clients regardless of which tools a key may call.</p>
      */
     public List<Map<String, Object>> listResources() {
         return List.of(

@@ -64,6 +64,55 @@ class OAuth2EngineTest {
         }
 
         @Test
+        @DisplayName("renamed client id param (TikTok client_key): carried on the authorize URL, no literal client_id")
+        void renamedClientIdParam() throws Exception {
+            // TikTok is the RFC oddball: its authorize endpoint expects client_key, not client_id.
+            // The provider declares clientIdParam in its oauth2Config JSON; the engine must honour it
+            // (the live symptom was TikTok's "client_key" error when the engine emitted client_id).
+            OAuth2ProviderConfig cfg = OAuth2ProviderConfig.fromJson(json.readTree("""
+                    {
+                      "authorizationUrl": "https://www.tiktok.com/v2/auth/authorize/",
+                      "tokenUrl": "https://open.tiktokapis.com/v2/oauth/token/",
+                      "clientIdParam": "client_key",
+                      "scopes": ["user.info.basic"]
+                    }
+                    """));
+
+            Map<String, String> params =
+                    parseQuery(engine.buildAuthorizationUrl(cfg, "client-abc", "state-xyz", CALLBACK, null));
+
+            assertThat(params).containsEntry("client_key", "client-abc");
+            assertThat(params).doesNotContainKey("client_id");
+        }
+
+        @Test
+        @DisplayName("Reddit-shaped config: authorize URL carries duration=permanent + scopes; fromJson yields BASIC auth")
+        void redditShapedAuthorizeUrl() throws Exception {
+            // Mirrors scripts/api-migrations/reddit.json's oauth2Config. duration=permanent is the
+            // single param that makes Reddit issue a refresh_token, so assert it reaches the authorize
+            // URL, together with the space-delimited scopes and client_secret_basic surviving fromJson.
+            OAuth2ProviderConfig cfg = OAuth2ProviderConfig.fromJson(json.readTree("""
+                    {
+                      "authorizationUrl": "https://www.reddit.com/api/v1/authorize",
+                      "tokenUrl": "https://www.reddit.com/api/v1/access_token",
+                      "scopes": ["identity","read","submit","edit","vote","save","subscribe","privatemessages","report","history","mysubreddits","flair"],
+                      "scopeDelimiter": " ",
+                      "authMethod": "client_secret_basic",
+                      "pkce": false,
+                      "authorizeExtraParams": { "duration": "permanent" }
+                    }
+                    """));
+
+            Map<String, String> params =
+                    parseQuery(engine.buildAuthorizationUrl(cfg, "cid", "state-1", CALLBACK, null));
+
+            assertThat(params).containsEntry("duration", "permanent");
+            assertThat(params).containsEntry("response_type", "code");
+            assertThat(params.get("scope")).contains("submit").contains("identity");
+            assertThat(cfg.tokenAuthMethod()).isEqualTo(AuthMethod.BASIC);
+        }
+
+        @Test
         @DisplayName("comma-delimited scopes (e.g. Slack-style)")
         void commaDelimitedScopes() {
             OAuth2ProviderConfig cfg = new OAuth2ProviderConfig(
@@ -356,10 +405,10 @@ class OAuth2EngineTest {
         @Test
         @DisplayName("POST auth: client_id and client_secret in the body")
         void postAuth() {
-            HttpEntity<MultiValueMap<String, String>> req = engine.buildTokenExchangeRequest(
+            HttpEntity<?> req = engine.buildTokenExchangeRequest(
                     standardConfig(false), "code-abc", "client-id", "client-secret", CALLBACK, null);
 
-            MultiValueMap<String, String> body = req.getBody();
+            MultiValueMap<String, String> body = (MultiValueMap<String, String>) req.getBody();
             assertThat(body).isNotNull();
             assertThat(body.getFirst("grant_type")).isEqualTo("authorization_code");
             assertThat(body.getFirst("code")).isEqualTo("code-abc");
@@ -371,6 +420,147 @@ class OAuth2EngineTest {
             assertThat(headers.getContentType()).isEqualTo(MediaType.APPLICATION_FORM_URLENCODED);
             assertThat(headers.getAccept()).contains(MediaType.APPLICATION_JSON);
             assertThat(headers.getFirst(HttpHeaders.AUTHORIZATION)).isNull();
+        }
+
+        @Test
+        @DisplayName("carries a descriptive User-Agent - Reddit's access_token endpoint 429s the HTTP client default agent")
+        void tokenExchangeSendsUserAgent() {
+            HttpEntity<?> req = engine.buildTokenExchangeRequest(
+                    standardConfig(false), "code-abc", "client-id", "client-secret", CALLBACK, null);
+
+            assertThat(req.getHeaders().getFirst(HttpHeaders.USER_AGENT))
+                    .isEqualTo(OAuth2Engine.TOKEN_REQUEST_USER_AGENT);
+        }
+
+        @Test
+        @DisplayName("renamed client id param (TikTok client_key): token body uses client_key, client_secret stays standard")
+        void postAuthRenamedClientIdParam() throws Exception {
+            OAuth2ProviderConfig cfg = OAuth2ProviderConfig.fromJson(json.readTree("""
+                    {
+                      "authorizationUrl": "https://www.tiktok.com/v2/auth/authorize/",
+                      "tokenUrl": "https://open.tiktokapis.com/v2/oauth/token/",
+                      "clientIdParam": "client_key",
+                      "authMethod": "client_secret_post",
+                      "scopes": ["user.info.basic"]
+                    }
+                    """));
+
+            HttpEntity<?> req = engine.buildTokenExchangeRequest(
+                    cfg, "code-abc", "client-id", "client-secret", CALLBACK, null);
+
+            MultiValueMap<String, String> body = (MultiValueMap<String, String>) req.getBody();
+            assertThat(body).isNotNull();
+            assertThat(body.getFirst("client_key")).isEqualTo("client-id");
+            assertThat(body.getFirst("client_id")).isNull();
+            assertThat(body.getFirst("client_secret")).isEqualTo("client-secret");
+        }
+
+        @Test
+        @DisplayName("renamed client id param on BASIC auth: client_key still emitted in the body for public-client parity")
+        void basicAuthRenamedClientIdParam() throws Exception {
+            OAuth2ProviderConfig cfg = OAuth2ProviderConfig.fromJson(json.readTree("""
+                    {
+                      "authorizationUrl": "https://provider/authorize",
+                      "tokenUrl": "https://provider/token",
+                      "clientIdParam": "client_key",
+                      "authMethod": "client_secret_basic",
+                      "scopes": ["read"]
+                    }
+                    """));
+
+            HttpEntity<?> req = engine.buildTokenExchangeRequest(
+                    cfg, "code-abc", "client-id", "client-secret", CALLBACK, null);
+
+            MultiValueMap<String, String> body = (MultiValueMap<String, String>) req.getBody();
+            assertThat(body).isNotNull();
+            assertThat(body.getFirst("client_key")).isEqualTo("client-id");
+            assertThat(body.getFirst("client_id")).isNull();
+        }
+
+        @Test
+        @DisplayName("renamed client id param on the refresh_token request body")
+        void refreshRenamedClientIdParam() throws Exception {
+            OAuth2ProviderConfig cfg = OAuth2ProviderConfig.fromJson(json.readTree("""
+                    {
+                      "authorizationUrl": "https://www.tiktok.com/v2/auth/authorize/",
+                      "tokenUrl": "https://open.tiktokapis.com/v2/oauth/token/",
+                      "clientIdParam": "client_key",
+                      "authMethod": "client_secret_post",
+                      "scopes": ["user.info.basic"]
+                    }
+                    """));
+
+            HttpEntity<?> req = engine.buildRefreshRequest(
+                    cfg, "refresh-tok", "client-id", "client-secret");
+
+            MultiValueMap<String, String> body = (MultiValueMap<String, String>) req.getBody();
+            assertThat(body).isNotNull();
+            assertThat(body.getFirst("grant_type")).isEqualTo("refresh_token");
+            assertThat(body.getFirst("client_key")).isEqualTo("client-id");
+            assertThat(body.getFirst("client_id")).isNull();
+        }
+
+        @Test
+        @DisplayName("JSON token format (TikTok Business): JSON object body with app_id/secret/auth_code, application/json")
+        void jsonTokenBody() throws Exception {
+            OAuth2ProviderConfig cfg = OAuth2ProviderConfig.fromJson(json.readTree("""
+                    {
+                      "authorizationUrl": "https://business-api.tiktok.com/portal/auth",
+                      "tokenUrl": "https://business-api.tiktok.com/open_api/v1.3/oauth2/access_token/",
+                      "clientIdParam": "app_id",
+                      "clientSecretParam": "secret",
+                      "codeParam": "auth_code",
+                      "tokenRequestFormat": "json",
+                      "authMethod": "client_secret_post",
+                      "scopes": ["ad.read"]
+                    }
+                    """));
+
+            HttpEntity<?> req = engine.buildTokenExchangeRequest(
+                    cfg, "the-auth-code", "app-123", "secret-xyz", CALLBACK, null);
+
+            assertThat(req.getHeaders().getContentType()).isEqualTo(MediaType.APPLICATION_JSON);
+            // Body is a serialized JSON object, not a form MultiValueMap.
+            assertThat(req.getBody()).isInstanceOf(String.class);
+            JsonNode parsed = json.readTree((String) req.getBody());
+            assertThat(parsed.path("app_id").asText()).isEqualTo("app-123");
+            assertThat(parsed.path("secret").asText()).isEqualTo("secret-xyz");
+            assertThat(parsed.path("auth_code").asText()).isEqualTo("the-auth-code");
+            assertThat(parsed.path("grant_type").asText()).isEqualTo("authorization_code");
+            // The RFC names must NOT leak into the JSON body.
+            assertThat(parsed.has("client_id")).isFalse();
+            assertThat(parsed.has("client_secret")).isFalse();
+            assertThat(parsed.has("code")).isFalse();
+        }
+
+        @Test
+        @DisplayName("default FORM format keeps application/x-www-form-urlencoded (regression symmetry with JSON)")
+        void formTokenBodyContentType() {
+            HttpEntity<?> req = engine.buildTokenExchangeRequest(
+                    standardConfig(false), "code-abc", "cid", "csec", CALLBACK, null);
+
+            assertThat(req.getHeaders().getContentType()).isEqualTo(MediaType.APPLICATION_FORM_URLENCODED);
+            assertThat(req.getBody()).isInstanceOf(MultiValueMap.class);
+        }
+
+        @Test
+        @DisplayName("renamed client secret param on a FORM-body provider (rename is not JSON-only)")
+        void formSecretParamRename() throws Exception {
+            OAuth2ProviderConfig cfg = OAuth2ProviderConfig.fromJson(json.readTree("""
+                    {
+                      "authorizationUrl": "https://provider/authorize",
+                      "tokenUrl": "https://provider/token",
+                      "clientSecretParam": "secret",
+                      "authMethod": "client_secret_post",
+                      "scopes": ["read"]
+                    }
+                    """));
+
+            HttpEntity<?> req = engine.buildTokenExchangeRequest(
+                    cfg, "code-abc", "cid", "the-secret", CALLBACK, null);
+
+            assertThat(form(req).getFirst("secret")).isEqualTo("the-secret");
+            assertThat(form(req).getFirst("client_secret")).isNull();
         }
 
         @Test
@@ -388,14 +578,14 @@ class OAuth2EngineTest {
                     OAuth2ProviderConfig.RefreshConfig.STANDARD
             );
 
-            HttpEntity<MultiValueMap<String, String>> req = engine.buildTokenExchangeRequest(
+            HttpEntity<?> req = engine.buildTokenExchangeRequest(
                     cfg, "code-abc", "client-id", "client-secret", CALLBACK, null);
 
             String expectedHeader = "Basic " + Base64.getEncoder()
                     .encodeToString("client-id:client-secret".getBytes(StandardCharsets.UTF_8));
             assertThat(req.getHeaders().getFirst(HttpHeaders.AUTHORIZATION)).isEqualTo(expectedHeader);
 
-            MultiValueMap<String, String> body = req.getBody();
+            MultiValueMap<String, String> body = (MultiValueMap<String, String>) req.getBody();
             assertThat(body).isNotNull();
             assertThat(body.getFirst("client_id")).isEqualTo("client-id");
             assertThat(body.getFirst("client_secret")).isNull();
@@ -416,10 +606,10 @@ class OAuth2EngineTest {
                     OAuth2ProviderConfig.RefreshConfig.STANDARD
             );
 
-            HttpEntity<MultiValueMap<String, String>> req = engine.buildTokenExchangeRequest(
+            HttpEntity<?> req = engine.buildTokenExchangeRequest(
                     cfg, "code-abc", "client-id", null, CALLBACK, "verifier-xyz");
 
-            MultiValueMap<String, String> body = req.getBody();
+            MultiValueMap<String, String> body = (MultiValueMap<String, String>) req.getBody();
             assertThat(body).isNotNull();
             assertThat(body.getFirst("client_id")).isEqualTo("client-id");
             assertThat(body.getFirst("client_secret")).isNull();
@@ -430,21 +620,21 @@ class OAuth2EngineTest {
         @Test
         @DisplayName("PKCE: code_verifier added to token exchange body")
         void pkceVerifierInBody() {
-            HttpEntity<MultiValueMap<String, String>> req = engine.buildTokenExchangeRequest(
+            HttpEntity<?> req = engine.buildTokenExchangeRequest(
                     standardConfig(true), "code-abc", "cid", "csec", CALLBACK, "my-verifier");
 
             assertThat(req.getBody()).isNotNull();
-            assertThat(req.getBody().getFirst("code_verifier")).isEqualTo("my-verifier");
+            assertThat(form(req).getFirst("code_verifier")).isEqualTo("my-verifier");
         }
 
         @Test
         @DisplayName("no PKCE: code_verifier is not added")
         void noPkceNoVerifier() {
-            HttpEntity<MultiValueMap<String, String>> req = engine.buildTokenExchangeRequest(
+            HttpEntity<?> req = engine.buildTokenExchangeRequest(
                     standardConfig(false), "code-abc", "cid", "csec", CALLBACK, null);
 
             assertThat(req.getBody()).isNotNull();
-            assertThat(req.getBody().getFirst("code_verifier")).isNull();
+            assertThat(form(req).getFirst("code_verifier")).isNull();
         }
     }
 
@@ -457,15 +647,25 @@ class OAuth2EngineTest {
         @Test
         @DisplayName("POST auth: sends grant_type=refresh_token with credentials in body")
         void refreshBodyShape() {
-            HttpEntity<MultiValueMap<String, String>> req = engine.buildRefreshRequest(
+            HttpEntity<?> req = engine.buildRefreshRequest(
                     standardConfig(false), "my-refresh-token", "cid", "csec");
 
             assertThat(req.getBody()).isNotNull();
-            assertThat(req.getBody().getFirst("grant_type")).isEqualTo("refresh_token");
-            assertThat(req.getBody().getFirst("refresh_token")).isEqualTo("my-refresh-token");
-            assertThat(req.getBody().getFirst("client_id")).isEqualTo("cid");
-            assertThat(req.getBody().getFirst("client_secret")).isEqualTo("csec");
+            assertThat(form(req).getFirst("grant_type")).isEqualTo("refresh_token");
+            assertThat(form(req).getFirst("refresh_token")).isEqualTo("my-refresh-token");
+            assertThat(form(req).getFirst("client_id")).isEqualTo("cid");
+            assertThat(form(req).getFirst("client_secret")).isEqualTo("csec");
             assertThat(req.getHeaders().getFirst(HttpHeaders.AUTHORIZATION)).isNull();
+        }
+
+        @Test
+        @DisplayName("carries a descriptive User-Agent on the refresh request (same reason as the exchange path)")
+        void refreshSendsUserAgent() {
+            HttpEntity<?> req = engine.buildRefreshRequest(
+                    standardConfig(false), "my-refresh-token", "cid", "csec");
+
+            assertThat(req.getHeaders().getFirst(HttpHeaders.USER_AGENT))
+                    .isEqualTo(OAuth2Engine.TOKEN_REQUEST_USER_AGENT);
         }
 
         @Test
@@ -483,17 +683,17 @@ class OAuth2EngineTest {
                     OAuth2ProviderConfig.RefreshConfig.STANDARD
             );
 
-            HttpEntity<MultiValueMap<String, String>> req = engine.buildRefreshRequest(
+            HttpEntity<?> req = engine.buildRefreshRequest(
                     cfg, "rt", "cid", "csec");
 
             String expected = "Basic " + Base64.getEncoder()
                     .encodeToString("cid:csec".getBytes(StandardCharsets.UTF_8));
             assertThat(req.getHeaders().getFirst(HttpHeaders.AUTHORIZATION)).isEqualTo(expected);
             assertThat(req.getBody()).isNotNull();
-            assertThat(req.getBody().getFirst("grant_type")).isEqualTo("refresh_token");
-            assertThat(req.getBody().getFirst("refresh_token")).isEqualTo("rt");
+            assertThat(form(req).getFirst("grant_type")).isEqualTo("refresh_token");
+            assertThat(form(req).getFirst("refresh_token")).isEqualTo("rt");
             // client_secret must NOT be duplicated in the body when BASIC is used.
-            assertThat(req.getBody().getFirst("client_secret")).isNull();
+            assertThat(form(req).getFirst("client_secret")).isNull();
         }
     }
 
@@ -506,14 +706,23 @@ class OAuth2EngineTest {
         @Test
         @DisplayName("POST auth: sends grant_type=client_credentials with credentials in body")
         void clientCredentialsBodyShape() {
-            HttpEntity<MultiValueMap<String, String>> req = engine.buildClientCredentialsRequest(
+            HttpEntity<?> req = engine.buildClientCredentialsRequest(
                     standardConfig(false), "cid", "csec");
 
             assertThat(req.getBody()).isNotNull();
-            assertThat(req.getBody().getFirst("grant_type")).isEqualTo("client_credentials");
-            assertThat(req.getBody().getFirst("client_id")).isEqualTo("cid");
-            assertThat(req.getBody().getFirst("client_secret")).isEqualTo("csec");
+            assertThat(form(req).getFirst("grant_type")).isEqualTo("client_credentials");
+            assertThat(form(req).getFirst("client_id")).isEqualTo("cid");
+            assertThat(form(req).getFirst("client_secret")).isEqualTo("csec");
             assertThat(req.getHeaders().getFirst(HttpHeaders.AUTHORIZATION)).isNull();
+        }
+
+        @Test
+        @DisplayName("carries a descriptive User-Agent on the client_credentials request (third path through finalizeRequest)")
+        void clientCredentialsSendsUserAgent() {
+            HttpEntity<?> req = engine.buildClientCredentialsRequest(standardConfig(false), "cid", "csec");
+
+            assertThat(req.getHeaders().getFirst(HttpHeaders.USER_AGENT))
+                    .isEqualTo(OAuth2Engine.TOKEN_REQUEST_USER_AGENT);
         }
 
         @Test
@@ -531,16 +740,16 @@ class OAuth2EngineTest {
                     OAuth2ProviderConfig.RefreshConfig.STANDARD
             );
 
-            HttpEntity<MultiValueMap<String, String>> req = engine.buildClientCredentialsRequest(
+            HttpEntity<?> req = engine.buildClientCredentialsRequest(
                     cfg, "cid", "csec");
 
             String expected = "Basic " + Base64.getEncoder()
                     .encodeToString("cid:csec".getBytes(StandardCharsets.UTF_8));
             assertThat(req.getHeaders().getFirst(HttpHeaders.AUTHORIZATION)).isEqualTo(expected);
             assertThat(req.getBody()).isNotNull();
-            assertThat(req.getBody().getFirst("grant_type")).isEqualTo("client_credentials");
-            assertThat(req.getBody().getFirst("client_id")).isEqualTo("cid");
-            assertThat(req.getBody().getFirst("client_secret")).isNull();
+            assertThat(form(req).getFirst("grant_type")).isEqualTo("client_credentials");
+            assertThat(form(req).getFirst("client_id")).isEqualTo("cid");
+            assertThat(form(req).getFirst("client_secret")).isNull();
         }
 
         @Test
@@ -560,7 +769,7 @@ class OAuth2EngineTest {
                     "client_credentials"
             );
 
-            HttpEntity<MultiValueMap<String, String>> req =
+            HttpEntity<?> req =
                     engine.buildClientCredentialsRequest(cfg, "cid", "csec");
             OAuth2Engine.TokenRequest tokenRequest =
                     engine.materializeTokenRequest(cfg, "https://example.com/token", req);
@@ -569,8 +778,8 @@ class OAuth2EngineTest {
                     .containsEntry("grant_type", "client_credentials")
                     .containsEntry("client_id", "cid")
                     .containsEntry("client_secret", "csec");
-            assertThat(tokenRequest.entity().getBody()).isNotNull();
-            assertThat(tokenRequest.entity().getBody()).isEmpty();
+            assertThat(form(tokenRequest.entity())).isNotNull();
+            assertThat(form(tokenRequest.entity())).isEmpty();
         }
     }
 
@@ -598,6 +807,86 @@ class OAuth2EngineTest {
             assertThat(resp.tokenType()).isEqualTo("Bearer");
             assertThat(resp.expiresIn()).isEqualTo(3600L);
             assertThat(resp.scope()).isEqualTo("read write");
+        }
+
+        @Test
+        @DisplayName("tokenResponsePath: reads tokens nested under a wrapper (TikTok Business data)")
+        void nestedResponsePath() throws Exception {
+            OAuth2ProviderConfig cfg = OAuth2ProviderConfig.fromJson(json.readTree("""
+                    {
+                      "authorizationUrl": "https://business-api.tiktok.com/portal/auth",
+                      "tokenUrl": "https://business-api.tiktok.com/open_api/v1.3/oauth2/access_token/",
+                      "tokenResponsePath": "data",
+                      "scopes": ["ad.read"]
+                    }
+                    """));
+            JsonNode body = json.readTree("""
+                    {"code":0,"message":"OK","data":{"access_token":"AT","refresh_token":"RT"}}
+                    """);
+
+            OAuth2TokenResponse resp = engine.parseTokenResponse(body, cfg);
+
+            assertThat(resp.accessToken()).isEqualTo("AT");
+            assertThat(resp.refreshToken()).isEqualTo("RT");
+        }
+
+        @Test
+        @DisplayName("known limitation: non-standard expiry field under the wrapper yields null expiresIn (lazy 401 refresh only)")
+        void nestedResponsePathNonStandardExpiryIsNull() throws Exception {
+            OAuth2ProviderConfig cfg = OAuth2ProviderConfig.fromJson(json.readTree("""
+                    {
+                      "authorizationUrl": "https://business-api.tiktok.com/portal/auth",
+                      "tokenUrl": "https://business-api.tiktok.com/open_api/v1.3/oauth2/access_token/",
+                      "tokenResponsePath": "data",
+                      "scopes": ["ad.read"]
+                    }
+                    """));
+            // TikTok Business names expiry access_token_expires_in, which the engine does not read.
+            JsonNode body = json.readTree("""
+                    {"code":0,"data":{"access_token":"AT","access_token_expires_in":86400}}
+                    """);
+
+            OAuth2TokenResponse resp = engine.parseTokenResponse(body, cfg);
+
+            assertThat(resp.accessToken()).isEqualTo("AT");
+            assertThat(resp.expiresIn()).isNull();
+        }
+
+        @Test
+        @DisplayName("tokenResponsePath: missing wrapper object throws (not a silent null token)")
+        void nestedResponsePathMissingWrapper() throws Exception {
+            OAuth2ProviderConfig cfg = OAuth2ProviderConfig.fromJson(json.readTree("""
+                    {
+                      "authorizationUrl": "https://business-api.tiktok.com/portal/auth",
+                      "tokenUrl": "https://business-api.tiktok.com/open_api/v1.3/oauth2/access_token/",
+                      "tokenResponsePath": "data",
+                      "scopes": ["ad.read"]
+                    }
+                    """));
+            JsonNode body = json.readTree("""
+                    {"code":40105,"message":"invalid auth_code"}
+                    """);
+
+            assertThatThrownBy(() -> engine.parseTokenResponse(body, cfg))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("data");
+        }
+
+        @Test
+        @DisplayName("no tokenResponsePath (default): config overload reads the top level unchanged")
+        void configOverloadRootUnchanged() throws Exception {
+            OAuth2ProviderConfig cfg = OAuth2ProviderConfig.fromJson(json.readTree("""
+                    {
+                      "authorizationUrl": "https://example.com/a",
+                      "tokenUrl": "https://example.com/t",
+                      "scopes": ["read"]
+                    }
+                    """));
+            JsonNode body = json.readTree("""
+                    {"access_token":"AT","token_type":"Bearer"}
+                    """);
+
+            assertThat(engine.parseTokenResponse(body, cfg).accessToken()).isEqualTo("AT");
         }
 
         @Test
@@ -781,6 +1070,12 @@ class OAuth2EngineTest {
                 Map.of(),
                 OAuth2ProviderConfig.RefreshConfig.STANDARD
         );
+    }
+
+    /** The form-encoded token body of a request (all non-JSON providers). */
+    @SuppressWarnings("unchecked")
+    private static MultiValueMap<String, String> form(HttpEntity<?> req) {
+        return (MultiValueMap<String, String>) req.getBody();
     }
 
     private static Map<String, String> parseQuery(String url) {

@@ -426,7 +426,7 @@ public class OAuth2Service {
         credentialData.putAll(
                 normalizeHostVarsAgainstTemplate(request.templateVarsOrEmpty(), providerConfig.tokenUrl()));
 
-        HttpEntity<MultiValueMap<String, String>> requestEntity =
+        HttpEntity<?> requestEntity =
                 engine.buildClientCredentialsRequest(providerConfig, clientId, clientSecret);
         OAuth2Engine.TokenRequest tokenRequest = engine.materializeTokenRequest(
                 providerConfig,
@@ -439,7 +439,7 @@ public class OAuth2Service {
             throw new RuntimeException("Client credentials token request failed: " + response.getStatusCode());
         }
 
-        OAuth2TokenResponse tokens = engine.parseTokenResponse(response.getBody());
+        OAuth2TokenResponse tokens = engine.parseTokenResponse(response.getBody(), providerConfig);
         credentialData.put("access_token", encryptionService.encrypt(tokens.accessToken()));
         credentialData.put("token_type", tokens.tokenType() != null ? tokens.tokenType() : "Bearer");
         if (tokens.expiresIn() != null) {
@@ -599,7 +599,7 @@ public class OAuth2Service {
                 );
             }
 
-            HttpEntity<MultiValueMap<String, String>> request = engine.buildTokenExchangeRequest(
+            HttpEntity<?> request = engine.buildTokenExchangeRequest(
                     providerConfig,
                     code,
                     oAuth2State.clientId(),
@@ -627,7 +627,7 @@ public class OAuth2Service {
                 throw new RuntimeException("Token exchange failed: " + response.getStatusCode());
             }
 
-            OAuth2TokenResponse tokens = engine.parseTokenResponse(response.getBody());
+            OAuth2TokenResponse tokens = engine.parseTokenResponse(response.getBody(), providerConfig);
 
             // Persist credential.
             Map<String, Object> credentialData = new HashMap<>();
@@ -993,7 +993,7 @@ public class OAuth2Service {
         int currentAttempts = readRefreshAttempts(data);
 
         try {
-            HttpEntity<MultiValueMap<String, String>> request = engine.buildRefreshRequest(
+            HttpEntity<?> request = engine.buildRefreshRequest(
                     providerConfig, refreshToken, clientId, clientSecret);
             OAuth2Engine.TokenRequest tokenRequest = engine.materializeTokenRequest(
                     providerConfig,
@@ -1007,7 +1007,7 @@ public class OAuth2Service {
                 throw new RuntimeException("Failed to refresh token: " + response.getStatusCode());
             }
 
-            OAuth2TokenResponse tokens = engine.parseTokenResponse(response.getBody());
+            OAuth2TokenResponse tokens = engine.parseTokenResponse(response.getBody(), providerConfig);
 
             Map<String, Object> newData = new HashMap<>(data);
             newData.put("access_token", encryptionService.encrypt(tokens.accessToken()));
@@ -1081,7 +1081,7 @@ public class OAuth2Service {
         String clientSecret = encryptionService.decrypt(encryptedClientSecret);
 
         try {
-            HttpEntity<MultiValueMap<String, String>> request = engine.buildClientCredentialsRequest(
+            HttpEntity<?> request = engine.buildClientCredentialsRequest(
                     providerConfig, clientId, clientSecret);
             OAuth2Engine.TokenRequest tokenRequest = engine.materializeTokenRequest(
                     providerConfig,
@@ -1094,7 +1094,7 @@ public class OAuth2Service {
                 throw new RuntimeException("Client credentials token request failed: " + response.getStatusCode());
             }
 
-            OAuth2TokenResponse tokens = engine.parseTokenResponse(response.getBody());
+            OAuth2TokenResponse tokens = engine.parseTokenResponse(response.getBody(), providerConfig);
             Map<String, Object> newData = new HashMap<>(data);
             newData.put("client_id", clientId);
             newData.put("access_token", encryptionService.encrypt(tokens.accessToken()));

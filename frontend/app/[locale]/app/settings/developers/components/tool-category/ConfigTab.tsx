@@ -77,7 +77,7 @@ const ConfigTab: React.FC<ConfigTabProps> = ({
           <select
             value={tool.method}
             onChange={(e) => handleMethodChange(e.target.value)}
-            className="w-full px-4 py-3 bg-theme-primary border border-theme rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all duration-300"
+            className="w-full h-9 px-4 text-sm bg-theme-primary border border-theme rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all duration-300"
           >
             {HTTP_METHODS.map(method => (
               <option key={method} value={method}>{method}</option>

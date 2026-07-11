@@ -45,7 +45,7 @@ export function DeleteConversationModal({
         role="dialog"
         aria-modal="true"
         aria-labelledby="delete-conversation-title"
-        className="max-w-md w-full bg-theme-primary rounded-3xl shadow-2xl p-8 animate-in fade-in-0 zoom-in-95 duration-300 border border-theme max-h-[90vh] overflow-y-auto"
+        className="max-w-md w-full bg-theme-primary rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.16)] p-6 animate-in fade-in-0 zoom-in-95 duration-200 border border-theme max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Icon */}
@@ -54,7 +54,7 @@ export function DeleteConversationModal({
         </div>
 
         {/* Title */}
-        <h2 id="delete-conversation-title" className="text-2xl font-semibold text-theme-primary text-center mb-2">
+        <h2 id="delete-conversation-title" className="text-xl font-semibold text-theme-primary text-center mb-2">
           {title}
         </h2>
 

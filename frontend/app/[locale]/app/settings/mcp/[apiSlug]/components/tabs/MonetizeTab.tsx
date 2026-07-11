@@ -846,7 +846,7 @@ const MonetizeTab: React.FC<MonetizeTabProps> = ({
       {/* Deselection Confirmation Modal */}
       {showDeselectModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="max-w-md w-full bg-theme-primary rounded-2xl shadow-2xl p-6 text-center border border-theme">
+          <div className="max-w-md w-full bg-theme-primary rounded-2xl shadow-2xl p-6 text-center border border-theme max-h-[90vh] overflow-y-auto">
             {/* Warning icon */}
             <div className="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-4">
               <AlertCircle className="w-8 h-8 text-orange-600" />

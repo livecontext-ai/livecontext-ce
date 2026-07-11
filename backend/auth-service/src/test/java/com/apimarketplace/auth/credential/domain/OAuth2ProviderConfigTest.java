@@ -37,6 +37,112 @@ class OAuth2ProviderConfigTest {
         assertThat(cfg.effectiveRefreshUrl()).isEqualTo("https://example.com/token");
         assertThat(cfg.grantType()).isEqualTo("authorizationCode");
         assertThat(cfg.isClientCredentials()).isFalse();
+        assertThat(cfg.clientIdParam()).isEqualTo("client_id");
+    }
+
+    @Test
+    @DisplayName("parses a provider-renamed client id param (TikTok client_key)")
+    void customClientIdParam() throws Exception {
+        JsonNode node = json.readTree("""
+                {
+                  "authorizationUrl": "https://www.tiktok.com/v2/auth/authorize/",
+                  "tokenUrl": "https://open.tiktokapis.com/v2/oauth/token/",
+                  "clientIdParam": "client_key",
+                  "scopes": ["user.info.basic"]
+                }
+                """);
+
+        OAuth2ProviderConfig cfg = OAuth2ProviderConfig.fromJson(node);
+
+        assertThat(cfg).isNotNull();
+        assertThat(cfg.clientIdParam()).isEqualTo("client_key");
+    }
+
+    @Test
+    @DisplayName("minimal config gets RFC-standard tokenExchange defaults")
+    void tokenExchangeDefaults() throws Exception {
+        JsonNode node = json.readTree("""
+                {
+                  "authorizationUrl": "https://example.com/a",
+                  "tokenUrl": "https://example.com/t",
+                  "scopes": ["read"]
+                }
+                """);
+
+        OAuth2ProviderConfig.TokenExchangeConfig tx = OAuth2ProviderConfig.fromJson(node).tokenExchange();
+
+        assertThat(tx.clientSecretParam()).isEqualTo("client_secret");
+        assertThat(tx.codeParam()).isEqualTo("code");
+        assertThat(tx.requestFormat())
+                .isEqualTo(OAuth2ProviderConfig.TokenExchangeConfig.RequestFormat.FORM);
+        assertThat(tx.responsePath()).isNull();
+    }
+
+    @Test
+    @DisplayName("parses the non-RFC TikTok-Business token-exchange quirks (app_id/secret/auth_code/json/data)")
+    void tokenExchangeBusinessQuirks() throws Exception {
+        JsonNode node = json.readTree("""
+                {
+                  "authorizationUrl": "https://business-api.tiktok.com/portal/auth",
+                  "tokenUrl": "https://business-api.tiktok.com/open_api/v1.3/oauth2/access_token/",
+                  "clientIdParam": "app_id",
+                  "clientSecretParam": "secret",
+                  "codeParam": "auth_code",
+                  "tokenRequestFormat": "json",
+                  "tokenResponsePath": "data",
+                  "scopes": ["ad.read"]
+                }
+                """);
+
+        OAuth2ProviderConfig cfg = OAuth2ProviderConfig.fromJson(node);
+
+        assertThat(cfg.clientIdParam()).isEqualTo("app_id");
+        assertThat(cfg.tokenExchange().clientSecretParam()).isEqualTo("secret");
+        assertThat(cfg.tokenExchange().codeParam()).isEqualTo("auth_code");
+        assertThat(cfg.tokenExchange().requestFormat())
+                .isEqualTo(OAuth2ProviderConfig.TokenExchangeConfig.RequestFormat.JSON);
+        assertThat(cfg.tokenExchange().responsePath()).isEqualTo("data");
+        // Copy methods must preserve the whole quirk record.
+        assertThat(cfg.withScopes(java.util.List.of("campaign.read")).tokenExchange().codeParam())
+                .isEqualTo("auth_code");
+    }
+
+    @Test
+    @DisplayName("blank clientIdParam falls back to the RFC client_id default")
+    void blankClientIdParamDefaults() throws Exception {
+        JsonNode node = json.readTree("""
+                {
+                  "authorizationUrl": "https://example.com/a",
+                  "tokenUrl": "https://example.com/t",
+                  "clientIdParam": "   ",
+                  "scopes": ["read"]
+                }
+                """);
+
+        OAuth2ProviderConfig cfg = OAuth2ProviderConfig.fromJson(node);
+
+        assertThat(cfg.clientIdParam()).isEqualTo("client_id");
+    }
+
+    @Test
+    @DisplayName("withScopes and withUrls preserve a renamed clientIdParam")
+    void copyMethodsPreserveClientIdParam() throws Exception {
+        JsonNode node = json.readTree("""
+                {
+                  "authorizationUrl": "https://www.tiktok.com/v2/auth/authorize/",
+                  "tokenUrl": "https://open.tiktokapis.com/v2/oauth/token/",
+                  "clientIdParam": "client_key",
+                  "scopes": ["user.info.basic"]
+                }
+                """);
+        OAuth2ProviderConfig cfg = OAuth2ProviderConfig.fromJson(node);
+
+        // Both copy helpers must carry clientIdParam through - the record's own Javadoc warns that a
+        // new field is easy to silently drop when only some components are copied.
+        assertThat(cfg.withScopes(java.util.List.of("video.upload")).clientIdParam())
+                .isEqualTo("client_key");
+        assertThat(cfg.withUrls("https://new/auth", "https://new/token").clientIdParam())
+                .isEqualTo("client_key");
     }
 
     @Test

@@ -136,7 +136,9 @@ export function FilesExplorerBody({
         <StorageFolderRow key={entryKey(entry)} entry={entry} label={label} countLabel={countLabel} onOpen={onOpenFolder} />
       );
     }
-    // Virtual workflow folders are navigation-only (no dnd, no select); manual folders are full tiles.
+    // Virtual workflow folders can't be drag/drop targets (no real row) but they
+    // DO join the bulk selection (checkbox keyed by virtualId); manual folders
+    // are full tiles.
     return isVirtualEntry(entry) ? (
       <VirtualFolderCard
         key={entryKey(entry)}
@@ -144,6 +146,8 @@ export function FilesExplorerBody({
         label={label}
         countLabel={countLabel}
         onOpen={onOpenFolder}
+        selected={selectable ? selectedIds.has(entryKey(entry)) : false}
+        onToggleSelect={selectable ? onToggleSelect : undefined}
         onDelete={onDeleteVirtualFolder}
         deleteLabel={tFiles('deleteFolder')}
       />

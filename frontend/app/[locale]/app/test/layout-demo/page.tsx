@@ -141,7 +141,7 @@ function AgentConfigExample() {
                     <input
                         type="text"
                         placeholder="My Agent"
-                        className="w-full p-2 border rounded-lg bg-theme-primary text-theme-primary"
+                        className="w-full h-9 px-2 text-sm border rounded-lg bg-theme-primary text-theme-primary"
                     />
                 </div>
                 <div>

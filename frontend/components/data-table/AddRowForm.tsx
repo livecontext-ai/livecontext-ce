@@ -150,7 +150,7 @@ export function AddRowForm({
                     type="number"
                     value={newRowPriority}
                     onChange={(e) => onPriorityChange(parseInt(e.target.value) || 1)}
-                    className="w-full h-10 text-sm"
+                    className="w-full text-sm"
                     min="1"
                     placeholder={t('priority')}
                   />

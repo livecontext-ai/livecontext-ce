@@ -503,33 +503,33 @@ export default function TestApisPageContent() {
         <CardContent className="p-6">
           <div className="flex flex-col lg:flex-row gap-6">
             <div className="relative flex-1">
-              <Search className="pointer-events-none absolute left-6 top-4 h-5 w-5 text-theme-secondary" />
+              <Search className="pointer-events-none absolute left-6 top-1/2 -translate-y-1/2 h-4 w-4 text-theme-secondary" />
               <Input
                 value={apiNameFilter}
                 onChange={(e) => setApiNameFilter(e.target.value)}
                 onKeyDown={handleNameFilterKeyDown}
                 placeholder={t('filterByName')}
-                className="pl-14 pr-32 h-14 text-lg"
+                className="pl-14 pr-32 text-sm"
               />
               <Button
                 onClick={applyNameFilter}
-                className="absolute right-2 top-2 h-10 px-4"
+                className="absolute right-1 top-1/2 -translate-y-1/2 h-7 px-3"
                 variant="default"
               >
                 {t('search')}
               </Button>
             </div>
             <div className="relative flex-1">
-              <Search className="pointer-events-none absolute left-6 top-4 h-5 w-5 text-theme-secondary" />
+              <Search className="pointer-events-none absolute left-6 top-1/2 -translate-y-1/2 h-4 w-4 text-theme-secondary" />
               <Input
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 placeholder={t('searchInDetails')}
-                className="pl-14 h-14 text-lg"
+                className="pl-14 text-sm"
               />
             </div>
             <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-full lg:w-[220px] h-14 text-lg">
+              <SelectTrigger className="w-full lg:w-[220px] text-sm">
                 <SelectValue placeholder={t('filters.statusPlaceholder')} />
               </SelectTrigger>
               <SelectContent>
@@ -541,7 +541,7 @@ export default function TestApisPageContent() {
               </SelectContent>
             </Select>
             <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-              <SelectTrigger className="w-full lg:w-[220px] h-14 text-lg">
+              <SelectTrigger className="w-full lg:w-[220px] text-sm">
                 <SelectValue placeholder={t('filters.categoryPlaceholder')} />
               </SelectTrigger>
               <SelectContent>
@@ -557,7 +557,7 @@ export default function TestApisPageContent() {
               setPageSize(parseInt(value));
               setCurrentPage(0); // Reset to first page when changing page size
             }}>
-              <SelectTrigger className="w-full lg:w-[180px] h-14 text-lg">
+              <SelectTrigger className="w-full lg:w-[180px] text-sm">
                 <SelectValue placeholder={t('filters.perPagePlaceholder')} />
               </SelectTrigger>
               <SelectContent>

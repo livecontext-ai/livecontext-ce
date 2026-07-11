@@ -92,7 +92,7 @@ const UriInput: React.FC<UriInputProps> = ({
             onChange={(e) => handleBaseUrlChange(e.target.value)}
             placeholder="https://api.example.com"
             disabled={disabled || !onBaseUrlChange}
-            className={`px-3 py-2 text-sm ${
+            className={`px-3 text-sm ${
               onBaseUrlChange ? 'cursor-text' : 'cursor-not-allowed'
             }`}
           />

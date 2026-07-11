@@ -145,12 +145,12 @@ export function MCPTable({ className = '' }: MCPTableProps) {
             {mcps.length > 0 && (
                 <div className="flex flex-col gap-4 md:flex-row md:items-center">
                     <div className="relative flex-1 overflow-visible">
-                        <Search className="pointer-events-none absolute left-4 top-3.5 h-4 w-4 text-theme-secondary" />
+                        <Search className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-theme-secondary" />
                         <Input
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
                             placeholder={t('emptyState.mcp.searchPlaceholder')}
-                            className="flex w-full rounded-xl border border-theme bg-[var(--bg-primary)] px-4 py-3 text-sm text-[var(--text-primary)] ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-50 pl-11"
+                            className="flex w-full rounded-xl border border-theme bg-[var(--bg-primary)] px-4 text-sm text-[var(--text-primary)] ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-50 pl-11"
                         />
                     </div>
                 </div>
@@ -186,7 +186,7 @@ export function MCPTable({ className = '' }: MCPTableProps) {
                         role="dialog"
                         aria-modal="true"
                         aria-label={t('emptyState.mcp.deleteTitle')}
-                        className="bg-theme-primary rounded-lg p-6 shadow-lg max-w-md w-full"
+                        className="bg-theme-primary rounded-lg p-6 shadow-lg max-w-md w-full max-h-[90vh] overflow-y-auto"
                         onClick={(e) => e.stopPropagation()}
                     >
                         <h3 className="text-lg font-semibold text-theme-primary mb-4">{t('emptyState.mcp.deleteTitle')}</h3>

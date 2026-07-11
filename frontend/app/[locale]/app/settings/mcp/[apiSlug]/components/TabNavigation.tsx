@@ -77,11 +77,11 @@ const TabNavigation: React.FC<TabNavigationProps> = ({
     <div className="mb-8 flex max-w-full overflow-x-auto scrollbar-hide -mx-1 px-1">
       <div
         ref={containerRef}
-        className="relative mx-auto inline-flex items-center gap-1 p-1.5 bg-theme-tertiary rounded-full w-max"
+        className="relative mx-auto inline-flex items-center gap-1 p-1.5 bg-theme-tertiary rounded-2xl w-max"
       >
         {/* Animated slider background */}
         <div
-          className="absolute top-1.5 h-[calc(100%-12px)] rounded-full bg-[var(--bg-primary)] transition-all duration-300 ease-out"
+          className="absolute top-1.5 h-[calc(100%-12px)] rounded-xl bg-[var(--bg-primary)] transition-all duration-200 ease-out"
           style={{
             left: `${sliderStyle.left}px`,
             width: `${sliderStyle.width}px`,
@@ -103,7 +103,7 @@ const TabNavigation: React.FC<TabNavigationProps> = ({
               disabled={isDisabled}
               title={t(tab.labelKey)}
               className={cn(
-                "relative z-10 flex flex-shrink-0 items-center gap-2 px-3 sm:px-4 py-2 rounded-full text-sm transition-all duration-200",
+                "relative z-10 flex h-9 flex-shrink-0 items-center gap-2 px-3 sm:px-4 rounded-xl text-sm transition-all duration-200",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60",
                 isActive
                   ? "text-[var(--text-primary)]"

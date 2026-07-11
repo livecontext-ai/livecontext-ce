@@ -54,7 +54,7 @@ const TestTab: React.FC<TestTabProps> = ({
           <select
             value={selectedLanguage}
             onChange={(e) => onLanguageChange(e.target.value)}
-            className="px-3 py-1 bg-theme-primary border border-theme rounded text-sm text-theme-primary focus:outline-none focus:ring-1 focus:ring-blue-500"
+            className="h-9 px-3 bg-theme-primary border border-theme rounded text-sm text-theme-primary focus:outline-none focus:ring-1 focus:ring-blue-500"
           >
             {LANGUAGE_OPTIONS.map(({ value, label }) => (
               <option key={value} value={value}>{label}</option>

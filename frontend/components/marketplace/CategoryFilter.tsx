@@ -79,7 +79,7 @@ export function CategoryFilter({
       value={selectedCategory || 'all'}
       onValueChange={(value) => onCategoryChange(value === 'all' ? undefined : value)}
     >
-      <SelectTrigger className={`h-10 w-48 rounded-xl bg-theme-primary border-theme ${className}`}>
+      <SelectTrigger className={`h-9 w-48 rounded-xl bg-theme-primary border-theme ${className}`}>
         <SelectValue>
           <div className="flex items-center gap-2">
             {selectedCategory ? (

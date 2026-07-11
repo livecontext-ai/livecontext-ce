@@ -1,4 +1,15 @@
 {
+  "globalSearch": {
+    "placeholder": "Pesquisar...",
+    "conversations": "Conversas",
+    "workflows": "Fluxos de trabalho",
+    "agents": "Agentes",
+    "settings": "Configurações",
+    "noResults": "Nenhum resultado para \"{query}\"",
+    "searching": "Pesquisando...",
+    "untitled": "Sem título",
+    "clear": "Limpar pesquisa"
+  },
   "reward": {
     "page": {
       "title": "Indique e ganhe",
@@ -378,6 +389,8 @@
   },
   "sidePanel": {
     "addTab": "Adicionar aba",
+    "openRight": "Abrir o painel à direita",
+    "openBottom": "Abrir o painel embaixo",
     "searchPlaceholder": "Buscar...",
     "applications": "Aplicações",
     "interfaces": "Interfaces",
@@ -386,6 +399,7 @@
     "noItems": "Nenhum item disponível",
     "errorLoading": "Falha ao carregar itens",
     "aiChat": "Chat IA",
+    "welcomeTitle": "Como posso ajudar você?",
     "agent": "Agente",
     "workflowPanel": "Painel de Workflow",
     "workflows": "Workflows",
@@ -3940,6 +3954,32 @@
       "createdAt": "Criada em {date}",
       "noKey": "Nenhuma chave de API ainda. Gere uma para conectar um cliente MCP."
     },
+    "keys": {
+      "title": "Chaves de API",
+      "description": "As solicitações ao endpoint MCP autenticam-se com uma chave de API enviada no cabeçalho X-API-Key. Crie uma por cliente, cada uma com acesso total ou limitada às ferramentas de que precisa, e revogue qualquer uma sem afetar as outras.",
+      "create": "Nova chave",
+      "empty": "Nenhuma chave de API ainda. Crie uma para conectar um cliente MCP.",
+      "fullAccess": "Acesso completo",
+      "fullAccessHint": "Todas as ferramentas MCP",
+      "scopedAccess": "Acesso limitado",
+      "scopedAccessHint": "Apenas as ferramentas que você escolher",
+      "createdAt": "Criada em {date}",
+      "revoke": "Revogar",
+      "revokeConfirm": "Revogar chave",
+      "revokedTitle": "Chave revogada",
+      "revokeFailed": "Não foi possível revogar a chave",
+      "createTitle": "Criar uma chave de API",
+      "createSubtitle": "Dê um nome à chave e escolha o que ela pode acessar.",
+      "createdTitle": "Chave criada",
+      "nameLabel": "Nome",
+      "namePlaceholder": "ex.: Cursor no meu notebook",
+      "accessLabel": "Acesso",
+      "limitLabel": "Limitar a ferramentas específicas",
+      "scopesLabel": "Ferramentas",
+      "scopesRequired": "Escolha pelo menos uma ferramenta.",
+      "cancel": "Cancelar",
+      "done": "Concluído"
+    },
     "toasts": {
       "keyGenerated": "Chave de API gerada",
       "keyGenerationFailed": "Não foi possível gerar a chave de API",
@@ -4854,6 +4894,7 @@
     "iterationLabel": "Item {number}",
     "workflowFallback": "Fluxo de trabalho",
     "moveTo": "Mover para…",
+    "virtualBulkExcluded": "As pastas de workflow só podem ser excluídas - desmarque-as para baixar ou mover",
     "moveToFolderTitle": "Mover {count, plural, one {# item} other {# itens}}",
     "moveToRoot": "Nível superior (raiz)",
     "moveHere": "Mover aqui",
@@ -5246,10 +5287,14 @@
       "themeLight": "Claro",
       "themeDark": "Escuro",
       "themeAuto": "Sistema",
-      "sidePanelPosition": "Posição do painel lateral",
-      "sidePanelPositionDescription": "Escolha onde o painel lateral abre",
-      "sidePanelPositionRight": "Direita",
-      "sidePanelPositionBottom": "Inferior",
+      "sidePanelDefaultPosition": "Posição padrão do painel lateral",
+      "sidePanelDefaultPositionDescription": "Onde o painel lateral abre por padrão em todo o aplicativo",
+      "sidePanelDefaultPositionRight": "Direita",
+      "sidePanelDefaultPositionBottom": "Inferior",
+      "sidePanelBottomMode": "Estilo do painel inferior",
+      "sidePanelBottomModeDescription": "Como o painel é exibido ao abri-lo embaixo pelo cabeçalho",
+      "sidePanelBottomModeFull": "Largura total (sob a barra lateral)",
+      "sidePanelBottomModeContent": "Largura do conteúdo",
       "timezone": "Fuso Horario",
       "timezoneDescription": "Defina seu fuso horario local",
       "selectTimezone": "Selecionar fuso horario",
@@ -6614,7 +6659,8 @@
         "chat-trigger": "Chat",
         "schedule-trigger": "Agendador",
         "form-trigger": "Formulário"
-      }
+      },
+      "close": "Fechar"
     },
     "nodes": {
       "deleteNode": "Excluir nó",

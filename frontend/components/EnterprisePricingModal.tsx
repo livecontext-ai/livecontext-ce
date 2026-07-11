@@ -235,10 +235,10 @@ const EnterprisePricingModal = React.memo(function EnterprisePricingModal({
         {/* Header with Billing Cycle Toggle */}
         <div className="flex items-center justify-center p-4 sm:p-6 border-b border-theme relative">
           <div className="flex items-center">
-            <div className="relative inline-flex items-center gap-1 p-1.5 bg-theme-tertiary rounded-full" ref={tabContainerRef}>
+            <div className="relative inline-flex items-center gap-1 p-1.5 bg-theme-tertiary rounded-2xl" ref={tabContainerRef}>
               {/* Slider highlight */}
               <div
-                className="absolute top-1.5 bottom-1.5 rounded-full bg-theme-primary transition-all duration-300 ease-out"
+                className="absolute top-1.5 bottom-1.5 rounded-xl bg-theme-primary transition-all duration-200 ease-out"
                 style={{
                   left: tabSliderStyle.left,
                   width: tabSliderStyle.width,
@@ -256,7 +256,7 @@ const EnterprisePricingModal = React.memo(function EnterprisePricingModal({
                     key={option.value}
                     data-tab-id={option.value}
                     onClick={() => onBillingCycleChange?.(option.value as 'monthly' | 'yearly')}
-                    className={`relative z-10 flex items-center justify-center px-6 py-2 rounded-full text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 outline-none ${isActive
+                    className={`relative z-10 flex items-center justify-center h-9 px-6 rounded-xl text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 outline-none ${isActive
                       ? "text-theme-primary"
                       : "text-theme-secondary hover:text-theme-primary hover:bg-theme-primary/50"
                       }`}
@@ -297,7 +297,7 @@ const EnterprisePricingModal = React.memo(function EnterprisePricingModal({
                       setSelectedOption(value || null);
                     }}
                   >
-                    <SelectTrigger className="w-full text-sm sm:text-base text-center font-semibold">
+                    <SelectTrigger className="w-full text-sm text-center font-semibold">
                       <SelectValue placeholder={t('selectPricing')} />
                     </SelectTrigger>
                     <SelectContent>

@@ -205,7 +205,7 @@ function ExploreTab({ remote = false }: { remote?: boolean }) {
             placeholder={t('searchPlaceholder')}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-11 h-12 rounded-xl bg-theme-primary border-theme text-sm"
+            className="w-full pl-11 rounded-xl bg-theme-primary border-theme text-sm"
           />
         </div>
         <CategoryFilter

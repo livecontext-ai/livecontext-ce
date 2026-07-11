@@ -128,7 +128,7 @@ const AnalyzeTab: React.FC<AnalyzeTabProps> = ({ apiData }) => {
               value={timeRange}
               onValueChange={(value) => setTimeRange(value)}
             >
-              <SelectTrigger className="px-3 py-2">
+              <SelectTrigger className="px-3">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

@@ -37,7 +37,12 @@ class MonolithSecurityFilterApiKeyTest {
                         new MonolithSecurityFilter.OrgMembershipClaim("team-org-uuid", "ADMIN", false, false)));
     }
 
-    private static MonolithSecurityFilter filterWithResolver(Function<String, MonolithSecurityFilter.JwtClaims> resolver) {
+    /** Full-access key auth (scopes null), the pre-multi-key behavior. */
+    private static MonolithSecurityFilter.ApiKeyAuth fullAccessAuthForUser42() {
+        return new MonolithSecurityFilter.ApiKeyAuth(claimsForUser42(), null);
+    }
+
+    private static MonolithSecurityFilter filterWithResolver(Function<String, MonolithSecurityFilter.ApiKeyAuth> resolver) {
         return new MonolithSecurityFilter(() -> null, List.of(), token -> null, resolver);
     }
 
@@ -81,7 +86,7 @@ class MonolithSecurityFilterApiKeyTest {
     @DisplayName("valid X-API-Key header resolves the owner and injects trusted user headers")
     void validXApiKeyHeaderInjectsTrustedHeaders() throws Exception {
         MonolithSecurityFilter filter = filterWithResolver(key ->
-                VALID_KEY.equals(key) ? claimsForUser42() : null);
+                VALID_KEY.equals(key) ? fullAccessAuthForUser42() : null);
         MockHttpServletRequest request = externalRequest("POST", "/mcp");
         request.addHeader("X-API-Key", VALID_KEY);
         MockHttpServletResponse response = new MockHttpServletResponse();
@@ -104,7 +109,7 @@ class MonolithSecurityFilterApiKeyTest {
         AtomicReference<String> resolvedKey = new AtomicReference<>();
         MonolithSecurityFilter filter = filterWithResolver(key -> {
             resolvedKey.set(key);
-            return claimsForUser42();
+            return fullAccessAuthForUser42();
         });
         MockHttpServletRequest request = externalRequest("POST", "/mcp");
         request.addHeader("Authorization", "Bearer " + VALID_KEY);
@@ -170,7 +175,7 @@ class MonolithSecurityFilterApiKeyTest {
     @Test
     @DisplayName("forged identity headers sent alongside an API key are replaced by the resolved identity")
     void forgedHeadersAlongsideApiKeyAreReplaced() throws Exception {
-        MonolithSecurityFilter filter = filterWithResolver(key -> claimsForUser42());
+        MonolithSecurityFilter filter = filterWithResolver(key -> fullAccessAuthForUser42());
         MockHttpServletRequest request = externalRequest("POST", "/mcp");
         request.addHeader("X-API-Key", VALID_KEY);
         request.addHeader("X-User-ID", "999");
@@ -188,7 +193,7 @@ class MonolithSecurityFilterApiKeyTest {
     @Test
     @DisplayName("valid membership active-org claim switches the injected org scope for API-key auth")
     void activeOrgClaimResolvesAgainstMembershipsForApiKeyAuth() throws Exception {
-        MonolithSecurityFilter filter = filterWithResolver(key -> claimsForUser42());
+        MonolithSecurityFilter filter = filterWithResolver(key -> fullAccessAuthForUser42());
         MockHttpServletRequest request = externalRequest("POST", "/mcp");
         request.addHeader("X-API-Key", VALID_KEY);
         request.addHeader("X-Active-Organization-ID", "team-org-uuid");
@@ -208,7 +213,7 @@ class MonolithSecurityFilterApiKeyTest {
         AtomicReference<String> resolvedKey = new AtomicReference<>();
         MonolithSecurityFilter filter = filterWithResolver(key -> {
             resolvedKey.set(key);
-            return claimsForUser42();
+            return fullAccessAuthForUser42();
         });
         String otherKey = "lc_live_" + "b".repeat(64);
         MockHttpServletRequest request = externalRequest("POST", "/mcp");
@@ -230,7 +235,7 @@ class MonolithSecurityFilterApiKeyTest {
                 () -> keyPair.getPublic(), List.of(), token -> null,
                 key -> {
                     resolverCalled.set(true);
-                    return claimsForUser42();
+                    return fullAccessAuthForUser42();
                 });
         MockHttpServletRequest request = externalRequest("POST", "/mcp");
         request.addHeader("X-API-Key", VALID_KEY);

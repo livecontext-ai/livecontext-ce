@@ -299,15 +299,15 @@ export default function ToolEditPage() {
 
                 {/* Tab Navigation */}
                 <div className="mb-8 flex max-w-full overflow-x-auto scrollbar-hide">
-                    <div ref={tabContainerRef} className="relative mx-auto inline-flex w-max items-center gap-1 p-1.5 bg-theme-tertiary rounded-full">
-                        <div className="absolute top-1.5 h-[calc(100%-12px)] rounded-full bg-[var(--bg-primary)] transition-all duration-300 ease-out"
+                    <div ref={tabContainerRef} className="relative mx-auto inline-flex w-max items-center gap-1 p-1.5 bg-theme-tertiary rounded-2xl">
+                        <div className="absolute top-1.5 h-[calc(100%-12px)] rounded-xl bg-[var(--bg-primary)] transition-all duration-200 ease-out"
                             style={{ left: `${tabSliderStyle.left}px`, width: `${tabSliderStyle.width}px` }} />
                         {tabs.map((tab) => {
                             const IconComponent = tab.icon;
                             const isActive = activeTab === tab.id;
                             return (
                                 <button key={tab.id} data-tab-id={tab.id} type="button" onClick={() => setActiveTab(tab.id)}
-                                    className={`relative z-10 flex items-center gap-2 px-4 py-2 rounded-full text-sm transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 ${isActive
+                                    className={`relative z-10 flex h-9 items-center gap-2 px-4 rounded-xl text-sm transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 ${isActive
                                         ? 'text-[var(--text-primary)]'
                                         : 'text-theme-secondary hover:text-theme-primary hover:bg-[var(--bg-primary)]/50'}`}>
                                     <IconComponent className={`w-4 h-4 transition-colors duration-200 ${isActive ? 'text-[var(--text-primary)]' : ''}`} />

@@ -566,14 +566,14 @@ export function ConversationSidebar({
           <TooltipTrigger asChild>
         <div
           onClick={() => handleConversationClick(conversation)}
-          className={`group relative cursor-pointer transition-all duration-200 rounded-lg px-1 py-2 ${
+          className={`group relative cursor-pointer transition-all duration-200 rounded-lg px-1 py-1.5 my-0.5 ${
             currentConversationId === conversation.id
               ? 'bg-surface-hover'
               : 'bg-transparent hover:bg-surface-hover'
           }`}
         >
           <div className="flex items-center w-full min-w-0 pr-6">
-            <h3 className={`text-sm font-normal truncate transition-colors min-w-0 ${showShimmer ? 'shimmer-text-visible' : 'text-theme-primary'}`}>
+            <h3 className={`text-sm font-normal truncate transition-colors min-w-0 ${showShimmer ? 'shimmer-text-visible' : 'text-theme-secondary group-hover:text-theme-primary group-[.bg-surface-hover]:text-theme-primary group-[.bg-surface-hover]:font-medium'}`}>
               {getDisplayTitle(conversation)}
             </h3>
             {conversation.workflowId && (
@@ -713,13 +713,13 @@ export function ConversationSidebar({
                   // Highlight Home whenever the main panel is actually on Home (new chat) - including
                   // while the sidebar is in Messages mode, since Messages is a pure view that keeps us
                   // on Home. Only an open DM thread (/app/messages/[threadId]) un-highlights it.
-                  className={`flex items-center group rounded-lg px-1 py-2 transition-all duration-200 cursor-pointer w-full ${currentView === 'chat' && !isDetailPage && !currentConversationId && !pathname?.includes('/app/messages')
+                  className={`flex items-center group rounded-lg px-1 py-1.5 my-0.5 transition-all duration-200 cursor-pointer w-full ${currentView === 'chat' && !isDetailPage && !currentConversationId && !pathname?.includes('/app/messages')
                     ? 'bg-surface-hover'
                     : 'bg-transparent hover:bg-surface-hover'
                     }`}
                 >
-                  <Home className="w-4 h-4 text-theme-primary mr-2 group-hover:text-theme-primary transition-colors" />
-                  <h2 className="text-sm text-theme-primary group-hover:text-theme-primary transition-colors">{t('sidebar.home')}</h2>
+                  <Home className="w-4 h-4 text-theme-secondary mr-2 group-hover:text-theme-primary group-[.bg-surface-hover]:text-theme-primary transition-colors" />
+                  <h2 className="text-sm text-theme-secondary group-hover:text-theme-primary group-[.bg-surface-hover]:text-theme-primary group-[.bg-surface-hover]:font-medium transition-colors">{t('sidebar.home')}</h2>
                 </button>
               </div>
             </div>
@@ -733,13 +733,13 @@ export function ConversationSidebar({
               <div className="flex items-center px-4">
                 <button
                   onClick={onMarketPlaceClick}
-                  className={`flex items-center group rounded-lg px-1 py-2 transition-all duration-200 cursor-pointer w-full ${currentView === 'marketplace'
+                  className={`flex items-center group rounded-lg px-1 py-1.5 my-0.5 transition-all duration-200 cursor-pointer w-full ${currentView === 'marketplace'
                     ? 'bg-surface-hover'
                     : 'bg-transparent hover:bg-surface-hover'
                     }`}
                 >
-                  <Store className="w-4 h-4 text-theme-primary mr-2 group-hover:text-theme-primary transition-colors" />
-                  <h2 className="text-sm text-theme-primary group-hover:text-theme-primary transition-colors">{t('sidebar.marketplace')}</h2>
+                  <Store className="w-4 h-4 text-theme-secondary mr-2 group-hover:text-theme-primary group-[.bg-surface-hover]:text-theme-primary transition-colors" />
+                  <h2 className="text-sm text-theme-secondary group-hover:text-theme-primary group-[.bg-surface-hover]:text-theme-primary group-[.bg-surface-hover]:font-medium transition-colors">{t('sidebar.marketplace')}</h2>
                 </button>
               </div>
             </div>
@@ -790,14 +790,14 @@ export function ConversationSidebar({
                       router.push(`/app/project/${project.id}`);
                     }
                   }}
-                  className="group relative cursor-pointer transition-all duration-200 rounded-lg px-1 py-2 hover:bg-surface-hover"
+                  className="group relative cursor-pointer transition-all duration-200 rounded-lg px-1 py-1.5 my-0.5 hover:bg-surface-hover"
                 >
                   <div className="flex items-center w-full min-w-0 pr-6">
                     {(() => {
                       const IconComp = getProjectIcon(project.icon);
                       return <IconComp className="w-4 h-4 mr-2 flex-shrink-0" style={{ color: project.color }} />;
                     })()}
-                    <h3 className="text-sm font-normal truncate text-theme-primary min-w-0">{project.name}</h3>
+                    <h3 className="text-sm font-normal truncate text-theme-secondary group-hover:text-theme-primary group-[.bg-surface-hover]:text-theme-primary min-w-0">{project.name}</h3>
                   </div>
 
                   {/* 3-dot menu - hidden for VIEWER (ProjectService update/delete
@@ -875,13 +875,13 @@ export function ConversationSidebar({
                       router.push('/app/board');
                     }
                   }}
-                  className={`flex items-center group rounded-lg px-1 py-2 transition-all duration-200 cursor-pointer w-full ${currentView === 'board'
+                  className={`flex items-center group rounded-lg px-1 py-1.5 my-0.5 transition-all duration-200 cursor-pointer w-full ${currentView === 'board'
                     ? 'bg-surface-hover'
                     : 'bg-transparent hover:bg-surface-hover'
                     }`}
                 >
-                  <Columns3 className="w-4 h-4 text-theme-primary mr-2 group-hover:text-theme-primary transition-colors" />
-                  <h2 className="text-sm text-theme-primary group-hover:text-theme-primary transition-colors">{t('sidebar.board')}</h2>
+                  <Columns3 className="w-4 h-4 text-theme-secondary mr-2 group-hover:text-theme-primary group-[.bg-surface-hover]:text-theme-primary transition-colors" />
+                  <h2 className="text-sm text-theme-secondary group-hover:text-theme-primary group-[.bg-surface-hover]:text-theme-primary group-[.bg-surface-hover]:font-medium transition-colors">{t('sidebar.board')}</h2>
                 </button>
               </div>
             </div>
@@ -901,13 +901,13 @@ export function ConversationSidebar({
                       router.push('/app/agent');
                     }
                   }}
-                  className={`flex items-center group rounded-lg px-1 py-2 transition-all duration-200 cursor-pointer w-full ${currentView === 'agent'
+                  className={`flex items-center group rounded-lg px-1 py-1.5 my-0.5 transition-all duration-200 cursor-pointer w-full ${currentView === 'agent'
                     ? 'bg-surface-hover'
                     : 'bg-transparent hover:bg-surface-hover'
                     }`}
                 >
-                  <Bot className="w-4 h-4 text-theme-primary mr-2 group-hover:text-theme-primary transition-colors" />
-                  <h2 className="text-sm text-theme-primary group-hover:text-theme-primary transition-colors">{t('sidebar.agents')}</h2>
+                  <Bot className="w-4 h-4 text-theme-secondary mr-2 group-hover:text-theme-primary group-[.bg-surface-hover]:text-theme-primary transition-colors" />
+                  <h2 className="text-sm text-theme-secondary group-hover:text-theme-primary group-[.bg-surface-hover]:text-theme-primary group-[.bg-surface-hover]:font-medium transition-colors">{t('sidebar.agents')}</h2>
                 </button>
               </div>
             </div>
@@ -927,13 +927,13 @@ export function ConversationSidebar({
                       router.push('/app/applications');
                     }
                   }}
-                  className={`flex items-center group rounded-lg px-1 py-2 transition-all duration-200 cursor-pointer w-full ${currentView === 'applications'
+                  className={`flex items-center group rounded-lg px-1 py-1.5 my-0.5 transition-all duration-200 cursor-pointer w-full ${currentView === 'applications'
                     ? 'bg-surface-hover'
                     : 'bg-transparent hover:bg-surface-hover'
                     }`}
                 >
-                  <AppWindow className="w-4 h-4 text-theme-primary mr-2 group-hover:text-theme-primary transition-colors" />
-                  <h2 className="text-sm text-theme-primary group-hover:text-theme-primary transition-colors">{t('sidebar.applications')}</h2>
+                  <AppWindow className="w-4 h-4 text-theme-secondary mr-2 group-hover:text-theme-primary group-[.bg-surface-hover]:text-theme-primary transition-colors" />
+                  <h2 className="text-sm text-theme-secondary group-hover:text-theme-primary group-[.bg-surface-hover]:text-theme-primary group-[.bg-surface-hover]:font-medium transition-colors">{t('sidebar.applications')}</h2>
                 </button>
               </div>
             </div>
@@ -953,13 +953,13 @@ export function ConversationSidebar({
                       router.push('/app/workflow');
                     }
                   }}
-                  className={`flex items-center group rounded-lg px-1 py-2 transition-all duration-200 cursor-pointer w-full ${currentView === 'workflow'
+                  className={`flex items-center group rounded-lg px-1 py-1.5 my-0.5 transition-all duration-200 cursor-pointer w-full ${currentView === 'workflow'
                     ? 'bg-surface-hover'
                     : 'bg-transparent hover:bg-surface-hover'
                     }`}
                 >
-                  <Workflow className="w-4 h-4 text-theme-primary mr-2 group-hover:text-theme-primary transition-colors" />
-                  <h2 className="text-sm text-theme-primary group-hover:text-theme-primary transition-colors">{t('sidebar.workflows')}</h2>
+                  <Workflow className="w-4 h-4 text-theme-secondary mr-2 group-hover:text-theme-primary group-[.bg-surface-hover]:text-theme-primary transition-colors" />
+                  <h2 className="text-sm text-theme-secondary group-hover:text-theme-primary group-[.bg-surface-hover]:text-theme-primary group-[.bg-surface-hover]:font-medium transition-colors">{t('sidebar.workflows')}</h2>
                 </button>
               </div>
             </div>
@@ -979,13 +979,13 @@ export function ConversationSidebar({
                       router.push('/app/interface');
                     }
                   }}
-                  className={`flex items-center group rounded-lg px-1 py-2 transition-all duration-200 cursor-pointer w-full ${currentView === 'interface'
+                  className={`flex items-center group rounded-lg px-1 py-1.5 my-0.5 transition-all duration-200 cursor-pointer w-full ${currentView === 'interface'
                     ? 'bg-surface-hover'
                     : 'bg-transparent hover:bg-surface-hover'
                     }`}
                 >
-                  <Monitor className="w-4 h-4 text-theme-primary mr-2 group-hover:text-theme-primary transition-colors" />
-                  <h2 className="text-sm text-theme-primary group-hover:text-theme-primary transition-colors">{t('sidebar.interfaces')}</h2>
+                  <Monitor className="w-4 h-4 text-theme-secondary mr-2 group-hover:text-theme-primary group-[.bg-surface-hover]:text-theme-primary transition-colors" />
+                  <h2 className="text-sm text-theme-secondary group-hover:text-theme-primary group-[.bg-surface-hover]:text-theme-primary group-[.bg-surface-hover]:font-medium transition-colors">{t('sidebar.interfaces')}</h2>
                 </button>
               </div>
             </div>
@@ -1005,13 +1005,13 @@ export function ConversationSidebar({
                       router.push('/app/tables');
                     }
                   }}
-                  className={`flex items-center group rounded-lg px-1 py-2 transition-all duration-200 cursor-pointer w-full ${currentView === 'data'
+                  className={`flex items-center group rounded-lg px-1 py-1.5 my-0.5 transition-all duration-200 cursor-pointer w-full ${currentView === 'data'
                     ? 'bg-surface-hover'
                     : 'bg-transparent hover:bg-surface-hover'
                     }`}
                 >
-                  <Table className="w-4 h-4 text-theme-primary mr-2 group-hover:text-theme-primary transition-colors" />
-                  <h2 className="text-sm text-theme-primary group-hover:text-theme-primary transition-colors">{t('sidebar.tables')}</h2>
+                  <Table className="w-4 h-4 text-theme-secondary mr-2 group-hover:text-theme-primary group-[.bg-surface-hover]:text-theme-primary transition-colors" />
+                  <h2 className="text-sm text-theme-secondary group-hover:text-theme-primary group-[.bg-surface-hover]:text-theme-primary group-[.bg-surface-hover]:font-medium transition-colors">{t('sidebar.tables')}</h2>
                 </button>
               </div>
             </div>
@@ -1031,13 +1031,13 @@ export function ConversationSidebar({
                       router.push('/app/files');
                     }
                   }}
-                  className={`flex items-center group rounded-lg px-1 py-2 transition-all duration-200 cursor-pointer w-full ${currentView === 'files'
+                  className={`flex items-center group rounded-lg px-1 py-1.5 my-0.5 transition-all duration-200 cursor-pointer w-full ${currentView === 'files'
                     ? 'bg-surface-hover'
                     : 'bg-transparent hover:bg-surface-hover'
                     }`}
                 >
-                  <Folder className="w-4 h-4 text-theme-primary mr-2 group-hover:text-theme-primary transition-colors" />
-                  <h2 className="text-sm text-theme-primary group-hover:text-theme-primary transition-colors">{t('sidebar.nav.files')}</h2>
+                  <Folder className="w-4 h-4 text-theme-secondary mr-2 group-hover:text-theme-primary group-[.bg-surface-hover]:text-theme-primary transition-colors" />
+                  <h2 className="text-sm text-theme-secondary group-hover:text-theme-primary group-[.bg-surface-hover]:text-theme-primary group-[.bg-surface-hover]:font-medium transition-colors">{t('sidebar.nav.files')}</h2>
                 </button>
               </div>
             </div>

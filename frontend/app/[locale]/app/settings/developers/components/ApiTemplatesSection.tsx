@@ -133,7 +133,7 @@ const ApiTemplatesSection: React.FC<ApiTemplatesSectionProps> = ({
       {/* Modal de confirmation de changement de template */}
       {showChangeTemplateModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="max-w-sm w-full bg-theme-primary rounded-xl shadow-xl p-5 border border-theme">
+          <div className="max-w-sm w-full bg-theme-primary rounded-xl shadow-xl p-5 border border-theme max-h-[90vh] overflow-y-auto">
             {/* Icon */}
             <div className="w-10 h-10 bg-amber-100 dark:bg-amber-900/30 rounded-lg flex items-center justify-center mx-auto mb-3">
               <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-500" />

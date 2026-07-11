@@ -1296,7 +1296,7 @@ export function PublishWorkflowModal({
   if (publishPhase === 'publishing') {
     return createPortal(
       <div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
-        <div className="max-w-md w-full bg-theme-primary rounded-3xl shadow-2xl p-8 animate-in fade-in-0 zoom-in-95 duration-300 border border-theme">
+        <div className="max-w-md w-full bg-theme-primary rounded-3xl shadow-2xl p-8 animate-in fade-in-0 zoom-in-95 duration-300 border border-theme max-h-[90vh] overflow-y-auto">
           <div className="text-center">
             <div className="w-16 h-16 bg-theme-secondary rounded-full flex items-center justify-center mx-auto mb-5">
               <LoadingSpinner size="md" />
@@ -1313,7 +1313,7 @@ export function PublishWorkflowModal({
   if (publishPhase === 'error') {
     return createPortal(
       <div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-[9999] flex items-center justify-center p-4" onClick={() => setPublishPhase(null)}>
-        <div className="max-w-md w-full bg-theme-primary rounded-3xl shadow-2xl p-8 animate-in fade-in-0 zoom-in-95 duration-300 border border-theme" onClick={(e) => e.stopPropagation()}>
+        <div className="max-w-md w-full bg-theme-primary rounded-3xl shadow-2xl p-8 animate-in fade-in-0 zoom-in-95 duration-300 border border-theme max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
           <div className="text-center">
             <div className="w-16 h-16 bg-red-100 dark:bg-red-900/30 rounded-full flex items-center justify-center mx-auto mb-5">
               <AlertTriangle className="h-8 w-8 text-red-600 dark:text-red-400" />
@@ -1456,7 +1456,7 @@ export function PublishWorkflowModal({
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="unpublish-workflow-modal-title"
-        className="max-w-md w-full bg-theme-primary rounded-2xl shadow-2xl border border-theme animate-in fade-in-0 zoom-in-95 duration-200 p-6"
+        className="max-w-md w-full bg-theme-primary rounded-2xl shadow-2xl border border-theme animate-in fade-in-0 zoom-in-95 duration-200 p-6 max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-3 mb-4">

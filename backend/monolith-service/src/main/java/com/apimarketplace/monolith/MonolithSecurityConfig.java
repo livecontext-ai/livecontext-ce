@@ -44,12 +44,14 @@ public class MonolithSecurityConfig {
                         .orElse(null),
                 // API-key auth (X-API-Key / "Bearer lc_live_..."), same trust model as the cloud
                 // gateway's ApiKeyResolver: the lc_live_ key resolves to its owner's identity.
+                // Scoped multi keys additionally carry the tool allow-list, which the filter
+                // injects downstream as X-Api-Key-Scopes (null = legacy/full access = no header).
                 apiKey -> {
                     UserResolutionResponse resolved = apiKeyService.resolveByPlaintextKey(apiKey);
                     if (resolved == null || !resolved.canMakeRequest()) {
                         return null;
                     }
-                    return new MonolithSecurityFilter.JwtClaims(
+                    MonolithSecurityFilter.JwtClaims claims = new MonolithSecurityFilter.JwtClaims(
                             String.valueOf(resolved.getUserId()),
                             resolved.getProviderId(),
                             resolved.getEmail(),
@@ -60,6 +62,7 @@ public class MonolithSecurityConfig {
                                     .map(m -> new MonolithSecurityFilter.OrgMembershipClaim(
                                             m.getOrgId(), m.getRole(), m.isPersonal(), m.isPaused()))
                                     .toList());
+                    return new MonolithSecurityFilter.ApiKeyAuth(claims, resolved.getApiKeyScopes());
                 }
         );
     }

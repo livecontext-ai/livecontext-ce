@@ -1,6 +1,7 @@
 package com.apimarketplace.auth.service;
 
 import com.apimarketplace.auth.domain.User;
+import com.apimarketplace.auth.repository.ApiKeyRepository;
 import com.apimarketplace.auth.repository.UserRepository;
 import com.apimarketplace.common.security.CredentialEncryptionService;
 import org.junit.jupiter.api.DisplayName;
@@ -31,6 +32,9 @@ class ApiKeyServiceCacheBustTest {
 
     @Mock
     private UserRepository userRepository;
+
+    @Mock
+    private ApiKeyRepository apiKeyRepository;
 
     @Mock
     private CredentialEncryptionService encryptionService;

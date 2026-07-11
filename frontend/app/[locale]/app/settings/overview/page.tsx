@@ -9,7 +9,7 @@ import { useAuthGuard } from "@/hooks/useAuthGuard";
 import { useAuth } from "@/lib/providers/smart-providers";
 import { useUserProfile } from "@/hooks/useUserProfile";
 import { useTheme, type ThemePreference } from "@/components/ThemeProvider";
-import { useSidePanelLayoutSafe, type SidePanelPosition } from "@/contexts/SidePanelLayoutContext";
+import { useSidePanelLayoutSafe, type SidePanelBottomMode, type SidePanelDefaultPosition } from "@/contexts/SidePanelLayoutContext";
 import { useSubscription } from "@/lib/hooks/smart-hooks-complete";
 import { OverviewPageSkeleton } from "@/components/skeletons";
 import { ScheduledChangeAlert } from "@/components/billing";
@@ -115,8 +115,16 @@ export default function SettingsOverviewPage() {
   // App theme (light / dark / auto) - shown in General Preferences below the language.
   const { themePreference, setTheme } = useTheme();
 
-  // Where the unified side panel docks (right / bottom) - shown below the theme.
-  const { position: sidePanelPosition, setPosition: setSidePanelPosition } = useSidePanelLayoutSafe();
+  // Side-panel layout preferences - shown below the theme. `defaultPosition` picks
+  // where the panel opens BY DEFAULT across the app (right / bottom); the two header
+  // dock buttons still override the active dock live. `bottomMode` picks which bottom
+  // variant (content-width or full-width) the bottom dock uses.
+  const {
+    defaultPosition: sidePanelDefaultPosition,
+    setDefaultPosition: setSidePanelDefaultPosition,
+    bottomMode: sidePanelBottomMode,
+    setBottomMode: setSidePanelBottomMode,
+  } = useSidePanelLayoutSafe();
 
   // All useState hooks first
   const [activeTab, setActiveTab] = useState("profile");
@@ -394,10 +402,10 @@ export default function SettingsOverviewPage() {
         {/* ===== SETTINGS TABS SECTION ===== */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
           <div className="relative mb-6 sm:mb-8 flex max-w-full overflow-x-auto scrollbar-hide">
-            <div className="relative mx-auto inline-flex w-max items-center gap-0.5 sm:gap-1 p-1 sm:p-1.5 bg-theme-tertiary rounded-full" ref={tabContainerRef}>
+            <div className="relative mx-auto inline-flex w-max items-center gap-0.5 sm:gap-1 p-1 sm:p-1.5 bg-theme-tertiary rounded-2xl" ref={tabContainerRef}>
               {/* Slider highlight */}
               <div
-                className="absolute top-1 sm:top-1.5 bottom-1 sm:bottom-1.5 rounded-full bg-[var(--bg-primary)] transition-all duration-300 ease-out"
+                className="absolute top-1 sm:top-1.5 bottom-1 sm:bottom-1.5 rounded-xl bg-[var(--bg-primary)] transition-all duration-200 ease-out"
                 style={{
                   left: tabSliderStyle.left,
                   width: tabSliderStyle.width,
@@ -412,7 +420,7 @@ export default function SettingsOverviewPage() {
                   type="button"
                   onClick={() => setActiveTab(tab.id)}
                   className={cn(
-                    "relative z-10 flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 py-1.5 sm:py-2 rounded-full text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 outline-none",
+                    "relative z-10 flex h-9 items-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 rounded-xl text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 outline-none",
                     activeTab === tab.id
                       ? "text-[var(--text-primary)]"
                       : "text-theme-secondary hover:text-theme-primary hover:bg-[var(--bg-primary)]/50"
@@ -814,29 +822,59 @@ export default function SettingsOverviewPage() {
                   </Select>
                 </div>
 
-                {/* Side panel position - persisted client-side (localStorage), scoped per
-                    workspace. 'right' docks the panel to the side (resizes width); 'bottom'
-                    docks it under the content (resizes height). The header toggle icon
-                    mirrors the choice. */}
+                {/* Default side-panel opening position - persisted client-side
+                    (localStorage), scoped per workspace. Picks where the panel opens
+                    BY DEFAULT everywhere in the app: 'right' (docks right, resizes
+                    width) or 'bottom' (docks under the content, using the bottom style
+                    below). The two header dock buttons still override the active dock
+                    live for the current session. */}
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-4">
                   <div>
                     <h4 className="font-medium text-theme-primary">
-                      {t('preferences.sidePanelPosition')}
+                      {t('preferences.sidePanelDefaultPosition')}
                     </h4>
                     <p className="text-sm text-theme-secondary">
-                      {t('preferences.sidePanelPositionDescription')}
+                      {t('preferences.sidePanelDefaultPositionDescription')}
                     </p>
                   </div>
                   <Select
-                    value={sidePanelPosition}
-                    onValueChange={(value) => setSidePanelPosition(value as SidePanelPosition)}
+                    value={sidePanelDefaultPosition}
+                    onValueChange={(value) => setSidePanelDefaultPosition(value as SidePanelDefaultPosition)}
                   >
-                    <SelectTrigger className="w-full sm:w-[200px]" data-testid="side-panel-position-select">
-                      <SelectValue placeholder={t('preferences.sidePanelPosition')} />
+                    <SelectTrigger className="w-full sm:w-[200px]" data-testid="side-panel-default-position-select">
+                      <SelectValue placeholder={t('preferences.sidePanelDefaultPosition')} />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="right">{t('preferences.sidePanelPositionRight')}</SelectItem>
-                      <SelectItem value="bottom">{t('preferences.sidePanelPositionBottom')}</SelectItem>
+                      <SelectItem value="right">{t('preferences.sidePanelDefaultPositionRight')}</SelectItem>
+                      <SelectItem value="bottom">{t('preferences.sidePanelDefaultPositionBottom')}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Bottom-panel style - persisted client-side (localStorage), scoped per
+                    workspace. The header now carries BOTH dock buttons (bottom + right);
+                    this setting only chooses which bottom variant that button opens:
+                    'bottom-full' (default) spans the full window width with the sidebar
+                    shrinking above it; 'bottom' stays content-width, right of the sidebar. */}
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-4">
+                  <div>
+                    <h4 className="font-medium text-theme-primary">
+                      {t('preferences.sidePanelBottomMode')}
+                    </h4>
+                    <p className="text-sm text-theme-secondary">
+                      {t('preferences.sidePanelBottomModeDescription')}
+                    </p>
+                  </div>
+                  <Select
+                    value={sidePanelBottomMode}
+                    onValueChange={(value) => setSidePanelBottomMode(value as SidePanelBottomMode)}
+                  >
+                    <SelectTrigger className="w-full sm:w-[200px]" data-testid="side-panel-bottom-mode-select">
+                      <SelectValue placeholder={t('preferences.sidePanelBottomMode')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="bottom-full">{t('preferences.sidePanelBottomModeFull')}</SelectItem>
+                      <SelectItem value="bottom">{t('preferences.sidePanelBottomModeContent')}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>

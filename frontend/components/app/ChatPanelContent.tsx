@@ -9,6 +9,7 @@
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { ChatCore } from '@/components/chat/ChatCore';
+import { WelcomeTitle } from '@/app/shared/components';
 import { ModelSelectorDropdown, PROVIDER_ICON_MAP } from '@/components/chat/ModelSelectorDropdown';
 import { NoProviderCta } from '@/components/ai/NoProviderCta';
 import { useStreaming } from '@/contexts/StreamingContext';
@@ -316,6 +317,8 @@ export function ChatPanelContent() {
         hideDataSourceToggle
         className="flex-1 min-h-0 min-w-0"
         leadingControl={leadingControl}
+        welcomeLayout
+        welcomeTitle={<WelcomeTitle>{t('sidePanel.welcomeTitle')}</WelcomeTitle>}
       />
     </div>
   );

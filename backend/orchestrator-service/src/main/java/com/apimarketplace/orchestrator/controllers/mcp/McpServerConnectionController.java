@@ -10,6 +10,9 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -36,6 +39,9 @@ public class McpServerConnectionController {
         this.protocolService = protocolService;
     }
 
+    /** Scope-picker descriptions are capped so the settings UI stays compact. */
+    private static final int SCOPE_DESCRIPTION_MAX_LENGTH = 200;
+
     /**
      * GET /api/mcp-server/connection
      * Authenticated: requires the upstream-injected X-User-ID.
@@ -52,11 +58,41 @@ public class McpServerConnectionController {
                 ? publicBaseUrl.substring(0, publicBaseUrl.length() - 1)
                 : publicBaseUrl;
 
+        List<Map<String, Object>> tools = protocolService.listTools();
+
         return ResponseEntity.ok(Map.of(
                 "url", base + "/mcp",
                 "serverName", McpStreamableHttpController.SERVER_NAME,
                 "authHeader", "X-API-Key",
-                "toolCount", protocolService.listTools().size()
+                "toolCount", tools.size(),
+                "availableScopes", availableScopes(tools)
         ));
+    }
+
+    /**
+     * The scope vocabulary for the API-key settings UI: one entry per tool the
+     * MCP server exposes (same merged list {@code tools/list} serves), so a
+     * scoped key can be restricted to any subset of these names.
+     */
+    private static List<Map<String, Object>> availableScopes(List<Map<String, Object>> tools) {
+        return tools.stream()
+                .map(tool -> {
+                    Map<String, Object> scope = new LinkedHashMap<>();
+                    scope.put("name", String.valueOf(tool.get("name")));
+                    scope.put("description", truncatedDescription(tool.get("description")));
+                    return scope;
+                })
+                .sorted(Comparator.comparing(scope -> String.valueOf(scope.get("name"))))
+                .toList();
+    }
+
+    private static String truncatedDescription(Object description) {
+        if (description == null) {
+            return "";
+        }
+        String text = description.toString();
+        return text.length() > SCOPE_DESCRIPTION_MAX_LENGTH
+                ? text.substring(0, SCOPE_DESCRIPTION_MAX_LENGTH)
+                : text;
     }
 }

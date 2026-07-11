@@ -1481,19 +1481,28 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
         }
       }
 
-      // Handle widget configuration
-      if (widgetConfig.enabled && savedAgent?.id) {
+      // Handle widget configuration - mirror the webhook/schedule pattern: create/update
+      // when enabled, and DEACTIVATE when toggled OFF for an existing widget. Without the
+      // OFF branch, disabling the widget on update was a silent no-op and it kept serving
+      // (isActive stayed true). Deactivate (not delete) so the embed token/URL stays stable
+      // if the widget is re-enabled later - createOrUpdateWidgetConfig flips isActive back on.
+      if (savedAgent?.id) {
         try {
-          await orchestratorApi.createOrUpdateWidgetConfig(savedAgent.id, {
-            position: widgetConfig.position,
-            theme: widgetConfig.theme,
-            primaryColor: widgetConfig.primaryColor,
-            welcomeMessage: widgetConfig.welcomeMessage,
-            bubbleText: widgetConfig.bubbleText,
-            showAvatar: widgetConfig.showAvatar,
-            autoOpenDelay: widgetConfig.autoOpenDelay,
-            allowedOrigins: widgetConfig.allowedOrigins,
-          });
+          if (widgetConfig.enabled) {
+            await orchestratorApi.createOrUpdateWidgetConfig(savedAgent.id, {
+              position: widgetConfig.position,
+              theme: widgetConfig.theme,
+              primaryColor: widgetConfig.primaryColor,
+              welcomeMessage: widgetConfig.welcomeMessage,
+              bubbleText: widgetConfig.bubbleText,
+              showAvatar: widgetConfig.showAvatar,
+              autoOpenDelay: widgetConfig.autoOpenDelay,
+              allowedOrigins: widgetConfig.allowedOrigins,
+            });
+          } else if (widgetConfig.widgetToken) {
+            // Existing widget toggled OFF -> stop serving it (keeps the token for re-enable).
+            await orchestratorApi.setWidgetActive(savedAgent.id, false);
+          }
         } catch (widgetErr) {
           console.error('Error saving widget config:', widgetErr);
           addToast({
@@ -1688,13 +1697,13 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
         className="fixed inset-0 bg-black/20 backdrop-blur-sm z-[9999] flex items-center justify-center p-4"
       >
         <div
-          className="max-w-2xl w-full bg-theme-primary rounded-3xl shadow-2xl animate-in fade-in-0 zoom-in-95 duration-300 border border-theme max-h-[90vh] flex flex-col"
+          className="max-w-2xl w-full bg-theme-primary rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.16)] animate-in fade-in-0 zoom-in-95 duration-200 border border-theme max-h-[90vh] flex flex-col"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header */}
           <div className="px-8 pt-8 pb-4">
             <div className="text-center mb-4">
-              <h3 className="text-2xl font-semibold text-theme-primary">
+              <h3 className="text-xl font-semibold text-theme-primary">
                 {isEditMode ? t('editTitle') : t('title')}
               </h3>
               <p className="text-sm text-theme-secondary mt-1">
@@ -2257,11 +2266,7 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                       <Globe className="w-4 h-4 text-theme-secondary" />
                       <span>{webSearchEnabled ? t('enabled') : t('disabled')}</span>
                     </div>
-                    <div
-                      className={`relative w-8 h-4.5 rounded-full transition-colors flex-shrink-0 ${webSearchEnabled ? 'bg-black dark:bg-white' : 'bg-gray-300 dark:bg-gray-600'}`}
-                    >
-                      <span className={`absolute top-0.5 left-0.5 w-3.5 h-3.5 rounded-full bg-white dark:bg-black transition-transform ${webSearchEnabled ? 'translate-x-3.5' : ''}`} />
-                    </div>
+                    <Switch checked={webSearchEnabled} presentational />
                   </button>
                 </div>
 
@@ -2290,9 +2295,7 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                       <ImageIcon className="w-4 h-4 text-theme-secondary" />
                       <span>{imageGenerationEnabled ? t('enabled') : t('disabled')}</span>
                     </div>
-                    <div className={`relative w-8 h-4.5 rounded-full transition-colors flex-shrink-0 ${imageGenerationEnabled ? 'bg-black dark:bg-white' : 'bg-gray-300 dark:bg-gray-600'}`}>
-                      <span className={`absolute top-0.5 left-0.5 w-3.5 h-3.5 rounded-full bg-white dark:bg-black transition-transform ${imageGenerationEnabled ? 'translate-x-3.5' : ''}`} />
-                    </div>
+                    <Switch checked={imageGenerationEnabled} presentational />
                   </button>
                 </div>
 
@@ -2620,9 +2623,7 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                       <ShieldCheck className="w-4 h-4 text-theme-secondary" />
                       <span>{t('sensitiveActionsAlwaysOn')}</span>
                     </div>
-                    <div className="relative w-8 h-4.5 rounded-full bg-black dark:bg-white flex-shrink-0 opacity-60">
-                      <span className="absolute top-0.5 left-0.5 w-3.5 h-3.5 rounded-full bg-white dark:bg-black translate-x-3.5" />
-                    </div>
+                    <Switch checked presentational disabled />
                   </div>
                 </div>
 
@@ -2817,9 +2818,7 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                         <div className="text-xs text-theme-secondary">{t('webhookLinkDescription')}</div>
                       </div>
                     </div>
-                    <div className={`relative w-8 h-4 rounded-full transition-colors flex-shrink-0 ${webhookEnabled ? 'bg-black dark:bg-white' : 'bg-gray-300 dark:bg-gray-600'}`}>
-                      <div className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white dark:bg-black transition-transform ${webhookEnabled ? 'translate-x-4' : ''}`} />
-                    </div>
+                    <Switch checked={webhookEnabled} presentational />
                   </button>
 
                   {webhookEnabled && (
@@ -2842,13 +2841,7 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                           <div className="text-sm font-medium text-theme-primary">{t('scheduleWithMemory')}</div>
                           <div className="text-xs text-theme-secondary">{t('scheduleWithMemoryHelp')}</div>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => setWebhookMemory(prev => !prev)}
-                          className={`relative w-8 h-4 rounded-full transition-colors flex-shrink-0 ${webhookMemory ? 'bg-black dark:bg-white' : 'bg-gray-300 dark:bg-gray-600'}`}
-                        >
-                          <div className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white dark:bg-black transition-transform ${webhookMemory ? 'translate-x-4' : ''}`} />
-                        </button>
+                        <Switch checked={webhookMemory} onCheckedChange={(v) => setWebhookMemory(v)} aria-label={t('scheduleWithMemory')} />
                       </div>
 
                       {webhookData ? (
@@ -2907,9 +2900,7 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                         <div className="text-xs text-theme-secondary">{t('scheduleDescription')}</div>
                       </div>
                     </div>
-                    <div className={`relative w-8 h-4 rounded-full transition-colors flex-shrink-0 ${scheduleEnabled ? 'bg-black dark:bg-white' : 'bg-gray-300 dark:bg-gray-600'}`}>
-                      <div className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white dark:bg-black transition-transform ${scheduleEnabled ? 'translate-x-4' : ''}`} />
-                    </div>
+                    <Switch checked={scheduleEnabled} presentational />
                   </button>
 
                   {scheduleEnabled && (
@@ -2977,13 +2968,7 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                           <div className="text-sm font-medium text-theme-primary">{t('scheduleWithMemory')}</div>
                           <div className="text-xs text-theme-secondary">{t('scheduleWithMemoryHelp')}</div>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => setScheduleWithMemory(prev => !prev)}
-                          className={`relative w-8 h-4 rounded-full transition-colors flex-shrink-0 ${scheduleWithMemory ? 'bg-black dark:bg-white' : 'bg-gray-300 dark:bg-gray-600'}`}
-                        >
-                          <div className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white dark:bg-black transition-transform ${scheduleWithMemory ? 'translate-x-4' : ''}`} />
-                        </button>
+                        <Switch checked={scheduleWithMemory} onCheckedChange={(v) => setScheduleWithMemory(v)} aria-label={t('scheduleWithMemory')} />
                       </div>
 
                       {/* Advanced Options (collapsible) */}
@@ -3043,14 +3028,7 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                                   </Tooltip>
                                 </TooltipProvider>
                               </div>
-                              <button
-                                type="button"
-                                onClick={() => setBacklogEnabled(prev => !prev)}
-                                aria-label={t('backlogEnabled')}
-                                className={`relative w-8 h-4 rounded-full transition-colors flex-shrink-0 ${backlogEnabled ? 'bg-black dark:bg-white' : 'bg-gray-300 dark:bg-gray-600'}`}
-                              >
-                                <div className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white dark:bg-black transition-transform ${backlogEnabled ? 'translate-x-4' : ''}`} />
-                              </button>
+                              <Switch checked={backlogEnabled} onCheckedChange={(v) => setBacklogEnabled(v)} aria-label={t('backlogEnabled')} />
                             </div>
                           </div>
                         )}
@@ -3109,9 +3087,7 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                         <div className="text-xs text-theme-secondary">Embed a chat interface on your website</div>
                       </div>
                     </div>
-                    <div className={`relative w-8 h-4 rounded-full transition-colors flex-shrink-0 ${widgetConfig.enabled ? 'bg-black dark:bg-white' : 'bg-gray-300 dark:bg-gray-600'}`}>
-                      <div className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white dark:bg-black transition-transform ${widgetConfig.enabled ? 'translate-x-4' : ''}`} />
-                    </div>
+                    <Switch checked={widgetConfig.enabled} presentational />
                   </button>
 
                   {widgetConfig.enabled && (
@@ -3260,7 +3236,7 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                               type="text"
                               value={widgetConfig.widgetToken}
                               readOnly
-                              className="flex-1 text-sm rounded-lg border border-theme bg-[var(--bg-tertiary)] text-theme-secondary px-3 py-2 font-mono"
+                              className="flex-1 h-9 text-sm rounded-lg border border-theme bg-[var(--bg-tertiary)] text-theme-secondary px-3 font-mono"
                             />
                             <button
                               type="button"

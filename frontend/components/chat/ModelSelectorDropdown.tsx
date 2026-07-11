@@ -185,7 +185,7 @@ export function ModelSelectorDropdown({
       <button
         type="button"
         onClick={() => setShowModelSelector(!showModelSelector)}
-        className="flex items-center gap-2 transition-colors duration-200 cursor-pointer rounded-lg px-2 py-1 text-theme-primary hover:bg-theme-secondary"
+        className="flex h-9 items-center gap-2 transition-colors duration-150 cursor-pointer rounded-lg px-2.5 text-theme-primary hover:bg-theme-secondary"
         title={changeModelTitle}
       >
         <span className="truncate max-w-[180px] text-sm">

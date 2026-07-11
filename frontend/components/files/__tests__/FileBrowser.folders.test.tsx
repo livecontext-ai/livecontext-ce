@@ -59,11 +59,14 @@ vi.mock('@/app/workflows/builder/components/inspector/useStorageExplorer', () =>
 // ---- storage API: assert create/move ----
 const createFolder = vi.fn().mockResolvedValue({ id: 'new-folder', name: 'Docs', isFolder: true, parentFolderId: null });
 const moveEntries = vi.fn().mockResolvedValue({ movedCount: 1, failed: [] });
+const deleteEntries = vi.fn().mockResolvedValue({ deletedCount: 1 });
+const deleteVirtualFolder = vi.fn().mockResolvedValue({ deletedCount: 3 });
 vi.mock('@/lib/api/storage-api', () => ({
   storageApi: {
     createFolder: (...a: unknown[]) => createFolder(...a),
     moveEntries: (...a: unknown[]) => moveEntries(...a),
-    deleteEntries: vi.fn().mockResolvedValue({ deletedCount: 0 }),
+    deleteEntries: (...a: unknown[]) => deleteEntries(...a),
+    deleteVirtualFolder: (...a: unknown[]) => deleteVirtualFolder(...a),
     renameEntry: vi.fn().mockResolvedValue({ id: 'x', fileName: 'y' }),
   },
   // FileBrowser imports this filter constant; mirror the real export so the
@@ -95,12 +98,15 @@ vi.mock('../FolderCard', () => ({
       <input type="checkbox" data-testid={`select-folder-${entry.id}`} onChange={() => onToggleSelect(entry.id)} />
     </div>
   ),
-  // Virtual workflow folder stub: navigation-only - exposes label + open, but NO
-  // checkbox (it isn't selectable). Keyed by virtualId since its id is null.
-  VirtualFolderCard: ({ entry, onOpen, countLabel, label }: { entry: StorageExplorerEntry; onOpen: (e: StorageExplorerEntry) => void; countLabel: string; label: string }) => (
+  // Virtual workflow folder stub: keyed by virtualId (its id is null). It joins
+  // the bulk selection (checkbox toggling by virtualId) like every other row.
+  VirtualFolderCard: ({ entry, onOpen, onToggleSelect, countLabel, label }: { entry: StorageExplorerEntry; onOpen: (e: StorageExplorerEntry) => void; onToggleSelect?: (key: string) => void; countLabel: string; label: string }) => (
     <div data-testid={`vfolder-${entry.virtualId}`}>
       <button data-testid={`open-vfolder-${entry.virtualId}`} onClick={() => onOpen(entry)}>{label}</button>
       <span data-testid={`vcount-${entry.virtualId}`}>{countLabel}</span>
+      {onToggleSelect && (
+        <input type="checkbox" data-testid={`select-vfolder-${entry.virtualId}`} onChange={() => onToggleSelect(entry.virtualId!)} />
+      )}
     </div>
   ),
 }));
@@ -114,7 +120,11 @@ vi.mock('../FileCard', () => ({
 vi.mock('@/components/app/FileDetailView', () => ({ FileDetailView: () => <div data-testid="detail" /> }));
 vi.mock('../FileFilterBar', () => ({ FileFilterBar: () => <div /> }));
 vi.mock('@/components/ui/PaginationBar', () => ({ PaginationBar: () => <div /> }));
-vi.mock('@/components/ui/BulkDeleteModal', () => ({ BulkDeleteModal: () => null }));
+vi.mock('@/components/ui/BulkDeleteModal', () => ({
+  // Expose the confirm callback so the unified-delete test can drive it.
+  BulkDeleteModal: ({ isOpen, onConfirm }: { isOpen: boolean; onConfirm: () => void }) =>
+    isOpen ? <button data-testid="confirm-bulk-delete" onClick={onConfirm} /> : null,
+}));
 vi.mock('@/components/ToastContainer', () => ({ default: () => null }));
 vi.mock('@/components/Toast', () => ({ useToast: () => ({ toasts: [], addToast: vi.fn(), removeToast: vi.fn() }) }));
 vi.mock('@/hooks/useAuthToken', () => ({ useAuthToken: () => 'token' }));
@@ -337,13 +347,41 @@ describe('FileBrowser - virtual workflow folders (Phase 2b)', () => {
     expect(navigateToFolder).toHaveBeenCalledWith('wf:1/e0');
   });
 
-  it('a virtual folder is NOT selectable - select-all counts only the real (file) rows', () => {
-    // 1 virtual folder + 1 file. Selecting all must select exactly the file.
+  it('a virtual folder IS selectable - it joins the same selection as the file rows', () => {
+    // 1 virtual folder + 1 file. Both rows carry a checkbox and count together.
     hookState.entries = [vfolder('wf:1'), file('a', 'a.png')];
-    const { getByTestId, getByText } = render(<FileBrowser />);
-    // Select the only selectable row → toolbar shows "1 selected" (virtual excluded).
+    const { getByTestId, getAllByText } = render(<FileBrowser />);
     fireEvent.click(getByTestId('select-file-a'));
-    expect(getByText('selectedCount:1')).toBeTruthy();
+    fireEvent.click(getByTestId('select-vfolder-wf:1'));
+    // "2 selected" appears in the select-all label AND the floating action bar.
+    expect(getAllByText('selectedCount:2').length).toBeGreaterThan(0);
+  });
+
+  it('deletes a MIXED selection through one flow: bulk endpoint for real rows + per-ref endpoint for each workflow folder', async () => {
+    hookState.entries = [vfolder('wf:1'), file('a', 'a.png')];
+    const { getByTestId, getAllByText } = render(<FileBrowser />);
+    fireEvent.click(getByTestId('select-file-a'));
+    fireEvent.click(getByTestId('select-vfolder-wf:1'));
+    // Open the confirm from the floating bar, then confirm.
+    fireEvent.click(getAllByText('deleteSelected')[0]);
+    await act(async () => { fireEvent.click(getByTestId('confirm-bulk-delete')); });
+    await waitFor(() => {
+      expect(deleteEntries).toHaveBeenCalledWith(['a']);
+      expect(deleteVirtualFolder).toHaveBeenCalledWith('wf:1');
+    });
+    expect(refresh).toHaveBeenCalled();
+  });
+
+  it('disables download and move while a workflow folder is selected (delete stays available)', () => {
+    hookState.entries = [vfolder('wf:1'), file('a', 'a.png')];
+    const { getByTestId, getAllByText } = render(<FileBrowser />);
+    fireEvent.click(getByTestId('select-vfolder-wf:1'));
+    const download = getAllByText('downloadSelected')[0].closest('button')!;
+    const move = getAllByText('moveTo')[0].closest('button')!;
+    const del = getAllByText('deleteSelected')[0].closest('button')!;
+    expect(download.disabled).toBe(true);
+    expect(move.disabled).toBe(true);
+    expect(del.disabled).toBe(false);
   });
 
   it('hides the New folder button while inside a virtual folder (no real parent to attach to)', () => {

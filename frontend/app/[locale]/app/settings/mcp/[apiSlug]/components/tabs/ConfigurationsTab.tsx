@@ -114,7 +114,7 @@ const ConfigurationsTab: React.FC<ConfigurationsTabProps> = ({
                   type="url"
                   value={config.baseUrl || ''}
                   onChange={(e) => setConfig({ ...config, baseUrl: e.target.value })}
-                  className="w-full px-3 py-2 bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
+                  className="w-full h-9 px-3 text-sm bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
                   placeholder="https://api.example.com"
                 />
               ) : (
@@ -133,7 +133,7 @@ const ConfigurationsTab: React.FC<ConfigurationsTabProps> = ({
                   type="text"
                   value={config.healthcheckEndpoint || ''}
                   onChange={(e) => setConfig({ ...config, healthcheckEndpoint: e.target.value })}
-                  className="w-full px-3 py-2 bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
+                  className="w-full h-9 px-3 text-sm bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
                   placeholder="/health"
                 />
               ) : (
@@ -151,7 +151,7 @@ const ConfigurationsTab: React.FC<ConfigurationsTabProps> = ({
                 <select
                   value={config.visibility || 'public'}
                   onChange={(e) => setConfig({ ...config, visibility: e.target.value })}
-                  className="w-full px-3 py-2 bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
+                  className="w-full h-9 px-3 text-sm bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
                 >
                   <option value="public">{t('visibility.public')}</option>
                   <option value="private">{t('visibility.private')}</option>
@@ -193,7 +193,7 @@ const ConfigurationsTab: React.FC<ConfigurationsTabProps> = ({
                       type: e.target.value
                     }
                   })}
-                  className="w-full px-3 py-2 bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
+                  className="w-full h-9 px-3 text-sm bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
                 >
                   <option value="none">{t('authTypes.none')}</option>
                   <option value="apikey">{t('authTypes.apiKey')}</option>
@@ -225,7 +225,7 @@ const ConfigurationsTab: React.FC<ConfigurationsTabProps> = ({
                           headerName: e.target.value
                         }
                       })}
-                      className="w-full px-3 py-2 bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
+                      className="w-full h-9 px-3 text-sm bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
                       placeholder="Authorization"
                     />
                   ) : (
@@ -251,7 +251,7 @@ const ConfigurationsTab: React.FC<ConfigurationsTabProps> = ({
                             headerValue: e.target.value
                           }
                         })}
-                        className="w-full px-3 py-2 pr-10 bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
+                        className="w-full h-9 px-3 pr-10 text-sm bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
                         placeholder={t('placeholders.apiKeyToken')}
                       />
                     ) : (
@@ -286,7 +286,7 @@ const ConfigurationsTab: React.FC<ConfigurationsTabProps> = ({
                               password: e.target.value
                             }
                           })}
-                          className="w-full px-3 py-2 pr-10 bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
+                          className="w-full h-9 px-3 pr-10 text-sm bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
                           placeholder={t('placeholders.password')}
                         />
                       ) : (
@@ -331,7 +331,7 @@ const ConfigurationsTab: React.FC<ConfigurationsTabProps> = ({
                     requests: parseInt(e.target.value)
                   }
                 })}
-                className="w-full px-3 py-2 bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
+                className="w-full h-9 px-3 text-sm bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
                 min="1"
               />
             ) : (
@@ -355,7 +355,7 @@ const ConfigurationsTab: React.FC<ConfigurationsTabProps> = ({
                     period: e.target.value
                   }
                 })}
-                className="w-full px-3 py-2 bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
+                className="w-full h-9 px-3 text-sm bg-theme-tertiary border border-theme/20 rounded-lg text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/50"
               >
                 <option value="minute">{t('periods.perMinute')}</option>
                 <option value="hour">{t('periods.perHour')}</option>

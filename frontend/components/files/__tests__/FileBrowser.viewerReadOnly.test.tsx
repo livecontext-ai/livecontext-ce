@@ -79,10 +79,11 @@ vi.mock('../FolderCard', () => ({
       <input type="checkbox" data-testid={`select-folder-${entry.id}`} onChange={() => onToggleSelect(entry.id)} />
     </div>
   ),
-  // VirtualFolderCard exposes whether the delete affordance was provided: the
-  // browser passes onDelete only when the caller can mutate.
-  VirtualFolderCard: ({ entry, onDelete }: { entry: StorageExplorerEntry; onDelete?: (e: StorageExplorerEntry) => void }) => (
-    <div data-testid={`vfolder-${entry.virtualId}`} data-has-delete={String(!!onDelete)} />
+  // VirtualFolderCard exposes whether it joined the bulk selection (the Files
+  // page routes virtual-folder delete through the selection bar, so there is no
+  // per-card delete affordance anymore) and whether a per-card delete was passed.
+  VirtualFolderCard: ({ entry, onToggleSelect, onDelete }: { entry: StorageExplorerEntry; onToggleSelect?: (key: string) => void; onDelete?: (e: StorageExplorerEntry) => void }) => (
+    <div data-testid={`vfolder-${entry.virtualId}`} data-selectable={String(!!onToggleSelect)} data-has-delete={String(!!onDelete)} />
   ),
 }));
 vi.mock('../FileCard', () => ({
@@ -160,11 +161,14 @@ describe('FileBrowser - MEMBER (canMutate) keeps the write surface', () => {
     expect(queryByText('renameFolder')).toBeTruthy();
   });
 
-  it('keeps grid cards draggable and virtual folders deletable', () => {
+  it('keeps grid cards draggable; virtual folders join the selection (no per-card delete)', () => {
     hookState.entries = [vfolder('wf:1'), file('a', 'a.png')];
     const { getByTestId } = render(<FileBrowser />);
     expect(getByTestId('file-a').getAttribute('data-draggable')).toBe('true');
-    expect(getByTestId('vfolder-wf:1').getAttribute('data-has-delete')).toBe('true');
+    // Deletion is unified through the floating selection bar - the virtual tile
+    // gets the same checkbox as every row instead of its own trash button.
+    expect(getByTestId('vfolder-wf:1').getAttribute('data-selectable')).toBe('true');
+    expect(getByTestId('vfolder-wf:1').getAttribute('data-has-delete')).toBe('false');
   });
 });
 
@@ -193,10 +197,13 @@ describe('FileBrowser - VIEWER (org workspace) is read-only', () => {
     expect(queryByText('renameFolder')).toBeNull();
   });
 
-  it('disables drag-to-move and virtual-folder delete', () => {
+  it('disables drag-to-move; virtual folders stay selectable (mutations gated in the bar)', () => {
     hookState.entries = [vfolder('wf:1'), file('a', 'a.png')];
     const { getByTestId } = render(<FileBrowser />);
     expect(getByTestId('file-a').getAttribute('data-draggable')).toBe('false');
+    // Selection stays available to a VIEWER (bulk download is read-only); the
+    // delete/move actions in the floating bar are canMutate-gated separately.
+    expect(getByTestId('vfolder-wf:1').getAttribute('data-selectable')).toBe('true');
     expect(getByTestId('vfolder-wf:1').getAttribute('data-has-delete')).toBe('false');
   });
 

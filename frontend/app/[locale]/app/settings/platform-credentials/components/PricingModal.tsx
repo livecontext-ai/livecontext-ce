@@ -346,7 +346,7 @@ export function PricingModal({ open, onOpenChange, credential, onNotify }: Prici
                               updateOverrideRow(row.id, { apiToolId: v })
                             }
                           >
-                            <SelectTrigger className="h-10 min-h-0 rounded-md py-2">
+                            <SelectTrigger className="rounded-md">
                               <SelectValue placeholder={t("selectTool")} />
                             </SelectTrigger>
                             <SelectContent>

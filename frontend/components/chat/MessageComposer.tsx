@@ -711,7 +711,7 @@ export function MessageComposer({
                       className="h-9 w-9"
                       title={t('chat.startDictation')}
                     >
-                      <Mic className="w-5 h-5" />
+                      <Mic className="w-4 h-4" />
                     </Button>
                   )
                 )}
@@ -727,7 +727,7 @@ export function MessageComposer({
                         size="icon"
                         onClick={handleSend}
                         disabled={disabled || isUploading || queueIsFull}
-                        className="h-9 w-9 shadow-none hover:shadow-none"
+                        className="h-9 w-9 rounded-full shadow-none hover:shadow-none"
                         title={queueIsFull ? t('chat.queue.full') : t('chat.queue.queued')}
                       >
                         <ArrowUp className="w-5 h-5" />
@@ -741,7 +741,7 @@ export function MessageComposer({
                       size="icon"
                       onClick={showStopButton ? onStopStream : handleSend}
                       disabled={disabled || isUploading || (!showStopButton && !hasInput)}
-                      className="h-9 w-9 shadow-none hover:shadow-none"
+                      className="h-9 w-9 rounded-full shadow-none hover:shadow-none"
                       title={showStopButton ? t('chat.stop') : t('chat.send')}
                     >
                       {showStopButton ? <Square className="w-5 h-5" /> : <ArrowUp className="w-5 h-5" />}

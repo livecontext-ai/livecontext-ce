@@ -170,7 +170,7 @@ export const ToolSelector: React.FC<ToolSelectorProps> = ({
               placeholder={viewMode === 'categories' ? t('searchTools') : t('searchByServer')}
               value={toolSearchQuery}
               onChange={(e) => onSearchChange(e.target.value)}
-              className="w-full pl-10 pr-4 py-2.5 bg-theme-tertiary border border-theme rounded-lg text-theme-primary placeholder-theme-secondary focus:outline-none focus:ring-1 focus:ring-theme-primary/30 transition-all duration-200"
+              className="w-full h-9 pl-10 pr-4 text-sm bg-theme-tertiary border border-theme rounded-lg text-theme-primary placeholder-theme-secondary focus:outline-none focus:ring-1 focus:ring-theme-primary/30 transition-all duration-200"
             />
           </div>
         </div>

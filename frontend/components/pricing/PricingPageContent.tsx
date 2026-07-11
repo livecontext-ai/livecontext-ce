@@ -948,10 +948,10 @@ export default function PricingPage() {
       {!isCeMode && (
         <section className="pt-6 pb-2 transition-colors duration-300">
           <div className="w-full flex justify-center">
-            <div className="relative inline-flex items-center gap-1 p-1.5 bg-theme-tertiary rounded-full" ref={modeTabContainerRef}>
+            <div className="relative inline-flex items-center gap-1 p-1.5 bg-theme-tertiary rounded-2xl" ref={modeTabContainerRef}>
               {/* Slider highlight */}
               <div
-                className="absolute top-1.5 bottom-1.5 rounded-full bg-[var(--bg-primary)] transition-all duration-300 ease-out"
+                className="absolute top-1.5 bottom-1.5 rounded-xl bg-[var(--bg-primary)] transition-all duration-200 ease-out"
                 style={{
                   left: modeSliderStyle.left,
                   width: modeSliderStyle.width,
@@ -968,7 +968,7 @@ export default function PricingPage() {
                     key={option.value}
                     data-mode-id={option.value}
                     onClick={() => setPricingMode(option.value as 'subscription' | 'payg')}
-                    className={`relative z-10 flex items-center justify-center px-6 py-2 rounded-full text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 outline-none ${isActive
+                    className={`relative z-10 flex items-center justify-center h-9 px-6 rounded-xl text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 outline-none ${isActive
                       ? 'text-[var(--text-primary)]'
                       : 'text-theme-secondary hover:text-theme-primary hover:bg-[var(--bg-primary)]/50'
                       }`}
@@ -989,10 +989,10 @@ export default function PricingPage() {
       <>
       <section className="transition-colors duration-300">
         <div className="w-full flex justify-center">
-          <div className="relative inline-flex items-center gap-1 p-1.5 bg-theme-tertiary rounded-full" ref={tabContainerRef}>
+          <div className="relative inline-flex items-center gap-1 p-1.5 bg-theme-tertiary rounded-2xl" ref={tabContainerRef}>
             {/* Slider highlight */}
             <div
-              className="absolute top-1.5 bottom-1.5 rounded-full bg-[var(--bg-primary)] transition-all duration-300 ease-out"
+              className="absolute top-1.5 bottom-1.5 rounded-xl bg-[var(--bg-primary)] transition-all duration-200 ease-out"
               style={{
                 left: tabSliderStyle.left,
                 width: tabSliderStyle.width,
@@ -1010,7 +1010,7 @@ export default function PricingPage() {
                   key={option.value}
                   data-tab-id={option.value}
                   onClick={() => setBillingCycle(option.value as 'monthly' | 'yearly')}
-                  className={`relative z-10 flex items-center justify-center px-6 py-2 rounded-full text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 outline-none ${isActive
+                  className={`relative z-10 flex items-center justify-center h-9 px-6 rounded-xl text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 outline-none ${isActive
                     ? "text-[var(--text-primary)]"
                     : "text-theme-secondary hover:text-theme-primary hover:bg-[var(--bg-primary)]/50"
                     }`}
@@ -1142,7 +1142,7 @@ export default function PricingPage() {
       )}
 
       {/* Pay-as-you-go view - alternative to subscription. 3 tier cards laid
-          out in the same PlanSelector style (centered, rounded-3xl, Check
+          out in the same PlanSelector style (centered, rounded-2xl, Check
           features, full-width CTA) for visual coherence with the rest of the
           page. Click any card → TopUpModal pre-selected on that tier. */}
       {!isCeMode && pricingMode === 'payg' && (
@@ -1153,7 +1153,7 @@ export default function PricingPage() {
                 <div className="h-6 w-6 rounded-full border-2 border-theme-secondary/30 border-t-theme-primary animate-spin" aria-label={t('paygSection.loading')} />
               </div>
             ) : !paygConfigured ? (
-              <div className="max-w-3xl mx-auto p-6 border border-black/10 dark:border-white/20 rounded-3xl bg-transparent text-center">
+              <div className="max-w-3xl mx-auto p-6 border border-black/10 dark:border-white/20 rounded-2xl bg-transparent text-center">
                 <h3 className="text-lg font-semibold text-theme-primary mb-1 transition-colors duration-300">
                   {t('paygSection.unconfigured.title')}
                 </h3>
@@ -1180,7 +1180,7 @@ export default function PricingPage() {
                     return (
                       <div
                         key={tier.tier}
-                        className={`relative p-4 border border-black/10 dark:border-white/20 rounded-3xl transition-all duration-300 ${
+                        className={`relative p-4 border border-black/10 dark:border-white/20 rounded-2xl transition-all duration-300 ${
                           isPopular ? '!border-2 !border-black dark:!border-white bg-transparent' : 'hover:border-theme/30'
                         } ${!tier.configured ? 'pointer-events-none opacity-60' : ''}`}
                       >
@@ -1264,7 +1264,7 @@ export default function PricingPage() {
               {t('credits.title')}
             </h2>
             <div className="grid md:grid-cols-3 gap-8">
-              <div className="p-6 border border-black/10 dark:border-white/20 rounded-3xl bg-transparent hover:bg-theme-tertiary/20 transition-colors">
+              <div className="p-6 border border-black/10 dark:border-white/20 rounded-2xl bg-transparent hover:bg-theme-tertiary/20 transition-colors">
                 <div className="w-14 h-14 bg-theme-secondary rounded-full flex items-center justify-center mx-auto mb-6">
                   <Zap className="w-7 h-7 text-theme-primary" />
                 </div>
@@ -1276,7 +1276,7 @@ export default function PricingPage() {
                 </p>
               </div>
 
-              <div className="p-6 border border-black/10 dark:border-white/20 rounded-3xl bg-transparent hover:bg-theme-tertiary/20 transition-colors">
+              <div className="p-6 border border-black/10 dark:border-white/20 rounded-2xl bg-transparent hover:bg-theme-tertiary/20 transition-colors">
                 <div className="w-14 h-14 bg-theme-secondary rounded-full flex items-center justify-center mx-auto mb-6">
                   <Database className="w-7 h-7 text-theme-primary" />
                 </div>
@@ -1288,7 +1288,7 @@ export default function PricingPage() {
                 </p>
               </div>
 
-              <div className="p-6 border border-black/10 dark:border-white/20 rounded-3xl bg-transparent hover:bg-theme-tertiary/20 transition-colors">
+              <div className="p-6 border border-black/10 dark:border-white/20 rounded-2xl bg-transparent hover:bg-theme-tertiary/20 transition-colors">
                 <div className="w-14 h-14 bg-theme-secondary rounded-full flex items-center justify-center mx-auto mb-6">
                   <Clock className="w-7 h-7 text-theme-primary" />
                 </div>
@@ -1313,7 +1313,7 @@ export default function PricingPage() {
             </h2>
 
             <div className="space-y-6">
-              <div className="p-6 border border-black/10 dark:border-white/20 rounded-3xl bg-transparent">
+              <div className="p-6 border border-black/10 dark:border-white/20 rounded-2xl bg-transparent">
                 <h3 className="text-xl font-semibold text-theme-primary mb-4 transition-colors duration-300">
                   {t('faq.exceedCredits.question')}
                 </h3>
@@ -1322,7 +1322,7 @@ export default function PricingPage() {
                 </p>
               </div>
 
-              <div className="p-6 border border-black/10 dark:border-white/20 rounded-3xl bg-transparent">
+              <div className="p-6 border border-black/10 dark:border-white/20 rounded-2xl bg-transparent">
                 <h3 className="text-xl font-semibold text-theme-primary mb-4 transition-colors duration-300">
                   {t('faq.changePlans.question')}
                 </h3>
@@ -1331,7 +1331,7 @@ export default function PricingPage() {
                 </p>
               </div>
 
-              <div className="p-6 border border-black/10 dark:border-white/20 rounded-3xl bg-transparent">
+              <div className="p-6 border border-black/10 dark:border-white/20 rounded-2xl bg-transparent">
                 <h3 className="text-xl font-semibold text-theme-primary mb-4 transition-colors duration-300">
                   {t('faq.payAsYouGo.question')}
                 </h3>
@@ -1340,7 +1340,7 @@ export default function PricingPage() {
                 </p>
               </div>
 
-              <div className="p-6 border border-black/10 dark:border-white/20 rounded-3xl bg-transparent">
+              <div className="p-6 border border-black/10 dark:border-white/20 rounded-2xl bg-transparent">
                 <h3 className="text-xl font-semibold text-theme-primary mb-4 transition-colors duration-300">
                   {t('faq.sharedStorage.question')}
                 </h3>

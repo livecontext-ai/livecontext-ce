@@ -29,6 +29,7 @@ import {
   Gauge,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -510,23 +511,12 @@ function SortableModelRow({
       </div>
 
       {/* Enable/disable toggle */}
-      <button
-        type="button"
-        onClick={() => onToggleEnabled(model)}
-        aria-pressed={model.enabled !== false}
-        data-testid={`model-toggle-${model.provider}-${model.id}`}
-        className={cn(
-          "w-7 h-4 rounded-full relative transition-colors flex-shrink-0",
-          model.enabled !== false
-            ? "bg-emerald-500"
-            : "bg-gray-300 dark:bg-gray-600"
-        )}
-      >
-        <span className={cn(
-          "absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform shadow-sm",
-          model.enabled !== false ? "left-3.5" : "left-0.5"
-        )} />
-      </button>
+      <Switch
+        checked={model.enabled !== false}
+        onCheckedChange={() => onToggleEnabled(model)}
+        testId={`model-toggle-${model.provider}-${model.id}`}
+        aria-label={model.id}
+      />
 
       {/* Cloud-admin bundle override (V381): what the CE bundle ships for this
           model, independent of the cloud's enabled toggle. 3 states: inherit
@@ -1042,11 +1032,11 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
           All tabs share the same model list - only the writes differ. */}
       <div className="flex justify-center">
         <div
-          className="relative inline-flex items-center gap-1 p-1.5 bg-theme-tertiary rounded-full w-max"
+          className="relative inline-flex items-center gap-1 p-1.5 bg-theme-tertiary rounded-2xl w-max"
           ref={categoryTabRef}
         >
           <div
-            className="absolute top-1.5 bottom-1.5 rounded-full bg-[var(--bg-primary)] transition-all duration-300 ease-out"
+            className="absolute top-1.5 bottom-1.5 rounded-xl bg-[var(--bg-primary)] transition-all duration-200 ease-out"
             style={{
               left: categorySliderStyle.left,
               width: categorySliderStyle.width,
@@ -1061,7 +1051,7 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
               onClick={() => setCategory(c)}
               aria-pressed={category === c}
               className={cn(
-                "relative z-10 flex flex-shrink-0 items-center px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 outline-none",
+                "relative z-10 flex h-9 flex-shrink-0 items-center px-4 rounded-xl text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 outline-none",
                 category === c
                   ? "text-[var(--text-primary)]"
                   : "text-theme-secondary hover:text-theme-primary hover:bg-[var(--bg-primary)]/50"
@@ -1080,11 +1070,10 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
         <div className="flex items-center gap-2">
           {saving && <LoadingSpinner size="xs" />}
           <Select value={providerFilter} onValueChange={setProviderFilter}>
-            {/* min-h-0 cancels SelectTrigger's default min-h-[44px]; rounded-lg
-                keeps a softly-squared edge (less pill-like than the action
-                buttons) while matching their height. */}
+            {/* rounded-lg keeps a softly-squared edge (less pill-like than the
+                action buttons); height inherits the standard h-9 control size. */}
             <SelectTrigger
-              className="min-h-0 h-8 rounded-lg px-3 text-sm min-w-[160px]"
+              className="rounded-lg px-3 text-sm min-w-[160px]"
               aria-label={t("modelConfig.filterByProvider")}
               title={t("modelConfig.filterByProvider")}
             >
@@ -1100,7 +1089,6 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
           <Button
             size="sm"
             variant="outline"
-            className="h-8 px-3 text-sm"
             onClick={handleResetAll}
             disabled={!hasAnyOverride}
           >
@@ -1109,7 +1097,6 @@ export default function ModelManagementPanel({ t }: ModelManagementPanelProps) {
           </Button>
           <Button
             size="sm"
-            className="h-8 px-3 text-sm"
             onClick={() => setShowAddDialog(true)}
           >
             <Plus className="w-3.5 h-3.5 mr-1" />

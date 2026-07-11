@@ -38,10 +38,10 @@ export const ToggleGroup: React.FC<ToggleGroupProps> = ({
   const isPill = variant === "pill";
 
   const containerClasses = cn(
-      hasBorder ? "border border-theme transition-colors duration-300" : "transition-colors duration-300",
+      hasBorder ? "border border-theme transition-colors duration-150" : "transition-colors duration-150",
     isPill
-      ? "bg-theme-tertiary rounded-full p-1 flex items-center gap-1"
-      : "bg-theme-tertiary rounded-full p-2",
+      ? "bg-theme-tertiary rounded-2xl p-1 flex items-center gap-1"
+      : "bg-theme-tertiary rounded-xl p-1.5",
     className,
   );
 
@@ -50,12 +50,12 @@ export const ToggleGroup: React.FC<ToggleGroupProps> = ({
     : "grid grid-cols-2 gap-2";
 
   const baseButtonClasses = isPill
-    ? "px-3 py-1.5 rounded-full text-sm font-medium transition-all duration-200 cursor-pointer flex items-center justify-center gap-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-theme-primary/60"
-    : "py-3 px-6 rounded-full font-medium tracking-wide text-sm transition-all duration-200 cursor-pointer flex items-center justify-center gap-1 ring-offset-background focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)] focus:ring-offset-2";
+    ? "px-3 h-9 rounded-xl text-sm font-medium transition-colors duration-150 cursor-pointer flex items-center justify-center gap-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-theme-primary/60"
+    : "py-2 px-6 rounded-lg font-medium text-sm transition-colors duration-150 cursor-pointer flex items-center justify-center gap-1 ring-offset-background focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)] focus:ring-offset-1";
 
   const defaultActiveClass = isPill
-    ? "bg-theme-primary text-theme-secondary shadow-lg"
-    : "bg-[var(--bg-primary)] text-[var(--text-primary)] shadow-lg";
+    ? "bg-[var(--bg-primary)] text-[var(--text-primary)] shadow-sm"
+    : "bg-[var(--bg-primary)] text-[var(--text-primary)] shadow-sm";
 
   const defaultInactiveClass = isPill
     ? "text-theme-secondary hover:text-theme-primary hover:bg-theme-primary/10"

@@ -121,7 +121,7 @@ export default function AddModelDialog({ onSave, onClose, t }: AddModelDialogPro
                 value={modelId}
                 onChange={(e) => setModelId(e.target.value)}
                 placeholder="gpt-5.4-turbo"
-                className="w-full rounded-xl border border-theme bg-[var(--bg-primary)] px-4 py-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-0"
+                className="w-full rounded-xl border border-theme bg-[var(--bg-primary)] h-9 px-4 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-0"
                 required
               />
             </div>
@@ -136,7 +136,7 @@ export default function AddModelDialog({ onSave, onClose, t }: AddModelDialogPro
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
                 placeholder={t("modelConfig.addDialog.displayNamePlaceholder")}
-                className="w-full rounded-xl border border-theme bg-[var(--bg-primary)] px-4 py-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-0"
+                className="w-full rounded-xl border border-theme bg-[var(--bg-primary)] h-9 px-4 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-0"
               />
             </div>
 
@@ -171,7 +171,7 @@ export default function AddModelDialog({ onSave, onClose, t }: AddModelDialogPro
                   placeholder="Input ($/1M)"
                   step="0.01"
                   min="0"
-                  className="w-full rounded-xl border border-theme bg-[var(--bg-primary)] px-4 py-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-0"
+                  className="w-full rounded-xl border border-theme bg-[var(--bg-primary)] h-9 px-4 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-0"
                 />
                 <input
                   type="number"
@@ -180,7 +180,7 @@ export default function AddModelDialog({ onSave, onClose, t }: AddModelDialogPro
                   placeholder="Output ($/1M)"
                   step="0.01"
                   min="0"
-                  className="w-full rounded-xl border border-theme bg-[var(--bg-primary)] px-4 py-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-0"
+                  className="w-full rounded-xl border border-theme bg-[var(--bg-primary)] h-9 px-4 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-0"
                 />
               </div>
             </div>
@@ -201,7 +201,7 @@ export default function AddModelDialog({ onSave, onClose, t }: AddModelDialogPro
                   placeholder={t("modelConfig.rateLimits.tpmGlobal")}
                   step="1000"
                   min="0"
-                  className="w-full rounded-xl border border-theme bg-[var(--bg-primary)] px-4 py-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-0"
+                  className="w-full rounded-xl border border-theme bg-[var(--bg-primary)] h-9 px-4 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-0"
                 />
                 <input
                   type="number"
@@ -210,7 +210,7 @@ export default function AddModelDialog({ onSave, onClose, t }: AddModelDialogPro
                   placeholder={t("modelConfig.rateLimits.rpmGlobal")}
                   step="10"
                   min="0"
-                  className="w-full rounded-xl border border-theme bg-[var(--bg-primary)] px-4 py-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-0"
+                  className="w-full rounded-xl border border-theme bg-[var(--bg-primary)] h-9 px-4 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-0"
                 />
                 {/* Per-tenant rate-limit inputs are intentionally hidden while the
                     platform runs the GLOBAL rate-limit strategy (per-tenant caps are

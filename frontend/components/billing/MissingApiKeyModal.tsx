@@ -42,7 +42,7 @@ export default function MissingApiKeyModal() {
       <div className="absolute inset-0 bg-black/50" onClick={() => setOpen(false)} />
 
       {/* Modal */}
-      <div className="relative w-full max-w-md mx-4 rounded-2xl bg-theme-primary border border-theme shadow-2xl p-6">
+      <div className="relative w-full max-w-md mx-4 rounded-2xl bg-theme-primary border border-theme shadow-[0_16px_48px_rgba(0,0,0,0.16)] p-6 max-h-[90vh] overflow-y-auto">
         {/* Close button */}
         <button
           onClick={() => setOpen(false)}

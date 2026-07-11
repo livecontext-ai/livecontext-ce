@@ -71,7 +71,7 @@ export function CreateFolderDialog({ isOpen, onClose, onCreate, initialName }: C
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="max-w-md w-full bg-theme-primary rounded-3xl shadow-2xl animate-in fade-in-0 zoom-in-95 duration-300 border border-theme flex flex-col"
+        className="max-w-md w-full bg-theme-primary rounded-3xl shadow-2xl animate-in fade-in-0 zoom-in-95 duration-300 border border-theme flex flex-col max-h-[90vh] overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -87,7 +87,7 @@ export function CreateFolderDialog({ isOpen, onClose, onCreate, initialName }: C
         </div>
 
         {/* Content */}
-        <div className="px-8 pb-4">
+        <div className="flex-1 overflow-y-auto px-8 pb-4">
           <div className="space-y-5 animate-in fade-in-0 slide-in-from-right-4 duration-300">
             <div>
               <label className="block text-sm font-medium text-theme-primary mb-2">{t('folderName')}</label>

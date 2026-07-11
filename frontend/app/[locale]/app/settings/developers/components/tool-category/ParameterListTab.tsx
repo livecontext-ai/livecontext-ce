@@ -99,7 +99,7 @@ const ParameterListTab: React.FC<ParameterListTabProps> = ({
               type="text"
               value={headerParam.name}
               onChange={(e) => updateParameter(paramIndex, 'name', e.target.value)}
-              className="w-full px-3 py-2 bg-theme-primary border border-theme rounded text-theme-primary text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+              className="w-full h-9 px-3 bg-theme-primary border border-theme rounded text-theme-primary text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
               placeholder={t('parameterList.headerNamePlaceholder')}
             />
           </div>
@@ -111,7 +111,7 @@ const ParameterListTab: React.FC<ParameterListTabProps> = ({
               type="text"
               value={headerParam.value || ''}
               onChange={(e) => updateParameter(paramIndex, 'value', e.target.value)}
-              className="w-full px-3 py-2 bg-theme-primary border border-theme rounded text-theme-primary text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+              className="w-full h-9 px-3 bg-theme-primary border border-theme rounded text-theme-primary text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
               placeholder={t('parameterList.headerValuePlaceholder')}
             />
           </div>
@@ -142,7 +142,7 @@ const ParameterListTab: React.FC<ParameterListTabProps> = ({
               type="text"
               value={bodyParam.name}
               onChange={(e) => updateParameter(paramIndex, 'name', e.target.value)}
-              className="w-full px-3 py-2 bg-theme-primary border border-theme rounded text-theme-primary text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+              className="w-full h-9 px-3 bg-theme-primary border border-theme rounded text-theme-primary text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
               placeholder={t('parameterList.fieldNamePlaceholder')}
             />
           </div>
@@ -153,7 +153,7 @@ const ParameterListTab: React.FC<ParameterListTabProps> = ({
             <select
               value={bodyParam.type || 'string'}
               onChange={(e) => updateParameter(paramIndex, 'type', e.target.value)}
-              className="w-full px-3 py-2 bg-theme-primary border border-theme rounded text-theme-primary text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+              className="w-full h-9 px-3 bg-theme-primary border border-theme rounded text-theme-primary text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
             >
               {PARAM_TYPES.map(type => (
                 <option key={type} value={type}>{type}</option>
@@ -168,7 +168,7 @@ const ParameterListTab: React.FC<ParameterListTabProps> = ({
               type="text"
               value={bodyParam.value || ''}
               onChange={(e) => updateParameter(paramIndex, 'value', e.target.value)}
-              className="w-full px-3 py-2 bg-theme-primary border border-theme rounded text-theme-primary text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+              className="w-full h-9 px-3 bg-theme-primary border border-theme rounded text-theme-primary text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
               placeholder={t('parameterList.bodyValuePlaceholder')}
             />
           </div>
@@ -180,7 +180,7 @@ const ParameterListTab: React.FC<ParameterListTabProps> = ({
               type="text"
               value={bodyParam.description || ''}
               onChange={(e) => updateParameter(paramIndex, 'description', e.target.value)}
-              className="w-full px-3 py-2 bg-theme-primary border border-theme rounded text-theme-primary text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+              className="w-full h-9 px-3 bg-theme-primary border border-theme rounded text-theme-primary text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
               placeholder={t('parameterList.bodyDescriptionPlaceholder')}
             />
           </div>
@@ -201,7 +201,7 @@ const ParameterListTab: React.FC<ParameterListTabProps> = ({
               type="text"
               value={baseParam.name}
               onChange={(e) => updateParameter(paramIndex, 'name', e.target.value)}
-              className="w-full px-3 py-2 bg-theme-primary border border-theme rounded text-theme-primary text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+              className="w-full h-9 px-3 bg-theme-primary border border-theme rounded text-theme-primary text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
               placeholder={parameterType === 'pathParameters' ? t('parameterList.pathParamPlaceholder') : t('parameterList.queryParamPlaceholder')}
             />
           </div>
@@ -212,7 +212,7 @@ const ParameterListTab: React.FC<ParameterListTabProps> = ({
             <select
               value={baseParam.type || 'string'}
               onChange={(e) => updateParameter(paramIndex, 'type', e.target.value)}
-              className="w-full px-3 py-2 bg-theme-primary border border-theme rounded text-theme-primary text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+              className="w-full h-9 px-3 bg-theme-primary border border-theme rounded text-theme-primary text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
             >
               {PARAM_TYPES.map(type => (
                 <option key={type} value={type}>{type}</option>
@@ -229,7 +229,7 @@ const ParameterListTab: React.FC<ParameterListTabProps> = ({
               type="text"
               value={baseParam.description || ''}
               onChange={(e) => updateParameter(paramIndex, 'description', e.target.value)}
-              className="w-full px-3 py-2 bg-theme-primary border border-theme rounded text-theme-primary text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+              className="w-full h-9 px-3 bg-theme-primary border border-theme rounded text-theme-primary text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
               placeholder={t('parameterList.descriptionPlaceholder')}
             />
           </div>
@@ -241,7 +241,7 @@ const ParameterListTab: React.FC<ParameterListTabProps> = ({
               type="text"
               value={baseParam.example || ''}
               onChange={(e) => updateParameter(paramIndex, 'example', e.target.value)}
-              className="w-full px-3 py-2 bg-theme-primary border border-theme rounded text-theme-primary text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+              className="w-full h-9 px-3 bg-theme-primary border border-theme rounded text-theme-primary text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50"
               placeholder={parameterType === 'pathParameters' ? t('parameterList.pathExamplePlaceholder') : t('parameterList.queryExamplePlaceholder')}
             />
           </div>

@@ -82,6 +82,7 @@ vi.mock('@/lib/api/orchestrator', () => ({
     updateAgent: updateAgentMock,
     setAgentSkills: vi.fn().mockResolvedValue(undefined),
     createOrUpdateWidgetConfig: vi.fn().mockResolvedValue(undefined),
+    setWidgetActive: vi.fn().mockResolvedValue(undefined),
   },
 }));
 vi.mock('@/lib/api/api-client', () => ({ apiClient: { get: vi.fn().mockResolvedValue({}), post: vi.fn() } }));
@@ -170,6 +171,7 @@ vi.mock('@/components/Toast', () => ({
 }));
 
 import { CreateAgentModal } from '../CreateAgentModal';
+import { orchestratorApi } from '@/lib/api/orchestrator';
 
 interface TestAgent {
   id?: string;
@@ -321,7 +323,7 @@ describe('CreateAgentModal - Task 2: backlog lives under Schedule → Advanced O
     renderModal({ id: 'agent-1', name: 'A', backlogEnabled: false }, 3);
     fireEvent.click(await screen.findByText('modals.createAgent.scheduleLabel')); // enable schedule
     fireEvent.click(await screen.findByText('Advanced Options'));
-    fireEvent.click(await screen.findByRole('button', { name: 'modals.createAgent.backlogEnabled' }));
+    fireEvent.click(await screen.findByRole('switch', { name: 'modals.createAgent.backlogEnabled' }));
     save();
 
     await waitFor(() => expect(updateAgentMock).toHaveBeenCalledTimes(1));
@@ -519,5 +521,54 @@ describe('CreateAgentModal - schedule prompt edit preserves the existing cron', 
     const [, body] = createOrUpdateScheduleMock.mock.calls[0];
     expect(body.cron).toBe('0 18 * * *'); // preserved, NOT reset to '0 9 * * *'
     expect(body.schedulePrompt).toBe('NEW TASK');
+  });
+});
+
+describe('CreateAgentModal - widget toggle-off on update deactivates it (regression)', () => {
+  // An existing, ACTIVE widget the edit modal hydrates from getWidgetConfig.
+  const activeWidget = {
+    isActive: true,
+    position: 'bottom-right', theme: 'light', primaryColor: '#000000',
+    welcomeMessage: 'Hi', bubbleText: 'Chat', showAvatar: true, autoOpenDelay: 0,
+    widgetToken: 'wid_abc', allowedOrigins: '', widgetScriptUrl: 'https://x/widget.js',
+  };
+
+  it('deactivates the widget when toggled OFF (was a silent no-op: it kept serving)', async () => {
+    vi.mocked(orchestratorApi.getWidgetConfig).mockResolvedValueOnce(activeWidget as never);
+    renderModal({ id: 'agent-1', name: 'A' }, 3); // Integration step
+    // Widget hydrates as enabled → its config panel ("Position") renders.
+    await screen.findByText('Position');
+    // Toggle the widget OFF, then save.
+    fireEvent.click(screen.getByText('Chat Widget'));
+    save();
+
+    await waitFor(() =>
+      expect(orchestratorApi.setWidgetActive).toHaveBeenCalledWith('agent-1', false),
+    );
+    // It must NOT re-create/update the config (which would flip isActive back on).
+    expect(orchestratorApi.createOrUpdateWidgetConfig).not.toHaveBeenCalled();
+  });
+
+  it('updates (not deactivates) when the widget stays enabled', async () => {
+    vi.mocked(orchestratorApi.getWidgetConfig).mockResolvedValueOnce(activeWidget as never);
+    renderModal({ id: 'agent-1', name: 'A' }, 3);
+    await screen.findByText('Position'); // enabled
+    save(); // no toggle
+
+    await waitFor(() =>
+      expect(orchestratorApi.createOrUpdateWidgetConfig).toHaveBeenCalledTimes(1),
+    );
+    expect(orchestratorApi.setWidgetActive).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when there was never a widget and it stays off (no spurious deactivate)', async () => {
+    // getWidgetConfig defaults to null → no widget; toggle stays off.
+    renderModal({ id: 'agent-1', name: 'A' }, 3);
+    await screen.findByText('Chat Widget');
+    save();
+
+    await waitFor(() => expect(updateAgentMock).toHaveBeenCalledTimes(1));
+    expect(orchestratorApi.createOrUpdateWidgetConfig).not.toHaveBeenCalled();
+    expect(orchestratorApi.setWidgetActive).not.toHaveBeenCalled();
   });
 });

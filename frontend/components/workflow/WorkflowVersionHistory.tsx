@@ -469,7 +469,7 @@ export const WorkflowSaveWithVersions: React.FC<WorkflowSaveWithVersionsProps> =
           onClick={() => setPinConfirm(null)}
         >
           <div
-            className="max-w-sm w-full bg-theme-primary rounded-3xl shadow-2xl p-8 animate-in fade-in-0 zoom-in-95 duration-300 border border-theme"
+            className="max-w-sm w-full bg-theme-primary rounded-3xl shadow-2xl p-8 animate-in fade-in-0 zoom-in-95 duration-300 border border-theme max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             {pinConfirm.version !== null ? (

@@ -166,7 +166,7 @@ export function ImageScreeningModal({
             onClick={onCancel}
         >
             <div
-                className="max-w-2xl w-full bg-theme-primary rounded-3xl shadow-2xl border border-theme animate-in fade-in-0 zoom-in-95 duration-200"
+                className="max-w-2xl w-full bg-theme-primary rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.16)] border border-theme animate-in fade-in-0 zoom-in-95 duration-200 max-h-[90vh] flex flex-col overflow-hidden"
                 onClick={(e) => e.stopPropagation()}
             >
                 {/* Header */}
@@ -184,7 +184,7 @@ export function ImageScreeningModal({
                 </div>
 
                 {/* Flagged list */}
-                <div className="px-6 py-4 max-h-[55vh] overflow-y-auto space-y-2">
+                <div className="px-6 py-4 flex-1 overflow-y-auto space-y-2">
                     {flagged.map((img) => {
                         const state = getState(img);
                         const isReplaced = state.status === 'done';

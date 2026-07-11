@@ -29,8 +29,10 @@ import {
   Shield,
   Unlink,
 } from 'lucide-react';
+import Link from 'next/link';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
 import {
   Dialog,
   DialogContent,
@@ -41,6 +43,7 @@ import {
 } from '@/components/ui/dialog';
 import {
   cloudLinkService,
+  CLOUD_NO_SUBSCRIPTION,
   type CloudLinkStatus,
 } from '@/lib/api/cloud-link.service';
 import { ceLinkService, type CeLinkSummary } from '@/lib/api/ce-link.service';
@@ -66,6 +69,8 @@ function ThisInstallSection() {
   const tCe = useTranslations('settings.cloudAccount.ce');
   const tErr = useTranslations('settings.cloudAccount.errors');
   const tConfirm = useTranslations('settings.cloudAccount.confirmDisconnect');
+  // Integration-credential source strings are shared config, defined under aiProviders.
+  const tCatalog = useTranslations('aiProviders.catalogSource');
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const { hasRole, isAuthenticated, isLoading: isAuthLoading } = useAuth();
@@ -73,6 +78,11 @@ function ThisInstallSection() {
   const [status, setStatus] = useState<CloudLinkStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // Integration credential source: ON = relay through the linked cloud account
+  // (its platform creds, per-call markup, needs an active paid subscription);
+  // OFF = credentials configured and used locally on this install.
+  const [catalogSaving, setCatalogSaving] = useState(false);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
 
   const loadStatus = useCallback(async () => {
     try {
@@ -84,6 +94,22 @@ function ThisInstallSection() {
       setState('error');
     }
   }, [tErr]);
+
+  const handleSetCatalogSource = useCallback(async (useCloud: boolean) => {
+    const source = useCloud ? 'CLOUD' : 'BYOK';
+    setCatalogSaving(true);
+    setCatalogError(null);
+    try {
+      const saved = await cloudLinkService.setCatalogSource(source);
+      setStatus((current) => (current ? { ...current, catalogSource: saved } : current));
+      // No model-cache clear: integration credentials do not affect the model catalog.
+    } catch (err) {
+      console.error('Failed to save CE integration credential source:', err);
+      setCatalogError(useCloud ? tCatalog('linkRequired') : tCatalog('saveError'));
+    } finally {
+      setCatalogSaving(false);
+    }
+  }, [tCatalog]);
 
   const handleCallback = useCallback(
     async (oauthState: string) => {
@@ -223,6 +249,42 @@ function ThisInstallSection() {
           </div>
         </div>
       </div>
+
+      {/* Integration credential source: only meaningful once linked (CLOUD relays
+          through the linked account). A single clean toggle: on = cloud, off = local. */}
+      {connected && (
+        <div className="rounded-xl border border-theme p-6">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-theme-primary">{tCatalog('label')}</p>
+              <p className="mt-0.5 text-sm text-theme-secondary max-w-md">
+                {status?.catalogSource === 'CLOUD' ? tCatalog('cloudHint') : tCatalog('localHint')}
+              </p>
+            </div>
+            <Switch
+              checked={status?.catalogSource === 'CLOUD'}
+              onCheckedChange={handleSetCatalogSource}
+              disabled={catalogSaving}
+              aria-label={tCatalog('label')}
+            />
+          </div>
+          {status?.catalogSource === 'CLOUD'
+            && (!status?.cloudPlanCode || status.cloudPlanCode === CLOUD_NO_SUBSCRIPTION) && (
+            <p className="mt-2 text-sm text-amber-600 dark:text-amber-400 max-w-md">
+              {tCatalog('subscriptionRequired')}{' '}
+              <Link
+                href="/app/settings/pricing"
+                className="font-medium underline underline-offset-2 hover:text-amber-700 dark:hover:text-amber-300"
+              >
+                {tCatalog('viewPlans')}
+              </Link>
+            </p>
+          )}
+          {catalogError && (
+            <p className="mt-2 text-sm text-red-600 dark:text-red-400">{catalogError}</p>
+          )}
+        </div>
+      )}
 
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent>
@@ -556,11 +618,11 @@ export default function CloudAccountPage() {
       <div className="flex max-w-full overflow-x-auto scrollbar-hide">
         <div
           ref={tabContainerRef}
-          className="relative mx-auto inline-flex items-center gap-1 p-1.5 bg-theme-tertiary rounded-full w-max"
+          className="relative mx-auto inline-flex items-center gap-1 p-1.5 bg-theme-tertiary rounded-2xl w-max"
         >
           {/* Slider highlight */}
           <div
-            className="absolute top-1.5 bottom-1.5 rounded-full bg-[var(--bg-primary)] transition-all duration-300 ease-out"
+            className="absolute top-1.5 bottom-1.5 rounded-xl bg-[var(--bg-primary)] transition-all duration-200 ease-out"
             style={{
               left: sliderStyle.left,
               width: sliderStyle.width,
@@ -575,7 +637,7 @@ export default function CloudAccountPage() {
               onClick={() => setTab(item.id)}
               title={item.label}
               className={cn(
-                "relative z-10 flex items-center gap-2 px-6 py-2 rounded-full text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 outline-none",
+                "relative z-10 flex h-9 items-center gap-2 px-6 rounded-xl text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 outline-none",
                 tab === item.id
                   ? "text-[var(--text-primary)]"
                   : "text-theme-secondary hover:text-theme-primary hover:bg-[var(--bg-primary)]/50"

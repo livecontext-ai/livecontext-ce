@@ -1,4 +1,15 @@
 {
+  "globalSearch": {
+    "placeholder": "Buscar...",
+    "conversations": "Chats",
+    "workflows": "Flujos de trabajo",
+    "agents": "Agentes",
+    "settings": "Ajustes",
+    "noResults": "Sin resultados para \"{query}\"",
+    "searching": "Buscando...",
+    "untitled": "Sin título",
+    "clear": "Borrar búsqueda"
+  },
   "reward": {
     "page": {
       "title": "Invita y gana",
@@ -378,6 +389,8 @@
   },
   "sidePanel": {
     "addTab": "Agregar pestaña",
+    "openRight": "Abrir el panel a la derecha",
+    "openBottom": "Abrir el panel abajo",
     "searchPlaceholder": "Buscar...",
     "applications": "Aplicaciones",
     "interfaces": "Interfaces",
@@ -386,6 +399,7 @@
     "noItems": "No hay elementos disponibles",
     "errorLoading": "Error al cargar los elementos",
     "aiChat": "Chat IA",
+    "welcomeTitle": "¿En qué puedo ayudarte?",
     "agent": "Agente",
     "workflowPanel": "Panel de Workflow",
     "workflows": "Workflows",
@@ -3940,6 +3954,32 @@
       "createdAt": "Creada el {date}",
       "noKey": "Aún no hay clave API. Genera una para conectar un cliente MCP."
     },
+    "keys": {
+      "title": "Claves API",
+      "description": "Las solicitudes al endpoint MCP se autentican con una clave API enviada en el encabezado X-API-Key. Crea una por cliente, cada una con acceso completo o limitada a las herramientas que necesita, y revoca cualquiera sin afectar a las demás.",
+      "create": "Nueva clave",
+      "empty": "Aún no hay claves API. Crea una para conectar un cliente MCP.",
+      "fullAccess": "Acceso completo",
+      "fullAccessHint": "Todas las herramientas MCP",
+      "scopedAccess": "Acceso limitado",
+      "scopedAccessHint": "Solo las herramientas que elijas",
+      "createdAt": "Creada el {date}",
+      "revoke": "Revocar",
+      "revokeConfirm": "Revocar clave",
+      "revokedTitle": "Clave revocada",
+      "revokeFailed": "No se pudo revocar la clave",
+      "createTitle": "Crear una clave API",
+      "createSubtitle": "Dale un nombre a la clave y elige a qué puede acceder.",
+      "createdTitle": "Clave creada",
+      "nameLabel": "Nombre",
+      "namePlaceholder": "p. ej. Cursor en mi portátil",
+      "accessLabel": "Acceso",
+      "limitLabel": "Limitar a herramientas específicas",
+      "scopesLabel": "Herramientas",
+      "scopesRequired": "Elige al menos una herramienta.",
+      "cancel": "Cancelar",
+      "done": "Listo"
+    },
     "toasts": {
       "keyGenerated": "Clave API generada",
       "keyGenerationFailed": "No se pudo generar la clave API",
@@ -4854,6 +4894,7 @@
     "iterationLabel": "Elemento {number}",
     "workflowFallback": "Flujo de trabajo",
     "moveTo": "Mover a…",
+    "virtualBulkExcluded": "Las carpetas de workflow solo se pueden eliminar - anule su selección para descargar o mover",
     "moveToFolderTitle": "Mover {count, plural, one {# elemento} other {# elementos}}",
     "moveToRoot": "Nivel superior (raíz)",
     "moveHere": "Mover aquí",
@@ -5246,10 +5287,14 @@
       "themeLight": "Claro",
       "themeDark": "Oscuro",
       "themeAuto": "Sistema",
-      "sidePanelPosition": "Posición del panel lateral",
-      "sidePanelPositionDescription": "Elige dónde se abre el panel lateral",
-      "sidePanelPositionRight": "Derecha",
-      "sidePanelPositionBottom": "Abajo",
+      "sidePanelDefaultPosition": "Posición predeterminada del panel lateral",
+      "sidePanelDefaultPositionDescription": "Dónde se abre el panel lateral de forma predeterminada en toda la aplicación",
+      "sidePanelDefaultPositionRight": "Derecha",
+      "sidePanelDefaultPositionBottom": "Abajo",
+      "sidePanelBottomMode": "Estilo del panel inferior",
+      "sidePanelBottomModeDescription": "Cómo se muestra el panel al abrirlo abajo desde el encabezado",
+      "sidePanelBottomModeFull": "Ancho completo (bajo la barra lateral)",
+      "sidePanelBottomModeContent": "Ancho del contenido",
       "timezone": "Zona horaria",
       "timezoneDescription": "Establece tu zona horaria local",
       "selectTimezone": "Seleccionar zona horaria",
@@ -6614,7 +6659,8 @@
         "chat-trigger": "Chat",
         "schedule-trigger": "Programador",
         "form-trigger": "Formulario"
-      }
+      },
+      "close": "Cerrar"
     },
     "nodes": {
       "deleteNode": "Eliminar nodo",

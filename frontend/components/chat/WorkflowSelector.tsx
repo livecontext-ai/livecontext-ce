@@ -582,12 +582,12 @@ export const WorkflowSelector: React.FC<WorkflowSelectorProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
       <div
-        className="bg-white dark:bg-gray-900 rounded-lg shadow-xl max-w-4xl w-full mx-4 max-h-[80vh] overflow-y-auto"
+        className="bg-white dark:bg-gray-900 rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.16)] max-w-4xl w-full mx-4 max-h-[80vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="p-6">
           <div className="flex items-center justify-between mb-6">
-            <h2 className="text-2xl font-semibold text-theme-primary">Select a Workflow Template</h2>
+            <h2 className="text-xl font-semibold text-theme-primary">Select a Workflow Template</h2>
             <Button
               variant="ghost"
               size="icon"

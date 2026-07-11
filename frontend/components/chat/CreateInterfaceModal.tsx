@@ -190,7 +190,7 @@ export const CreateInterfaceModal: React.FC<CreateInterfaceModalProps> = ({
       onClick={onClose}
     >
       <div
-        className={`w-full bg-theme-primary rounded-3xl shadow-2xl animate-in fade-in-0 zoom-in-95 duration-300 border border-theme flex flex-col overflow-hidden ${
+        className={`w-full bg-theme-primary rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.16)] animate-in fade-in-0 zoom-in-95 duration-200 border border-theme flex flex-col overflow-hidden ${
           currentStep === 2 ? 'max-w-5xl h-[85vh]' : 'max-w-2xl max-h-[90vh]'
         }`}
         onClick={(e) => e.stopPropagation()}
@@ -203,7 +203,7 @@ export const CreateInterfaceModal: React.FC<CreateInterfaceModalProps> = ({
                 <Layout className="w-8 h-8 text-theme-primary" />
               </div>
             )}
-            <h3 className="text-2xl font-semibold text-theme-primary">
+            <h3 className="text-xl font-semibold text-theme-primary">
               {isEditMode ? t('editTitle') : t('title')}
             </h3>
             <p className="text-sm text-theme-secondary mt-1">

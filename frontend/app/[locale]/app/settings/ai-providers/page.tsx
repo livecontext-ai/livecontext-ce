@@ -1,12 +1,11 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import Link from "next/link";
 import { BotMessageSquare, Cloud, Key, Terminal, SlidersHorizontal, User, Shield, Info, Route } from "lucide-react";
 import { useAuthGuard } from "@/hooks/useAuthGuard";
 import { useAuth } from "@/lib/providers/smart-providers";
 import { credentialService } from "@/lib/api/orchestrator/credential.service";
-import { cloudLinkService, CLOUD_NO_SUBSCRIPTION, type CloudLinkStatus } from "@/lib/api/cloud-link.service";
+import { cloudLinkService, type CloudLinkStatus } from "@/lib/api/cloud-link.service";
 import { clearModelsCache } from "@/hooks/useModels";
 import { Button } from "@/components/ui/button";
 import { useTranslations } from "next-intl";
@@ -125,9 +124,6 @@ export default function AiProvidersPage() {
   const [sourceLoading, setSourceLoading] = useState(false);
   const [sourceSaving, setSourceSaving] = useState<"CLOUD" | "BYOK" | null>(null);
   const [sourceError, setSourceError] = useState<string | null>(null);
-  const [catalogSource, setCatalogSource] = useState<"CLOUD" | "BYOK">("BYOK");
-  const [catalogSaving, setCatalogSaving] = useState<"CLOUD" | "BYOK" | null>(null);
-  const [catalogError, setCatalogError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -197,13 +193,11 @@ export default function AiProvidersPage() {
       const status = await cloudLinkService.getStatus();
       setCloudLinkStatus(status);
       setLlmSource(status.llmSource ?? "BYOK");
-      setCatalogSource(status.catalogSource ?? "BYOK");
       setSourceError(null);
     } catch (err) {
       console.warn("Failed to load CE cloud LLM source:", err);
       setCloudLinkStatus(null);
       setLlmSource("BYOK");
-      setCatalogSource("BYOK");
     } finally {
       setSourceLoading(false);
     }
@@ -230,23 +224,6 @@ export default function AiProvidersPage() {
       setSourceError(source === "CLOUD" ? t("cloudSource.linkRequired") : t("cloudSource.saveError"));
     } finally {
       setSourceSaving(null);
-    }
-  };
-
-  const handleSetCatalogSource = async (source: "CLOUD" | "BYOK") => {
-    if (source === catalogSource || catalogSaving) return;
-    setCatalogSaving(source);
-    setCatalogError(null);
-    try {
-      const saved = await cloudLinkService.setCatalogSource(source);
-      setCatalogSource(saved);
-      setCloudLinkStatus((current) => current ? { ...current, catalogSource: saved } : current);
-      // No clearModelsCache() here: integration credentials do not affect the model catalog.
-    } catch (err) {
-      console.error("Failed to save CE integration credential source:", err);
-      setCatalogError(source === "CLOUD" ? t("catalogSource.linkRequired") : t("catalogSource.saveError"));
-    } finally {
-      setCatalogSaving(null);
     }
   };
 
@@ -365,9 +342,9 @@ export default function AiProvidersPage() {
 
       {/* Connection mode toggle */}
       <div className="flex max-w-full overflow-x-auto scrollbar-hide -mx-1 px-1">
-        <div className="relative mx-auto inline-flex items-center gap-1 p-1.5 bg-theme-tertiary rounded-full w-max" ref={tabContainerRef}>
+        <div className="relative mx-auto inline-flex items-center gap-1 p-1.5 bg-theme-tertiary rounded-2xl w-max" ref={tabContainerRef}>
           <div
-            className="absolute top-1.5 bottom-1.5 rounded-full bg-[var(--bg-primary)] transition-all duration-300 ease-out"
+            className="absolute top-1.5 bottom-1.5 rounded-xl bg-[var(--bg-primary)] transition-all duration-200 ease-out"
             style={{
               left: tabSliderStyle.left,
               width: tabSliderStyle.width,
@@ -382,7 +359,7 @@ export default function AiProvidersPage() {
               onClick={() => setConnectionMode(tab.id)}
               title={tab.label}
               className={cn(
-                "relative z-10 flex flex-shrink-0 items-center gap-2 px-3 sm:px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 outline-none",
+                "relative z-10 flex h-9 flex-shrink-0 items-center gap-2 px-3 sm:px-4 rounded-xl text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 outline-none",
                 connectionMode === tab.id
                   ? "text-[var(--text-primary)]"
                   : "text-theme-secondary hover:text-theme-primary hover:bg-[var(--bg-primary)]/50"
@@ -411,13 +388,13 @@ export default function AiProvidersPage() {
           {IS_CE && (
             <>
             <div className="flex flex-col items-center gap-2 text-center">
-              <div className="relative inline-flex items-center gap-1 rounded-full bg-theme-tertiary p-1.5 w-max">
+              <div className="relative inline-flex items-center gap-1 rounded-2xl bg-theme-tertiary p-1.5 w-max">
                 <button
                   type="button"
                   onClick={() => handleSetLlmSource("CLOUD")}
                   disabled={sourceLoading || sourceSaving !== null}
                   className={cn(
-                    "inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-colors",
+                    "inline-flex h-9 items-center gap-2 rounded-xl px-4 text-sm font-medium transition-colors",
                     llmSource === "CLOUD"
                       ? "bg-[var(--bg-primary)] text-theme-primary shadow-sm"
                       : "text-theme-secondary hover:text-theme-primary"
@@ -431,7 +408,7 @@ export default function AiProvidersPage() {
                   onClick={() => handleSetLlmSource("BYOK")}
                   disabled={sourceLoading || sourceSaving !== null}
                   className={cn(
-                    "inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-colors",
+                    "inline-flex h-9 items-center gap-2 rounded-xl px-4 text-sm font-medium transition-colors",
                     llmSource === "BYOK"
                       ? "bg-[var(--bg-primary)] text-theme-primary shadow-sm"
                       : "text-theme-secondary hover:text-theme-primary"
@@ -454,64 +431,9 @@ export default function AiProvidersPage() {
                 <p className="text-sm text-red-600 dark:text-red-400">{sourceError}</p>
               )}
             </div>
-            {/*
-              Integration credential source toggle: same CLOUD/BYOK choice as the LLM
-              source above, but for third-party integration (catalog) credentials.
-              CLOUD relays integration calls to the linked cloud account (its platform
-              credentials, per-call markup billed there); it requires an active paid
-              subscription on that account.
-            */}
-            <div className="flex flex-col items-center gap-2 text-center">
-              <p className="text-sm font-medium text-theme-primary">{t("catalogSource.label")}</p>
-              <div className="relative inline-flex items-center gap-1 rounded-full bg-theme-tertiary p-1.5 w-max">
-                <button
-                  type="button"
-                  onClick={() => handleSetCatalogSource("CLOUD")}
-                  disabled={sourceLoading || catalogSaving !== null}
-                  className={cn(
-                    "inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-colors",
-                    catalogSource === "CLOUD"
-                      ? "bg-[var(--bg-primary)] text-theme-primary shadow-sm"
-                      : "text-theme-secondary hover:text-theme-primary"
-                  )}
-                >
-                  {catalogSaving === "CLOUD" ? <LoadingDot /> : <Cloud className="h-4 w-4" />}
-                  {t("catalogSource.cloud")}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleSetCatalogSource("BYOK")}
-                  disabled={sourceLoading || catalogSaving !== null}
-                  className={cn(
-                    "inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-colors",
-                    catalogSource === "BYOK"
-                      ? "bg-[var(--bg-primary)] text-theme-primary shadow-sm"
-                      : "text-theme-secondary hover:text-theme-primary"
-                  )}
-                >
-                  {catalogSaving === "BYOK" ? <LoadingDot /> : <Key className="h-4 w-4" />}
-                  {t("catalogSource.local")}
-                </button>
-              </div>
-              <p className="text-sm text-theme-secondary max-w-md">
-                {catalogSource === "CLOUD" ? t("catalogSource.cloudHint") : t("catalogSource.localHint")}
-              </p>
-              {catalogSource === "CLOUD"
-                && (!cloudLinkStatus?.cloudPlanCode || cloudLinkStatus.cloudPlanCode === CLOUD_NO_SUBSCRIPTION) && (
-                <p className="text-sm text-amber-600 dark:text-amber-400 max-w-md">
-                  {t("catalogSource.subscriptionRequired")}{" "}
-                  <Link
-                    href="/app/settings/pricing"
-                    className="font-medium underline underline-offset-2 hover:text-amber-700 dark:hover:text-amber-300"
-                  >
-                    {t("catalogSource.viewPlans")}
-                  </Link>
-                </p>
-              )}
-              {catalogError && (
-                <p className="text-sm text-red-600 dark:text-red-400">{catalogError}</p>
-              )}
-            </div>
+            {/* Integration credential source (Cloud vs Local) lives on the Cloud
+                Account settings page - it is a property of the cloud link, not of
+                the LLM API keys. */}
             </>
           )}
           {error && (

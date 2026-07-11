@@ -85,7 +85,7 @@ export function FileFilterBar({
             value={searchInput}
             onChange={(e) => onSearchChange(e.target.value)}
             placeholder={tExp('searchPlaceholder')}
-            className="pl-8 h-11"
+            className="pl-8"
           />
         </div>
 
@@ -95,7 +95,7 @@ export function FileFilterBar({
             onClick={() => onViewModeChange('grid')}
             aria-pressed={viewMode === 'grid'}
             title={tFiles('viewGrid')}
-            className={`h-11 px-3 flex items-center justify-center transition-colors ${viewMode === 'grid' ? 'bg-[var(--bg-tertiary)] text-[var(--text-primary)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]/50'}`}
+            className={`h-9 px-3 flex items-center justify-center transition-colors ${viewMode === 'grid' ? 'bg-[var(--bg-tertiary)] text-[var(--text-primary)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]/50'}`}
           >
             <LayoutGrid className="h-4 w-4" />
           </button>
@@ -104,7 +104,7 @@ export function FileFilterBar({
             onClick={() => onViewModeChange('list')}
             aria-pressed={viewMode === 'list'}
             title={tFiles('viewList')}
-            className={`h-11 px-3 flex items-center justify-center transition-colors ${viewMode === 'list' ? 'bg-[var(--bg-tertiary)] text-[var(--text-primary)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]/50'}`}
+            className={`h-9 px-3 flex items-center justify-center transition-colors ${viewMode === 'list' ? 'bg-[var(--bg-tertiary)] text-[var(--text-primary)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]/50'}`}
           >
             <List className="h-4 w-4" />
           </button>
@@ -115,7 +115,7 @@ export function FileFilterBar({
           onClick={onRefresh}
           disabled={loading}
           title={tExp('refresh')}
-          className="h-11 px-3 flex items-center justify-center rounded-lg border border-theme text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]/50 transition-colors flex-shrink-0"
+          className="h-9 px-3 flex items-center justify-center rounded-lg border border-theme text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]/50 transition-colors flex-shrink-0"
         >
           <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
         </button>
@@ -124,7 +124,7 @@ export function FileFilterBar({
       {/* Row 2 - type / source / date-range filters */}
       <div className="flex flex-wrap items-center gap-2">
         <Select value={fileType} onValueChange={(v) => onFileTypeChange(v as FileTypeCategory)}>
-          <SelectTrigger className="w-auto min-w-[140px] h-11">
+          <SelectTrigger className="w-auto min-w-[140px]">
             <SelectValue placeholder={tExp('allFileTypes')} />
           </SelectTrigger>
           <SelectContent>
@@ -139,7 +139,7 @@ export function FileFilterBar({
           value={sourceType === '' ? ALL : sourceType}
           onValueChange={(v) => onSourceTypeChange(v === ALL ? '' : v)}
         >
-          <SelectTrigger className="w-auto min-w-[140px] h-11">
+          <SelectTrigger className="w-auto min-w-[140px]">
             <SelectValue placeholder={tExp('allSources')} />
           </SelectTrigger>
           <SelectContent>
@@ -157,7 +157,7 @@ export function FileFilterBar({
             value={dateFrom}
             max={dateTo || undefined}
             onChange={(e) => onDateFromChange(e.target.value)}
-            className="w-auto h-11 px-3 text-sm"
+            className="w-auto px-3 text-sm"
           />
           <span>{tFiles('dateTo')}</span>
           <Input
@@ -165,7 +165,7 @@ export function FileFilterBar({
             value={dateTo}
             min={dateFrom || undefined}
             onChange={(e) => onDateToChange(e.target.value)}
-            className="w-auto h-11 px-3 text-sm"
+            className="w-auto px-3 text-sm"
           />
         </div>
       </div>

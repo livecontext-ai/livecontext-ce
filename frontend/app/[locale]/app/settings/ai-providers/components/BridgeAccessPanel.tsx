@@ -258,7 +258,7 @@ export default function BridgeAccessPanel({ bridgeProvider, t }: BridgeAccessPan
           placeholder={t("bridge.access.unlimited")}
           value={draftQuota}
           onChange={(e) => setDraftQuota(e.target.value)}
-          className="w-full rounded-lg border border-theme bg-theme-primary px-3 py-2 text-sm text-theme-primary focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]/60"
+          className="h-9 w-full rounded-lg border border-theme bg-theme-primary px-3 text-sm text-theme-primary focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]/60"
         />
         <p className="text-xs text-theme-secondary">{t("bridge.access.dailyQuotaHint")}</p>
       </div>
@@ -316,7 +316,7 @@ export default function BridgeAccessPanel({ bridgeProvider, t }: BridgeAccessPan
             onKeyDown={(e) => {
               if (e.key === "Enter" && allowlistActive) handleGrant();
             }}
-            className="flex-1 rounded-lg border border-theme bg-theme-primary px-3 py-2 text-sm text-theme-primary focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]/60 disabled:cursor-not-allowed"
+            className="h-9 flex-1 rounded-lg border border-theme bg-theme-primary px-3 text-sm text-theme-primary focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]/60 disabled:cursor-not-allowed"
           />
           <Button
             onClick={handleGrant}

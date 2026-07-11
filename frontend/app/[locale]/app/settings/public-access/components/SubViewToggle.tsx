@@ -21,14 +21,14 @@ export function SubViewToggle({ activeView, onViewChange }: SubViewToggleProps) 
 
   return (
     <div className="flex items-center justify-center">
-      <div className="inline-flex items-center gap-1 p-1.5 bg-theme-tertiary rounded-full w-max">
+      <div className="inline-flex items-center gap-1 p-1.5 bg-theme-tertiary rounded-2xl w-max">
         {views.map(({ id, icon: Icon, labelKey }) => {
           const isActive = activeView === id;
           return (
             <button
               key={id}
               onClick={() => onViewChange(id)}
-              className={`flex flex-shrink-0 items-center gap-1.5 px-3 sm:px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 outline-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 ${
+              className={`flex h-9 flex-shrink-0 items-center gap-1.5 px-3 sm:px-4 rounded-xl text-sm font-medium transition-all duration-200 outline-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 ${
                 isActive
                   ? 'bg-[var(--bg-primary)] text-[var(--text-primary)] shadow-sm'
                   : 'text-theme-secondary hover:text-theme-primary hover:bg-[var(--bg-primary)]/50'

@@ -26,6 +26,7 @@ import type { MoveFolderRow } from '@/lib/files/moveFolderTree';
 import { FileFilterBar } from './FileFilterBar';
 import { PaginationBar } from '@/components/ui/PaginationBar';
 import { BulkDeleteModal } from '@/components/ui/BulkDeleteModal';
+import { SelectionActionBar, BulkBarButton } from '@/components/ui/SelectionActionBar';
 import { useToast } from '@/components/Toast';
 import ToastContainer from '@/components/ToastContainer';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
@@ -165,42 +166,56 @@ export function FileBrowser() {
   const filtersActive = !!search || !!sourceTypeFilter || !!dateFrom || !!dateTo || fileType !== '_all';
 
   // ---- Selection (Map survives pagination → bulk actions span pages) ----
-  // VIRTUAL workflow folders (Phase 2b) have no real id - they can't be moved,
-  // deleted or renamed, so they are NEVER selectable. Every selection structure
-  // below operates on the real (non-virtual) rows only.
+  // Keyed by entryKey(): real rows by id, VIRTUAL workflow folders (Phase 2b) by
+  // their virtualId - so a workflow folder gets the SAME checkbox + bulk-delete
+  // flow as any file. Virtual folders still can't be downloaded / moved / renamed
+  // (no real row); those actions disable while one is selected.
   const [selected, setSelected] = React.useState<Map<string, StorageExplorerEntry>>(new Map());
   const selectedIds = React.useMemo(() => new Set(selected.keys()), [selected]);
-  const selectableEntries = React.useMemo(() => entries.filter((e) => !isVirtualEntry(e)), [entries]);
-  const entryById = React.useMemo(() => {
+  const selectableEntries = entries;
+  const entryByKey = React.useMemo(() => {
     const m = new Map<string, StorageExplorerEntry>();
-    for (const e of selectableEntries) m.set(e.id, e);
+    for (const e of selectableEntries) m.set(entryKey(e), e);
     return m;
   }, [selectableEntries]);
 
-  const toggleSelection = React.useCallback((id: string) => {
+  const toggleSelection = React.useCallback((key: string) => {
     setSelected((prev) => {
       const next = new Map(prev);
-      if (next.has(id)) next.delete(id);
+      if (next.has(key)) next.delete(key);
       else {
-        const e = entryById.get(id);
-        if (e) next.set(id, e);
+        const e = entryByKey.get(key);
+        if (e) next.set(key, e);
       }
       return next;
     });
-  }, [entryById]);
+  }, [entryByKey]);
 
-  const visibleSelectedCount = selectableEntries.reduce((n, e) => n + (selected.has(e.id) ? 1 : 0), 0);
+  const visibleSelectedCount = selectableEntries.reduce((n, e) => n + (selected.has(entryKey(e)) ? 1 : 0), 0);
   const allVisibleSelected = selectableEntries.length > 0 && visibleSelectedCount === selectableEntries.length;
   const toggleSelectAll = React.useCallback(() => {
     setSelected((prev) => {
       const next = new Map(prev);
-      const all = selectableEntries.length > 0 && selectableEntries.every((e) => next.has(e.id));
-      if (all) for (const e of selectableEntries) next.delete(e.id);
-      else for (const e of selectableEntries) next.set(e.id, e);
+      const all = selectableEntries.length > 0 && selectableEntries.every((e) => next.has(entryKey(e)));
+      if (all) for (const e of selectableEntries) next.delete(entryKey(e));
+      else for (const e of selectableEntries) next.set(entryKey(e), e);
       return next;
     });
   }, [selectableEntries]);
   const clearSelection = React.useCallback(() => setSelected(new Map()), []);
+
+  // Split of the selection: real rows (files + manual folders, by id) vs virtual
+  // workflow folders (by virtualId ref). Download/move/rename apply to real rows
+  // only; delete handles both.
+  const selectedVirtual = React.useMemo(
+    () => Array.from(selected.values()).filter(isVirtualEntry),
+    [selected],
+  );
+  const selectedRealIds = React.useMemo(
+    () => Array.from(selected.values()).filter((e) => !isVirtualEntry(e)).map((e) => e.id),
+    [selected],
+  );
+  const hasVirtualSelected = selectedVirtual.length > 0;
 
   // ---- Focused single-file viewer state ----
   // Declared up here (before the workspace-reset hook) so a workspace switch can
@@ -230,7 +245,7 @@ export function FileBrowser() {
   // ---- Bulk download (single ZIP, same endpoint as the side-panel) ----
   const [downloading, setDownloading] = React.useState(false);
   const handleBulkDownload = React.useCallback(async () => {
-    if (selected.size === 0) return;
+    if (selectedRealIds.length === 0) return;
     setDownloading(true);
     try {
       const headers: Record<string, string> = { 'Content-Type': 'application/json', ...getActiveOrgHeaderForRequest() };
@@ -238,7 +253,7 @@ export function FileBrowser() {
       const res = await fetch('/api/proxy/storage/explorer/download-zip', {
         method: 'POST',
         headers,
-        body: JSON.stringify({ ids: Array.from(selected.keys()) }),
+        body: JSON.stringify({ ids: selectedRealIds }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const blob = await res.blob();
@@ -256,7 +271,7 @@ export function FileBrowser() {
     } finally {
       setDownloading(false);
     }
-  }, [selected, token, addToast, t]);
+  }, [selectedRealIds, token, addToast, t]);
 
   const handleDownloadOne = React.useCallback(async (entry: StorageExplorerEntry) => {
     try {
@@ -277,41 +292,32 @@ export function FileBrowser() {
     if (selected.size === 0) return;
     setDeleting(true);
     try {
-      // Report the server's actual deletedCount (a cross-org / already-gone id is
+      // One unified delete for the whole selection: real rows (files + manual
+      // folders) go through the bulk endpoint; each selected VIRTUAL workflow
+      // folder deletes every file it groups via its per-ref endpoint. Report the
+      // server's actual combined deletedCount (a cross-org / already-gone id is
       // skipped server-side, so this can be < the number selected).
-      const { deletedCount } = await storageApi.deleteEntries(Array.from(selected.keys()));
+      let totalDeleted = 0;
+      if (selectedRealIds.length > 0) {
+        const { deletedCount } = await storageApi.deleteEntries(selectedRealIds);
+        totalDeleted += deletedCount;
+      }
+      for (const folder of selectedVirtual) {
+        if (!folder.virtualId) continue;
+        const { deletedCount } = await storageApi.deleteVirtualFolder(folder.virtualId);
+        totalDeleted += deletedCount;
+      }
       clearSelection();
       setShowDeleteModal(false);
       refresh();
-      addToast({ type: 'success', title: t('deletedTitle'), message: t('deletedMessage', { count: deletedCount }) });
+      addToast({ type: 'success', title: t('deletedTitle'), message: t('deletedMessage', { count: totalDeleted }) });
     } catch (err) {
       console.error('Delete failed:', err);
       addToast({ type: 'error', title: t('deleteFailedTitle'), message: t('deleteFailedMessage') });
     } finally {
       setDeleting(false);
     }
-  }, [selected, clearSelection, refresh, addToast, t]);
-
-  // ---- Virtual workflow-folder delete (removes every file the folder groups) ----
-  const [virtualFolderToDelete, setVirtualFolderToDelete] = React.useState<StorageExplorerEntry | null>(null);
-  const [deletingFolder, setDeletingFolder] = React.useState(false);
-  const handleConfirmDeleteVirtualFolder = React.useCallback(async () => {
-    const ref = virtualFolderToDelete?.virtualId;
-    if (!ref) return;
-    setDeletingFolder(true);
-    try {
-      const { deletedCount } = await storageApi.deleteVirtualFolder(ref);
-      setVirtualFolderToDelete(null);
-      clearSelection();
-      refresh();
-      addToast({ type: 'success', title: t('folderDeletedTitle'), message: t('folderDeletedMessage', { count: deletedCount }) });
-    } catch (err) {
-      console.error('Virtual folder delete failed:', err);
-      addToast({ type: 'error', title: t('deleteFolderFailedTitle'), message: t('deleteFolderFailedMessage') });
-    } finally {
-      setDeletingFolder(false);
-    }
-  }, [virtualFolderToDelete, clearSelection, refresh, addToast, t]);
+  }, [selected, selectedRealIds, selectedVirtual, clearSelection, refresh, addToast, t]);
 
   // ---- Folders (V313): drag-to-move, create, rename ----
   // dnd-kit: require a small drag distance before a pointer-drag starts so a plain
@@ -322,8 +328,9 @@ export function FileBrowser() {
   // floating DragOverlay thumbnail. Set on drag start, cleared on end/cancel.
   const [activeDragEntry, setActiveDragEntry] = React.useState<StorageExplorerEntry | null>(null);
   const handleDragStart = React.useCallback((event: DragStartEvent) => {
-    setActiveDragEntry(entryById.get(String(event.active.id)) ?? null);
-  }, [entryById]);
+    // Only real rows are draggable, and a real row's entryKey IS its id.
+    setActiveDragEntry(entryByKey.get(String(event.active.id)) ?? null);
+  }, [entryByKey]);
 
   // Move the dragged card(s) into a folder. When the dragged card is part of the
   // current multi-selection, the WHOLE selection moves; otherwise just that card.
@@ -334,8 +341,10 @@ export function FileBrowser() {
     try {
       if (!overId || !activeId || overId === activeId) return;
 
-      const ids = selected.has(activeId) ? Array.from(selected.keys()) : [activeId];
-      // Never move the target folder into itself (defensive - the backend also blocks cycles).
+      // A multi-selection drag moves the REAL selected rows only (virtual workflow
+      // folders have no real row to move). Never move the target folder into
+      // itself (defensive - the backend also blocks cycles).
+      const ids = selected.has(activeId) ? selectedRealIds : [activeId];
       const moveIds = ids.filter((id) => id !== overId);
       if (moveIds.length === 0) return;
 
@@ -356,7 +365,7 @@ export function FileBrowser() {
       // Always drop the overlay thumbnail once the drag resolves (success or no-op).
       setActiveDragEntry(null);
     }
-  }, [selected, clearSelection, refresh, addToast, t]);
+  }, [selected, selectedRealIds, clearSelection, refresh, addToast, t]);
 
   // ---- "Move to…" folder tree picker (complements drag-and-drop) ----
   // Opened from the selection toolbar; loads the full manual-folder tree on open.
@@ -380,13 +389,13 @@ export function FileBrowser() {
   // these as a destination. Files contribute nothing here (a file has no subtree).
   const selectedFolderIds = React.useMemo(() => {
     const ids = new Set<string>();
-    for (const e of selected.values()) if (e.isFolder) ids.add(e.id);
+    for (const e of selected.values()) if (e.isFolder && !isVirtualEntry(e)) ids.add(e.id);
     return ids;
   }, [selected]);
 
   // Commit the chosen destination (a folder id, or null for the top level).
   const handleMoveTo = React.useCallback(async (target: string | null) => {
-    const moveIds = Array.from(selected.keys());
+    const moveIds = selectedRealIds;
     if (moveIds.length === 0) return;
     try {
       const { movedCount, failed } = await storageApi.moveEntries(moveIds, target);
@@ -402,7 +411,7 @@ export function FileBrowser() {
       console.error('Move failed:', err);
       addToast({ type: 'error', title: t('moveFailedTitle'), message: t('moveFailedMessage', { count: moveIds.length }) });
     }
-  }, [selected, clearSelection, refresh, addToast, t]);
+  }, [selectedRealIds, clearSelection, refresh, addToast, t]);
 
   // Create a folder in the current location (root or the open MANUAL folder).
   // A manual folder can only live at root or under another manual folder - never
@@ -434,12 +443,13 @@ export function FileBrowser() {
   // Rename: enabled only when exactly one FOLDER is selected (reuses renameEntry -
   // backend renames file_name, which is the folder's name).
   const singleSelected = selected.size === 1 ? Array.from(selected.values())[0] : null;
-  const canRenameFolder = !!singleSelected?.isFolder;
+  // Rename applies to MANUAL folders only (a virtual workflow folder has no row to rename).
+  const canRenameFolder = !!singleSelected?.isFolder && !isVirtualEntry(singleSelected);
   const [renamingFolder, setRenamingFolder] = React.useState(false);
   const [renameValue, setRenameValue] = React.useState('');
   const [savingRename, setSavingRename] = React.useState(false);
   const startRenameFolder = React.useCallback(() => {
-    if (!singleSelected?.isFolder) return;
+    if (!singleSelected?.isFolder || isVirtualEntry(singleSelected)) return;
     setRenameValue(singleSelected.fileName ?? '');
     setRenamingFolder(true);
   }, [singleSelected]);
@@ -749,9 +759,11 @@ export function FileBrowser() {
             />
           </div>
 
-          {/* Selection toolbar */}
+          {/* Select-all row - always rendered while there are entries, so starting a
+              selection never shifts the layout. The selection ACTIONS live in the
+              floating SelectionActionBar pill at the bottom (same as every table). */}
           {entries.length > 0 && (
-            <div className="flex-shrink-0 flex items-center justify-between gap-2 mb-2">
+            <div className="flex-shrink-0 flex items-center gap-2 mb-2">
               <label className="flex items-center gap-2 text-xs text-theme-secondary cursor-pointer">
                 <input
                   type="checkbox"
@@ -764,55 +776,6 @@ export function FileBrowser() {
                 />
                 {selected.size > 0 ? tExp('selectedCount', { count: selected.size }) : tExp('selectAll')}
               </label>
-              {selected.size > 0 && (
-                <div className="flex items-center gap-1">
-                  {/* Rename - only when exactly one FOLDER is selected (V313). An
-                      inline input replaces the button while editing. */}
-                  {canMutate && canRenameFolder && (
-                    renamingFolder ? (
-                      <input
-                        autoFocus
-                        type="text"
-                        value={renameValue}
-                        placeholder={t('renameFolder')}
-                        onChange={(e) => setRenameValue(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') void handleRenameFolder();
-                          if (e.key === 'Escape') setRenamingFolder(false);
-                        }}
-                        onBlur={() => void handleRenameFolder()}
-                        disabled={savingRename}
-                        className="text-sm h-9 px-2.5 rounded-lg border border-theme bg-theme-secondary text-theme-primary focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]"
-                      />
-                    ) : (
-                      <Button variant="outline" size="default" onClick={startRenameFolder} disabled={deleting || downloading}>
-                        <Pencil className="h-3.5 w-3.5 mr-1.5" />
-                        {t('renameFolder')}
-                      </Button>
-                    )
-                  )}
-                  <Button variant="outline" size="default" onClick={handleBulkDownload} disabled={downloading || deleting}>
-                    {downloading ? <LoadingSpinner size="xs" className="mr-1.5" /> : <Download className="h-3.5 w-3.5 mr-1.5" />}
-                    {tExp('downloadSelected')}
-                  </Button>
-                  {/* Move to… - folder tree picker (complements drag-and-drop). */}
-                  {canMutate && (
-                    <Button variant="outline" size="default" onClick={() => void openMoveModal()} disabled={deleting || downloading}>
-                      <FolderInput className="h-3.5 w-3.5 mr-1.5" />
-                      {t('moveTo')}
-                    </Button>
-                  )}
-                  {canMutate && (
-                    <Button variant="destructive" size="default" onClick={() => setShowDeleteModal(true)} disabled={deleting || downloading}>
-                      <Trash2 className="h-3.5 w-3.5 mr-1.5" />
-                      {tExp('deleteSelected')}
-                    </Button>
-                  )}
-                  <Button variant="ghost" size="default" onClick={clearSelection}>
-                    {tCommon('clearSelection')}
-                  </Button>
-                </div>
-              )}
             </div>
           )}
 
@@ -876,7 +839,6 @@ export function FileBrowser() {
                   enableFolders
                   tFiles={t}
                   onOpenFolder={enterFolder}
-                  onDeleteVirtualFolder={canMutate ? setVirtualFolderToDelete : undefined}
                   onOpenFile={setDetailEntry}
                   onDownloadFile={handleDownloadOne}
                   downloadLabel={tExp('download')}
@@ -919,7 +881,6 @@ export function FileBrowser() {
                       const name = entry.isFolder
                         ? folderLabel(entry, t)
                         : (entry.fileName || entry.contentType || 'Unnamed');
-                      const virtual = isVirtualEntry(entry);
                       return (
                         <tr
                           key={entryKey(entry)}
@@ -927,15 +888,14 @@ export function FileBrowser() {
                           onClick={() => (entry.isFolder ? enterFolder(entry) : setDetailEntry(entry))}
                         >
                           <td className="px-3 py-2 text-center" onClick={(e) => e.stopPropagation()}>
-                            {/* Virtual workflow folders aren't selectable - empty cell. */}
-                            {!virtual && (
-                              <input
-                                type="checkbox"
-                                checked={selectedIds.has(entry.id)}
-                                onChange={() => toggleSelection(entry.id)}
-                                className="rounded border-slate-300 dark:border-slate-600"
-                              />
-                            )}
+                            {/* Every row is selectable - virtual workflow folders are keyed
+                                by their virtualId and join the same bulk selection. */}
+                            <input
+                              type="checkbox"
+                              checked={selectedIds.has(entryKey(entry))}
+                              onChange={() => toggleSelection(entryKey(entry))}
+                              className="rounded border-slate-300 dark:border-slate-600"
+                            />
                           </td>
                           <td className="px-3 py-2 min-w-[200px] max-w-[420px]">
                             <div className="flex items-center gap-2 min-w-0">
@@ -1010,19 +970,60 @@ export function FileBrowser() {
         isConfirming={deleting}
       />
 
-      <BulkDeleteModal
-        isOpen={!!virtualFolderToDelete}
-        title={t('deleteFolderConfirmTitle')}
-        message={t('deleteFolderConfirmMessage', {
-          name: virtualFolderToDelete ? folderLabel(virtualFolderToDelete, t) : '',
-          count: virtualFolderToDelete?.childCount ?? 0,
-        })}
-        cancelLabel={tExp('cancel')}
-        confirmLabel={t('deleteFolder')}
-        onCancel={() => setVirtualFolderToDelete(null)}
-        onConfirm={handleConfirmDeleteVirtualFolder}
-        isConfirming={deletingFolder}
-      />
+      {/* Floating bulk-selection pill - same bar as every table page. Anchored to
+          the app <main> (nearest positioned ancestor), so it floats over the list
+          without shifting the layout. */}
+      {selected.size > 0 && (
+        <SelectionActionBar count={selected.size} onClear={clearSelection}>
+          {canMutate && canRenameFolder && (
+            renamingFolder ? (
+              <input
+                autoFocus
+                type="text"
+                value={renameValue}
+                placeholder={t('renameFolder')}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void handleRenameFolder();
+                  if (e.key === 'Escape') setRenamingFolder(false);
+                }}
+                onBlur={() => void handleRenameFolder()}
+                disabled={savingRename}
+                className="h-7 w-44 px-2 rounded-md bg-white/10 dark:bg-black/10 text-sm text-white dark:text-black placeholder:text-white/50 dark:placeholder:text-black/50 focus:outline-none focus:ring-1 focus:ring-white/40 dark:focus:ring-black/40"
+              />
+            ) : (
+              <BulkBarButton onClick={startRenameFolder} disabled={deleting || downloading}>
+                <Pencil className="h-3.5 w-3.5" />
+                {t('renameFolder')}
+              </BulkBarButton>
+            )
+          )}
+          <BulkBarButton
+            onClick={handleBulkDownload}
+            disabled={downloading || deleting || hasVirtualSelected || selectedRealIds.length === 0}
+            title={hasVirtualSelected ? t('virtualBulkExcluded') : undefined}
+          >
+            {downloading ? <LoadingSpinner size="xs" /> : <Download className="h-3.5 w-3.5" />}
+            {tExp('downloadSelected')}
+          </BulkBarButton>
+          {canMutate && (
+            <BulkBarButton
+              onClick={() => void openMoveModal()}
+              disabled={deleting || downloading || hasVirtualSelected || selectedRealIds.length === 0}
+              title={hasVirtualSelected ? t('virtualBulkExcluded') : undefined}
+            >
+              <FolderInput className="h-3.5 w-3.5" />
+              {t('moveTo')}
+            </BulkBarButton>
+          )}
+          {canMutate && (
+            <BulkBarButton variant="danger" onClick={() => setShowDeleteModal(true)} disabled={deleting || downloading}>
+              <Trash2 className="h-3.5 w-3.5" />
+              {tExp('deleteSelected')}
+            </BulkBarButton>
+          )}
+        </SelectionActionBar>
+      )}
 
       <input
         ref={fileInputRef}

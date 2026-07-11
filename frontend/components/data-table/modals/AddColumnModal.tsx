@@ -178,7 +178,7 @@ export const DateFormatConfig: React.FC<DateFormatConfigProps> = ({ dateFormat, 
     <select
       value={dateFormat}
       onChange={(e) => onChange(e.target.value as 'date' | 'datetime' | 'time')}
-      className="w-48 rounded-md border border-theme bg-theme-primary px-2 py-1.5 text-sm text-theme-primary"
+      className="w-48 h-9 rounded-md border border-theme bg-theme-primary px-2 text-sm text-theme-primary"
     >
       <option value="date">Date</option>
       <option value="datetime">Date + Time</option>
@@ -206,7 +206,7 @@ export const NumberFormatConfig: React.FC<NumberFormatConfigProps> = ({ format, 
       <select
         value={format}
         onChange={(e) => onFormatChange(e.target.value as NumberFormatType)}
-        className="w-48 rounded-md border border-theme bg-theme-primary px-2 py-1.5 text-sm text-theme-primary"
+        className="w-48 h-9 rounded-md border border-theme bg-theme-primary px-2 text-sm text-theme-primary"
       >
         <option value="plain">Plain number</option>
         <option value="currency">Currency</option>
@@ -595,7 +595,7 @@ export function AddColumnModal({
                     <select
                       value={vectorDimension}
                       onChange={(e) => setVectorDimension(Number(e.target.value))}
-                      className="w-full rounded-md border border-theme bg-theme-primary px-3 py-2 text-sm"
+                      className="w-full h-9 rounded-md border border-theme bg-theme-primary px-3 text-sm"
                     >
                       <option value={384}>384 (MiniLM)</option>
                       <option value={768}>768 (BERT, E5-base)</option>
@@ -609,7 +609,7 @@ export function AddColumnModal({
                     <select
                       value={vectorMetric}
                       onChange={(e) => setVectorMetric(e.target.value as 'cosine' | 'l2' | 'dot')}
-                      className="w-full rounded-md border border-theme bg-theme-primary px-3 py-2 text-sm"
+                      className="w-full h-9 rounded-md border border-theme bg-theme-primary px-3 text-sm"
                     >
                       <option value="cosine">Cosine</option>
                       <option value="l2">L2 (Euclidean)</option>

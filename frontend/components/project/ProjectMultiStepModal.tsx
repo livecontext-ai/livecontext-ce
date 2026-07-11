@@ -527,7 +527,7 @@ const ResourceSection: React.FC<ResourceSectionProps> = ({
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder={t('searchResources')}
-                  className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-black/10 dark:border-white/10 bg-[var(--bg-primary)] text-theme-primary focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]/20"
+                  className="w-full pl-9 pr-3 h-9 text-sm rounded-lg border border-black/10 dark:border-white/10 bg-[var(--bg-primary)] text-theme-primary focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]/20"
                   onClick={(e) => e.stopPropagation()}
                 />
               </div>

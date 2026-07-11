@@ -86,6 +86,18 @@ describe('SidePanel dock position', () => {
     expect(box.style.width).toBe('');
   });
 
+  it('bottom-full: renders the same bottom box-model as bottom (full width, top border)', () => {
+    window.localStorage.setItem('lc.sidePanel.position:personal', 'bottom-full');
+    const { container } = renderPanel();
+    const box = panelBox(container);
+    expect(box).toBeTruthy();
+    expect(box.classList.contains('w-full')).toBe(true);
+    expect(box.classList.contains('border-t')).toBe(true);
+    expect(box.classList.contains('border-l')).toBe(false);
+    expect(box.style.height).not.toBe('');
+    expect(box.style.width).toBe('');
+  });
+
   it('mobile: keeps the fixed right overlay even when the preference is bottom', () => {
     mobile.value = true;
     window.localStorage.setItem('lc.sidePanel.position:personal', 'bottom');

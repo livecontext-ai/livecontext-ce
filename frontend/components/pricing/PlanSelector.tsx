@@ -96,7 +96,7 @@ const PlanSelector = React.memo(function PlanSelector({
     (currentPlan === plan.id.toUpperCase() && currentCadence === billingCycle && plan.id !== 'free' && plan.id !== 'enterprise');
 
   return (
-    <div className={`relative p-4 border border-black/10 dark:border-white/20 rounded-3xl transition-all duration-300 ${plan.disabled ? 'pointer-events-none' : ''} ${(currentPlan === 'FREE' && plan.popular) ||
+    <div className={`relative p-4 border border-black/10 dark:border-white/20 rounded-2xl transition-all duration-200 ${plan.disabled ? 'pointer-events-none' : ''} ${(currentPlan === 'FREE' && plan.popular) ||
       (currentPlan === plan.id.toUpperCase() && currentCadence === billingCycle && plan.id !== 'free') ||
       ((currentPlan.startsWith('ENTERPRISE_') || currentPlan === 'ENTERPRISE') && plan.id === 'enterprise' && currentCadence === billingCycle)
       ? '!border-2 !border-black dark:!border-white bg-transparent'

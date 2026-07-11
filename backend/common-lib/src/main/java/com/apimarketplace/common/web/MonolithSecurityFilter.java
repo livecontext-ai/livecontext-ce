@@ -49,6 +49,13 @@ public class MonolithSecurityFilter implements Filter {
     private static final String API_KEY_HEADER = "X-API-Key";
     /** Plaintext key prefix minted by auth-service's ApiKeyService ({@code lc_live_<64 hex>}). */
     private static final String API_KEY_PREFIX = "lc_live_";
+    /**
+     * Comma-joined MCP tool names the authenticating API key may call. Injected ONLY
+     * when a SCOPED multi API key authenticated the request (mirror of the cloud
+     * gateway's {@code X-Api-Key-Scopes} injection); absent for JWT auth and
+     * legacy/full-access keys. Untrusted from inbound - in the trusted-header strip set.
+     */
+    public static final String API_KEY_SCOPES_HEADER = "X-Api-Key-Scopes";
     private static final String ACTIVE_ORG_ID_HEADER = "X-Active-Organization-ID";
     private static final String ORGANIZATION_ID_HEADER = "X-Organization-ID";
     private static final String ORGANIZATION_ROLE_HEADER = "X-Organization-Role";
@@ -70,6 +77,7 @@ public class MonolithSecurityFilter implements Filter {
             "X-Provider-ID",
             "X-User-Version",
             "X-Remaining-Credits",
+            API_KEY_SCOPES_HEADER,
             "X-Gateway-Secret",
             "X-Gateway-Timestamp",
             SHARE_CONTEXT_HEADER,
@@ -81,7 +89,7 @@ public class MonolithSecurityFilter implements Filter {
     private final Supplier<Key> verificationKeySupplier;
     private final List<String> publicPaths;
     private final Function<String, ShareTokenContext> shareTokenResolver;
-    private final Function<String, JwtClaims> apiKeyResolver;
+    private final Function<String, ApiKeyAuth> apiKeyResolver;
     private final LongSupplier nowMillis;
 
     /**
@@ -101,13 +109,14 @@ public class MonolithSecurityFilter implements Filter {
     /**
      * @param apiKeyResolver resolves a plaintext {@code lc_live_} API key (from the X-API-Key
      *                       header or an {@code Authorization: Bearer lc_live_...} value) to the
-     *                       owning user's claims, or {@code null} when the key is invalid.
-     *                       Mirrors the cloud gateway's API-key authentication path.
+     *                       owning user's claims plus the key's optional tool scopes, or
+     *                       {@code null} when the key is invalid. Mirrors the cloud gateway's
+     *                       API-key authentication path.
      */
     public MonolithSecurityFilter(Supplier<Key> verificationKeySupplier,
                                   List<String> publicPaths,
                                   Function<String, ShareTokenContext> shareTokenResolver,
-                                  Function<String, JwtClaims> apiKeyResolver) {
+                                  Function<String, ApiKeyAuth> apiKeyResolver) {
         this(verificationKeySupplier, publicPaths, shareTokenResolver, apiKeyResolver,
                 System::currentTimeMillis);
     }
@@ -128,7 +137,7 @@ public class MonolithSecurityFilter implements Filter {
     MonolithSecurityFilter(Supplier<Key> verificationKeySupplier,
                            List<String> publicPaths,
                            Function<String, ShareTokenContext> shareTokenResolver,
-                           Function<String, JwtClaims> apiKeyResolver,
+                           Function<String, ApiKeyAuth> apiKeyResolver,
                            LongSupplier nowMillis) {
         this.verificationKeySupplier = verificationKeySupplier;
         this.publicPaths = publicPaths != null ? publicPaths : List.of();
@@ -221,8 +230,8 @@ public class MonolithSecurityFilter implements Filter {
         // would otherwise 401 as "invalid token" on protected paths.
         String apiKey = extractApiKey(trustedRequest, authHeader);
         if (apiKey != null) {
-            JwtClaims apiKeyClaims = apiKeyResolver != null ? apiKeyResolver.apply(apiKey) : null;
-            if (apiKeyClaims == null) {
+            ApiKeyAuth apiKeyAuth = apiKeyResolver != null ? apiKeyResolver.apply(apiKey) : null;
+            if (apiKeyAuth == null || apiKeyAuth.claims() == null) {
                 if (publicPath) {
                     // Public routes never 401: an unresolvable key falls back to anonymous,
                     // matching the JWT handling below.
@@ -234,7 +243,21 @@ public class MonolithSecurityFilter implements Filter {
                 httpResponse.getWriter().write("{\"error\":\"Unauthorized\",\"message\":\"Invalid or unknown API key.\"}");
                 return;
             }
-            doFilterWithBoundRequest(new AuthHeadersRequestWrapper(trustedRequest, apiKeyClaims, claimedActiveOrgId),
+            // SECURITY: a SCOPED API key (scopes != null) is confined to the canonical
+            // MCP streamable endpoint (/mcp), mirroring the cloud gateway. Without this,
+            // a scoped key authenticates the ENTIRE API surface: it could mint itself a
+            // full-access key via POST /api/auth/api-keys (privilege escalation) or
+            // execute out-of-scope tools through the legacy /api/mcp/* REST surface.
+            // Full-access keys (scopes == null) keep working everywhere.
+            if (apiKeyAuth.scopes() != null && !isMcpStreamablePath(path)) {
+                log.debug("Scoped API key rejected on non-MCP path {}", path);
+                httpResponse.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                httpResponse.setContentType("application/json");
+                httpResponse.getWriter().write("{\"error\":\"scope_forbidden\",\"message\":\"This API key is limited to the MCP endpoint (/mcp).\"}");
+                return;
+            }
+            doFilterWithBoundRequest(new AuthHeadersRequestWrapper(trustedRequest, apiKeyAuth.claims(),
+                            claimedActiveOrgId, apiKeyAuth.scopes()),
                     response, chain);
             return;
         }
@@ -355,6 +378,16 @@ public class MonolithSecurityFilter implements Filter {
             return headerKey.trim();
         }
         return bearerApiKey;
+    }
+
+    /**
+     * Canonical MCP streamable endpoint: {@code /mcp} exactly, or any sub-path
+     * {@code /mcp/**}. Deliberately EXCLUDES the legacy REST surfaces
+     * {@code /api/mcp/**} and {@code /api/mcp-server/**} - a scoped key must not
+     * reach them. Mirrors the cloud gateway's {@code AuthenticationFilter}.
+     */
+    private static boolean isMcpStreamablePath(String path) {
+        return path.equals("/mcp") || path.startsWith("/mcp/");
     }
 
     private String extractShareToken(String authHeader) {
@@ -749,6 +782,19 @@ public class MonolithSecurityFilter implements Filter {
 
     public record OrgMembershipClaim(String orgId, String role, boolean personal, boolean paused) {}
 
+    /**
+     * Result of API-key resolution: the owner's identity claims plus the key's optional
+     * tool scopes. {@code scopes} is {@code null} for legacy/full-access keys (no
+     * {@code X-Api-Key-Scopes} header injected) and a non-empty list for scoped multi
+     * keys. Keeps {@link JwtClaims} untouched for the JWT paths.
+     */
+    public record ApiKeyAuth(JwtClaims claims, List<String> scopes) {
+
+        public ApiKeyAuth {
+            scopes = scopes != null ? List.copyOf(scopes) : null;
+        }
+    }
+
     record OrgContext(String organizationId, String organizationRole) {}
 
     public record ShareTokenContext(String userId, String organizationId, String resourceType,
@@ -839,8 +885,22 @@ public class MonolithSecurityFilter implements Filter {
         private final Map<String, String> injectedHeaders;
 
         AuthHeadersRequestWrapper(HttpServletRequest request, JwtClaims claims, String claimedActiveOrgId) {
+            this(request, claims, claimedActiveOrgId, null);
+        }
+
+        /**
+         * @param apiKeyScopes tool scopes of the authenticating API key; non-null only for
+         *                     scoped multi keys - injected as {@code X-Api-Key-Scopes}
+         *                     (comma-joined). Null (JWT auth, legacy/full-access key)
+         *                     injects nothing: absence of the header means full access.
+         */
+        AuthHeadersRequestWrapper(HttpServletRequest request, JwtClaims claims, String claimedActiveOrgId,
+                                  List<String> apiKeyScopes) {
             super(request);
             this.injectedHeaders = new LinkedHashMap<>();
+            if (apiKeyScopes != null) {
+                injectedHeaders.put(API_KEY_SCOPES_HEADER, String.join(",", apiKeyScopes));
+            }
             injectedHeaders.put("X-User-ID", claims.userId());
             injectedHeaders.put("X-Authenticated", "true");
             if (claims.providerId() != null) {

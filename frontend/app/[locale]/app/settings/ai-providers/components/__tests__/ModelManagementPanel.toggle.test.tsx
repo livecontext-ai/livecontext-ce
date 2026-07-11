@@ -70,13 +70,13 @@ describe('ModelManagementPanel - optimistic enable toggle (no visual reload)', (
     const toggle = await screen.findByTestId('model-toggle-openai-gpt-5');
     // Initial load = exactly one fetch.
     await waitFor(() => expect(mocks.getEffectiveModels).toHaveBeenCalledTimes(1));
-    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    expect(toggle).toHaveAttribute('aria-checked', 'true');
 
     fireEvent.click(toggle);
 
     // Optimistic flip is visible immediately + persisted as enabled=false.
     await waitFor(() =>
-      expect(screen.getByTestId('model-toggle-openai-gpt-5')).toHaveAttribute('aria-pressed', 'false'),
+      expect(screen.getByTestId('model-toggle-openai-gpt-5')).toHaveAttribute('aria-checked', 'false'),
     );
     expect(mocks.saveOverride).toHaveBeenCalledWith(
       expect.objectContaining({ provider: 'openai', modelId: 'gpt-5', enabled: false }),
@@ -107,7 +107,7 @@ describe('ModelManagementPanel - optimistic enable toggle (no visual reload)', (
       expect(mocks.setCategoryEnabled).toHaveBeenCalledWith('openai', 'gpt-5', 'browser_agent', false),
     );
     await waitFor(() =>
-      expect(screen.getByTestId('model-toggle-openai-gpt-5')).toHaveAttribute('aria-pressed', 'false'),
+      expect(screen.getByTestId('model-toggle-openai-gpt-5')).toHaveAttribute('aria-checked', 'false'),
     );
     expect(mocks.getEffectiveModels).toHaveBeenCalledTimes(2);
     expect(mocks.saveOverride).not.toHaveBeenCalled();
@@ -125,9 +125,9 @@ describe('ModelManagementPanel - optimistic enable toggle (no visual reload)', (
     fireEvent.click(toggle);
 
     await waitFor(() => expect(mocks.saveOverride).toHaveBeenCalledTimes(1));
-    // Rolled back to enabled (aria-pressed true) after the rejected save.
+    // Rolled back to enabled (aria-checked true) after the rejected save.
     await waitFor(() =>
-      expect(screen.getByTestId('model-toggle-openai-gpt-5')).toHaveAttribute('aria-pressed', 'true'),
+      expect(screen.getByTestId('model-toggle-openai-gpt-5')).toHaveAttribute('aria-checked', 'true'),
     );
     // Never refetched, even on the error path.
     expect(mocks.getEffectiveModels).toHaveBeenCalledTimes(1);

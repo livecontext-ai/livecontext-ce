@@ -336,6 +336,9 @@ public class HttpExecutionService {
             url = processPathParameters(url, tool, filteredParameters);
             log.info("[HttpExecutionService.executeHttpCall] Tool: {}, URL after path parameters: {}", tool.getId(), url);
 
+            // Dynamic-URL endpoints first (placeholder reject + host allow-list, no DNS toward
+            // non-allowed hosts), then the generic SSRF validation for every URL.
+            enforceDynamicUrlConstraints(tool, url);
             // SSRF protection: validate after path parameter substitution so {placeholders} don't break URI parsing
             UrlSafetyValidator.validateUrl(url);
 
@@ -435,6 +438,9 @@ public class HttpExecutionService {
             String url = buildFullUrl(api, tool);
             url = processPathParameters(url, tool, filteredParameters);
 
+            // Dynamic-URL endpoints first (placeholder reject + host allow-list, no DNS toward
+            // non-allowed hosts), then the generic SSRF validation for every URL.
+            enforceDynamicUrlConstraints(tool, url);
             // SSRF protection: validate after path parameter substitution so {placeholders} don't break URI parsing
             UrlSafetyValidator.validateUrl(url);
 
@@ -1796,6 +1802,17 @@ public class HttpExecutionService {
             return endpoint;
         }
 
+        // Dynamic-URL escape hatch: when the endpoint path BEGINS with a {placeholder}, the
+        // full request URL comes from a runtime parameter (a provider-issued signed URL that a
+        // prior call returned) - prepending the API baseUrl would corrupt it into
+        // "https://base/https://provider/...". Return the template verbatim; the placeholder is
+        // substituted by processPathParameters (declare extras.encoding="verbatim" on the param
+        // so its query string survives) and the result is SSRF-validated like any other URL.
+        // Users: TikTok Content Posting upload_url, WhatsApp Cloud media_url.
+        if (endpoint != null && endpoint.startsWith("{")) {
+            return endpoint;
+        }
+
         String fullUrl;
         if (baseUrl.endsWith("/") && endpoint.startsWith("/")) {
             fullUrl = baseUrl + endpoint.substring(1);
@@ -1806,6 +1823,90 @@ public class HttpExecutionService {
         }
 
         return fullUrl;
+    }
+
+    /**
+     * Security constraints for dynamic-URL endpoints - endpoints whose path template BEGINS
+     * with a {placeholder} (see the dynamic-URL escape hatch in {@link #buildFullUrl}), where a
+     * RUNTIME parameter chooses the request host. Three checks, all fail-closed:
+     *
+     * <ol>
+     *   <li><b>No residual placeholders.</b> The substituted URL must be a complete literal.
+     *       A value like {@code https://{api_key}.evil.com/} would pass a naive SSRF check
+     *       (the validator skips DNS on templated hosts) and then have the user's credential
+     *       substituted into it by {@code replaceUrlTemplateVariables} downstream - a
+     *       credential-exfiltration primitive. Rejecting any remaining '{' closes that hole and
+     *       doubles as a clear error when the URL parameter was simply not provided.</li>
+     *   <li><b>Host allow-list.</b> The endpoint MUST declare
+     *       {@code execution.request.allowedUrlHostSuffixes}; the URL's host must equal one of
+     *       the suffixes or end with "." + suffix. Provider-signed URLs live on known provider
+     *       hosts (TikTok {@code *.tiktokapis.com}, WhatsApp {@code lookaside.fbsbx.com}) -
+     *       any other destination would receive the user's injected credential, so an endpoint
+     *       without a declared allow-list is refused outright rather than left open.
+     *       Checked BEFORE DNS resolution so attacker-chosen domains are never even resolved.</li>
+     *   <li><b>SSRF validation</b> of the final URL (private/loopback/link-local rejection),
+     *       same validator as the legacy path.</li>
+     * </ol>
+     *
+     * <p>No-op for fixed-host endpoints (template does not start with '{'): their host is the
+     * registered, trusted baseUrl and existing behaviour must not change.
+     *
+     * @throws IllegalArgumentException when any constraint fails (callers surface it as a
+     *         failed tool result; no outbound request is made)
+     */
+    void enforceDynamicUrlConstraints(ApiToolEntity tool, String url) {
+        String endpointTemplate = tool.getEndpoint();
+        if (endpointTemplate == null || !endpointTemplate.startsWith("{")) {
+            return;
+        }
+        if (url == null || url.contains("{")) {
+            throw new IllegalArgumentException(
+                "Dynamic-URL endpoint " + endpointTemplate + " requires its URL parameter to be a "
+                + "complete literal URL from the provider's init/lookup response - got unresolved "
+                + "placeholders: " + url);
+        }
+        List<String> suffixes = readAllowedUrlHostSuffixes(tool);
+        if (suffixes.isEmpty()) {
+            throw new IllegalArgumentException(
+                "Dynamic-URL endpoint " + endpointTemplate + " declares no "
+                + "execution.request.allowedUrlHostSuffixes - refusing an open-destination request");
+        }
+        String host;
+        try {
+            host = java.net.URI.create(url.trim()).getHost();
+        } catch (Exception e) {
+            host = null;
+        }
+        if (host == null || host.isBlank()) {
+            throw new IllegalArgumentException("Dynamic URL has no parseable host: " + url);
+        }
+        String lowerHost = host.toLowerCase(Locale.ROOT);
+        boolean allowed = suffixes.stream()
+            .map(s -> s.toLowerCase(Locale.ROOT))
+            .anyMatch(s -> lowerHost.equals(s) || lowerHost.endsWith("." + s));
+        if (!allowed) {
+            throw new IllegalArgumentException(
+                "Dynamic URL host '" + host + "' is not among the endpoint's allowed hosts "
+                + suffixes + " - refusing the request");
+        }
+        UrlSafetyValidator.validateUrl(url);
+    }
+
+    /** Read execution.request.allowedUrlHostSuffixes off the tool's execution spec (empty when absent). */
+    private List<String> readAllowedUrlHostSuffixes(ApiToolEntity tool) {
+        JsonNode spec = parseExecutionSpec(tool.getExecutionSpec());
+        JsonNode arr = spec.path("request").path("allowedUrlHostSuffixes");
+        if (arr == null || !arr.isArray()) {
+            return List.of();
+        }
+        List<String> out = new ArrayList<>();
+        for (JsonNode n : arr) {
+            String s = n.asText("").trim();
+            if (!s.isEmpty()) {
+                out.add(s);
+            }
+        }
+        return out;
     }
 
     /**
@@ -1917,17 +2018,29 @@ public class HttpExecutionService {
                 // LinkedIn {entityUrn}. Without it the raw "https://site/" splits the
                 // path and the upstream API 404s. Declared per-param in the JSON
                 // (extras.encoding) so it is data-driven, never hard-coded per API.
+                //
+                // VERBATIM (opt-in) applies NO encoding at all. Required when the
+                // {placeholder} IS the entire request URL (dynamic-URL endpoints whose
+                // path starts with the placeholder - TikTok upload_url, WhatsApp
+                // media_url): those provider-issued signed URLs carry their own query
+                // string, and conservative's '?' → %3F would corrupt it. Only sensible
+                // for full-URL params; the substituted result still passes
+                // UrlSafetyValidator before any request is sent.
                 for (String paramName : expectedPathParams) {
                     if (availableParams.containsKey(paramName)) {
                         String rawValue = availableParams.get(paramName);
                         ParameterMetadata meta = paramMetadata.get(paramName);
-                        boolean strict = meta != null && "strict".equalsIgnoreCase(meta.encoding());
-                        String value = strict
-                            ? encodePathValueStrict(rawValue)
-                            : encodePathValueConservative(rawValue);
+                        String encoding = meta != null && meta.encoding() != null
+                            ? meta.encoding().toLowerCase(java.util.Locale.ROOT)
+                            : "";
+                        String value = switch (encoding) {
+                            case "strict" -> encodePathValueStrict(rawValue);
+                            case "verbatim" -> rawValue;
+                            default -> encodePathValueConservative(rawValue);
+                        };
                         url = url.replace("{" + paramName + "}", value);
                         log.info("[HttpExecutionService.processPathParameters] Tool: {}, Replaced {{{}}} with {} (encoding={})",
-                                tool.getId(), paramName, value, strict ? "strict" : "conservative");
+                                tool.getId(), paramName, value, encoding.isEmpty() ? "conservative" : encoding);
                     } else {
                         log.warn("[HttpExecutionService.processPathParameters] Tool: {}, Missing path parameter: {} in available params: {}",
                                 tool.getId(), paramName, availableParams.keySet());
@@ -2457,6 +2570,13 @@ public class HttpExecutionService {
             // 2. Build URL - same helpers as legacy path
             String url = buildFullUrl(api, tool);
             url = processPathParameters(url, tool, filteredParameters);
+
+            // Dynamic-URL endpoints ({upload_url}, {media_url}) let a runtime parameter choose
+            // the request host - enforce their dedicated constraints (no residual placeholders,
+            // declared host allow-list, SSRF check). No-op for fixed-host endpoints, so every
+            // existing typed tool keeps its prior behaviour.
+            enforceDynamicUrlConstraints(tool, url);
+
             url = processQueryParameters(url, tool, filteredParameters);
 
             // 3. Credential injection (URL/header/query) - V103 variant-aware.

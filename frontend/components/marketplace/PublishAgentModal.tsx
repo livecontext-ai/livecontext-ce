@@ -129,12 +129,12 @@ export default function PublishAgentModal({
   if (state === 'publishing') {
     return createPortal(
       <div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-[9999] flex items-center justify-center p-4" onClick={handleClose}>
-        <div className="max-w-md w-full bg-theme-primary rounded-3xl shadow-2xl p-8 animate-in fade-in-0 zoom-in-95 duration-300 border border-theme" onClick={(e) => e.stopPropagation()}>
+        <div className="max-w-md w-full bg-theme-primary rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.16)] p-6 animate-in fade-in-0 zoom-in-95 duration-200 border border-theme max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
           <div className="text-center">
             <div className="w-16 h-16 bg-theme-secondary rounded-full flex items-center justify-center mx-auto mb-5">
               <LoadingSpinner size="md" />
             </div>
-            <h2 className="text-2xl font-semibold text-theme-primary mb-2">{t('publishing')}</h2>
+            <h2 className="text-xl font-semibold text-theme-primary mb-2">{t('publishing')}</h2>
             <p className="text-sm text-theme-secondary">{t('publishingMessage', { type: 'AGENT' })}</p>
           </div>
         </div>
@@ -147,12 +147,12 @@ export default function PublishAgentModal({
   if (state === 'success') {
     return createPortal(
       <div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-[9999] flex items-center justify-center p-4" onClick={handleClose}>
-        <div className="max-w-md w-full bg-theme-primary rounded-3xl shadow-2xl p-8 animate-in fade-in-0 zoom-in-95 duration-300 border border-theme" onClick={(e) => e.stopPropagation()}>
+        <div className="max-w-md w-full bg-theme-primary rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.16)] p-6 animate-in fade-in-0 zoom-in-95 duration-200 border border-theme max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
           <div className="text-center">
             <div className="w-16 h-16 bg-theme-secondary rounded-full flex items-center justify-center mx-auto mb-5">
               <CheckCircle className="h-8 w-8 text-theme-primary" />
             </div>
-            <h2 className="text-2xl font-semibold text-theme-primary mb-2">{t('publishSuccess')}</h2>
+            <h2 className="text-xl font-semibold text-theme-primary mb-2">{t('publishSuccess')}</h2>
             <p className="text-sm text-theme-secondary mb-6">{t('publishSuccessMessage', { type: 'AGENT' })}</p>
             <Button onClick={handleClose} className="w-full">{t('done')}</Button>
           </div>
@@ -166,12 +166,12 @@ export default function PublishAgentModal({
   if (state === 'error') {
     return createPortal(
       <div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-[9999] flex items-center justify-center p-4" onClick={handleClose}>
-        <div className="max-w-md w-full bg-theme-primary rounded-3xl shadow-2xl p-8 animate-in fade-in-0 zoom-in-95 duration-300 border border-theme" onClick={(e) => e.stopPropagation()}>
+        <div className="max-w-md w-full bg-theme-primary rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.16)] p-6 animate-in fade-in-0 zoom-in-95 duration-200 border border-theme max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
           <div className="text-center">
             <div className="w-16 h-16 bg-theme-secondary rounded-full flex items-center justify-center mx-auto mb-5">
               <AlertTriangle className="h-8 w-8 text-theme-primary" />
             </div>
-            <h2 className="text-2xl font-semibold text-theme-primary mb-2">{t('publishError')}</h2>
+            <h2 className="text-xl font-semibold text-theme-primary mb-2">{t('publishError')}</h2>
             <p className="text-sm text-theme-secondary mb-6">{error}</p>
             <div className="flex gap-3">
               <Button onClick={handleClose} variant="outline" className="flex-1">{t('close')}</Button>
@@ -187,7 +187,7 @@ export default function PublishAgentModal({
   // Form state (default)
   return createPortal(
     <div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-[9999] flex items-center justify-center p-4" onClick={handleClose}>
-      <div className="max-w-md w-full bg-theme-primary rounded-3xl shadow-2xl p-8 animate-in fade-in-0 zoom-in-95 duration-300 border border-theme" onClick={(e) => e.stopPropagation()}>
+      <div className="max-w-md w-full bg-theme-primary rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.16)] p-6 animate-in fade-in-0 zoom-in-95 duration-200 border border-theme" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className="flex items-start gap-3 mb-5">
           <div className="w-10 h-10 rounded-full bg-theme-secondary flex items-center justify-center shrink-0">
@@ -219,7 +219,7 @@ export default function PublishAgentModal({
                 <select
                   value={interfaceId}
                   onChange={(e) => setInterfaceId(e.target.value)}
-                  className="w-full rounded-xl border border-theme bg-theme-primary px-4 py-3 text-sm text-theme-primary focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]"
+                  className="w-full h-9 rounded-xl border border-theme bg-theme-primary px-4 text-sm text-theme-primary focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]"
                 >
                   {interfaces.map((iface) => (
                     <option key={iface.id} value={iface.id}>{iface.name}</option>

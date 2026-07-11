@@ -91,11 +91,11 @@ export default function BundlesSection() {
       <div className="flex max-w-full overflow-x-auto scrollbar-hide">
         <div
           ref={tabContainerRef}
-          className="relative mx-auto inline-flex items-center gap-1 p-1.5 bg-theme-tertiary rounded-full w-max"
+          className="relative mx-auto inline-flex items-center gap-1 p-1.5 bg-theme-tertiary rounded-2xl w-max"
         >
           {/* Slider highlight */}
           <div
-            className="absolute top-1.5 bottom-1.5 rounded-full bg-[var(--bg-primary)] transition-all duration-300 ease-out"
+            className="absolute top-1.5 bottom-1.5 rounded-xl bg-[var(--bg-primary)] transition-all duration-200 ease-out"
             style={{
               left: sliderStyle.left,
               width: sliderStyle.width,
@@ -110,7 +110,7 @@ export default function BundlesSection() {
               onClick={() => setSection(tab.id)}
               title={tab.label}
               className={cn(
-                "relative z-10 flex items-center gap-2 px-6 py-2 rounded-full text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 outline-none",
+                "relative z-10 flex h-9 items-center gap-2 px-6 rounded-xl text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 outline-none",
                 section === tab.id
                   ? "text-[var(--text-primary)]"
                   : "text-theme-secondary hover:text-theme-primary hover:bg-[var(--bg-primary)]/50"

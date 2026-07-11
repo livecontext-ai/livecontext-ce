@@ -7,6 +7,7 @@ import { useCurrentView } from '@/hooks/useCurrentView';
 import { useUnifiedAppSafe } from '@/contexts/UnifiedAppContext';
 import { useBreadcrumbs } from '@/hooks/useBreadcrumbs';
 import { ChatHeader } from '@/components/chat/ChatHeader';
+import { GlobalSearchBar } from '@/components/search/GlobalSearchBar';
 import { useVisibleModels, AIModel, SelectedModel, EMPTY_SELECTED_MODEL, selectedModelFromAIModel, modelMatches, selectedModelEquals, getEffectiveDefaultSelectedModel } from '@/hooks/useModels';
 import { useSafeNavigate } from '@/contexts/NavigationGuardContext';
 import { useSidePanelSafe, stripLocale } from '@/contexts/SidePanelContext';
@@ -673,6 +674,8 @@ export function AppHeader() {
       />
     )}
     <ChatHeader
+      searchSlot={<GlobalSearchBar />}
+      mobileSearchSlot={<GlobalSearchBar variant="compact" />}
       selectedModel={appState.selectedModel}
       onModelChange={setSelectedModel}
       reasoningEffort={appState.reasoningEffort}
@@ -737,7 +740,8 @@ export function AppHeader() {
       agentModelProvider={headerAgentModelProvider}
       // Conversation Activity toggle - only on a real conversation page (/app/c/<id>)
       showActivityToggle={isConversationPage}
-      // Right panel props - Sparkles button always visible; behavior varies by page type
+      // Right panel props - dock buttons always visible; behavior varies by page type
+      isSidePanelOpen={sidePanel?.isOpen ?? false}
       showAgentConfigPanel={isConversationPage ? !!isAgentConfigOpen : (sidePanel?.isOpen ?? false)}
       onToggleAgentConfigPanel={
         isConversationPage

@@ -435,7 +435,7 @@ export default function StepTable({
       {/* Modale de confirmation de suppression */}
       {showDeleteStepsModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-theme-primary rounded-lg p-6 shadow-lg max-w-md w-full">
+          <div className="bg-theme-primary rounded-lg p-6 shadow-lg max-w-md w-full max-h-[90vh] overflow-y-auto">
             <h3 className="text-lg font-semibold text-theme-primary mb-4">Confirm Deletion</h3>
             <p className="text-sm text-theme-secondary mb-4">
               Are you sure you want to delete {selectedSteps.size} step(s)? This action cannot be undone.

@@ -1,4 +1,15 @@
 {
+  "globalSearch": {
+    "placeholder": "搜索...",
+    "conversations": "聊天",
+    "workflows": "工作流",
+    "agents": "智能体",
+    "settings": "设置",
+    "noResults": "没有与\"{query}\"相关的结果",
+    "searching": "搜索中...",
+    "untitled": "无标题",
+    "clear": "清除搜索"
+  },
   "reward": {
     "page": {
       "title": "推荐有奖",
@@ -378,6 +389,8 @@
   },
   "sidePanel": {
     "addTab": "添加标签",
+    "openRight": "在右侧打开面板",
+    "openBottom": "在底部打开面板",
     "searchPlaceholder": "搜索...",
     "applications": "应用",
     "interfaces": "界面",
@@ -386,6 +399,7 @@
     "noItems": "暂无可用项目",
     "errorLoading": "加载项目失败",
     "aiChat": "AI 聊天",
+    "welcomeTitle": "我能帮您做什么？",
     "agent": "代理",
     "workflowPanel": "工作流面板",
     "workflows": "工作流",
@@ -3940,6 +3954,32 @@
       "createdAt": "创建于 {date}",
       "noKey": "尚无 API 密钥。生成一个以连接 MCP 客户端。"
     },
+    "keys": {
+      "title": "API 密钥",
+      "description": "对 MCP 端点的请求通过 X-API-Key 请求头中的 API 密钥进行身份验证。为每个客户端创建一个,可完全访问或仅限所需的工具,撤销任意一个都不会影响其他密钥。",
+      "create": "新建密钥",
+      "empty": "还没有 API 密钥。创建一个以连接 MCP 客户端。",
+      "fullAccess": "完全访问",
+      "fullAccessHint": "所有 MCP 工具",
+      "scopedAccess": "受限访问",
+      "scopedAccessHint": "仅限您选择的工具",
+      "createdAt": "创建于 {date}",
+      "revoke": "吊销",
+      "revokeConfirm": "撤销密钥",
+      "revokedTitle": "密钥已吊销",
+      "revokeFailed": "无法吊销该密钥",
+      "createTitle": "创建 API 密钥",
+      "createSubtitle": "为密钥命名并选择它可以访问的内容。",
+      "createdTitle": "密钥已创建",
+      "nameLabel": "名称",
+      "namePlaceholder": "例如:我笔记本电脑上的 Cursor",
+      "accessLabel": "访问权限",
+      "limitLabel": "限制为特定工具",
+      "scopesLabel": "工具",
+      "scopesRequired": "请至少选择一个工具。",
+      "cancel": "取消",
+      "done": "完成"
+    },
     "toasts": {
       "keyGenerated": "API 密钥已生成",
       "keyGenerationFailed": "无法生成 API 密钥",
@@ -4854,6 +4894,7 @@
     "iterationLabel": "项 {number}",
     "workflowFallback": "工作流",
     "moveTo": "移动到…",
+    "virtualBulkExcluded": "工作流文件夹只能删除 - 取消选择后才能下载或移动",
     "moveToFolderTitle": "移动 {count} 个项目",
     "moveToRoot": "顶层（根目录）",
     "moveHere": "移动到此处",
@@ -5246,10 +5287,14 @@
       "themeLight": "浅色",
       "themeDark": "深色",
       "themeAuto": "跟随系统",
-      "sidePanelPosition": "侧边面板位置",
-      "sidePanelPositionDescription": "选择侧边面板打开的位置",
-      "sidePanelPositionRight": "右侧",
-      "sidePanelPositionBottom": "底部",
+      "sidePanelDefaultPosition": "侧边面板默认位置",
+      "sidePanelDefaultPositionDescription": "侧边面板在整个应用中默认打开的位置",
+      "sidePanelDefaultPositionRight": "右侧",
+      "sidePanelDefaultPositionBottom": "底部",
+      "sidePanelBottomMode": "底部面板样式",
+      "sidePanelBottomModeDescription": "从页眉在底部打开面板时的显示方式",
+      "sidePanelBottomModeFull": "全宽（延伸到侧边栏下方）",
+      "sidePanelBottomModeContent": "内容宽度",
       "timezone": "时区",
       "timezoneDescription": "设置您的本地时区",
       "selectTimezone": "选择时区",
@@ -6614,7 +6659,8 @@
         "chat-trigger": "聊天",
         "schedule-trigger": "定时器",
         "form-trigger": "表单"
-      }
+      },
+      "close": "关闭"
     },
     "nodes": {
       "deleteNode": "删除节点",

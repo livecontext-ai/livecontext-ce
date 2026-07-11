@@ -208,7 +208,7 @@ export default function AcquirePublicationModal({
         onClick={handleClose}
       >
         <div
-          className="max-w-md w-full bg-theme-primary rounded-3xl shadow-2xl p-8 animate-in fade-in-0 zoom-in-95 duration-300 border border-theme"
+          className="max-w-md w-full bg-theme-primary rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.16)] p-6 animate-in fade-in-0 zoom-in-95 duration-200 border border-theme max-h-[90vh] overflow-y-auto"
           role="dialog"
           aria-modal="true"
           aria-labelledby="acquire-publication-success-title"
@@ -218,7 +218,7 @@ export default function AcquirePublicationModal({
             <div className="w-16 h-16 bg-theme-secondary rounded-full flex items-center justify-center mx-auto mb-5">
               <Download className="h-7 w-7 text-theme-primary animate-pulse" />
             </div>
-            <h2 className="text-2xl font-semibold text-theme-primary mb-2">
+            <h2 className="text-xl font-semibold text-theme-primary mb-2">
               {t('processingTitle')}
             </h2>
             <p className="text-sm text-theme-secondary mb-5">
@@ -265,14 +265,14 @@ export default function AcquirePublicationModal({
         onClick={handleClose}
       >
         <div
-          className="max-w-md w-full bg-theme-primary rounded-3xl shadow-2xl p-8 animate-in fade-in-0 zoom-in-95 duration-300 border border-theme"
+          className="max-w-md w-full bg-theme-primary rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.16)] p-6 animate-in fade-in-0 zoom-in-95 duration-200 border border-theme max-h-[90vh] overflow-y-auto"
           onClick={(e) => e.stopPropagation()}
         >
           <div className="text-center">
             <div className="w-16 h-16 bg-theme-secondary rounded-full flex items-center justify-center mx-auto mb-5">
               <CheckCircle className="h-8 w-8 text-theme-primary" />
             </div>
-            <h2 id="acquire-publication-success-title" className="text-2xl font-semibold text-theme-primary mb-2">
+            <h2 id="acquire-publication-success-title" className="text-xl font-semibold text-theme-primary mb-2">
               {t('successTitle')}
             </h2>
             <p className="text-sm text-theme-secondary mb-6">
@@ -299,14 +299,14 @@ export default function AcquirePublicationModal({
         onClick={handleClose}
       >
         <div
-          className="max-w-md w-full bg-theme-primary rounded-3xl shadow-2xl p-8 animate-in fade-in-0 zoom-in-95 duration-300 border border-theme"
+          className="max-w-md w-full bg-theme-primary rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.16)] p-6 animate-in fade-in-0 zoom-in-95 duration-200 border border-theme max-h-[90vh] overflow-y-auto"
           onClick={(e) => e.stopPropagation()}
         >
           <div className="text-center">
             <div className="w-16 h-16 bg-theme-secondary rounded-full flex items-center justify-center mx-auto mb-5">
               <AlertTriangle className="h-8 w-8 text-theme-primary" />
             </div>
-            <h2 className="text-2xl font-semibold text-theme-primary mb-2">
+            <h2 className="text-xl font-semibold text-theme-primary mb-2">
               {t('errorTitle')}
             </h2>
             <p className="text-sm text-theme-secondary mb-6">
@@ -335,14 +335,14 @@ export default function AcquirePublicationModal({
         onClick={handleClose}
       >
         <div
-          className="max-w-md w-full bg-theme-primary rounded-3xl shadow-2xl p-8 animate-in fade-in-0 zoom-in-95 duration-300 border border-theme"
+          className="max-w-md w-full bg-theme-primary rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.16)] p-6 animate-in fade-in-0 zoom-in-95 duration-200 border border-theme max-h-[90vh] overflow-y-auto"
           onClick={(e) => e.stopPropagation()}
         >
           <div className="text-center">
             <div className="w-16 h-16 bg-theme-secondary rounded-full flex items-center justify-center mx-auto mb-5">
               <Link2 className="h-8 w-8 text-theme-primary" />
             </div>
-            <h2 className="text-2xl font-semibold text-theme-primary mb-2">
+            <h2 className="text-xl font-semibold text-theme-primary mb-2">
               {t('linkRequired')}
             </h2>
             <p className="text-sm text-theme-secondary mb-6">
@@ -371,14 +371,14 @@ export default function AcquirePublicationModal({
         onClick={handleClose}
       >
         <div
-          className="max-w-md w-full bg-theme-primary rounded-3xl shadow-2xl p-8 animate-in fade-in-0 zoom-in-95 duration-300 border border-theme"
+          className="max-w-md w-full bg-theme-primary rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.16)] p-6 animate-in fade-in-0 zoom-in-95 duration-200 border border-theme max-h-[90vh] overflow-y-auto"
           onClick={(e) => e.stopPropagation()}
         >
           <div className="text-center">
             <div className="w-16 h-16 bg-theme-secondary rounded-full flex items-center justify-center mx-auto mb-5">
               <Coins className="h-8 w-8 text-theme-primary" />
             </div>
-            <h2 className="text-2xl font-semibold text-theme-primary mb-2">
+            <h2 className="text-xl font-semibold text-theme-primary mb-2">
               {isCeMode ? t('insufficientBalance') : t('insufficientCredits')}
             </h2>
             <p className="text-sm text-theme-secondary mb-6">
@@ -401,7 +401,7 @@ export default function AcquirePublicationModal({
       onClick={handleClose}
     >
       <div
-        className="max-w-md w-full bg-theme-primary rounded-3xl shadow-2xl p-8 animate-in fade-in-0 zoom-in-95 duration-300 border border-theme max-h-[90vh] overflow-y-auto"
+        className="max-w-md w-full bg-theme-primary rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.16)] p-6 animate-in fade-in-0 zoom-in-95 duration-200 border border-theme max-h-[90vh] overflow-y-auto"
         role="dialog"
         aria-modal="true"
         aria-labelledby="acquire-publication-title"

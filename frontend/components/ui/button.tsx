@@ -4,34 +4,44 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "@/lib/utils"
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full border border-transparent font-medium tracking-wide transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-primary)] disabled:pointer-events-none disabled:opacity-60 disabled:cursor-not-allowed",
+  // Clean, flat system: soft radius, hairline borders, no drop shadows beyond a
+  // subtle 1px lift on solid variants, color-only transitions. Color tokens are
+  // unchanged - only the shape/elevation/motion system differs from the legacy
+  // pill-with-glow style.
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-transparent font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--bg-primary)] disabled:pointer-events-none disabled:opacity-60 disabled:cursor-not-allowed",
   {
     variants: {
       variant: {
         default:
-          "bg-[var(--accent-primary)] text-[var(--accent-foreground)] shadow-[0_10px_28px_var(--shadow-color)] hover:bg-[var(--accent-hover)] hover:text-[var(--accent-foreground)] hover:shadow-[0_12px_32px_var(--shadow-color)]",
+          "bg-[var(--accent-primary)] text-[var(--accent-foreground)] shadow-[0_1px_2px_var(--shadow-color)] hover:bg-[var(--accent-hover)] hover:text-[var(--accent-foreground)]",
         secondary:
-          "bg-[var(--bg-secondary)] text-[var(--text-primary)] shadow-[0_4px_16px_rgba(11,13,22,0.12)] hover:bg-[var(--text-primary)] hover:text-[var(--bg-secondary)]",
+          "bg-[var(--bg-secondary)] text-[var(--text-primary)] border-[var(--border-color)] shadow-none hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]",
         outline:
-          "border border-[var(--border-color)] bg-transparent text-[var(--text-primary)] shadow-none hover:bg-[var(--accent-primary)] hover:text-[var(--accent-foreground)]",
+          "border border-[var(--border-color)] bg-transparent text-[var(--text-primary)] shadow-none hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]",
+        // ghost/ghostGray keep the legacy inverted hover: dozens of call sites
+        // pair them with `hover:text-[var(--bg-primary)]` overrides and expect
+        // the dark hover surface underneath.
         ghost:
           "bg-transparent text-[var(--text-primary)] shadow-none hover:bg-[var(--text-primary)] hover:text-[var(--bg-primary)]",
         ghostGray:
           "bg-transparent text-[var(--text-primary)] shadow-none hover:bg-[var(--text-primary)] hover:text-[var(--bg-primary)] [&_*]:text-current [&_svg]:!text-current",
         contrast:
-          "bg-black text-white shadow-[0_10px_28px_rgba(0,0,0,0.25)] hover:bg-gray-900 hover:text-white hover:shadow-[0_12px_32px_rgba(0,0,0,0.28)] dark:bg-white dark:text-gray-900 dark:shadow-[0_10px_26px_rgba(255,255,255,0.12)] dark:hover:bg-gray-100 dark:hover:text-gray-900 dark:hover:shadow-[0_12px_32px_rgba(255,255,255,0.16)]",
+          "bg-black text-white shadow-[0_1px_2px_rgba(0,0,0,0.15)] hover:bg-gray-900 hover:text-white dark:bg-white dark:text-gray-900 dark:hover:bg-gray-100 dark:hover:text-gray-900",
         destructive:
-          "bg-[#dc5c5c] text-white shadow-[0_8px_22px_rgba(220,92,92,0.3)] hover:bg-[#c84d4d]",
+          "bg-[#dc5c5c] text-white shadow-[0_1px_2px_rgba(220,92,92,0.25)] hover:bg-[#c84d4d]",
         link:
           "bg-transparent px-0 text-[var(--accent-primary)] underline-offset-4 shadow-none hover:underline",
         readonly:
-          "bg-theme-tertiary text-theme-primary border border-theme shadow-none cursor-default hover:bg-theme-tertiary hover:text-theme-primary rounded-lg",
+          "bg-theme-tertiary text-theme-primary border border-theme shadow-none cursor-default hover:bg-theme-tertiary hover:text-theme-primary",
       },
+      // One standard control height everywhere: h-9 (matches the Files Upload
+      // reference). `default` and `sm` differ only in horizontal padding; `lg`
+      // is reserved for hero/marketing CTAs.
       size: {
-        default: "h-11 px-6 text-sm",
-        sm: "h-9 px-3 text-sm",
-        lg: "h-12 px-8 text-base",
-        icon: "h-11 w-11 p-0 rounded-full",
+        default: "h-9 px-4 text-sm",
+        sm: "h-9 px-3.5 text-sm",
+        lg: "h-11 px-6 text-base",
+        icon: "h-9 w-9 p-0",
       },
     },
     defaultVariants: {

@@ -834,7 +834,7 @@ export function WorkflowModeToggle({
             aria-modal="true"
             aria-labelledby="cancel-run-dialog-title"
             aria-describedby="cancel-run-dialog-description"
-            className="max-w-sm w-full bg-theme-primary rounded-3xl shadow-2xl p-8 animate-in fade-in-0 zoom-in-95 duration-300 border border-theme"
+            className="max-w-sm w-full bg-theme-primary rounded-3xl shadow-2xl p-8 animate-in fade-in-0 zoom-in-95 duration-300 border border-theme max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="text-center mb-6">

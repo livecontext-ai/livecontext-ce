@@ -50,12 +50,12 @@ export function TriggerTypeTabs({ activeTab, onTabChange }: TriggerTypeTabsProps
   return (
     <div className="max-w-full overflow-x-auto scrollbar-hide -mx-1 px-1">
       <div
-        className="relative inline-flex items-center gap-1 p-1.5 bg-theme-tertiary rounded-full w-max"
+        className="relative inline-flex items-center gap-1 p-1.5 bg-theme-tertiary rounded-2xl w-max"
         ref={containerRef}
       >
         {/* Animated slider */}
         <div
-          className="absolute top-1.5 bottom-1.5 rounded-full bg-[var(--bg-primary)] transition-all duration-300 ease-out"
+          className="absolute top-1.5 bottom-1.5 rounded-xl bg-[var(--bg-primary)] transition-all duration-200 ease-out"
           style={{
             left: sliderStyle.left,
             width: sliderStyle.width,
@@ -71,7 +71,7 @@ export function TriggerTypeTabs({ activeTab, onTabChange }: TriggerTypeTabsProps
               data-tab-id={id}
               onClick={() => onTabChange(id)}
               title={t(labelKey)}
-              className={`relative z-10 flex flex-shrink-0 items-center gap-1.5 px-3 sm:px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 outline-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 ${
+              className={`relative z-10 flex h-9 flex-shrink-0 items-center gap-1.5 px-3 sm:px-4 rounded-xl text-sm font-medium transition-all duration-200 outline-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/60 ${
                 isActive
                   ? 'text-[var(--text-primary)]'
                   : 'text-theme-secondary hover:text-theme-primary hover:bg-[var(--bg-primary)]/50'

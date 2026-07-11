@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import clsx from 'clsx';
-import { X, GripVertical, Minimize2, Maximize2, Maximize, Copy, Trash2, Eye, Play, RotateCcw, Minus, MoreVertical, Flag } from 'lucide-react';
+import { X, GripVertical, Minimize2, Maximize2, Maximize, Copy, Trash2, Eye, Play, RotateCcw, Minus, MoreVertical, Flag, Table } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import type { Node } from 'reactflow';
 import { Button } from '@/components/ui/button';
@@ -15,6 +15,22 @@ import { matchNodeClass } from '../../nodes/nodeClasses';
 import { ViewModeTabs, ViewMode } from './ViewModeTabs';
 import { AvatarDisplay } from '@/components/agents/AvatarPicker';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
+import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
+import { useSidePanelSafe } from '@/contexts/SidePanelContext';
+import { DataSourcePanelContent } from '@/components/app/DataSourcePanelContent';
+
+/**
+ * A "secondary" node action. Rendered as an inline icon button on wide panels
+ * (advanced / fullscreen) and as a menu row inside the overflow menu on narrow
+ * panels. `label` doubles as the button tooltip / accessible name.
+ */
+interface SecondaryAction {
+  key: string;
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  danger?: boolean;
+}
 
 /**
  * Step-by-step execution status
@@ -45,6 +61,10 @@ export interface InspectorPanelHeaderProps {
   isTriggerNode: boolean;
   isInterfaceNode: boolean;
   shouldForceSmallMode: boolean;
+
+  // Table trigger: when a table is selected, expose "View table" in the toolbar
+  isTableSelected: boolean;
+  dataSourceId?: string | number | null;
 
   // Navigation state
   triggerNavigationLevel: string;
@@ -97,6 +117,8 @@ export function InspectorPanelHeader({
   isTriggerNode,
   isInterfaceNode,
   shouldForceSmallMode,
+  isTableSelected,
+  dataSourceId,
   triggerNavigationLevel,
   selectedDataSourceId,
   dataSources,
@@ -118,6 +140,91 @@ export function InspectorPanelHeader({
   onReportNode,
 }: InspectorPanelHeaderProps) {
   const t = useTranslations('workflowBuilder.inspector');
+  const { isPreviewOnly } = useWorkflowMode();
+  const sidePanel = useSidePanelSafe();
+
+  // Wide panels (advanced or fullscreen) have room to show the secondary
+  // actions inline; narrow panels (compact 300px, mobile) fold them into the
+  // overflow menu so the toolbar never overflows the panel.
+  const isWidePanel = isAdvanced || isFullscreen;
+
+  // Secondary node actions - single source of truth, rendered either inline
+  // (wide) or inside the overflow menu (narrow). Conditions mirror the former
+  // floating InspectorActionButtons column exactly.
+  const secondaryActions: SecondaryAction[] = [];
+  if (onDeleteNode && !isRunMode) {
+    secondaryActions.push({
+      key: 'delete',
+      icon: <Trash2 className="h-4 w-4" />,
+      label: t('deleteNode'),
+      onClick: () => onDeleteNode(node.id),
+      danger: true,
+    });
+  }
+  if (onDuplicateNode && !isRunMode) {
+    secondaryActions.push({
+      key: 'duplicate',
+      icon: <Copy className="h-4 w-4" />,
+      label: t('duplicateNode'),
+      onClick: () => onDuplicateNode(node.id),
+    });
+  }
+  if (onReportNode) {
+    secondaryActions.push({
+      key: 'report',
+      icon: <Flag className="h-4 w-4" />,
+      label: t('report.buttonTooltip'),
+      onClick: () => onReportNode(),
+    });
+  }
+  if (isInterfaceNode && isRunMode && onAdvancedChange) {
+    secondaryActions.push({
+      key: 'preview',
+      icon: <Eye className="h-4 w-4" />,
+      label: t('previewInterface'),
+      onClick: () => onAdvancedChange(true),
+    });
+  }
+  if (onAdvancedChange && !shouldForceSmallMode && !isFullscreen) {
+    secondaryActions.push({
+      key: 'advanced',
+      icon: isAdvanced ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />,
+      label: isAdvanced ? t('minimize') : t('expand'),
+      onClick: () => onAdvancedChange(!isAdvanced),
+    });
+  }
+  if (onFullscreenChange) {
+    secondaryActions.push({
+      key: 'fullscreen',
+      icon: isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize className="h-4 w-4" />,
+      label: isFullscreen ? t('exitFullscreen') : t('fullscreen'),
+      onClick: () => onFullscreenChange(!isFullscreen),
+    });
+  }
+  if (isTableSelected && dataSourceId) {
+    secondaryActions.push({
+      key: 'viewTable',
+      icon: <Table className="h-4 w-4" />,
+      label: t('viewTable'),
+      onClick: () => {
+        sidePanel?.openTab({
+          id: `datasource-${dataSourceId}`,
+          label: node.data?.label || 'Table',
+          icon: <Table className="w-4 h-4" />,
+          content: <DataSourcePanelContent dataSourceId={String(dataSourceId)} />,
+          preferredWidth: 0.35,
+        });
+      },
+    });
+  }
+  if (onMinimize && !isFullscreen) {
+    secondaryActions.push({
+      key: 'minimize',
+      icon: <Minus className="h-4 w-4" />,
+      label: t('collapse'),
+      onClick: () => onMinimize(),
+    });
+  }
 
   // Compute display label based on navigation state
   const displayLabel = React.useMemo(() => {
@@ -240,30 +347,41 @@ export function InspectorPanelHeader({
         </div>
       )}
 
-      {/* Action buttons */}
-      <div className={clsx(
-        "flex items-center gap-1 flex-shrink-0",
-        isFullscreen ? "" : "lg:hidden"
-      )}>
-        {/* ── Mobile: overflow menu for secondary actions ── */}
-        <MobileOverflowMenu
-          node={node}
-          isRunMode={isRunMode}
-          isFullscreen={isFullscreen}
-          isAdvanced={isAdvanced}
-          isInterfaceNode={isInterfaceNode}
-          shouldForceSmallMode={shouldForceSmallMode}
-          onDuplicateNode={onDuplicateNode}
-          onDeleteNode={onDeleteNode}
-          onAdvancedChange={onAdvancedChange}
-          onFullscreenChange={onFullscreenChange}
-          onMinimize={onMinimize}
-          onReportNode={onReportNode}
-          t={t}
-        />
+      {/* Action buttons - a single in-flow toolbar shown at ALL breakpoints.
+          Secondary actions render inline on wide panels (advanced/fullscreen)
+          and fold into the overflow menu on narrow panels; the primary Play /
+          Re-run and Close buttons stay inline everywhere. */}
+      <div className="flex items-center gap-1 flex-shrink-0">
+        {isWidePanel ? (
+          /* Wide panels: secondary actions inline */
+          secondaryActions.map((action) => (
+            <Button
+              key={action.key}
+              type="button"
+              variant="ghost"
+              size="icon"
+              className={clsx(
+                "h-8 w-8",
+                action.danger
+                  ? "text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+                  : "text-[var(--text-primary)] hover:bg-[var(--text-primary)] hover:text-[var(--bg-primary)]"
+              )}
+              onClick={(e) => {
+                e.stopPropagation();
+                action.onClick();
+              }}
+              title={action.label}
+            >
+              {action.icon}
+            </Button>
+          ))
+        ) : (
+          /* Narrow panels: secondary actions in the overflow menu */
+          <SecondaryActionsMenu items={secondaryActions} moreActionsLabel={t('moreActions')} />
+        )}
 
         {/* Play button for step-by-step execution - always visible */}
-        {node && !isInterfaceNode && (
+        {node && !isInterfaceNode && !isPreviewOnly && (
           isRunMode ? (
             stepByStepStatus.isStepByStepMode && (
               <>
@@ -274,7 +392,6 @@ export function InspectorPanelHeader({
                   disabled={!stepByStepStatus.canExecute || stepByStepStatus.isExecuting}
                   className={clsx(
                     "h-8 w-8",
-                    isFullscreen ? "" : "lg:hidden",
                     stepByStepStatus.canExecute && !stepByStepStatus.isExecuting
                       ? "text-[var(--text-primary)] hover:bg-[var(--text-primary)] hover:text-[var(--bg-primary)]"
                       : "text-slate-400 dark:text-slate-500 cursor-not-allowed"
@@ -303,7 +420,6 @@ export function InspectorPanelHeader({
                     disabled={stepByStepStatus.isRerunning || stepByStepStatus.isExecuting}
                     className={clsx(
                       "h-8 w-8",
-                      isFullscreen ? "" : "lg:hidden",
                       !stepByStepStatus.isRerunning && !stepByStepStatus.isExecuting
                         ? "text-[var(--text-primary)] hover:bg-[var(--text-primary)] hover:text-[var(--bg-primary)]"
                         : "text-slate-400 dark:text-slate-500 cursor-not-allowed"
@@ -333,7 +449,6 @@ export function InspectorPanelHeader({
               disabled={!isTriggerNode || hasGlobalValidationErrors}
               className={clsx(
                 "h-8 w-8",
-                isFullscreen ? "" : "lg:hidden",
                 isTriggerNode && !hasGlobalValidationErrors
                   ? "text-[var(--text-primary)] hover:bg-[var(--text-primary)] hover:text-[var(--bg-primary)]"
                   : "text-slate-400 dark:text-slate-500 cursor-not-allowed"
@@ -352,10 +467,7 @@ export function InspectorPanelHeader({
             type="button"
             variant="ghost"
             size="icon"
-            className={clsx(
-              "h-8 w-8 text-[var(--text-primary)] hover:bg-[var(--text-primary)] hover:text-[var(--bg-primary)]",
-              isFullscreen ? "" : "lg:hidden"
-            )}
+            className="h-8 w-8 text-[var(--text-primary)] hover:bg-[var(--text-primary)] hover:text-[var(--bg-primary)]"
             onClick={(e) => {
               e.stopPropagation();
               onClose();
@@ -371,100 +483,19 @@ export function InspectorPanelHeader({
 }
 
 /**
- * Overflow menu for secondary mobile header actions (duplicate, delete, expand, fullscreen, minimize).
- * Keeps the header compact on small screens.
+ * Overflow menu for secondary header actions on narrow panels (compact desktop
+ * panel + mobile). Keeps the toolbar from overflowing the panel. The item list
+ * is computed once in InspectorPanelHeader and passed in, so inline (wide) and
+ * menu (narrow) renderings stay in perfect parity.
  */
-function MobileOverflowMenu({
-  node,
-  isRunMode,
-  isFullscreen,
-  isAdvanced,
-  isInterfaceNode,
-  shouldForceSmallMode,
-  onDuplicateNode,
-  onDeleteNode,
-  onAdvancedChange,
-  onFullscreenChange,
-  onMinimize,
-  onReportNode,
-  t,
+function SecondaryActionsMenu({
+  items,
+  moreActionsLabel,
 }: {
-  node: Node<BuilderNodeData>;
-  isRunMode: boolean;
-  isFullscreen: boolean;
-  isAdvanced: boolean;
-  isInterfaceNode: boolean;
-  shouldForceSmallMode: boolean;
-  onDuplicateNode?: (nodeId: string) => void;
-  onDeleteNode?: (nodeId: string) => void;
-  onAdvancedChange?: (advanced: boolean) => void;
-  onFullscreenChange?: (fullscreen: boolean) => void;
-  onMinimize?: () => void;
-  onReportNode?: () => void;
-  t: (key: string) => string;
+  items: SecondaryAction[];
+  moreActionsLabel: string;
 }) {
   const [open, setOpen] = React.useState(false);
-
-  // Collect menu items based on current state
-  const items: { icon: React.ReactNode; label: string; onClick: () => void; danger?: boolean }[] = [];
-
-  if (onDuplicateNode && !isRunMode) {
-    items.push({
-      icon: <Copy className="h-4 w-4" />,
-      label: t('duplicateNode'),
-      onClick: () => onDuplicateNode(node.id),
-    });
-  }
-
-  if (onDeleteNode && !isRunMode) {
-    items.push({
-      icon: <Trash2 className="h-4 w-4" />,
-      label: t('deleteNode'),
-      onClick: () => onDeleteNode(node.id),
-      danger: true,
-    });
-  }
-
-  if (isInterfaceNode && isRunMode && onAdvancedChange) {
-    items.push({
-      icon: <Eye className="h-4 w-4" />,
-      label: t('previewInterface'),
-      onClick: () => onAdvancedChange(true),
-    });
-  }
-
-  if (onAdvancedChange && !shouldForceSmallMode && !isFullscreen) {
-    items.push({
-      icon: isAdvanced ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />,
-      label: isAdvanced ? t('minimize') : t('expand'),
-      onClick: () => onAdvancedChange(!isAdvanced),
-    });
-  }
-
-  if (onFullscreenChange) {
-    items.push({
-      icon: isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize className="h-4 w-4" />,
-      label: isFullscreen ? t('exitFullscreen') : t('fullscreen'),
-      onClick: () => onFullscreenChange(!isFullscreen),
-    });
-  }
-
-  if (onMinimize && !isFullscreen) {
-    items.push({
-      icon: <Minus className="h-4 w-4" />,
-      label: t('collapse'),
-      onClick: () => onMinimize(),
-    });
-  }
-
-  // Report a problem - available in both edit and run mode
-  if (onReportNode) {
-    items.push({
-      icon: <Flag className="h-4 w-4" />,
-      label: t('report.buttonTooltip'),
-      onClick: () => onReportNode(),
-    });
-  }
 
   if (items.length === 0) return null;
 
@@ -475,11 +506,8 @@ function MobileOverflowMenu({
           type="button"
           variant="ghost"
           size="icon"
-          className={clsx(
-            "h-8 w-8 text-[var(--text-primary)] hover:bg-[var(--text-primary)] hover:text-[var(--bg-primary)]",
-            isFullscreen ? "" : "lg:hidden"
-          )}
-          title={t('moreActions')}
+          className="h-8 w-8 text-[var(--text-primary)] hover:bg-[var(--text-primary)] hover:text-[var(--bg-primary)]"
+          title={moreActionsLabel}
         >
           <MoreVertical className="h-4 w-4" />
         </Button>
@@ -487,12 +515,14 @@ function MobileOverflowMenu({
       <PopoverContent
         align="end"
         side="bottom"
+        data-inspector-overflow-menu
         className="w-48 p-1 rounded-xl z-[10000] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-lg"
       >
-        {items.map((item, i) => (
+        {items.map((item) => (
           <button
-            key={i}
+            key={item.key}
             type="button"
+            title={item.label}
             className={clsx(
               "w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors",
               item.danger

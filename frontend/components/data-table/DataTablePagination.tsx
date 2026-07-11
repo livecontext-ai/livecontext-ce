@@ -59,7 +59,7 @@ export function DataTablePagination({ controller }: DataTablePaginationProps) {
       <div className="flex items-center gap-2 ml-4">
         <span className="text-sm text-theme-secondary">Rows per page:</span>
         <Select value={pagination.pageSize.toString()} onValueChange={(value) => handlePageSizeChange(Number(value))}>
-          <SelectTrigger className="w-[120px] h-8 text-sm">
+          <SelectTrigger className="w-[120px] h-9 text-sm">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

@@ -121,7 +121,7 @@ const UriInput: React.FC<UriInputProps> = ({
               onChange={(e) => handleEndpointChange(e.target.value)}
               placeholder={placeholder}
               disabled={disabled}
-              className={`w-full px-4 py-3 bg-theme-primary border rounded-lg text-theme-primary placeholder-theme-muted focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed ${
+              className={`w-full h-9 px-4 text-sm bg-theme-primary border rounded-lg text-theme-primary placeholder-theme-muted focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed ${
                 !hasValue ? 'border-red-300' : 'border-theme'
               } ${className}`}
             />
@@ -160,7 +160,7 @@ const UriInput: React.FC<UriInputProps> = ({
                 onChange={(e) => handleEndpointChange(e.target.value)}
                 placeholder={placeholder}
                 disabled={disabled}
-                className={`w-full px-4 py-3 bg-theme-primary border rounded-lg text-theme-primary placeholder-theme-muted focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed ${
+                className={`w-full h-9 px-4 text-sm bg-theme-primary border rounded-lg text-theme-primary placeholder-theme-muted focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed ${
                   !hasValue ? 'border-red-300' : 'border-theme'
                 } ${className}`}
               />

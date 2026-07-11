@@ -214,10 +214,10 @@ export default function InsufficientCreditsModal() {
 
           {/* Billing cycle toggle */}
           <div className="flex justify-center pt-5 pb-2">
-            <div className="inline-flex items-center bg-theme-tertiary rounded-full p-0.5">
+            <div className="inline-flex items-center bg-theme-tertiary rounded-lg p-0.5">
               <button
                 onClick={() => setBillingCycle('monthly')}
-                className={`px-4 py-1.5 text-xs font-medium rounded-full transition-all duration-200 ${
+                className={`px-4 py-1.5 text-xs font-medium rounded-lg transition-all duration-200 ${
                   billingCycle === 'monthly'
                     ? 'bg-theme-primary text-theme-primary shadow-sm'
                     : 'text-theme-muted hover:text-theme-primary'
@@ -227,7 +227,7 @@ export default function InsufficientCreditsModal() {
               </button>
               <button
                 onClick={() => setBillingCycle('yearly')}
-                className={`px-4 py-1.5 text-xs font-medium rounded-full transition-all duration-200 ${
+                className={`px-4 py-1.5 text-xs font-medium rounded-lg transition-all duration-200 ${
                   billingCycle === 'yearly'
                     ? 'bg-theme-primary text-theme-primary shadow-sm'
                     : 'text-theme-muted hover:text-theme-primary'

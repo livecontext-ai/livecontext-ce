@@ -62,7 +62,7 @@ const NavIconButton = memo(function NavIconButton({ icon: Icon, title, onClick, 
       className={`w-8 h-8 ${isActive ? 'bg-surface-hover' : ''}`}
       title={title}
     >
-      <Icon className="w-5 h-5" />
+      <Icon className="w-4 h-4" />
     </Button>
   );
 });
@@ -98,6 +98,13 @@ export const AppSidebar = memo(function AppSidebar({
   const { state: appState, setCurrentConversationId } = appContext;
   const streaming = useStreamingSafe();
   const currentConversationId = appState.currentConversationId || urlConversationId;
+
+  // Home is "active" only on the new-chat landing page - the SAME condition the
+  // expanded sidebar's Home row uses (ConversationSidebar), so collapsed and
+  // expanded highlight identically. New Chat is a pure action, never "active",
+  // so it no longer lights up alongside Home in collapsed mode.
+  const isHomeActive =
+    currentView === 'chat' && !isDetailPage && !currentConversationId && !pathname?.includes('/app/messages');
 
   // Sync context with URL when navigating (URL is source of truth for navigation)
   // NOTE: We only sync FROM URL TO context, never reset context here.
@@ -284,19 +291,19 @@ export const AppSidebar = memo(function AppSidebar({
                 {sidebarCollapsed ? (
                   <Button
                     onClick={() => setSidebarCollapsed(false)}
-                    variant="ghostGray"
+                    variant="ghost"
                     size="icon"
-                    className="w-8 h-8 hidden md:flex items-center justify-center opacity-0 group-hover/header:opacity-100 transition-opacity duration-300 absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10"
+                    className="w-8 h-8 hidden md:flex items-center justify-center text-black dark:text-white opacity-0 group-hover/header:opacity-100 transition-opacity duration-300 absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10"
                     title={t('expandSidebar')}
                   >
-                    <PanelLeft className="w-5 h-5" />
+                    <PanelLeft className="w-4 h-4" />
                   </Button>
                 ) : (
                   <Button
                     onClick={() => setSidebarCollapsed(true)}
-                    variant="ghostGray"
+                    variant="ghost"
                     size="icon"
-                    className="w-8 h-8 mr-1 hidden md:flex items-center justify-center group -ml-1 text-theme-muted hover:text-[var(--bg-primary)] transition-colors font-normal"
+                    className="w-8 h-8 mr-1 hidden md:flex items-center justify-center text-black dark:text-white"
                     title={t('collapseSidebar')}
                   >
                     <PanelLeft className="w-4 h-4" />
@@ -336,7 +343,7 @@ export const AppSidebar = memo(function AppSidebar({
                   key="home"
                   icon={Home}
                   title={t('nav.home')}
-                  isActive={currentView === 'chat' && !isDetailPage && !currentConversationId}
+                  isActive={isHomeActive}
                   onClick={(e) => {
                     e.stopPropagation();
                     handleConversationSelect(null);
@@ -356,7 +363,7 @@ export const AppSidebar = memo(function AppSidebar({
                   key="new-chat"
                   icon={MessageCircle}
                   title={t('nav.newChat')}
-                  isActive={currentView === 'chat' && !isDetailPage && !currentConversationId}
+                  isActive={false}
                   onClick={(e) => {
                     e.stopPropagation();
                     handleConversationSelect(null);
@@ -924,7 +931,7 @@ export const UserSection = memo(function UserSection({
                           className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition-colors text-sm ${
                             locale === lang.code
                               ? 'bg-gray-100 dark:bg-gray-800 text-theme-primary font-medium'
-                              : 'text-theme-secondary hover:bg-gray-50 dark:hover:bg-gray-800/50'
+                              : 'text-theme-secondary hover:bg-gray-100 dark:hover:bg-gray-800'
                           }`}
                         >
                           {locale === lang.code ? <Check className="h-3.5 w-3.5" /> : <span className="w-3.5" />}
@@ -952,7 +959,7 @@ export const UserSection = memo(function UserSection({
                               <button
                                 onClick={(e) => { e.stopPropagation(); handleRestoreWorkspace(ws); }}
                                 disabled={isRestoring}
-                                className="text-xs px-2 py-0.5 rounded-md border border-theme hover:bg-gray-50 dark:hover:bg-gray-800/50 disabled:opacity-50 cursor-pointer"
+                                className="text-xs px-2 py-0.5 rounded-md border border-theme hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50 cursor-pointer"
                               >
                                 {isRestoring ? t('restoring') : t('restore')}
                               </button>
@@ -970,7 +977,7 @@ export const UserSection = memo(function UserSection({
                             className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed ${paused ? 'cursor-not-allowed' : 'cursor-pointer'} ${
                               isActive
                                 ? 'bg-gray-100 dark:bg-gray-800 text-theme-primary font-medium'
-                                : 'text-theme-secondary hover:bg-gray-50 dark:hover:bg-gray-800/50'
+                                : 'text-theme-secondary hover:bg-gray-100 dark:hover:bg-gray-800'
                             }`}
                           >
                             <WorkspaceAvatar name={ws.name} avatarUrl={ws.avatarUrl} size="xs" className="border border-theme" />
@@ -988,7 +995,7 @@ export const UserSection = memo(function UserSection({
                           Create-workspace is a top-level sibling of this focus item, not here. */}
                       <button
                         onClick={(e) => { e.stopPropagation(); handleInviteTeammates(); }}
-                        className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition-colors text-sm text-theme-secondary hover:bg-gray-50 dark:hover:bg-gray-800/50"
+                        className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition-colors text-sm text-theme-secondary hover:bg-gray-100 dark:hover:bg-gray-800"
                       >
                         <UserPlus className="h-3.5 w-3.5" />
                         <span className="flex-1 text-left">{t('inviteTeammates')}</span>
@@ -1006,7 +1013,7 @@ export const UserSection = memo(function UserSection({
                             className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition-colors text-sm ${
                               isActive
                                 ? 'bg-gray-100 dark:bg-gray-800 text-theme-primary font-medium'
-                                : 'text-theme-secondary hover:bg-gray-50 dark:hover:bg-gray-800/50'
+                                : 'text-theme-secondary hover:bg-gray-100 dark:hover:bg-gray-800'
                             }`}
                           >
                             {isActive ? <Check className="h-3.5 w-3.5" /> : <span className="w-3.5" />}

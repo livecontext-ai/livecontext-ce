@@ -7,8 +7,7 @@ import { StreamingProvider } from '@/contexts/StreamingContext';
 import { WorkflowRunProvider } from '@/contexts/WorkflowRunContext';
 import { SidePanelProvider } from '@/contexts/SidePanelContext';
 import { SidePanelLayoutProvider } from '@/contexts/SidePanelLayoutContext';
-import { AppSidebar } from '@/components/app/AppSidebar';
-import { AppContentRegion } from './AppContentRegion';
+import { AppShell } from './AppShell';
 import InsufficientCreditsModal from '@/components/billing/InsufficientCreditsModal';
 import InsufficientStorageModal from '@/components/billing/InsufficientStorageModal';
 import MissingApiKeyModal from '@/components/billing/MissingApiKeyModal';
@@ -44,12 +43,9 @@ export default function AppLayout({
                 <SidePanelLayoutProvider>
                 <NavigationGuardProvider>
                   <div className="h-[100dvh] bg-theme-primary transition-colors duration-300 fixed inset-0 z-50">
-                    <div className="flex h-full relative">
-                      {/* AppSidebar is persistent across all /app routes */}
-                      <AppSidebar />
-
-                      <AppContentRegion>{children}</AppContentRegion>
-                    </div>
+                    {/* Sidebar + content + side panel, arranged per the dock-position
+                        preference (right / bottom / bottom-full). */}
+                    <AppShell>{children}</AppShell>
                     <WelcomeGiftModal />
                     <SuggestedAppsModal />
                     <InsufficientCreditsModal />

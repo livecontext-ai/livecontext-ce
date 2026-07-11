@@ -143,7 +143,7 @@ export function CreateSkillModal({ onClose, onSkillCreated, skill, folderId }: C
           role="dialog"
           aria-modal="true"
           aria-labelledby={titleId}
-          className="max-w-2xl w-full bg-theme-primary rounded-3xl shadow-2xl animate-in fade-in-0 zoom-in-95 duration-300 border border-theme max-h-[90vh] flex flex-col"
+          className="max-w-2xl w-full bg-theme-primary rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.16)] animate-in fade-in-0 zoom-in-95 duration-200 border border-theme max-h-[90vh] flex flex-col"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header */}
@@ -154,7 +154,7 @@ export function CreateSkillModal({ onClose, onSkillCreated, skill, folderId }: C
                   <Zap className="w-8 h-8 text-theme-primary" />
                 </div>
               </div>
-              <h3 id={titleId} className="text-2xl font-semibold text-theme-primary">
+              <h3 id={titleId} className="text-xl font-semibold text-theme-primary">
                 {isEditMode ? t('editTitle') : t('title')}
               </h3>
             </div>

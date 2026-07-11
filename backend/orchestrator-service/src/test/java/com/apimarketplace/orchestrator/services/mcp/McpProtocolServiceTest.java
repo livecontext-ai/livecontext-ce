@@ -15,13 +15,16 @@ import org.springframework.beans.factory.ObjectProvider;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -115,6 +118,86 @@ class McpProtocolServiceTest {
         assertThat(context.orgRole()).isEqualTo("ADMIN");
         assertThat(context.approvedServices()).isEmpty();
     }
+
+    // ==================== API-key scopes ====================
+
+    private static final List<Map<String, Object>> THREE_TOOLS = List.of(
+            Map.of("name", "agent", "description", "Manage agents"),
+            Map.of("name", "table", "description", "Table CRUD"),
+            Map.of("name", "workflow", "description", "Manage workflows"));
+
+    @Test
+    @DisplayName("listTools with null scopes returns the full tool list (full access)")
+    void listToolsNullScopesReturnsAllTools() {
+        when(registry.getToolsInMcpFormat()).thenReturn(THREE_TOOLS);
+
+        assertThat(service.listTools(null))
+                .extracting(t -> t.get("name")).containsExactly("agent", "table", "workflow");
+    }
+
+    @Test
+    @DisplayName("listTools with scopes keeps only tools whose name is in the scope set")
+    void listToolsWithScopesFiltersByName() {
+        when(registry.getToolsInMcpFormat()).thenReturn(THREE_TOOLS);
+
+        assertThat(service.listTools(Set.of("workflow", "table")))
+                .extracting(t -> t.get("name")).containsExactly("table", "workflow");
+    }
+
+    @Test
+    @DisplayName("listTools with an EMPTY scope set (zero-scope key) returns no tools")
+    void listToolsWithEmptyScopesReturnsNothing() {
+        when(registry.getToolsInMcpFormat()).thenReturn(THREE_TOOLS);
+
+        assertThat(service.listTools(Set.of())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("hasTool with scopes hides an existing but out-of-scope tool")
+    void hasToolWithScopesHidesOutOfScopeTool() {
+        lenient().when(registry.hasTool("workflow")).thenReturn(true);
+
+        assertThat(service.hasTool("workflow", Set.of("table"))).isFalse();
+        assertThat(service.hasTool("workflow", Set.of("workflow"))).isTrue();
+        assertThat(service.hasTool("workflow", null)).isTrue();
+    }
+
+    @Test
+    @DisplayName("scope matching is case-insensitive on the tool name")
+    void hasToolScopeMatchIsCaseInsensitiveOnToolName() {
+        when(registry.hasTool("Workflow")).thenReturn(true);
+
+        assertThat(service.hasTool("Workflow", Set.of("workflow"))).isTrue();
+    }
+
+    @Test
+    @DisplayName("callTool of an out-of-scope tool fails exactly like an unknown tool, without executing")
+    void callToolOutOfScopeFailsLikeUnknownTool() throws Exception {
+        Map<String, Object> result = service.callTool(
+                "workflow", Map.of(), "42", null, null, Set.of("table"));
+
+        assertThat(result.get("isError")).isEqualTo(true);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> content = (List<Map<String, Object>>) result.get("content");
+        // Same wording as a nonexistent tool: scoped keys cannot enumerate the catalog.
+        assertThat(content.get(0).get("text")).isEqualTo("Unknown tool: workflow");
+        verify(registrationService, never()).executeTool(anyString(), anyMap(), any());
+    }
+
+    @Test
+    @DisplayName("callTool of an in-scope tool executes normally")
+    void callToolInScopeExecutes() throws Exception {
+        when(registry.hasTool("workflow")).thenReturn(true);
+        when(registrationService.executeTool(eq("workflow"), anyMap(), any()))
+                .thenReturn(ToolsProvider.ToolExecutionResult.success("ok"));
+
+        Map<String, Object> result = service.callTool(
+                "workflow", Map.of(), "42", null, null, Set.of("workflow"));
+
+        assertThat(result.get("isError")).isEqualTo(false);
+    }
+
+    // ==================== resources ====================
 
     @Test
     @DisplayName("an unknown resource uri yields null content")

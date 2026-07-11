@@ -20,6 +20,11 @@ import java.util.Map;
  * existing provider JSONs. The engine applies RFC 6749 / RFC 7636 defaults when a field is
  * absent, so the vast majority of providers need only {@code authorizationUrl}, {@code tokenUrl},
  * and {@code scopes}.
+ *
+ * <p>{@code clientIdParam} names the request parameter that carries the OAuth client identifier on
+ * both the authorize URL and the token endpoint body. It defaults to the RFC 6749 {@code client_id};
+ * a provider that renames it (TikTok uses {@code client_key}) declares
+ * {@code "clientIdParam": "client_key"} in its {@code oauth2Config} JSON, no per-provider code.
  */
 public record OAuth2ProviderConfig(
         String authorizationUrl,
@@ -32,7 +37,9 @@ public record OAuth2ProviderConfig(
         boolean pkceEnabled,
         Map<String, String> authorizeExtraParams,
         RefreshConfig refresh,
-        String grantType
+        String grantType,
+        String clientIdParam,
+        TokenExchangeConfig tokenExchange
 ) {
 
     /** How client credentials are transmitted on the token endpoint. */
@@ -118,6 +125,53 @@ public record OAuth2ProviderConfig(
         }
     }
 
+    /**
+     * Token-endpoint deviations from RFC 6749 that a small set of non-standard providers need.
+     * Every field defaults to the RFC behaviour, so a provider that declares none behaves exactly
+     * as before. Declared flat in the {@code oauth2Config} JSON and grouped here for the engine.
+     *
+     * <ul>
+     *   <li>{@code clientSecretParam} - request-param name carrying the client secret in the token
+     *       body (default {@code client_secret}; TikTok for Business uses {@code secret}).</li>
+     *   <li>{@code codeParam} - request-param name carrying the authorization code in the token
+     *       body (default {@code code}; TikTok for Business uses {@code auth_code}).</li>
+     *   <li>{@code requestFormat} - how the token request body is encoded: RFC form-urlencoded
+     *       ({@link RequestFormat#FORM}, default) or a JSON object ({@link RequestFormat#JSON};
+     *       TikTok for Business).</li>
+     *   <li>{@code responsePath} - JSON field the access/refresh tokens are nested under in the
+     *       token response ({@code null} = RFC top level; TikTok for Business nests under
+     *       {@code data}).</li>
+     * </ul>
+     *
+     * <p><strong>Known limitation - token expiry under a wrapper.</strong> The engine reads the
+     * standard {@code expires_in} field inside the {@code responsePath} object. A provider that
+     * names its expiry differently (TikTok for Business uses {@code access_token_expires_in})
+     * yields a null {@code expiresIn()}, so no {@code expires_at} is stored and the proactive
+     * refresh scheduler skips the credential; it still refreshes lazily on the next 401. A
+     * per-provider expiry-field mapping is future work.
+     */
+    public record TokenExchangeConfig(
+            String clientSecretParam,
+            String codeParam,
+            RequestFormat requestFormat,
+            String responsePath
+    ) {
+        /** Token request body encoding. */
+        public enum RequestFormat { FORM, JSON }
+
+        /** Plain RFC-6749 token endpoint: client_secret + code, form body, top-level response. */
+        public static final TokenExchangeConfig STANDARD =
+                new TokenExchangeConfig("client_secret", "code", RequestFormat.FORM, null);
+
+        public TokenExchangeConfig {
+            clientSecretParam = clientSecretParam == null || clientSecretParam.isBlank()
+                    ? "client_secret" : clientSecretParam;
+            codeParam = codeParam == null || codeParam.isBlank() ? "code" : codeParam;
+            requestFormat = requestFormat == null ? RequestFormat.FORM : requestFormat;
+            responsePath = responsePath == null || responsePath.isBlank() ? null : responsePath;
+        }
+    }
+
     public OAuth2ProviderConfig {
         scopes = scopes == null ? List.of() : List.copyOf(scopes);
         scopeDelimiter = scopeDelimiter == null || scopeDelimiter.isEmpty() ? " " : scopeDelimiter;
@@ -128,6 +182,8 @@ public record OAuth2ProviderConfig(
                 : Collections.unmodifiableMap(new LinkedHashMap<>(authorizeExtraParams));
         refresh = refresh == null ? RefreshConfig.STANDARD : refresh;
         grantType = grantType == null || grantType.isBlank() ? "authorizationCode" : grantType;
+        clientIdParam = clientIdParam == null || clientIdParam.isBlank() ? "client_id" : clientIdParam;
+        tokenExchange = tokenExchange == null ? TokenExchangeConfig.STANDARD : tokenExchange;
     }
 
     public OAuth2ProviderConfig(
@@ -143,7 +199,30 @@ public record OAuth2ProviderConfig(
     ) {
         this(authorizationUrl, tokenUrl, refreshUrl, scopes, scopeDelimiter, tokenAuthMethod,
                 TokenParamsLocation.FORM, pkceEnabled, authorizeExtraParams, refresh,
-                "authorizationCode");
+                "authorizationCode", "client_id", TokenExchangeConfig.STANDARD);
+    }
+
+    /**
+     * Backward-compatible constructor matching the pre-{@code clientIdParam} canonical signature.
+     * Defaults {@code clientIdParam} to the RFC 6749 {@code client_id} so existing call sites keep
+     * compiling unchanged; providers that rename the param go through {@link #fromJson(JsonNode)}.
+     */
+    public OAuth2ProviderConfig(
+            String authorizationUrl,
+            String tokenUrl,
+            String refreshUrl,
+            List<String> scopes,
+            String scopeDelimiter,
+            AuthMethod tokenAuthMethod,
+            TokenParamsLocation tokenParamsLocation,
+            boolean pkceEnabled,
+            Map<String, String> authorizeExtraParams,
+            RefreshConfig refresh,
+            String grantType
+    ) {
+        this(authorizationUrl, tokenUrl, refreshUrl, scopes, scopeDelimiter, tokenAuthMethod,
+                tokenParamsLocation, pkceEnabled, authorizeExtraParams, refresh, grantType,
+                "client_id", TokenExchangeConfig.STANDARD);
     }
 
     /** Joined scope string using the configured delimiter. Empty string if no scopes. */
@@ -164,7 +243,7 @@ public record OAuth2ProviderConfig(
         return new OAuth2ProviderConfig(
                 authorizationUrl, tokenUrl, refreshUrl, newScopes, scopeDelimiter,
                 tokenAuthMethod, tokenParamsLocation, pkceEnabled, authorizeExtraParams, refresh,
-                grantType);
+                grantType, clientIdParam, tokenExchange);
     }
 
     /**
@@ -183,7 +262,7 @@ public record OAuth2ProviderConfig(
                 newTokenUrl != null ? newTokenUrl : tokenUrl,
                 refreshUrl, scopes, scopeDelimiter,
                 tokenAuthMethod, tokenParamsLocation, pkceEnabled, authorizeExtraParams, refresh,
-                grantType);
+                grantType, clientIdParam, tokenExchange);
     }
 
     /** Token endpoint falls back to {@code tokenUrl} when {@code refreshUrl} is not set. */
@@ -221,8 +300,30 @@ public record OAuth2ProviderConfig(
                 oauth2Config.path("pkce").asBoolean(false),
                 parseStringMap(oauth2Config.path("authorizeExtraParams")),
                 parseRefresh(oauth2Config.path("refresh")),
-                grantType
+                grantType,
+                textOrNull(oauth2Config, "clientIdParam"),
+                parseTokenExchange(oauth2Config)
         );
+    }
+
+    /**
+     * Build the {@link TokenExchangeConfig} from the flat {@code oauth2Config} fields
+     * ({@code clientSecretParam}, {@code codeParam}, {@code tokenRequestFormat},
+     * {@code tokenResponsePath}). All optional; each absent field keeps the RFC default.
+     */
+    private static TokenExchangeConfig parseTokenExchange(JsonNode oauth2Config) {
+        return new TokenExchangeConfig(
+                textOrNull(oauth2Config, "clientSecretParam"),
+                textOrNull(oauth2Config, "codeParam"),
+                parseRequestFormat(textOrNull(oauth2Config, "tokenRequestFormat")),
+                textOrNull(oauth2Config, "tokenResponsePath")
+        );
+    }
+
+    private static TokenExchangeConfig.RequestFormat parseRequestFormat(String raw) {
+        return "json".equalsIgnoreCase(raw)
+                ? TokenExchangeConfig.RequestFormat.JSON
+                : TokenExchangeConfig.RequestFormat.FORM;
     }
 
     public boolean isClientCredentials() {
