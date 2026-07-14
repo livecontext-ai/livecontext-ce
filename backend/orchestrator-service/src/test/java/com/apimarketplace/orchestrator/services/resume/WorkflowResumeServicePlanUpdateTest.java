@@ -57,6 +57,7 @@ class WorkflowResumeServicePlanUpdateTest {
     @Mock private StateSnapshotService stateSnapshotService;
     @Mock private UnifiedSignalService unifiedSignalService;
     @Mock private WorkflowPlanVersionService planVersionService;
+    @Mock private com.apimarketplace.orchestrator.repository.WorkflowRepository workflowRepository;
 
     private WorkflowResumeService service;
 
@@ -405,7 +406,127 @@ class WorkflowResumeServicePlanUpdateTest {
         assertThat(run.getPlanVersion()).isEqualTo(3);
     }
 
+    // ====================================================================
+    // In-run MOCK mirror: editor-run mock edits must reach workflow.plan
+    // (their durable home - run.plan is refreshed FROM workflow.plan on
+    // every fire, so a run-only mock would be wiped by the next refresh).
+    // ====================================================================
+
+    @Test
+    @DisplayName("updateRunPlan - editor run: a mock in the payload is mirrored into workflow.plan (params stay run-scoped)")
+    void updateRunPlanMirrorsMockIntoWorkflowPlan() {
+        Map<String, Object> frozen = planWith(List.of(mcp("Fetch", Map.of("url", "v1"))),
+                List.of(edge("trigger:start", "mcp:fetch")));
+        Map<String, Object> mockedMcp = mcp("Fetch", Map.of("url", "run-scoped-edit"));
+        mockedMcp.put("mock", Map.of("output", Map.of("score", 87)));
+        Map<String, Object> updated = planWith(List.of(mockedMcp),
+                List.of(edge("trigger:start", "mcp:fetch")));
+
+        WorkflowEntity workflow = workflowEntity(frozen);
+        WorkflowRunEntity run = editorRunEntity(frozen, workflow);
+        when(runRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(run));
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "workflowRepository", workflowRepository);
+
+        WorkflowPlan result = service.updateRunPlan(RUN_ID, updated);
+
+        assertThat(result).isNotNull();
+        verify(workflowRepository).save(workflow);
+        Map<?, ?> wfMcp = (Map<?, ?>) ((List<?>) workflow.getPlan().get("mcps")).get(0);
+        assertThat(wfMcp.get("mock")).isEqualTo(Map.of("output", Map.of("score", 87)));
+        // ONLY the mock is mirrored: the workflow keeps its own params.
+        assertThat(((Map<?, ?>) wfMcp.get("params")).get("url")).isEqualTo("v1");
+    }
+
+    @Test
+    @DisplayName("updateRunPlan - editor run: payload without any mock leaves workflow.plan untouched")
+    void updateRunPlanWithoutMockDoesNotTouchWorkflowPlan() {
+        Map<String, Object> frozen = planWith(List.of(mcp("Fetch", Map.of("url", "v1"))),
+                List.of(edge("trigger:start", "mcp:fetch")));
+        Map<String, Object> updated = planWith(List.of(mcp("Fetch", Map.of("url", "v2"))),
+                List.of(edge("trigger:start", "mcp:fetch")));
+
+        WorkflowEntity workflow = workflowEntity(frozen);
+        WorkflowRunEntity run = editorRunEntity(frozen, workflow);
+        when(runRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(run));
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "workflowRepository", workflowRepository);
+
+        service.updateRunPlan(RUN_ID, updated);
+
+        verify(workflowRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("updateRunPlan - NON-editor run never mirrors mocks to workflow.plan")
+    void updateRunPlanNonEditorRunDoesNotMirror() {
+        Map<String, Object> frozen = planWith(List.of(mcp("Fetch", Map.of())),
+                List.of(edge("trigger:start", "mcp:fetch")));
+        Map<String, Object> mockedMcp = mcp("Fetch", Map.of());
+        mockedMcp.put("mock", Map.of("output", Map.of("ok", true)));
+        Map<String, Object> updated = planWith(List.of(mockedMcp),
+                List.of(edge("trigger:start", "mcp:fetch")));
+
+        WorkflowRunEntity run = runEntity(frozen); // no __editorRun__ metadata
+        when(runRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(run));
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "workflowRepository", workflowRepository);
+
+        service.updateRunPlan(RUN_ID, updated);
+
+        verify(workflowRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("updateRunPlan - APPLICATION workflow: mirror skipped (immutable acquired clone)")
+    void updateRunPlanApplicationWorkflowDoesNotMirror() {
+        Map<String, Object> frozen = planWith(List.of(mcp("Fetch", Map.of())),
+                List.of(edge("trigger:start", "mcp:fetch")));
+        Map<String, Object> mockedMcp = mcp("Fetch", Map.of());
+        mockedMcp.put("mock", Map.of("output", Map.of("ok", true)));
+        Map<String, Object> updated = planWith(List.of(mockedMcp),
+                List.of(edge("trigger:start", "mcp:fetch")));
+
+        WorkflowEntity workflow = workflowEntity(frozen);
+        workflow.setWorkflowType(WorkflowEntity.WorkflowType.APPLICATION);
+        WorkflowRunEntity run = editorRunEntity(frozen, workflow);
+        when(runRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(run));
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "workflowRepository", workflowRepository);
+
+        service.updateRunPlan(RUN_ID, updated);
+
+        verify(workflowRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("updateRunPlan - mirror failure is non-fatal: the run plan write still succeeds")
+    void updateRunPlanMirrorFailureIsNonFatal() {
+        Map<String, Object> frozen = planWith(List.of(mcp("Fetch", Map.of())),
+                List.of(edge("trigger:start", "mcp:fetch")));
+        Map<String, Object> mockedMcp = mcp("Fetch", Map.of());
+        mockedMcp.put("mock", Map.of("output", Map.of("ok", true)));
+        Map<String, Object> updated = planWith(List.of(mockedMcp),
+                List.of(edge("trigger:start", "mcp:fetch")));
+
+        WorkflowEntity workflow = workflowEntity(frozen);
+        WorkflowRunEntity run = editorRunEntity(frozen, workflow);
+        when(runRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(run));
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "workflowRepository", workflowRepository);
+        when(workflowRepository.save(any())).thenThrow(new RuntimeException("db down"));
+
+        WorkflowPlan result = service.updateRunPlan(RUN_ID, updated);
+
+        assertThat(result).isNotNull();
+        verify(runRepository).save(run);
+    }
+
     // Helpers
+
+    private WorkflowRunEntity editorRunEntity(Map<String, Object> plan, WorkflowEntity workflow) {
+        WorkflowRunEntity run = runEntity(plan);
+        org.springframework.test.util.ReflectionTestUtils.setField(run, "workflow", workflow);
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("__editorRun__", Boolean.TRUE);
+        run.setMetadata(metadata);
+        return run;
+    }
 
     private WorkflowRunEntity runEntity(Map<String, Object> plan) {
         WorkflowRunEntity run = new WorkflowRunEntity();

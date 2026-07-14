@@ -8,7 +8,7 @@ import { getNodeVisual } from '../../data/nodeVisuals';
 import type { BuilderNodeData, SwitchCaseRow, DerivedNodeStatus, NodeStatus } from '../../types';
 import { createDefaultSwitchCases } from '../../types';
 import { useValidation } from '../../contexts/ValidationContext';
-import { NodeActionButtons, NodeHeader, useHoverVisibility, getIconSlug, getStatusBorderColor, ReadyShimmerOverlay } from './shared';
+import { NodeActionButtons, NodeHeader, useHoverVisibility, getIconSlug, getStatusBorderColor } from './shared';
 import { findNodeClassById } from '../../nodes/nodeClasses';
 import { NodeStatusBadge } from '../NodeStatusBadge';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
@@ -59,7 +59,7 @@ export function SwitchNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
 
   // Get border color based on status
   // Always use status color for border
-  const statusBorderColor = getStatusBorderColor(effectiveStatus, hasError, isRunMode || viewingEpoch != null);
+  const statusBorderColor = getStatusBorderColor(effectiveStatus, hasError, isRunMode || viewingEpoch != null, data.statusCounts);
   const borderColor = statusBorderColor;
   // Don't apply skipped styling in step-by-step mode
   const isSkipped = !executionStatus.isStepByStepMode && effectiveStatus === 'skipped';
@@ -92,9 +92,6 @@ export function SwitchNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
             animation: 'shimmer-scan 2.5s ease-in-out infinite',
           }}
         />
-      )}
-      {executionStatus.isStepByStepMode && effectiveStatus === 'ready' && (
-        <ReadyShimmerOverlay className="absolute inset-0 pointer-events-none rounded-[26px]" />
       )}
       <NodeHeader
         visuals={visuals}

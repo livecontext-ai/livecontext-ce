@@ -22,7 +22,7 @@ import { useValidation } from '../../contexts/ValidationContext';
 import {
   NodeHeader,
   useHoverVisibility,
-  getStatusBorderColor, ReadyShimmerOverlay } from './shared';
+  getStatusBorderColor } from './shared';
 import { getProviderIconSlug } from '@/lib/ai-providers/providerIcons';
 import { getEffectiveDefaultProvider } from '@/hooks/useModels';
 import { NodeStatusBadge } from '../NodeStatusBadge';
@@ -78,7 +78,7 @@ export function BrowserAgentNode({ data, selected, id }: NodeProps<BuilderNodeDa
     return data.status;
   }, [viewingEpoch, executionStatus, data.status]);
 
-  const borderColor = getStatusBorderColor(effectiveStatus, hasError, isRunMode || viewingEpoch != null);
+  const borderColor = getStatusBorderColor(effectiveStatus, hasError, isRunMode || viewingEpoch != null, data.statusCounts);
   const isSkipped = !executionStatus.isStepByStepMode && effectiveStatus === 'skipped';
 
   // Live-view side-panel wiring (open tab + live-coords sync) - shared
@@ -114,9 +114,6 @@ export function BrowserAgentNode({ data, selected, id }: NodeProps<BuilderNodeDa
               animation: 'shimmer-scan 2.5s ease-in-out infinite',
             }}
           />
-        )}
-        {executionStatus.isStepByStepMode && effectiveStatus === 'ready' && (
-          <ReadyShimmerOverlay className="absolute inset-0 pointer-events-none rounded-[26px]" />
         )}
 
         <NodeHeader

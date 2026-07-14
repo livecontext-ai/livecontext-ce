@@ -91,7 +91,7 @@ class WorkflowBuilderProviderConnectFanOutTest {
             loader, tableOperations, planExporter, helpModule, executionService, workflowRunRepository,
             agentWorkflowFireService, runSignalResolution, planVersionService, productionRunResolver,
             new com.apimarketplace.orchestrator.config.AgentDefaultsConfig(),
-            conversationEventPublisher
+            conversationEventPublisher, null /* mockOutputSuggester - not exercised here */
         );
         // enrichResult / addSessionSnapshot pass through so the test sees the real connect result.
         lenient().when(resultEnricher.enrichResult(any(), any())).thenAnswer(inv -> inv.getArgument(0));

@@ -392,6 +392,39 @@ public class StorageService implements StorageOperations {
                 });
     }
 
+    /**
+     * Anonymous avatar fast-path. Avatars (agent avatars shown on marketplace cards,
+     * shared applications and embeds) are the ONE file class served without auth, so
+     * this lookup is deliberately narrow: only rows uploaded through the generic
+     * {@code avatar} category (s3 key {@code {tenant}/general/avatar/...}) with an
+     * image mime type resolve; every other row returns empty, keeping the backing
+     * endpoint useless as a generic cross-tenant file oracle. The row UUID is the
+     * only handle (opaque, unguessable). No access-time touch: this path is
+     * anonymous and hot (every marketplace card), a write per view is unwanted.
+     */
+    @Transactional(readOnly = true)
+    public Optional<StorageEntity> getPublicAvatarEntity(UUID id) {
+        // isActive (status ACTIVE + not expired): a soft-DELETED avatar must stop
+        // serving here too, not only on the authenticated endpoints.
+        return storageRepository.findById(id)
+                .filter(StorageEntity::isActive)
+                .filter(StorageService::isPublicAvatar);
+    }
+
+    /**
+     * Eligibility rule for the anonymous avatar serve - see {@link #getPublicAvatarEntity}.
+     * Anchored to the row's OWN tenant prefix ({@code {tenantId}/general/avatar/...}), so a
+     * crafted upload {@code category} that merely CONTAINS the marker cannot qualify.
+     */
+    static boolean isPublicAvatar(StorageEntity entity) {
+        String key = entity.getS3Key();
+        String mime = entity.getMimeType();
+        String tenantId = entity.getTenantId();
+        return key != null && tenantId != null
+                && key.startsWith(tenantId + "/general/avatar/")
+                && mime != null && mime.toLowerCase().startsWith("image/");
+    }
+
     public int deleteByDateRange(String tenantId, Instant dateFrom, Instant dateTo) {
         int count = storageRepository.softDeleteByDateRange(tenantId, dateFrom, dateTo);
         if (count > 0) {

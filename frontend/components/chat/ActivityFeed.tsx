@@ -16,6 +16,7 @@ import { isGroupedTool, getToolDescription, getToolIconType } from '@/lib/utils/
 import { useStableGroupedActivities } from '@/hooks/useStableGroupedActivities';
 import type { ToolActivity, ToolVisualization } from '@/contexts/StreamingContext';
 import { normalizeIconSlug } from '@/lib/credentials/iconSlug';
+import { compactJsonForDisplay } from '@/lib/utils/compactJsonForDisplay';
 
 // Re-export so existing imports `from '@/components/chat/ActivityFeed'` keep
 // working. Single source of truth lives in StreamingContext (live state owns
@@ -686,7 +687,10 @@ function formatResultForMarkdown(content: string): string {
             acc[k] = parsed[k];
             return acc;
           }, {} as Record<string, unknown>);
-          return `${parsed[field]}\n\n\`\`\`json\n${JSON.stringify(additionalData, null, 2)}\n\`\`\``;
+          // Bounded display: huge extras (verbatim configs, prompts...) are
+          // compacted so the message never drowns under a wall of JSON.
+          // Kept in sync with GroupedToolCard.formatResultForMarkdown.
+          return `${parsed[field]}\n\n\`\`\`json\n${compactJsonForDisplay(additionalData)}\n\`\`\``;
         }
         return parsed[field];
       }
@@ -711,7 +715,7 @@ function formatResultForMarkdown(content: string): string {
       }
     }
 
-    return `\`\`\`json\n${JSON.stringify(parsed, null, 2)}\n\`\`\``;
+    return `\`\`\`json\n${compactJsonForDisplay(parsed)}\n\`\`\``;
   } catch {
     return content;
   }

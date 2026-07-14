@@ -673,8 +673,8 @@ export interface AgentPublicationSnapshot {
 
 export interface PublishAgentRequest {
   agentConfigId: string;
-  /** Landing page interface shown on the marketplace listing (required by the backend). */
-  interfaceId: string;
+  /** Optional landing-page interface; without it the marketplace card renders the agent identity hero. */
+  interfaceId?: string;
   title?: string;
   description?: string;
   categoryId?: string;

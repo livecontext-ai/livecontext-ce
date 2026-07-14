@@ -13,7 +13,6 @@ import org.springframework.stereotype.Repository;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -250,12 +249,17 @@ public class DataSourceItemQueryRepository {
         }
     }
 
-    private void appendCursorCondition(StringBuilder sql, List<Object> params, String cursorStr) {
+    // Package-private for unit testing the keyset seek predicate (direction + precision).
+    void appendCursorCondition(StringBuilder sql, List<Object> params, String cursorStr) {
         try {
             DataSourceEnhancedModels.KeysetCursor cursor = DataSourceEnhancedModels.KeysetCursor.decode(cursorStr);
-            sql.append("AND (created_at < ? OR (created_at = ? AND id < ?)) ");
-            params.add(Timestamp.from(Instant.ofEpochMilli(cursor.createdAtMs())));
-            params.add(Timestamp.from(Instant.ofEpochMilli(cursor.createdAtMs())));
+            // Sort is `created_at DESC, id ASC`, so the seek predicate must advance FORWARD
+            // within a created_at tie-group using `id > ?` (not `id < ?`, which re-selected
+            // already-seen smaller ids and never moved past the cursor on ties).
+            Timestamp cursorTs = Timestamp.from(cursor.createdAtInstant());
+            sql.append("AND (created_at < ? OR (created_at = ? AND id > ?)) ");
+            params.add(cursorTs);
+            params.add(cursorTs);
             params.add(cursor.id());
         } catch (IllegalArgumentException e) {
             // Invalid cursor, ignore pagination

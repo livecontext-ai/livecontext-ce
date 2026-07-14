@@ -195,6 +195,7 @@ public class AgentCrudModule implements ToolModule {
         String name = getStringParam(p, "name");
         String description = getStringParam(p, "description");
         String systemPrompt = getStringParam(p, "system_prompt");
+        String avatar = getStringParam(p, "avatar");
         String modelProvider = getStringParam(p, "model_provider");
         String modelName = getStringParam(p, "model_name");
         BigDecimal temperature = getDecimalParam(p, "temperature");
@@ -333,6 +334,7 @@ public class AgentCrudModule implements ToolModule {
             if (compactionErr.isPresent()) return compactionErr.get();
 
             // Direct service call - no HTTP hop
+            avatar = validateAvatarParam(avatar); // throws IllegalArgumentException -> clean tool error (caught below)
             AgentEntity result = agentService.createAgent(
                 tenantId, name, description, systemPrompt,
                 modelProvider != null ? modelProvider : resolveDefaultProvider(),
@@ -343,7 +345,7 @@ public class AgentCrudModule implements ToolModule {
                 toolsConfig.isEmpty() ? null : toolsConfig,
                 workflowId, dataSourceId, conversationId,
                 config.isEmpty() ? null : config,
-                null, // avatarUrl - AgentService assigns random preset
+                avatar, // avatarUrl - null => AgentService assigns a random preset
                 isPublic != null ? isPublic : Boolean.FALSE,
                 isActive != null ? isActive : Boolean.TRUE,
                 orgId,
@@ -457,7 +459,7 @@ public class AgentCrudModule implements ToolModule {
             resultMap.put("tools_mode", toolsMode != null ? toolsMode : "all");
             resultMap.put("resources", resolveResources(result.getToolsConfig()));
             if (result.getToolsConfig() != null) {
-                resultMap.put("tools_config", result.getToolsConfig());
+                resultMap.put("tools_config", summarizeToolsConfig(result.getToolsConfig()));
             }
             if (result.getConversationId() != null) {
                 resultMap.put("conversation_id", result.getConversationId().toString());
@@ -538,6 +540,57 @@ public class AgentCrudModule implements ToolModule {
             refundCreateSlot(tenantId, turnId);
             return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, "Failed to create agent: " + e.getMessage());
         }
+    }
+
+    /**
+     * Validate a supplied {@code avatar} value for create/update. Null/blank passes through
+     * (create -> random preset; update -> unchanged). A preset must be a known id, optionally
+     * recolored with {@code ?c1=RRGGBB&c2=RRGGBB} and/or decorated with a tool badge
+     * {@code ?tool=<id>} (colors first when combined); an http(s) URL is accepted as-is.
+     * Anything else throws so the agent gets an actionable message instead of a broken avatar.
+     */
+    static String validateAvatarParam(String avatar) {
+        if (avatar == null || avatar.isBlank()) {
+            return null;
+        }
+        String v = avatar.trim();
+        if (v.matches("(?i)https?://\\S+")) { // require a host after the scheme (rejects a bare "https://")
+            return v;
+        }
+        if (v.startsWith("preset:")) {
+            int q = v.indexOf('?');
+            String base = q < 0 ? v : v.substring(0, q);
+            if (!com.apimarketplace.agent.service.AgentService.isKnownAvatarPreset(base)) {
+                throw new IllegalArgumentException("Unknown avatar preset '" + base + "'. Valid presets: "
+                        + String.join(", ", com.apimarketplace.agent.service.AgentService.avatarPresetIds())
+                        + ". Optionally recolor with '?c1=RRGGBB&c2=RRGGBB' and/or add a tool badge with"
+                        + " '?tool=<tool>'.");
+            }
+            if (q >= 0) {
+                // Param names and tool ids are lowercase (what the frontend parser reads back);
+                // only the hex digits are case-insensitive.
+                String query = v.substring(q + 1);
+                if (!query.matches("(c1=[0-9a-fA-F]{6}&c2=[0-9a-fA-F]{6}(&tool=[a-z0-9-]+)?|tool=[a-z0-9-]+)")) {
+                    throw new IllegalArgumentException("Avatar customization must be '?c1=RRGGBB&c2=RRGGBB',"
+                            + " '?tool=<tool>', or '?c1=RRGGBB&c2=RRGGBB&tool=<tool>' (colors are two 6-digit"
+                            + " hex without '#', tool ids are lowercase, colors come before tool), e.g."
+                            + " 'preset:blue?c1=FF6600&c2=003366&tool=wrench'.");
+                }
+                java.util.regex.Matcher toolMatcher =
+                        java.util.regex.Pattern.compile("(?:^|&)tool=([a-z0-9-]+)").matcher(query);
+                if (toolMatcher.find()) {
+                    String tool = toolMatcher.group(1);
+                    if (!com.apimarketplace.agent.service.AgentService.isKnownAvatarTool(tool)) {
+                        throw new IllegalArgumentException("Unknown avatar tool '" + tool + "'. Valid tools: "
+                                + String.join(", ", com.apimarketplace.agent.service.AgentService.avatarToolIds())
+                                + ".");
+                    }
+                }
+            }
+            return v;
+        }
+        throw new IllegalArgumentException("avatar must be a preset id ('preset:<color>', optionally with"
+                + " '?c1=RRGGBB&c2=RRGGBB' and/or '?tool=<tool>') or an http(s) image URL.");
     }
 
     private void refundCreateSlot(String tenantId, String turnId) {
@@ -715,6 +768,7 @@ public class AgentCrudModule implements ToolModule {
         String name = getStringParam(p, "name");
         String description = getStringParam(p, "description");
         String systemPrompt = getStringParam(p, "system_prompt");
+        String avatar = getStringParam(p, "avatar");
         String modelProvider = getStringParam(p, "model_provider");
         String modelName = getStringParam(p, "model_name");
         BigDecimal temperature = getDecimalParam(p, "temperature");
@@ -826,6 +880,7 @@ public class AgentCrudModule implements ToolModule {
             if (compactionErr.isPresent()) return compactionErr.get();
 
             // Audit 2026-05-16 round-2 originally added this for org-teammate updates.
+            avatar = validateAvatarParam(avatar); // throws IllegalArgumentException -> clean tool error (caught below)
             AgentEntity result = agentService.updateAgent(
                 id, tenantId,
                 name != null ? name : existing.getName(),
@@ -836,7 +891,7 @@ public class AgentCrudModule implements ToolModule {
                 mergedToolsConfig,
                 resolvedWorkflowId, dataSourceId, resolvedConversationId,
                 config.isEmpty() ? null : config,
-                null, // avatarUrl
+                avatar, // avatarUrl - null => unchanged (patch semantics)
                 isPublic, isActive,
                 resolvedCreditBudget,
                 getStringParam(p, "budget_reset_mode"),
@@ -943,7 +998,7 @@ public class AgentCrudModule implements ToolModule {
             responseMap.put("is_active", result.getIsActive());
             responseMap.put("resources", resolveResources(result.getToolsConfig()));
             if (result.getToolsConfig() != null) {
-                responseMap.put("tools_config", result.getToolsConfig());
+                responseMap.put("tools_config", summarizeToolsConfig(result.getToolsConfig()));
             }
             if (skillsAssigned > 0) {
                 responseMap.put("skills_assigned", skillsAssigned);
@@ -1131,6 +1186,36 @@ public class AgentCrudModule implements ToolModule {
         Map<String, Object> config = new LinkedHashMap<>();
         if (maxIterations != null) config.put("maxIterations", maxIterations);
         return config;
+    }
+
+    /**
+     * Compact echo of toolsConfig for CREATE/UPDATE responses. The caller just SET
+     * this config, so echoing the full map back (custom lists can carry hundreds of
+     * ids) is pure noise in both the chat display and the LLM context. The summary
+     * keeps what is actionable: the catalogue {@code mode}, each family's grant, and
+     * the SIZE of each non-empty custom list. The FULL map stays available via
+     * {@code action=get} (round-trip editing reads it there). Documented in
+     * AgentHelpModule (actions.create/get + response_shape.tools_config) - keep in
+     * lockstep.
+     */
+    private static Map<String, Object> summarizeToolsConfig(Map<String, Object> toolsConfig) {
+        Map<String, Object> summary = new LinkedHashMap<>();
+        Object mode = toolsConfig.get("mode");
+        if (mode != null) summary.put("mode", mode);
+        for (String family : List.of("workflows", "tables", "interfaces", "agents", "applications")) {
+            Object grant = toolsConfig.get(family + "Grant");
+            if (grant != null) summary.put(family + "Grant", grant);
+            if (toolsConfig.get(family) instanceof List<?> ids && !ids.isEmpty()) {
+                summary.put(family + "_count", ids.size());
+            }
+        }
+        if (toolsConfig.get("tools") instanceof List<?> tools && !tools.isEmpty()) {
+            summary.put("tools_count", tools.size());
+        }
+        if (toolsConfig.containsKey("webSearch")) {
+            summary.put("webSearch", toolsConfig.get("webSearch"));
+        }
+        return summary;
     }
 
     /**

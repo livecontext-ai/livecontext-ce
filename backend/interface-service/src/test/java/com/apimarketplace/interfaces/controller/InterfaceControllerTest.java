@@ -75,6 +75,50 @@ class InterfaceControllerTest {
         }
 
         @Test
+        void wrongTypedNumericField_returns400_not500() throws Exception {
+            // Regression: a non-numeric dataSourceId used to hit ((Number) v).longValue()
+            // -> uncaught ClassCastException -> HTTP 500. Now a clean 400.
+            Map<String, Object> body = Map.of(
+                    "name", "Test", "htmlTemplate", "<div>hi</div>", "dataSourceId", "not-a-number");
+
+            mockMvc.perform(post("/api/interfaces")
+                            .header("X-User-ID", TENANT)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(body)))
+                    .andExpect(status().isBadRequest());
+        }
+
+        @Test
+        void wrongTypedBooleanField_returns400_not500() throws Exception {
+            Map<String, Object> body = Map.of(
+                    "name", "Test", "htmlTemplate", "<div>hi</div>", "isPublic", "maybe");
+
+            mockMvc.perform(post("/api/interfaces")
+                            .header("X-User-ID", TENANT)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(body)))
+                    .andExpect(status().isBadRequest());
+        }
+
+        @Test
+        void numericStringField_isAccepted() throws Exception {
+            // A numeric STRING must still be accepted (defensive parse), mirroring the internal path.
+            InterfaceEntity entity = createEntity();
+            when(interfaceService.createInterface(any(), any(), any(), any(), any(), any(),
+                    any(), any(), any(), any(), any(), any(), any()))
+                    .thenReturn(entity);
+
+            Map<String, Object> body = Map.of(
+                    "name", "Test", "htmlTemplate", "<div>hi</div>", "dataSourceId", "5");
+
+            mockMvc.perform(post("/api/interfaces")
+                            .header("X-User-ID", TENANT)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(body)))
+                    .andExpect(status().isOk());
+        }
+
+        @Test
         void shouldCreateWithSnakeCaseBody() throws Exception {
             InterfaceEntity entity = createEntity();
             when(interfaceService.createInterface(

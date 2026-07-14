@@ -1,13 +1,11 @@
 // @vitest-environment jsdom
 /**
- * Step-by-step "focused/playable" shimmer: a node whose status is READY in
- * step-by-step mode renders a green ReadyShimmerOverlay (data-testid
- * "ready-shimmer"), the same visual language as the blue running shimmer, so
- * the user can see at a glance which node they are on and can execute next.
- * The overlay must appear ONLY for that state:
- *   - not outside step-by-step mode (auto runs never show it),
- *   - not for running/completed nodes (running keeps its blue shimmer),
- *   - gone once the node is no longer ready.
+ * The green node-body "ready" shimmer was REMOVED. A node that is runnable now
+ * no longer paints a green scan across its whole body; instead its run button in
+ * the bottom bar is revealed on its own with a blue shimmer (see
+ * NodeBottomBar force-reveal + NodePlayButton RUNNABLE_SHIMMER). This test is a
+ * regression guard that the old green overlay (data-testid "ready-shimmer")
+ * never comes back for any node state, in or out of step-by-step mode.
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -44,8 +42,6 @@ vi.mock('../../NodePlayButton', () => ({
   NodePlayButton: () => null,
   deriveNodeStatus: () => undefined,
 }));
-// Keep ReadyShimmerOverlay / getStatusBorderColor real (they are under test);
-// only stub the heavy presentational children.
 vi.mock('../shared', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../shared')>();
   return { ...actual, NodeHeader: () => null, NodeActionButtons: () => null };
@@ -82,27 +78,21 @@ beforeEach(() => {
   mockExec = execStatus();
 });
 
-describe.each(components)('%s ready shimmer', (_name, Comp) => {
-  it('shows the green shimmer when the node is READY in step-by-step mode', () => {
+describe.each(components)('%s has no green ready shimmer', (_name, Comp) => {
+  it('does NOT render the green node-body shimmer when READY in step-by-step mode', () => {
     mockExec = execStatus({ isStepByStepMode: true, isReady: true });
     const c = renderNode(Comp);
-    expect(shimmer(c)).not.toBeNull();
+    expect(shimmer(c)).toBeNull();
   });
 
-  it('does not show the shimmer outside step-by-step mode even for a ready status', () => {
+  it('does NOT render it for a ready status outside step-by-step mode either', () => {
     mockExec = execStatus({ isStepByStepMode: false });
     const c = renderNode(Comp, 'ready');
     expect(shimmer(c)).toBeNull();
   });
 
-  it('does not show the ready shimmer on a RUNNING node (running keeps its own shimmer)', () => {
+  it('does NOT render it for a running node', () => {
     mockExec = execStatus({ isStepByStepMode: true, isRunning: true });
-    const c = renderNode(Comp);
-    expect(shimmer(c)).toBeNull();
-  });
-
-  it('drops the shimmer once the node completes', () => {
-    mockExec = execStatus({ isStepByStepMode: true, isCompleted: true });
     const c = renderNode(Comp);
     expect(shimmer(c)).toBeNull();
   });

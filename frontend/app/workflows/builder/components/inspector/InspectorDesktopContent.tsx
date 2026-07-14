@@ -6,11 +6,12 @@ import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Play, C
 import { useTranslations } from 'next-intl';
 import clsx from 'clsx';
 import type { Node, Edge } from 'reactflow';
-import type { ApprovalDelegation, BuilderNodeData } from '../../types';
+import type { ApprovalContinuationMode, ApprovalDelegation, BuilderNodeData } from '../../types';
 import type { Connection } from './useInspectorConnections';
 import { InputColumn } from './InputColumn';
 import { ParameterColumn } from './ParameterColumn';
 import { OutputColumn } from './OutputColumn';
+import { OutputSettingsMenu } from './OutputSettingsMenu';
 import { InterfaceMappingsColumn } from './InterfaceMappingsColumn';
 import { PreviewColumn } from './PreviewColumn';
 import { NodeResultDataTable } from './NodeResultDataTable';
@@ -23,6 +24,8 @@ import { RunDataPreview } from './outputs/RunDataPreview';
 import { NavigationButtons } from './outputs/NavigationButtons';
 import { useNextNodes, getLoopIdFromNode, useIsIterationNode } from '../../hooks/useNextNodes';
 import { useValidation } from '../../contexts/ValidationContext';
+import Toast, { useToast } from '@/components/Toast';
+import { ensureMockPort, nodeSupportsMock, stripMockMarkers } from '../../utils/nodeMock';
 
 interface InspectorDesktopContentProps {
   // Node props
@@ -147,6 +150,8 @@ interface InspectorDesktopContentProps {
   approvalTimeoutMs?: number;
   handleApprovalContextTemplateChange?: (template: string | undefined) => void;
   approvalContextTemplate?: string;
+  handleApprovalContinuationModeChange?: (mode: ApprovalContinuationMode | undefined) => void;
+  approvalContinuationMode?: ApprovalContinuationMode;
   handleApprovalDelegationChange?: (delegation: ApprovalDelegation | undefined) => void;
   approvalDelegation?: ApprovalDelegation;
 
@@ -294,6 +299,8 @@ export function InspectorDesktopContent({
   approvalTimeoutMs,
   handleApprovalContextTemplateChange,
   approvalContextTemplate,
+  handleApprovalContinuationModeChange,
+  approvalContinuationMode,
   handleApprovalDelegationChange,
   approvalDelegation,
   getEditorExpression,
@@ -391,10 +398,58 @@ export function InspectorDesktopContent({
     return checkNodeErrorFromContext(n.id);
   }, [checkNodeErrorFromContext]);
 
+  // "Use as mock output": copies a viewed run output onto the node as its
+  // static mock (engine marker keys stripped). Offered only on mock-capable
+  // nodes; confirmed with a success toast.
+  const tMock = useTranslations('workflowBuilder.mock');
+  const { toasts, addToast, removeToast } = useToast();
+  const handleUseAsMock = React.useCallback(
+    (output: unknown) => {
+      if (!node || !nodeSupportsMock(node)) return;
+      const cleaned = stripMockMarkers(output);
+      if (!cleaned) return;
+      // ensureMockPort: on a branching node a static mock must carry a port
+      // (backend parse rule) - default to the first branch.
+      onUpdate({ ...node.data, mock: ensureMockPort({ output: cleaned }, node) });
+      addToast({
+        type: 'success',
+        title: tMock('title'),
+        message: tMock('usedAsMockToast', { label: node.data?.label || node.id }),
+      });
+    },
+    [node, onUpdate, addToast, tMock]
+  );
+  const onUseAsMock = node && nodeSupportsMock(node) ? handleUseAsMock : undefined;
+
+  // Output object currently loaded by the column's RunDataPreview, lifted up so
+  // the Output header's settings menu can offer "Use as mock output" on it.
+  // RunDataPreview publishes null whenever it is not displaying loaded data;
+  // the node-switch reset here is defense in depth (the preview instance is
+  // reused, never remounted, across node selections).
+  const [loadedRunOutput, setLoadedRunOutput] = React.useState<unknown | null>(null);
+  React.useEffect(() => {
+    setLoadedRunOutput(null);
+  }, [node?.id]);
+
   // Show configuration mode or result mode
   if (!runId || viewMode === 'configuration' || isInterfaceNode) {
     return (
       <div className="flex flex-1 min-h-0 overflow-x-auto overflow-y-hidden">
+        {/* Toast notifications (Use-as-mock confirmation) - same pattern as CredentialSection */}
+        {toasts.length > 0 && (
+          <div className="fixed top-4 right-4 z-[99999] space-y-2">
+            {toasts.map((toast) => (
+              <Toast
+                key={toast.id}
+                id={toast.id}
+                type={toast.type}
+                title={toast.title}
+                message={toast.message}
+                onClose={removeToast}
+              />
+            ))}
+          </div>
+        )}
         {/* Left collapse zone - only in advanced/fullscreen mode */}
         {(isAdvanced || isFullscreen) && inputCollapsed && (
           <button
@@ -553,6 +608,8 @@ export function InspectorDesktopContent({
               handleApprovalTimeoutChange={handleApprovalTimeoutChange}
               approvalContextTemplate={approvalContextTemplate}
               handleApprovalContextTemplateChange={handleApprovalContextTemplateChange}
+              approvalContinuationMode={approvalContinuationMode}
+              handleApprovalContinuationModeChange={handleApprovalContinuationModeChange}
               approvalDelegation={approvalDelegation}
               handleApprovalDelegationChange={handleApprovalDelegationChange}
             />
@@ -616,6 +673,9 @@ export function InspectorDesktopContent({
                   </div>
                 )}
                 <div className="flex-1" /> {/* Right spacer for centering */}
+                {/* Settings menu - actions on the loaded run output (hides
+                    itself on non-mock-capable nodes) */}
+                <OutputSettingsMenu onUseAsMock={onUseAsMock} loadedOutput={loadedRunOutput} />
                 <button
                   onClick={() => setOutputCollapsed(true)}
                   className="p-1 hover:bg-slate-100 dark:hover:bg-slate-700 rounded text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
@@ -728,6 +788,7 @@ export function InspectorDesktopContent({
                         stepAlias={node?.data?.label}
                         dataType="output"
                         isDraggable={false}
+                        onLoadedOutputChange={setLoadedRunOutput}
                       />
                     </div>
                   ) : (
@@ -751,6 +812,7 @@ export function InspectorDesktopContent({
                     currentWorkflowId={workflowId}
                     currentRunId={runId}
                     showExecutionData={showExecutionData}
+                    onLoadedOutputChange={setLoadedRunOutput}
                   />
                 )}
               </div>

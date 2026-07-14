@@ -152,15 +152,21 @@ export class ClaudeAdapter {
    * @param {string} config.model - model ID (e.g. "claude-opus-4-6")
    * @param {number} config.maxTurns - max iterations
    * @param {string} config.mcpConfigPath - path to MCP JSON config
-   * @returns {{args: string[], stdinPayload: null}} Claude takes the prompt via `-p`
-   *   so it never needs stdin; we still return the unified shape for symmetry
-   *   with the other adapters.
+   * @returns {{args: string[], stdinPayload: string}} The prompt is delivered via
+   *   STDIN (like codex/gemini/mistral), NOT as the `-p` positional. Passing a large
+   *   prompt as an argv string overflows the OS arg-size limit (Linux MAX_ARG_STRLEN,
+   *   128 KB) and `spawn` fails with E2BIG ("no response from bridge server") for any
+   *   agent whose prompt/context is big. `claude -p` with no positional reads the
+   *   query from stdin, whose limit (~10 MB) is ~80x higher, so real prompts and
+   *   multi-line text are safe.
    */
   buildArgs(config) {
     const { prompt, systemPrompt, model, maxTurns, mcpConfigPath, restrictedToolset, mcpServerName } = config;
 
+    // NOTE: the prompt is NOT placed here - it goes to stdin (see the return value).
+    // `-p` is the print-mode flag; with no positional query claude reads stdin.
     const args = [
-      '-p', prompt,
+      '-p',
       '--output-format', 'stream-json',
       '--max-turns', String(maxTurns),
       '--verbose',
@@ -241,7 +247,10 @@ export class ClaudeAdapter {
 
     // Prepend CLAUDE_CLI_JS if using direct node invocation
     const finalArgs = CLAUDE_CLI_JS ? [CLAUDE_CLI_JS, ...args] : args;
-    return { args: finalArgs, stdinPayload: null };
+    // Prompt via STDIN, never argv: a large prompt as an argument string overflows
+    // the OS arg-size limit and spawn fails with E2BIG. server.mjs writes this to
+    // the child's stdin when stdinPayload != null.
+    return { args: finalArgs, stdinPayload: prompt };
   }
 
   /**

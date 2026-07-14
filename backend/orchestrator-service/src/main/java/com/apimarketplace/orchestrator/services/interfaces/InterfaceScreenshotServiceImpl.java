@@ -11,6 +11,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -45,24 +46,53 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
     private static final int PLAYWRIGHT_TIMEOUT_MS = 8000;
     /** PDF renders (print layout + font settling) are slower than a screenshot - give them headroom. */
     private static final int PDF_TIMEOUT_MS = 20000;
+    /** Load timeout for the video page (the sidecar records AFTER load; recording time is separate). */
+    private static final int VIDEO_LOAD_TIMEOUT_MS = 10000;
     private static final String MIME_PNG = "image/png";
     private static final String MIME_PDF = "application/pdf";
+    private static final String MIME_MP4 = "video/mp4";
     private static final String DEFAULT_PDF_FORMAT = "A4";
     private static final String SCREENSHOT_ENDPOINT = "/internal/render/screenshot";
     private static final String PDF_ENDPOINT = "/internal/render/pdf";
+    private static final String VIDEO_ENDPOINT = "/internal/render/video";
+    static final String DEFAULT_VIDEO_PRESET = "vertical";
+    /** Mirrors the sidecar's VIDEO_PRESETS (lib.js) - anything else would 400 at render time. */
+    static final java.util.Set<String> SUPPORTED_VIDEO_PRESETS =
+        java.util.Set.of("vertical", "horizontal", "square");
+    static final int DEFAULT_VIDEO_DURATION_SECONDS = 30;
+    static final int MIN_VIDEO_DURATION_SECONDS = 5;
+    /** Mirrors the sidecar's MAX_VIDEO_DURATION_MS hard ceiling (lib.js). */
+    static final int MAX_VIDEO_DURATION_SECONDS = 120;
+    /** Mirrors the sidecar's VIDEO_MODES: smooth = offline frame-by-frame (fluid, default),
+     *  live = real-time screencast recording (fallback). */
+    static final java.util.Set<String> SUPPORTED_VIDEO_MODES = java.util.Set.of("smooth", "live");
+    static final String DEFAULT_VIDEO_MODE = "smooth";
+    static final int DEFAULT_VIDEO_FPS = 30;
+    static final int MIN_VIDEO_FPS = 10;
+    static final int MAX_VIDEO_FPS = 60;
 
     /** Resource key for the backpressure permit. One global key per orchestrator deployment -
      *  the Playwright sidecar is a shared singleton (screenshot + PDF share it) so the cap is
      *  process-global, not per-run. */
     private static final String SEMAPHORE_KEY = "screenshot:sidecar";
 
-    /** Distinguishes the two render outputs, driving the sidecar endpoint, MIME, extension,
+    /** Separate permit pool for video renders: a recording holds a sidecar slot for its WHOLE
+     *  duration (seconds to minutes), so it gets its own, smaller cap instead of starving the
+     *  fast screenshot/PDF traffic behind long-held "screenshot:sidecar" permits. */
+    private static final String VIDEO_SEMAPHORE_KEY = "video:sidecar";
+
+    /** Options specific to a VIDEO render; null for the other kinds. */
+    private record VideoOptions(String preset, int maxDurationSeconds, String mode, int fps) { }
+
+    /** Distinguishes the render outputs, driving the sidecar endpoint, MIME, extension,
      *  filename segment and storage source-type. Keeps the screenshot path byte-identical. */
     private enum RenderKind {
         SCREENSHOT("screenshot", MIME_PNG, "png",
             com.apimarketplace.common.storage.service.StorageSourceTypes.INTERFACE_SCREENSHOT),
         PDF("pdf", MIME_PDF, "pdf",
-            com.apimarketplace.common.storage.service.StorageSourceTypes.INTERFACE_PDF);
+            com.apimarketplace.common.storage.service.StorageSourceTypes.INTERFACE_PDF),
+        VIDEO("video", MIME_MP4, "mp4",
+            com.apimarketplace.common.storage.service.StorageSourceTypes.INTERFACE_VIDEO);
 
         final String segment;
         final String mime;
@@ -81,10 +111,13 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
     private final FileStorageService fileStorageService;
     private final WorkflowRunRepository workflowRunRepository;
     private final RestTemplate restTemplate;
+    private final RestTemplate videoRestTemplate;
     private final ObjectMapper objectMapper;
     private final String rendererBaseUrl;
     private final DistributedSemaphore screenshotConcurrency;
     private final int maxConcurrent;
+    private final int videoMaxConcurrent;
+    private final long videoMaxBytes;
 
     @Autowired
     public InterfaceScreenshotServiceImpl(
@@ -92,26 +125,32 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
         FileStorageService fileStorageService,
         WorkflowRunRepository workflowRunRepository,
         RestTemplate restTemplate,
+        @Qualifier("videoRenderRestTemplate") RestTemplate videoRestTemplate,
         ObjectMapper objectMapper,
         @Value("${services.screenshot-renderer-url:}") String rendererBaseUrl,
         DistributedSemaphore screenshotConcurrency,
-        @Value("${services.screenshot-renderer.max-concurrent:4}") int maxConcurrent
+        @Value("${services.screenshot-renderer.max-concurrent:4}") int maxConcurrent,
+        @Value("${services.screenshot-renderer.video-max-concurrent:2}") int videoMaxConcurrent,
+        @Value("${services.screenshot-renderer.video-max-bytes:52428800}") long videoMaxBytes
     ) {
         this.renderService = renderService;
         this.fileStorageService = fileStorageService;
         this.workflowRunRepository = workflowRunRepository;
         this.restTemplate = restTemplate;
+        this.videoRestTemplate = videoRestTemplate;
         this.objectMapper = objectMapper;
         this.rendererBaseUrl = rendererBaseUrl;
         this.screenshotConcurrency = screenshotConcurrency;
         this.maxConcurrent = maxConcurrent;
+        this.videoMaxConcurrent = videoMaxConcurrent;
+        this.videoMaxBytes = videoMaxBytes;
     }
 
     @Override
     public Optional<FileRef> capture(String tenantId, String runId, int epoch, int spawn,
                                      Integer itemIndex, String nodeId, UUID interfaceId) {
         return render(RenderKind.SCREENSHOT, tenantId, runId, epoch, spawn, itemIndex, nodeId,
-            interfaceId, null, false);
+            interfaceId, null, false, null);
     }
 
     @Override
@@ -119,7 +158,65 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
                                         Integer itemIndex, String nodeId, UUID interfaceId,
                                         String pdfFormat, boolean landscape) {
         return render(RenderKind.PDF, tenantId, runId, epoch, spawn, itemIndex, nodeId,
-            interfaceId, pdfFormat, landscape);
+            interfaceId, pdfFormat, landscape, null);
+    }
+
+    @Override
+    public Optional<FileRef> captureVideo(String tenantId, String runId, int epoch, int spawn,
+                                          Integer itemIndex, String nodeId, UUID interfaceId,
+                                          String videoPreset, Integer maxDurationSeconds,
+                                          String videoMode, Integer videoFps) {
+        String preset = normalizeVideoPresetOrDefault(videoPreset);
+        int duration = clampVideoDurationSeconds(maxDurationSeconds);
+        String mode = normalizeVideoModeOrDefault(videoMode);
+        int fps = clampVideoFps(videoFps);
+        return render(RenderKind.VIDEO, tenantId, runId, epoch, spawn, itemIndex, nodeId,
+            interfaceId, null, false, new VideoOptions(preset, duration, mode, fps));
+    }
+
+    /**
+     * Normalise the requested render mode; null/blank/unknown falls back to smooth (the
+     * offline frame-by-frame renderer - fluid output regardless of sidecar load). 'live'
+     * (real-time screencast) stays available as an explicit fallback.
+     */
+    static String normalizeVideoModeOrDefault(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return DEFAULT_VIDEO_MODE;
+        }
+        String candidate = raw.trim().toLowerCase(Locale.ROOT);
+        return SUPPORTED_VIDEO_MODES.contains(candidate) ? candidate : DEFAULT_VIDEO_MODE;
+    }
+
+    /** Clamp the requested frame rate to [MIN, MAX]; null/non-positive → default 30. */
+    static int clampVideoFps(Integer fps) {
+        if (fps == null || fps <= 0) {
+            return DEFAULT_VIDEO_FPS;
+        }
+        return Math.max(MIN_VIDEO_FPS, Math.min(fps, MAX_VIDEO_FPS));
+    }
+
+    /**
+     * Normalise the caller's preset to a sidecar-supported one; null/blank/unknown falls back to
+     * vertical. This is the LAST line of defence: the agent/build path already normalises via
+     * InterfaceNodeConfig, but a hand-written or imported plan keeps its raw string, and
+     * forwarding an unknown preset would 400 at the sidecar (silent absent output) instead of
+     * honouring the documented "unknown falls back to vertical" contract.
+     */
+    static String normalizeVideoPresetOrDefault(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return DEFAULT_VIDEO_PRESET;
+        }
+        String candidate = raw.trim().toLowerCase(Locale.ROOT);
+        return SUPPORTED_VIDEO_PRESETS.contains(candidate) ? candidate : DEFAULT_VIDEO_PRESET;
+    }
+
+    /** Clamp the caller's recording ceiling to [MIN, MAX] seconds; null/non-positive → default. */
+    static int clampVideoDurationSeconds(Integer maxDurationSeconds) {
+        if (maxDurationSeconds == null || maxDurationSeconds <= 0) {
+            return DEFAULT_VIDEO_DURATION_SECONDS;
+        }
+        return Math.max(MIN_VIDEO_DURATION_SECONDS,
+            Math.min(maxDurationSeconds, MAX_VIDEO_DURATION_SECONDS));
     }
 
     /**
@@ -130,13 +227,13 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
      */
     private Optional<FileRef> render(RenderKind kind, String tenantId, String runId, int epoch,
                                      int spawn, Integer itemIndex, String nodeId, UUID interfaceId,
-                                     String pdfFormat, boolean landscape) {
+                                     String pdfFormat, boolean landscape, VideoOptions videoOptions) {
         if (rendererBaseUrl == null || rendererBaseUrl.isBlank()) {
             // WARN, not DEBUG: the user explicitly asked for this render (toggle ON) and the
             // output field will silently be absent. The builder UI warns pre-run via the
             // capabilities endpoint; this is the run-time trace an operator greps for.
             logger.warn("services.screenshot-renderer-url not configured - skipping {} for nodeId={} runId={} "
-                + "(enable the optional renderer component to activate interface screenshot/PDF outputs)",
+                + "(enable the optional renderer component to activate interface screenshot/PDF/video outputs)",
                 kind.segment, nodeId, runId);
             return Optional.empty();
         }
@@ -148,23 +245,28 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
         // cross-replica when Redis is wired, in-process otherwise. On capacity exhaustion we
         // skip the render (Optional.empty), honouring the existing best-effort contract: the
         // workflow continues normally, just without the field this run.
+        // Video renders hold their slot for the whole recording, so they use a dedicated
+        // (smaller) permit pool instead of starving the fast screenshot/PDF traffic.
+        String semaphoreKey = kind == RenderKind.VIDEO ? VIDEO_SEMAPHORE_KEY : SEMAPHORE_KEY;
+        int permitCap = kind == RenderKind.VIDEO ? videoMaxConcurrent : maxConcurrent;
         String ownerId = nodeId + ":" + runId + ":" + epoch + ":" + spawn + ":" + Thread.currentThread().getId();
-        if (!screenshotConcurrency.tryAcquire(SEMAPHORE_KEY, maxConcurrent, ownerId)) {
+        if (!screenshotConcurrency.tryAcquire(semaphoreKey, permitCap, ownerId)) {
             logger.info("Render sidecar at capacity (max={}), skipping {} for nodeId={} runId={} epoch={} spawn={}",
-                maxConcurrent, kind.segment, nodeId, runId, epoch, spawn);
+                permitCap, kind.segment, nodeId, runId, epoch, spawn);
             return Optional.empty();
         }
 
         try {
-            return doRender(kind, tenantId, runId, epoch, spawn, itemIndex, nodeId, interfaceId, pdfFormat, landscape);
+            return doRender(kind, tenantId, runId, epoch, spawn, itemIndex, nodeId, interfaceId,
+                pdfFormat, landscape, videoOptions);
         } finally {
-            screenshotConcurrency.release(SEMAPHORE_KEY, ownerId);
+            screenshotConcurrency.release(semaphoreKey, ownerId);
         }
     }
 
     private Optional<FileRef> doRender(RenderKind kind, String tenantId, String runId, int epoch,
                                        int spawn, Integer itemIndex, String nodeId, UUID interfaceId,
-                                       String pdfFormat, boolean landscape) {
+                                       String pdfFormat, boolean landscape, VideoOptions videoOptions) {
         ResolvedTemplateSnapshot snapshot;
         try {
             Optional<ResolvedTemplateSnapshot> opt = renderService.resolveTemplateSnapshot(interfaceId, runId, tenantId, epoch);
@@ -184,7 +286,7 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
 
         byte[] bytes;
         try {
-            bytes = postToSidecar(kind, assembled, pdfFormat, landscape);
+            bytes = postToSidecar(kind, assembled, pdfFormat, landscape, videoOptions);
         } catch (RestClientException e) {
             logger.warn("{} sidecar call failed for nodeId={} runId={} epoch={}: {}",
                 kind.segment, nodeId, runId, epoch, e.getMessage());
@@ -198,6 +300,15 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
         if (bytes == null || bytes.length == 0) {
             logger.warn("{} sidecar returned empty body for nodeId={} runId={} epoch={}",
                 kind.segment, nodeId, runId, epoch);
+            return Optional.empty();
+        }
+
+        // Screenshots/PDFs are naturally small; a recording is not. Guard storage against a
+        // pathological clip (very long + busy animation) - same best-effort skip as every
+        // other failure path.
+        if (kind == RenderKind.VIDEO && bytes.length > videoMaxBytes) {
+            logger.warn("video exceeds max size ({} > {} bytes), skipping upload for nodeId={} runId={} epoch={}",
+                bytes.length, videoMaxBytes, nodeId, runId, epoch);
             return Optional.empty();
         }
 
@@ -345,15 +456,22 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
         return haystack.toLowerCase(Locale.ROOT).indexOf(needle.toLowerCase(Locale.ROOT));
     }
 
-    private byte[] postToSidecar(RenderKind kind, String html, String pdfFormat, boolean landscape) {
-        String endpoint = kind == RenderKind.PDF ? PDF_ENDPOINT : SCREENSHOT_ENDPOINT;
+    private byte[] postToSidecar(RenderKind kind, String html, String pdfFormat, boolean landscape,
+                                 VideoOptions videoOptions) {
+        String endpoint = switch (kind) {
+            case PDF -> PDF_ENDPOINT;
+            case VIDEO -> VIDEO_ENDPOINT;
+            case SCREENSHOT -> SCREENSHOT_ENDPOINT;
+        };
         String url = rendererBaseUrl.endsWith("/")
             ? rendererBaseUrl.substring(0, rendererBaseUrl.length() - 1) + endpoint
             : rendererBaseUrl + endpoint;
 
-        Map<String, Object> body = kind == RenderKind.PDF
-            ? buildPdfBody(html, pdfFormat, landscape)
-            : buildScreenshotBody(html);
+        Map<String, Object> body = switch (kind) {
+            case PDF -> buildPdfBody(html, pdfFormat, landscape);
+            case VIDEO -> buildVideoBody(html, videoOptions);
+            case SCREENSHOT -> buildScreenshotBody(html);
+        };
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
@@ -362,8 +480,10 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(body, headers);
         // RestTemplate's default error handler throws HttpStatusCodeException for non-2xx -
         // it never returns a non-2xx ResponseEntity to this method, so the caller's catch
-        // around postToSidecar is the only failure-path we need.
-        ResponseEntity<byte[]> response = restTemplate.exchange(url, HttpMethod.POST, entity, byte[].class);
+        // around postToSidecar is the only failure-path we need. Video goes through the
+        // long-read-timeout template: a recording legitimately outlives the default 30s window.
+        RestTemplate template = kind == RenderKind.VIDEO ? videoRestTemplate : restTemplate;
+        ResponseEntity<byte[]> response = template.exchange(url, HttpMethod.POST, entity, byte[].class);
         return response.getBody();
     }
 
@@ -394,6 +514,31 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
         // Self-contained print HTML rarely needs networkidle; 'load' is faster + avoids hangs.
         body.put("waitFor", "load");
         body.put("timeoutMs", PDF_TIMEOUT_MS);
+        return body;
+    }
+
+    private Map<String, Object> buildVideoBody(String html, VideoOptions videoOptions) {
+        VideoOptions opts = videoOptions != null
+            ? videoOptions
+            : new VideoOptions(DEFAULT_VIDEO_PRESET, DEFAULT_VIDEO_DURATION_SECONDS,
+                DEFAULT_VIDEO_MODE, DEFAULT_VIDEO_FPS);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("html", html);
+        body.put("preset", opts.preset());
+        // The orchestrator always requests MP4 (H.264 + faststart): the one container every
+        // downstream consumer (social upload APIs, Telegram, browsers) accepts.
+        body.put("format", "mp4");
+        // smooth = offline frame-by-frame under a virtual clock (every frame perfect);
+        // live = real-time screencast (legacy fallback, frames can drop under load).
+        body.put("mode", opts.mode());
+        body.put("fps", opts.fps());
+        body.put("maxDurationMs", opts.maxDurationSeconds() * 1000);
+        // The interface's own JS ends the clip early by setting window.__DONE__ = true;
+        // otherwise the recording runs the full maxDurationMs. Both are normal endings.
+        body.put("waitForDone", true);
+        body.put("waitFor", "networkidle");
+        // Load timeout only - recording time is governed by maxDurationMs on the sidecar side.
+        body.put("timeoutMs", VIDEO_LOAD_TIMEOUT_MS);
         return body;
     }
 

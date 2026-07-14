@@ -191,6 +191,47 @@ class MonolithFileControllerTest {
     }
 
     @Nested
+    @DisplayName("avatar/{id} - anonymous avatar serve (CE)")
+    class AvatarById {
+
+        @Test
+        @DisplayName("serves an eligible avatar with the no-script CSP + nosniff + public cache headers")
+        void servesAvatarWithSecurityHeaders() {
+            UUID id = UUID.randomUUID();
+            StorageEntity e = new StorageEntity();
+            e.setId(id);
+            e.setTenantId("42");
+            e.setS3Key("42/general/avatar/ab12_avatar.svg");
+            e.setFileName("avatar.svg");
+            e.setMimeType("image/svg+xml");
+            when(storageService.getPublicAvatarEntity(id)).thenReturn(Optional.of(e));
+            when(fileStorageService.download(e.getS3Key()))
+                    .thenReturn(Optional.of("<svg/>".getBytes(StandardCharsets.UTF_8)));
+
+            ResponseEntity<byte[]> r = controller().avatarById(id);
+
+            assertThat(r.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(r.getHeaders().getFirst("Content-Security-Policy"))
+                    .isEqualTo("default-src 'none'; style-src 'unsafe-inline'");
+            assertThat(r.getHeaders().getFirst("X-Content-Type-Options")).isEqualTo("nosniff");
+            assertThat(r.getHeaders().getFirst("Cache-Control")).isEqualTo("public, max-age=86400");
+            assertThat(r.getBody()).isEqualTo("<svg/>".getBytes(StandardCharsets.UTF_8));
+        }
+
+        @Test
+        @DisplayName("non-eligible id 404s without reading object storage")
+        void nonEligible404s() {
+            UUID id = UUID.randomUUID();
+            when(storageService.getPublicAvatarEntity(id)).thenReturn(Optional.empty());
+
+            ResponseEntity<byte[]> r = controller().avatarById(id);
+
+            assertThat(r.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+            verify(fileStorageService, never()).download(anyString());
+        }
+    }
+
+    @Nested
     @DisplayName("by-id/{id}/raw")
     class RawById {
 

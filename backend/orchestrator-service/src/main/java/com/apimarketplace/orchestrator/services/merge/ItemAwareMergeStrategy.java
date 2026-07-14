@@ -78,8 +78,8 @@ public class ItemAwareMergeStrategy implements MergeStrategy {
         // Check if all expected items have been received
         boolean isComplete = state.isComplete();
         if (!isComplete) {
-            log.debug("Merge waiting: runId={}, mergePointId={}, scope={}, progress={:.1f}%",
-                runId, mergePointId, scope, state.getProgress() * 100);
+            log.debug("Merge waiting: runId={}, mergePointId={}, scope={}, progress={}%",
+                runId, mergePointId, scope, String.format("%.1f", state.getProgress() * 100));
         }
 
         return isComplete;

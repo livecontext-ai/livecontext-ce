@@ -22,6 +22,7 @@ import java.math.BigDecimal;
 import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -111,6 +112,76 @@ class AgentCrudModuleTest {
             assertThat(result).isPresent();
             assertThat(result.get().success()).isTrue();
             assertThat(result.get().toMap().toString()).contains("CREATED");
+        }
+
+        @Test
+        @DisplayName("create response echoes a SUMMARIZED tools_config (grants + list sizes), never the raw id lists")
+        @SuppressWarnings("unchecked")
+        void createEchoesSummarizedToolsConfig() {
+            AgentEntity created = mockAgent(AGENT_ID, "My Agent");
+            java.util.List<String> manyIds = new java.util.ArrayList<>();
+            for (int i = 0; i < 40; i++) manyIds.add(UUID.randomUUID().toString());
+            Map<String, Object> toolsConfig = new java.util.LinkedHashMap<>();
+            toolsConfig.put("mode", "custom");
+            toolsConfig.put("tablesGrant", "custom");
+            toolsConfig.put("tables", manyIds);
+            toolsConfig.put("workflowsGrant", "none");
+            toolsConfig.put("webSearch", true);
+            created.setToolsConfig(toolsConfig);
+            when(agentService.createAgent(any(), any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(created);
+
+            Optional<ToolExecutionResult> result = module.execute("create",
+                Map.of("action", "create", "name", "My Agent", "system_prompt", "hi"), TENANT, ctx());
+
+            assertThat(result.get().success()).isTrue();
+            Map<String, Object> data = (Map<String, Object>) result.get().toMap().get("data");
+            Map<String, Object> echoed = (Map<String, Object>) data.get("tools_config");
+            // Summary shape: grants + sizes, actionable for the LLM without the noise.
+            assertThat(echoed).containsEntry("mode", "custom");
+            assertThat(echoed).containsEntry("tablesGrant", "custom");
+            assertThat(echoed).containsEntry("tables_count", 40);
+            assertThat(echoed).containsEntry("workflowsGrant", "none");
+            assertThat(echoed).containsEntry("webSearch", true);
+            // The raw 40-id list must NOT be echoed back (that is what get is for).
+            assertThat(echoed).doesNotContainKey("tables");
+            assertThat(echoed.toString()).doesNotContain(manyIds.get(0));
+        }
+
+        @Test
+        @DisplayName("an invalid avatar returns a clean failure (validation caught, createAgent never called)")
+        void createWithInvalidAvatarFailsCleanly() {
+            Map<String, Object> params = new HashMap<>(Map.of(
+                "action", "create", "name", "A", "system_prompt", "hi", "avatar", "preset:crimson"));
+
+            Optional<ToolExecutionResult> result = module.execute("create", params, TENANT, ctx());
+
+            assertThat(result).isPresent();
+            assertThat(result.get().success()).isFalse();
+            assertThat(result.get().error()).contains("Unknown avatar preset");
+            verify(agentService, never()).createAgent(any(), any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("a valid recolored preset avatar is passed through to createAgent")
+        void createPassesRecoloredAvatarThrough() {
+            AgentEntity created = mockAgent(AGENT_ID, "A");
+            when(agentService.createAgent(any(), any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any(), eq("preset:blue?c1=FF6600&c2=003366"),
+                any(), any(), any(), any(), any())).thenReturn(created);
+
+            Map<String, Object> params = new HashMap<>(Map.of(
+                "action", "create", "name", "A", "system_prompt", "hi",
+                "avatar", "preset:blue?c1=FF6600&c2=003366"));
+
+            Optional<ToolExecutionResult> result = module.execute("create", params, TENANT, ctx());
+
+            assertThat(result.get().success()).isTrue();
+            verify(agentService).createAgent(any(), any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any(), eq("preset:blue?c1=FF6600&c2=003366"),
+                any(), any(), any(), any(), any());
         }
 
         @Test
@@ -455,6 +526,38 @@ class AgentCrudModuleTest {
             assertThat(result).isPresent();
             assertThat(result.get().success()).isTrue();
             assertThat(result.get().toMap().toString()).contains("UPDATED");
+        }
+
+        @Test
+        @DisplayName("update response echoes a SUMMARIZED tools_config (grants + list sizes), never the raw id lists")
+        @SuppressWarnings("unchecked")
+        void updateEchoesSummarizedToolsConfig() {
+            AgentEntity existing = mockAgent(AGENT_ID, "Old Name");
+            when(agentService.getAgent(AGENT_ID, TENANT)).thenReturn(Optional.of(existing));
+
+            AgentEntity updated = mockAgent(AGENT_ID, "New Name");
+            java.util.List<String> manyIds = new java.util.ArrayList<>();
+            for (int i = 0; i < 25; i++) manyIds.add(UUID.randomUUID().toString());
+            Map<String, Object> toolsConfig = new java.util.LinkedHashMap<>();
+            toolsConfig.put("mode", "all");
+            toolsConfig.put("workflowsGrant", "custom");
+            toolsConfig.put("workflows", manyIds);
+            updated.setToolsConfig(toolsConfig);
+            when(agentService.updateAgent(eq(AGENT_ID), eq(TENANT), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any()))
+                .thenReturn(updated);
+
+            Map<String, Object> params = Map.of("action", "update", "agent_id", AGENT_ID.toString(), "name", "New Name");
+            Optional<ToolExecutionResult> result = module.execute("update", params, TENANT, ctx());
+
+            assertThat(result.get().success()).isTrue();
+            Map<String, Object> data = (Map<String, Object>) result.get().toMap().get("data");
+            Map<String, Object> echoed = (Map<String, Object>) data.get("tools_config");
+            assertThat(echoed).containsEntry("workflowsGrant", "custom");
+            assertThat(echoed).containsEntry("workflows_count", 25);
+            assertThat(echoed).doesNotContainKey("workflows");
+            assertThat(echoed.toString()).doesNotContain(manyIds.get(0));
         }
 
         @Test
@@ -2437,6 +2540,101 @@ class AgentCrudModuleTest {
                 any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
             verify(agentService, never()).setCompactionOverrides(any(), any(), any(),
                 anyBoolean(), any(), anyBoolean(), any());
+        }
+    }
+
+    @Nested
+    @DisplayName("avatar param validation (MCP create/update)")
+    class AvatarParam {
+        @Test
+        @DisplayName("null/blank passes through (create -> random preset; update -> unchanged)")
+        void nullOrBlankPassesThrough() {
+            assertThat(AgentCrudModule.validateAvatarParam(null)).isNull();
+            assertThat(AgentCrudModule.validateAvatarParam("   ")).isNull();
+        }
+
+        @Test
+        @DisplayName("known preset, its recolored form, and an http URL are accepted verbatim")
+        void knownPresetAndCustomColorsAccepted() {
+            assertThat(AgentCrudModule.validateAvatarParam("preset:blue")).isEqualTo("preset:blue");
+            assertThat(AgentCrudModule.validateAvatarParam("preset:blue?c1=FF6600&c2=003366"))
+                    .isEqualTo("preset:blue?c1=FF6600&c2=003366");
+            assertThat(AgentCrudModule.validateAvatarParam("https://cdn/x.png")).isEqualTo("https://cdn/x.png");
+        }
+
+        @Test
+        @DisplayName("unknown preset is rejected with the valid list (actionable for the agent)")
+        void unknownPresetRejected() {
+            assertThatThrownBy(() -> AgentCrudModule.validateAvatarParam("preset:crimson"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("Unknown avatar preset")
+                    .hasMessageContaining("preset:blue");
+        }
+
+        @Test
+        @DisplayName("malformed custom colors are rejected (bad hex, missing c2, empty/garbled query)")
+        void malformedColorsRejected() {
+            for (String bad : new String[] {
+                    "preset:blue?c1=xyz&c2=003366",   // non-hex
+                    "preset:blue?c1=FF6600",           // missing c2
+                    "preset:blue?",                    // empty query
+                    "preset:blue?c1=FF6600&c2=003366&x=1", // trailing garbage
+                    // Param NAMES are lowercase: the frontend reads them case-sensitively, so
+                    // 'C1=' would be stored but never render - reject with guidance instead.
+                    "preset:blue?C1=FF6600&C2=003366",
+            }) {
+                assertThatThrownBy(() -> AgentCrudModule.validateAvatarParam(bad))
+                        .as("should reject %s", bad)
+                        .isInstanceOf(IllegalArgumentException.class)
+                        .hasMessageContaining("c1=RRGGBB");
+            }
+        }
+
+        @Test
+        @DisplayName("tool-badge forms are accepted verbatim (tool alone, colors + tool)")
+        void toolBadgeFormsAccepted() {
+            assertThat(AgentCrudModule.validateAvatarParam("preset:blue?tool=wrench"))
+                    .isEqualTo("preset:blue?tool=wrench");
+            assertThat(AgentCrudModule.validateAvatarParam("preset:blue?c1=FF6600&c2=003366&tool=git-branch"))
+                    .isEqualTo("preset:blue?c1=FF6600&c2=003366&tool=git-branch");
+        }
+
+        @Test
+        @DisplayName("unknown tool id is rejected with the valid list (actionable for the agent)")
+        void unknownToolRejected() {
+            assertThatThrownBy(() -> AgentCrudModule.validateAvatarParam("preset:blue?tool=sword"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("Unknown avatar tool")
+                    .hasMessageContaining("wrench");
+        }
+
+        @Test
+        @DisplayName("malformed tool forms are rejected (tool before colors, uppercase id, empty value)")
+        void malformedToolRejected() {
+            for (String bad : new String[] {
+                    "preset:blue?tool=wrench&c1=FF6600&c2=003366", // colors must come before tool
+                    "preset:blue?tool=Wrench",                     // ids are lowercase (frontend parse is case-sensitive)
+                    "preset:blue?tool=",                           // empty value
+            }) {
+                assertThatThrownBy(() -> AgentCrudModule.validateAvatarParam(bad))
+                        .as("should reject %s", bad)
+                        .isInstanceOf(IllegalArgumentException.class);
+            }
+        }
+
+        @Test
+        @DisplayName("a bare scheme with no host is rejected")
+        void bareHttpSchemeRejected() {
+            assertThatThrownBy(() -> AgentCrudModule.validateAvatarParam("https://"))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        @DisplayName("a non-preset non-URL value is rejected")
+        void garbageRejected() {
+            assertThatThrownBy(() -> AgentCrudModule.validateAvatarParam("just some text"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("preset:");
         }
     }
 }

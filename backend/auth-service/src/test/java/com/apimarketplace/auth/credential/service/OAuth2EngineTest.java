@@ -1072,6 +1072,93 @@ class OAuth2EngineTest {
         );
     }
 
+    // ─────────────────── buildAccessTokenGrantUrl (Meta family) ───────────────────
+
+    @Nested
+    @DisplayName("buildAccessTokenGrantUrl")
+    class BuildAccessTokenGrantUrl {
+
+        @Test
+        @DisplayName("Instagram exchange: grant_type + client_secret + access_token, no client_id")
+        void instagramExchange() {
+            var grant = new OAuth2ProviderConfig.AccessTokenGrant(
+                    "https://graph.instagram.com/access_token",
+                    "ig_exchange_token", "access_token", false, true);
+
+            String url = engine.buildAccessTokenGrantUrl(grant, "short-lived-tok", "cid", "csec");
+
+            assertThat(url).startsWith("https://graph.instagram.com/access_token?");
+            Map<String, String> params = parseQuery(url);
+            assertThat(params)
+                    .containsEntry("grant_type", "ig_exchange_token")
+                    .containsEntry("client_secret", "csec")
+                    .containsEntry("access_token", "short-lived-tok")
+                    .doesNotContainKey("client_id");
+        }
+
+        @Test
+        @DisplayName("Instagram renewal: only grant_type + access_token (no client_id/secret)")
+        void instagramRenewal() {
+            var grant = new OAuth2ProviderConfig.AccessTokenGrant(
+                    "https://graph.instagram.com/refresh_access_token",
+                    "ig_refresh_token", "access_token", false, false);
+
+            String url = engine.buildAccessTokenGrantUrl(grant, "long-lived-tok", "cid", "csec");
+
+            Map<String, String> params = parseQuery(url);
+            assertThat(params).containsOnlyKeys("grant_type", "access_token");
+            assertThat(params.get("grant_type")).isEqualTo("ig_refresh_token");
+            assertThat(params.get("access_token")).isEqualTo("long-lived-tok");
+        }
+
+        @Test
+        @DisplayName("Facebook: token travels under fb_exchange_token with client_id + secret")
+        void facebookExchange() {
+            var grant = new OAuth2ProviderConfig.AccessTokenGrant(
+                    "https://graph.facebook.com/v25.0/oauth/access_token",
+                    "fb_exchange_token", "fb_exchange_token", true, true);
+
+            String url = engine.buildAccessTokenGrantUrl(grant, "current-tok", "cid", "csec");
+
+            Map<String, String> params = parseQuery(url);
+            assertThat(params)
+                    .containsEntry("grant_type", "fb_exchange_token")
+                    .containsEntry("client_id", "cid")
+                    .containsEntry("client_secret", "csec")
+                    .containsEntry("fb_exchange_token", "current-tok");
+        }
+
+        @Test
+        @DisplayName("values are URL-encoded and an existing query continues with &")
+        void encodingAndExistingQuery() {
+            var grant = new OAuth2ProviderConfig.AccessTokenGrant(
+                    "https://example.com/token?api=1",
+                    "ig_exchange_token", "access_token", false, true);
+
+            String url = engine.buildAccessTokenGrantUrl(grant, "tok+en&x=1", null, "s3c&ret");
+
+            assertThat(url).startsWith("https://example.com/token?api=1&grant_type=");
+            Map<String, String> params = parseQuery(url);
+            assertThat(params)
+                    .containsEntry("api", "1")
+                    .containsEntry("access_token", "tok+en&x=1")
+                    .containsEntry("client_secret", "s3c&ret");
+        }
+
+        @Test
+        @DisplayName("blank clientId/clientSecret are omitted even when the grant asks for them")
+        void blankCredentialsOmitted() {
+            var grant = new OAuth2ProviderConfig.AccessTokenGrant(
+                    "https://graph.facebook.com/v25.0/oauth/access_token",
+                    "fb_exchange_token", "fb_exchange_token", true, true);
+
+            String url = engine.buildAccessTokenGrantUrl(grant, "tok", " ", null);
+
+            Map<String, String> params = parseQuery(url);
+            assertThat(params).containsOnlyKeys("grant_type", "fb_exchange_token");
+        }
+    }
+
     /** The form-encoded token body of a request (all non-JSON providers). */
     @SuppressWarnings("unchecked")
     private static MultiValueMap<String, String> form(HttpEntity<?> req) {

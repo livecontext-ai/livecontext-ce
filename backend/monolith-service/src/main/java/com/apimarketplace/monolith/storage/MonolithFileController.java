@@ -201,6 +201,35 @@ public class MonolithFileController {
                 .body(data);
     }
 
+    /**
+     * Anonymous avatar serve - CE counterpart of {@code FileController.avatarById}.
+     * Agent avatars must render for viewers who are NOT the uploader (marketplace cards,
+     * shared applications, widget embeds) where a plain {@code <img>} carries no token.
+     * Only rows eligible per {@code StorageService.getPublicAvatarEntity} resolve
+     * (generic {@code avatar} category + image mime); everything else 404s. SVGs get a
+     * no-script CSP + nosniff since they are user/AI supplied markup on the app origin.
+     */
+    @GetMapping("/avatar/{id}")
+    public ResponseEntity<byte[]> avatarById(@PathVariable UUID id) {
+        StorageEntity entity = storageService.getPublicAvatarEntity(id).orElse(null);
+        // Eligibility guarantees a non-null s3 key (the rule is key-anchored),
+        // so there is no inline-bytes branch here.
+        if (entity == null || entity.getFileName() == null || entity.getS3Key() == null) {
+            return ResponseEntity.notFound().build();
+        }
+        byte[] data = fileStorageService.download(entity.getS3Key()).orElse(null);
+        if (data == null) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDispositions.of("inline", entity.getFileName()))
+                .header(HttpHeaders.CONTENT_TYPE, entity.getMimeType())
+                .header(HttpHeaders.CACHE_CONTROL, "public, max-age=86400")
+                .header("X-Content-Type-Options", "nosniff")
+                .header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
+                .body(data);
+    }
+
     /** Parse the optional {@code parentFolderId} upload field; null/blank/malformed → null (root).
      *  A non-folder/cross-org id is dropped to root by the indexer, not here. */
     private static UUID parseFolderId(String raw) {

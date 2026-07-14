@@ -393,6 +393,92 @@ class OAuth2ProviderConfigTest {
         assertThat(cfg.joinedScopes()).isEqualTo("a,b,c");
     }
 
+    @Test
+    @DisplayName("parses longLivedExchange and refresh.accessTokenGrant (Meta family)")
+    void metaAccessTokenGrantBlocks() throws Exception {
+        JsonNode node = json.readTree("""
+                {
+                  "authorizationUrl": "https://www.instagram.com/oauth/authorize",
+                  "tokenUrl": "https://api.instagram.com/oauth/access_token",
+                  "scopes": ["instagram_business_basic"],
+                  "longLivedExchange": {
+                    "url": "https://graph.instagram.com/access_token",
+                    "grantType": "ig_exchange_token",
+                    "tokenParam": "access_token",
+                    "sendClientId": false,
+                    "sendClientSecret": true
+                  },
+                  "refresh": {
+                    "supported": true,
+                    "accessTokenGrant": {
+                      "url": "https://graph.instagram.com/refresh_access_token",
+                      "grantType": "ig_refresh_token"
+                    }
+                  }
+                }
+                """);
+
+        OAuth2ProviderConfig cfg = OAuth2ProviderConfig.fromJson(node);
+
+        assertThat(cfg).isNotNull();
+        OAuth2ProviderConfig.AccessTokenGrant exchange = cfg.longLivedExchange();
+        assertThat(exchange).isNotNull();
+        assertThat(exchange.url()).isEqualTo("https://graph.instagram.com/access_token");
+        assertThat(exchange.grantType()).isEqualTo("ig_exchange_token");
+        assertThat(exchange.sendClientId()).isFalse();
+        assertThat(exchange.sendClientSecret()).isTrue();
+
+        OAuth2ProviderConfig.AccessTokenGrant renewal = cfg.refresh().accessTokenGrant();
+        assertThat(renewal).isNotNull();
+        assertThat(renewal.url()).isEqualTo("https://graph.instagram.com/refresh_access_token");
+        assertThat(renewal.grantType()).isEqualTo("ig_refresh_token");
+        // Omitted fields fall back: tokenParam=access_token, both send flags false.
+        assertThat(renewal.tokenParam()).isEqualTo("access_token");
+        assertThat(renewal.sendClientId()).isFalse();
+        assertThat(renewal.sendClientSecret()).isFalse();
+        assertThat(cfg.refresh().supported()).isTrue();
+    }
+
+    @Test
+    @DisplayName("incomplete accessTokenGrant blocks degrade to null (feature off), never half-configured")
+    void incompleteAccessTokenGrantIsNull() throws Exception {
+        JsonNode node = json.readTree("""
+                {
+                  "authorizationUrl": "https://a",
+                  "tokenUrl": "https://t",
+                  "scopes": [],
+                  "longLivedExchange": { "url": "https://graph.instagram.com/access_token" },
+                  "refresh": {
+                    "supported": true,
+                    "accessTokenGrant": { "grantType": "ig_refresh_token" }
+                  }
+                }
+                """);
+
+        OAuth2ProviderConfig cfg = OAuth2ProviderConfig.fromJson(node);
+
+        assertThat(cfg.longLivedExchange()).as("missing grantType => block off").isNull();
+        assertThat(cfg.refresh().accessTokenGrant()).as("missing url => block off").isNull();
+    }
+
+    @Test
+    @DisplayName("providers without the Meta blocks parse with both absent (RFC providers untouched)")
+    void absentAccessTokenGrantBlocks() throws Exception {
+        JsonNode node = json.readTree("""
+                {
+                  "authorizationUrl": "https://a",
+                  "tokenUrl": "https://t",
+                  "scopes": [],
+                  "refresh": { "supported": true }
+                }
+                """);
+
+        OAuth2ProviderConfig cfg = OAuth2ProviderConfig.fromJson(node);
+
+        assertThat(cfg.longLivedExchange()).isNull();
+        assertThat(cfg.refresh().accessTokenGrant()).isNull();
+    }
+
     private OAuth2ProviderConfig.AuthMethod authMethodOf(String raw) throws Exception {
         JsonNode node = json.readTree("""
                 {

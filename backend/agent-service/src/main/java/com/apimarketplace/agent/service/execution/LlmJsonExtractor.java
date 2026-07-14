@@ -77,6 +77,13 @@ final class LlmJsonExtractor {
                     // Found a balanced object - return it
                     return content.substring(start, i + 1).trim();
                 }
+                if (depth < 0) {
+                    // A stray unmatched '}' in the preamble (e.g. `} {"x":1}`) would otherwise
+                    // poison the scan: depth never returns to 0, so a well-formed object later
+                    // is never extracted. Reset so scanning resumes from the next '{'.
+                    depth = 0;
+                    start = -1;
+                }
             }
         }
 

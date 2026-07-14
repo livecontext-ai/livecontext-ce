@@ -58,6 +58,8 @@ export interface UnifiedNodeOutputProps {
   showExecutionData?: boolean;
   /** Show navigation buttons */
   showNavigation?: boolean;
+  /** Forwarded to RunDataPreview: publishes the loaded output object (the Output header settings menu consumes it). */
+  onLoadedOutputChange?: (data: unknown | null) => void;
 }
 
 // =============================================================================
@@ -78,6 +80,7 @@ export function UnifiedNodeOutput({
   runId,
   showExecutionData = true,
   showNavigation = true,
+  onLoadedOutputChange,
 }: UnifiedNodeOutputProps) {
   const stepAlias = currentNode?.data?.label;
 
@@ -103,6 +106,7 @@ export function UnifiedNodeOutput({
           stepAlias={stepAlias}
           dataType={dataType}
           isDraggable={false}
+          onLoadedOutputChange={onLoadedOutputChange}
         />
       ) : (
         <StaticSchemaTree

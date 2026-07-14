@@ -86,10 +86,22 @@ public class AgentWorkflowFireService {
      */
     public WorkflowRunEntity createRun(WorkflowEntity workflow, WorkflowPlan plan,
                                        Map<String, Object> dataInputs, String tenantId) {
+        return createRun(workflow, plan, dataInputs, tenantId, null);
+    }
+
+    /**
+     * Overload with the run-level mock override ({@code mockMode}: null = default -
+     * enabled node mocks apply; "off" = ignore all mocks this run; "all_mcp" =
+     * catalog-example dry-run). Reconciled onto {@code __mockMode__} run metadata
+     * by {@code EditorRunResolver} on create AND reuse.
+     */
+    public WorkflowRunEntity createRun(WorkflowEntity workflow, WorkflowPlan plan,
+                                       Map<String, Object> dataInputs, String tenantId,
+                                       String mockMode) {
         // EditorRunResolver handles version resolution, run reuse, creation, snapshotting, and __editorRun__ marking.
         // No extra work needed here - createExecution() inside the resolver already snapshots interfaces.
         return editorRunResolver.findOrCreateRun(workflow, plan, dataInputs, tenantId,
-                com.apimarketplace.orchestrator.domain.workflow.ExecutionMode.AUTOMATIC).runEntity();
+                com.apimarketplace.orchestrator.domain.workflow.ExecutionMode.AUTOMATIC, mockMode).runEntity();
     }
 
     /**
@@ -110,8 +122,15 @@ public class AgentWorkflowFireService {
     public WorkflowRunEntity createRunForVersion(WorkflowEntity workflow, WorkflowPlan versionedPlan,
                                                   int planVersion, Map<String, Object> dataInputs,
                                                   String tenantId) {
+        return createRunForVersion(workflow, versionedPlan, planVersion, dataInputs, tenantId, null);
+    }
+
+    /** Overload with the run-level mock override - same semantics as {@link #createRun}. */
+    public WorkflowRunEntity createRunForVersion(WorkflowEntity workflow, WorkflowPlan versionedPlan,
+                                                  int planVersion, Map<String, Object> dataInputs,
+                                                  String tenantId, String mockMode) {
         return editorRunResolver.findOrCreateRunForVersion(workflow, versionedPlan, planVersion, dataInputs,
-                tenantId, com.apimarketplace.orchestrator.domain.workflow.ExecutionMode.AUTOMATIC).runEntity();
+                tenantId, com.apimarketplace.orchestrator.domain.workflow.ExecutionMode.AUTOMATIC, mockMode).runEntity();
     }
 
     // ==================== Trigger Resolution ====================
@@ -371,6 +390,11 @@ public class AgentWorkflowFireService {
             result.putAll(nodeReport);
         }
 
+        // Mock-mode visibility: which nodes served configured mocks instead of
+        // really executing (anti "forgot a mock was active" guard - zero noise
+        // when no mock is in play).
+        addMockInfo(result, run, plan);
+
         // Top-level error from trigger failure (not a node error)
         if (("FAILED".equals(status) || "PARTIAL_SUCCESS".equals(status))
                 && !triggerResult.success() && triggerResult.message() != null) {
@@ -392,6 +416,60 @@ public class AgentWorkflowFireService {
                 "Use the deepest level only for nodes you actually need - don't fetch the whole epoch when one node is enough.");
 
         return result;
+    }
+
+    /**
+     * Surfaces the run's mock state on the execute/get_run/wait_run report:
+     * {@code mock_mode} + {@code mocked_nodes} (normalized keys of the nodes whose
+     * output is a configured mock). OMITTED entirely when no mock is in play -
+     * normal runs stay byte-identical. Derived from the frozen run plan + run
+     * metadata (static view - the authoritative per-row flag is {@code mocked:true}
+     * on get_node_output).
+     */
+    private void addMockInfo(Map<String, Object> result, WorkflowRunEntity run, WorkflowPlan plan) {
+        Map<String, Object> metadata = run.getMetadata();
+        boolean editorRun = metadata != null && Boolean.TRUE.equals(metadata.get("__editorRun__"));
+        if (!editorRun || plan == null) {
+            return; // production fires never apply mocks - nothing to report
+        }
+        Map<String, NodeMock> mocks = plan.getNodeMocks();
+        List<String> enabledMocks = mocks.entrySet().stream()
+                .filter(e -> e.getValue().isEffective())
+                .map(Map.Entry::getKey)
+                .sorted()
+                .collect(Collectors.toList());
+        Object modeRaw = metadata.get(com.apimarketplace.orchestrator.execution.v2.engine.MockRunGate.MOCK_MODE_METADATA_KEY);
+        String mode = modeRaw instanceof String s ? s : "default";
+
+        if ("off".equals(mode)) {
+            if (!enabledMocks.isEmpty()) {
+                result.put("mock_mode", "off");
+                result.put("mock_note", "This run IGNORED the " + enabledMocks.size()
+                        + " configured node mock(s) (mock_mode='off') - every node executed for real.");
+            }
+            return;
+        }
+
+        List<String> mockedNodes = new ArrayList<>(enabledMocks);
+        if ("all_mcp".equals(mode)) {
+            for (Step mcp : plan.getMcps()) {
+                String key = mcp.getNormalizedKey();
+                if (key != null && !mockedNodes.contains(key) && !mcp.isCrudStep()
+                        && WorkflowPlanParser.isCatalogToolId(mcp.id())) {
+                    mockedNodes.add(key);
+                }
+            }
+            Collections.sort(mockedNodes);
+            result.put("mock_mode", "all_mcp");
+        } else {
+            if (mockedNodes.isEmpty()) {
+                return; // zero noise: no mocks configured, default mode
+            }
+            result.put("mock_mode", "default");
+        }
+        result.put("mocked_nodes", mockedNodes);
+        result.put("mock_note", "Outputs of mocked_nodes are CONFIGURED MOCKS, not real executions "
+                + "(get_node_output shows mocked=true on those rows). Re-run with mock_mode='off' to execute for real.");
     }
 
     /**
@@ -942,6 +1020,17 @@ public class AgentWorkflowFireService {
                 Map<String, Object> rawOutput = stepOutputService.loadRawOutput(
                         step.getOutputStorageId(), tenantId);
                 if (rawOutput != null && !rawOutput.isEmpty()) {
+                    // Mock badge: this row's output is a configured mock, not a real
+                    // execution (persisted __mocked__/__mock_source__ markers).
+                    if (Boolean.TRUE.equals(rawOutput.get(
+                            com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys.MOCKED))) {
+                        result.put("mocked", true);
+                        Object mockSource = rawOutput.get(
+                                com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys.MOCK_SOURCE);
+                        if (mockSource != null) {
+                            result.put("mock_source", mockSource);
+                        }
+                    }
                     if (expandField != null && !expandField.isBlank()) {
                         // Expand mode: window one output field's full text value (files.view-style),
                         // so the agent can page past the 128 KB preview cap.

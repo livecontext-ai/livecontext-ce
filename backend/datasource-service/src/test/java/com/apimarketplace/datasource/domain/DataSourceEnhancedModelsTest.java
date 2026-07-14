@@ -182,8 +182,33 @@ class DataSourceEnhancedModelsTest {
         void shouldDecode() {
             var cursor = DataSourceEnhancedModels.KeysetCursor.decode("1234567890_42");
             assertNotNull(cursor);
-            assertEquals(1234567890L, cursor.createdAtMs());
+            assertEquals(1234567890L, cursor.createdAtUs());
             assertEquals(42L, cursor.id());
+        }
+
+        @Test
+        @DisplayName("of() should preserve MICROSECOND precision (millis truncation dropped bulk-insert rows)")
+        void ofShouldPreserveMicrosecondPrecision() {
+            // Regression: rows of a bulk insert share one created_at down to the microsecond.
+            // A millis-truncated cursor never equals their created_at, so the next page was
+            // empty and every remaining row was silently dropped.
+            Instant createdAt = Instant.ofEpochSecond(1_700_000_000L, 123_456_000L); // .123456 s
+            var cursor = DataSourceEnhancedModels.KeysetCursor.of(createdAt, 42L);
+
+            // round-trips through encode/decode without losing the microseconds
+            var decoded = DataSourceEnhancedModels.KeysetCursor.decode(cursor.encode());
+            assertEquals(createdAt, decoded.createdAtInstant());
+            assertEquals(1_700_000_000_123_456L, decoded.createdAtUs());
+        }
+
+        @Test
+        @DisplayName("createdAtInstant() should round-trip nanos truncated to micros")
+        void createdAtInstantTruncatesToMicros() {
+            // Postgres timestamp is microsecond-precision: sub-microsecond nanos are dropped,
+            // which is exactly what the DB column stores, so comparison stays exact.
+            Instant withNanos = Instant.ofEpochSecond(1_700_000_000L, 123_456_789L);
+            var cursor = DataSourceEnhancedModels.KeysetCursor.of(withNanos, 7L);
+            assertEquals(Instant.ofEpochSecond(1_700_000_000L, 123_456_000L), cursor.createdAtInstant());
         }
 
         @Test
@@ -221,7 +246,7 @@ class DataSourceEnhancedModelsTest {
         }
 
         @Test
-        @DisplayName("Should throw on null createdAtMs")
+        @DisplayName("Should throw on null createdAtUs")
         void shouldThrowOnNullCreatedAt() {
             assertThrows(NullPointerException.class, () ->
                 new DataSourceEnhancedModels.KeysetCursor(null, 1L));

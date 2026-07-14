@@ -611,6 +611,7 @@ export function FileBrowser() {
   }, [prevEntry, nextEntry, handleDownloadDetail]);
 
   return (
+    <>
     <div
       className="relative flex flex-col min-h-[calc(100vh-8rem)]"
       onDragOver={onDragOver}
@@ -970,61 +971,6 @@ export function FileBrowser() {
         isConfirming={deleting}
       />
 
-      {/* Floating bulk-selection pill - same bar as every table page. Anchored to
-          the app <main> (nearest positioned ancestor), so it floats over the list
-          without shifting the layout. */}
-      {selected.size > 0 && (
-        <SelectionActionBar count={selected.size} onClear={clearSelection}>
-          {canMutate && canRenameFolder && (
-            renamingFolder ? (
-              <input
-                autoFocus
-                type="text"
-                value={renameValue}
-                placeholder={t('renameFolder')}
-                onChange={(e) => setRenameValue(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void handleRenameFolder();
-                  if (e.key === 'Escape') setRenamingFolder(false);
-                }}
-                onBlur={() => void handleRenameFolder()}
-                disabled={savingRename}
-                className="h-7 w-44 px-2 rounded-md bg-white/10 dark:bg-black/10 text-sm text-white dark:text-black placeholder:text-white/50 dark:placeholder:text-black/50 focus:outline-none focus:ring-1 focus:ring-white/40 dark:focus:ring-black/40"
-              />
-            ) : (
-              <BulkBarButton onClick={startRenameFolder} disabled={deleting || downloading}>
-                <Pencil className="h-3.5 w-3.5" />
-                {t('renameFolder')}
-              </BulkBarButton>
-            )
-          )}
-          <BulkBarButton
-            onClick={handleBulkDownload}
-            disabled={downloading || deleting || hasVirtualSelected || selectedRealIds.length === 0}
-            title={hasVirtualSelected ? t('virtualBulkExcluded') : undefined}
-          >
-            {downloading ? <LoadingSpinner size="xs" /> : <Download className="h-3.5 w-3.5" />}
-            {tExp('downloadSelected')}
-          </BulkBarButton>
-          {canMutate && (
-            <BulkBarButton
-              onClick={() => void openMoveModal()}
-              disabled={deleting || downloading || hasVirtualSelected || selectedRealIds.length === 0}
-              title={hasVirtualSelected ? t('virtualBulkExcluded') : undefined}
-            >
-              <FolderInput className="h-3.5 w-3.5" />
-              {t('moveTo')}
-            </BulkBarButton>
-          )}
-          {canMutate && (
-            <BulkBarButton variant="danger" onClick={() => setShowDeleteModal(true)} disabled={deleting || downloading}>
-              <Trash2 className="h-3.5 w-3.5" />
-              {tExp('deleteSelected')}
-            </BulkBarButton>
-          )}
-        </SelectionActionBar>
-      )}
-
       <input
         ref={fileInputRef}
         type="file"
@@ -1038,5 +984,70 @@ export function FileBrowser() {
 
       <ToastContainer toasts={toasts} onRemoveToast={removeToast} />
     </div>
+
+    {/* Floating bulk-selection pill - same bar as every table page. Rendered OUTSIDE
+        the `relative` root above: that root spans the whole page-scrolled list
+        (min-h + grows with content), so an absolute bar inside it lands at the bottom
+        of the CONTENT - visible only after scrolling to the very end, at a position
+        that varies with the list height. Out here its nearest positioned ancestor is
+        the app <main> (viewport-sized, overflow-hidden), pinning the pill to the
+        bottom of the visible area exactly like the table pages. */}
+    {selected.size > 0 && (
+      /* Non-positioned wrapper: keeps the pill's containing block on <main> while
+         re-attaching the OS drag-to-upload handlers the pill lost by moving out of
+         the root - a drop released on the pill must upload, not navigate away. */
+      <div onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
+      <SelectionActionBar count={selected.size} onClear={clearSelection}>
+        {canMutate && canRenameFolder && (
+          renamingFolder ? (
+            <input
+              autoFocus
+              type="text"
+              value={renameValue}
+              placeholder={t('renameFolder')}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void handleRenameFolder();
+                if (e.key === 'Escape') setRenamingFolder(false);
+              }}
+              onBlur={() => void handleRenameFolder()}
+              disabled={savingRename}
+              className="h-7 w-44 px-2 rounded-md bg-white/10 dark:bg-black/10 text-sm text-white dark:text-black placeholder:text-white/50 dark:placeholder:text-black/50 focus:outline-none focus:ring-1 focus:ring-white/40 dark:focus:ring-black/40"
+            />
+          ) : (
+            <BulkBarButton onClick={startRenameFolder} disabled={deleting || downloading}>
+              <Pencil className="h-3.5 w-3.5" />
+              {t('renameFolder')}
+            </BulkBarButton>
+          )
+        )}
+        <BulkBarButton
+          onClick={handleBulkDownload}
+          disabled={downloading || deleting || hasVirtualSelected || selectedRealIds.length === 0}
+          title={hasVirtualSelected ? t('virtualBulkExcluded') : undefined}
+        >
+          {downloading ? <LoadingSpinner size="xs" /> : <Download className="h-3.5 w-3.5" />}
+          {tExp('downloadSelected')}
+        </BulkBarButton>
+        {canMutate && (
+          <BulkBarButton
+            onClick={() => void openMoveModal()}
+            disabled={deleting || downloading || hasVirtualSelected || selectedRealIds.length === 0}
+            title={hasVirtualSelected ? t('virtualBulkExcluded') : undefined}
+          >
+            <FolderInput className="h-3.5 w-3.5" />
+            {t('moveTo')}
+          </BulkBarButton>
+        )}
+        {canMutate && (
+          <BulkBarButton variant="danger" onClick={() => setShowDeleteModal(true)} disabled={deleting || downloading}>
+            <Trash2 className="h-3.5 w-3.5" />
+            {tExp('deleteSelected')}
+          </BulkBarButton>
+        )}
+      </SelectionActionBar>
+      </div>
+    )}
+    </>
   );
 }

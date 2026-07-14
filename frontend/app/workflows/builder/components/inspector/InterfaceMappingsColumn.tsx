@@ -12,6 +12,7 @@ import { useInterfaceById } from '../../hooks/useInterfaces';
 import { orchestratorApi } from '@/lib/api';
 import { ExpressionEditor } from '@/components/ui/expression-editor';
 import { getDefaultForType } from '../../utils/interfaceHtmlUtils';
+import { clampVideoMaxDuration } from '../../utils/videoParams';
 import { useNodes, useEdges, type Node } from 'reactflow';
 import { nodeRegistry } from '../../registry/nodeRegistry';
 import { triggerKey } from '../../utils/labelNormalizer';
@@ -1023,8 +1024,160 @@ export const InterfaceMappingsColumn = ({
                 </div>
               )}
 
-              {/* Renderer sidecar missing: both render toggles would silently produce no
-                  output on this install - warn with the enable path instead of no-oping. */}
+            </div>
+          )}
+
+          {/* Generate video toggle - exposes a `video` FileRef output (MP4 recording of the interface). */}
+          {!isRunMode && (
+            <div className="mt-2 px-1">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-1">
+                  <span className="text-sm text-slate-600 dark:text-slate-300">{t('generateVideo')}</span>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <button type="button" className="inline-flex items-center justify-center rounded-full hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5">
+                        <Info className="h-2.5 w-2.5 text-slate-400" />
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[260px] p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
+                      <p className="text-xs text-slate-600 dark:text-slate-300">{t('generateVideoDescription')}</p>
+                    </PopoverContent>
+                  </Popover>
+                </div>
+                <Switch
+                  checked={interfaceData.generateVideo === true}
+                  onCheckedChange={(checked) => {
+                    onUpdate({
+                      ...data,
+                      interfaceData: {
+                        ...interfaceData,
+                        generateVideo: checked,
+                      },
+                    });
+                  }}
+                />
+              </div>
+
+              {/* Video capture options - only shown when video recording is enabled.
+                  One option per row: preset, frame rate, then max duration (clamped 5-120 on blur). */}
+              {interfaceData.generateVideo === true && (
+                <div className="mt-2 flex flex-col gap-2 pl-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <label className="text-xs text-slate-500 dark:text-slate-400" htmlFor="video-preset-select">
+                      {t('videoPreset')}
+                    </label>
+                    <select
+                      id="video-preset-select"
+                      className="text-xs rounded-md border border-gray-200/60 dark:border-gray-700/60 bg-[var(--bg-primary)] px-2 py-1 text-slate-600 dark:text-slate-300"
+                      value={interfaceData.videoPreset || 'vertical'}
+                      onChange={(e) => {
+                        onUpdate({
+                          ...data,
+                          interfaceData: {
+                            ...interfaceData,
+                            videoPreset: e.target.value,
+                          },
+                        });
+                      }}
+                    >
+                      <option value="vertical">{t('videoPresetVertical')}</option>
+                      <option value="horizontal">{t('videoPresetHorizontal')}</option>
+                      <option value="square">{t('videoPresetSquare')}</option>
+                    </select>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <label className="text-xs text-slate-500 dark:text-slate-400" htmlFor="video-mode-select">
+                      {t('videoMode')}
+                    </label>
+                    <select
+                      id="video-mode-select"
+                      className="text-xs rounded-md border border-gray-200/60 dark:border-gray-700/60 bg-[var(--bg-primary)] px-2 py-1 text-slate-600 dark:text-slate-300"
+                      value={interfaceData.videoMode || 'smooth'}
+                      onChange={(e) => {
+                        onUpdate({
+                          ...data,
+                          interfaceData: {
+                            ...interfaceData,
+                            videoMode: e.target.value,
+                          },
+                        });
+                      }}
+                    >
+                      <option value="smooth">{t('videoModeSmooth')}</option>
+                      <option value="live">{t('videoModeLive')}</option>
+                    </select>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <label className="text-xs text-slate-500 dark:text-slate-400" htmlFor="video-fps-select">
+                      {t('videoFps')}
+                    </label>
+                    <select
+                      id="video-fps-select"
+                      className="text-xs rounded-md border border-gray-200/60 dark:border-gray-700/60 bg-[var(--bg-primary)] px-2 py-1 text-slate-600 dark:text-slate-300"
+                      value={interfaceData.videoFps ?? 30}
+                      onChange={(e) => {
+                        const parsed = parseInt(e.target.value, 10);
+                        onUpdate({
+                          ...data,
+                          interfaceData: {
+                            ...interfaceData,
+                            videoFps: Number.isFinite(parsed) ? parsed : undefined,
+                          },
+                        });
+                      }}
+                    >
+                      {/* An agent can set any 10-60 value; surface it instead of a blank select. */}
+                      {typeof interfaceData.videoFps === 'number'
+                        && ![24, 30, 60].includes(interfaceData.videoFps) && (
+                        <option value={interfaceData.videoFps}>{interfaceData.videoFps}</option>
+                      )}
+                      <option value={24}>24</option>
+                      <option value={30}>30</option>
+                      <option value={60}>60</option>
+                    </select>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <label className="text-xs text-slate-500 dark:text-slate-400" htmlFor="video-max-duration-input">
+                      {t('videoMaxDuration')}
+                    </label>
+                    <input
+                      id="video-max-duration-input"
+                      type="number"
+                      min={5}
+                      max={120}
+                      className="w-20 text-xs rounded-md border border-gray-200/60 dark:border-gray-700/60 bg-[var(--bg-primary)] px-2 py-1 text-slate-600 dark:text-slate-300"
+                      value={interfaceData.videoMaxDurationSeconds ?? 30}
+                      onChange={(e) => {
+                        const parsed = parseInt(e.target.value, 10);
+                        onUpdate({
+                          ...data,
+                          interfaceData: {
+                            ...interfaceData,
+                            videoMaxDurationSeconds: Number.isFinite(parsed) ? parsed : undefined,
+                          },
+                        });
+                      }}
+                      onBlur={(e) => {
+                        // Hard bounds 5-120s: clamp on commit so a typed 999 or 1 never
+                        // reaches the plan (the backend clamps too, this keeps the UI honest).
+                        const clamped = clampVideoMaxDuration(e.target.value);
+                        if (clamped !== interfaceData.videoMaxDurationSeconds) {
+                          onUpdate({
+                            ...data,
+                            interfaceData: {
+                              ...interfaceData,
+                              videoMaxDurationSeconds: clamped,
+                            },
+                          });
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Renderer sidecar missing: the render toggles (screenshot/pdf/video) would silently
+                  produce no output on this install - warn with the enable path instead of no-oping. */}
               {rendererMissing && (
                 <OptionalFeatureNotice
                   message={t('rendererUnavailable')}
@@ -1593,7 +1746,8 @@ export const InterfaceMappingsColumn = ({
             Interface nodes are executable plan entries like any other -
             ParameterColumn renders this section for every other node type,
             but interface nodes use this dedicated column, so it is added
-            here too (same gating, same persistence path). */}
+            here too (same gating, same persistence path). The mock output
+            block lives inside this Settings section. */}
         {node && nodeSupportsPolicy(node as unknown as Node<BuilderNodeData>) ? (
           <NodeSettingsSection
             node={node as unknown as Node<BuilderNodeData>}

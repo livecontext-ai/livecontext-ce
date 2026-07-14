@@ -604,12 +604,15 @@ public class CredentialRepository {
     public List<Credential> findOAuth2CredentialsExpiringBefore(Instant threshold) {
         // NOTE: JSONB key-existence operator "?" collides with JDBC parameter placeholders.
         // Use jsonb_exists(...) instead - equivalent semantics, no escaping required.
+        // refresh_mode='access_token' credentials (Meta family) have NO refresh_token -
+        // their current access token is the renewal credential (OAuth2Service marker).
         String sql = """
             SELECT * FROM auth.credentials
             WHERE type = 'OAuth2'
               AND status NOT IN ('error', 'needs_reauth')
               AND jsonb_exists(credential_data, 'expires_at')
-              AND jsonb_exists(credential_data, 'refresh_token')
+              AND (jsonb_exists(credential_data, 'refresh_token')
+                   OR credential_data->>'refresh_mode' = 'access_token')
               AND (credential_data->>'expires_at')::timestamptz < ?
               AND coalesce(
                     (credential_data->>'refresh_cooldown_until')::timestamptz,

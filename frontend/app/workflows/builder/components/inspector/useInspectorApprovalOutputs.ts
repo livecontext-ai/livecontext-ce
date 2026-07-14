@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import type { Node } from 'reactflow';
-import type { BuilderNodeData, ApprovalOutput, ApprovalDelegation } from '../../types';
+import type { BuilderNodeData, ApprovalOutput, ApprovalDelegation, ApprovalContinuationMode } from '../../types';
 import { createDefaultApprovalOutputs } from '../../types';
 import type { Connection } from './useInspectorConnections';
 
@@ -106,6 +106,16 @@ export function useInspectorApprovalOutputs({
     [data, onUpdate],
   );
 
+  // Update split-context continuation mode (undefined = all_items default, removed from node data)
+  const handleContinuationModeChange = React.useCallback(
+    (mode: ApprovalContinuationMode | undefined) => {
+      if (!data) return;
+      const { validationIssues, approvalContinuationMode, ...rest } = data as any;
+      onUpdate(mode === undefined ? rest : { ...rest, approvalContinuationMode: mode });
+    },
+    [data, onUpdate],
+  );
+
   // Update external-channel delegation (undefined = delegation disabled, removed from node data)
   const handleDelegationChange = React.useCallback(
     (delegation: ApprovalDelegation | undefined) => {
@@ -124,9 +134,11 @@ export function useInspectorApprovalOutputs({
     handleRenameOutput,
     handleTimeoutChange,
     handleContextTemplateChange,
+    handleContinuationModeChange,
     handleDelegationChange,
     approvalTimeoutMs: data?.approvalTimeoutMs,
     approvalContextTemplate: data?.approvalContextTemplate,
+    approvalContinuationMode: data?.approvalContinuationMode,
     approvalDelegation: data?.approvalDelegation,
   };
 }

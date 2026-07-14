@@ -69,6 +69,7 @@ class WorkflowBuilderProviderExecuteTest {
     @Mock com.apimarketplace.orchestrator.services.WorkflowPlanVersionService planVersionService;
     @Mock com.apimarketplace.orchestrator.trigger.ProductionRunResolver productionRunResolver;
     @Mock com.apimarketplace.orchestrator.services.agent.ConversationEventPublisher conversationEventPublisher;
+    @Mock MockOutputSuggester mockOutputSuggester;
 
     private WorkflowBuilderProvider provider;
 
@@ -85,7 +86,7 @@ class WorkflowBuilderProviderExecuteTest {
             loader, tableOperations, planExporter, helpModule, executionService, workflowRunRepository,
             agentWorkflowFireService, runSignalResolution, planVersionService, productionRunResolver,
             new com.apimarketplace.orchestrator.config.AgentDefaultsConfig(),
-            conversationEventPublisher
+            conversationEventPublisher, mockOutputSuggester
         );
         // Pass-through for addSessionSnapshot so tests see the actual result
         lenient().when(resultEnricher.addSessionSnapshot(any(), any(), any(), any()))
@@ -130,7 +131,7 @@ class WorkflowBuilderProviderExecuteTest {
                                           Map<String, Object> dataInputs) {
         when(workflowService.getWorkflow(UUID.fromString(WF_ID))).thenReturn(Optional.of(entity));
         lenient().when(agentWorkflowFireService.resolveTrigger(any(), any())).thenReturn(trigger);
-        lenient().when(agentWorkflowFireService.createRun(any(), any(), eq(dataInputs), eq(TENANT_ID))).thenReturn(run);
+        lenient().when(agentWorkflowFireService.createRun(any(), any(), eq(dataInputs), eq(TENANT_ID), isNull())).thenReturn(run);
         TriggerExecutionResult tr = TriggerExecutionResult.success(
                 "run-1", "trigger:start", TriggerType.MANUAL, Set.of(), 0);
         lenient().when(agentWorkflowFireService.fire(run, trigger, dataInputs)).thenReturn(tr);
@@ -282,7 +283,7 @@ class WorkflowBuilderProviderExecuteTest {
         when(workflowService.getWorkflow(UUID.fromString(WF_ID))).thenReturn(Optional.of(entity));
         Trigger trigger = mock(Trigger.class);
         WorkflowRunEntity run = mock(WorkflowRunEntity.class);
-        when(agentWorkflowFireService.createRun(any(), any(), any(), eq(TENANT_ID))).thenReturn(run);
+        when(agentWorkflowFireService.createRun(any(), any(), any(), eq(TENANT_ID), isNull())).thenReturn(run);
         when(agentWorkflowFireService.resolveTrigger(any(), eq("trigger:parent")))
                 .thenThrow(new IllegalArgumentException("Trigger 'trigger:parent' exists but is not agent-fireable"));
 
@@ -317,7 +318,7 @@ class WorkflowBuilderProviderExecuteTest {
         WorkflowRunEntity seedRun = mock(WorkflowRunEntity.class);
         when(seedRun.getRunIdPublic()).thenReturn("run_seed_42");
         when(seedRun.getPlanVersion()).thenReturn(1);
-        when(agentWorkflowFireService.createRun(any(), any(), any(), eq(TENANT_ID))).thenReturn(seedRun);
+        when(agentWorkflowFireService.createRun(any(), any(), any(), eq(TENANT_ID), isNull())).thenReturn(seedRun);
         when(agentWorkflowFireService.hasOnlyBootstrapTriggers(any())).thenReturn(true);
 
         ToolExecutionResult result = provider.execute("workflow", params(), CTX);
@@ -351,7 +352,7 @@ class WorkflowBuilderProviderExecuteTest {
         WorkflowRunEntity seedRun = mock(WorkflowRunEntity.class);
         when(seedRun.getRunIdPublic()).thenReturn("run_seed_wf");
         when(seedRun.getPlanVersion()).thenReturn(1);
-        when(agentWorkflowFireService.createRun(any(), any(), any(), eq(TENANT_ID))).thenReturn(seedRun);
+        when(agentWorkflowFireService.createRun(any(), any(), any(), eq(TENANT_ID), isNull())).thenReturn(seedRun);
         when(agentWorkflowFireService.hasOnlyBootstrapTriggers(any())).thenReturn(true);
 
         ToolExecutionResult result = provider.execute("workflow", params(), CTX);
@@ -380,7 +381,7 @@ class WorkflowBuilderProviderExecuteTest {
 
         when(workflowService.getWorkflow(UUID.fromString(WF_ID))).thenReturn(Optional.of(entity));
         WorkflowRunEntity run = mock(WorkflowRunEntity.class);
-        when(agentWorkflowFireService.createRun(any(), any(), any(), eq(TENANT_ID))).thenReturn(run);
+        when(agentWorkflowFireService.createRun(any(), any(), any(), eq(TENANT_ID), isNull())).thenReturn(run);
         when(agentWorkflowFireService.resolveTrigger(any(), eq("trigger:catch")))
                 .thenThrow(new IllegalArgumentException("Trigger 'trigger:catch' is not agent-fireable"));
 
@@ -426,7 +427,7 @@ class WorkflowBuilderProviderExecuteTest {
         p.put("data_inputs", dataInputs);
         provider.execute("workflow", p, CTX);
 
-        verify(agentWorkflowFireService).createRun(any(), any(), eq(dataInputs), eq(TENANT_ID));
+        verify(agentWorkflowFireService).createRun(any(), any(), eq(dataInputs), eq(TENANT_ID), isNull());
         verify(agentWorkflowFireService).fire(run, trigger, dataInputs);
     }
 
@@ -438,7 +439,7 @@ class WorkflowBuilderProviderExecuteTest {
         WorkflowRunEntity run = mock(WorkflowRunEntity.class);
         when(workflowService.getWorkflow(UUID.fromString(WF_ID))).thenReturn(Optional.of(entity));
         when(agentWorkflowFireService.resolveTrigger(any(), eq("trigger:start"))).thenReturn(trigger);
-        when(agentWorkflowFireService.createRun(any(), any(), any(), eq(TENANT_ID))).thenReturn(run);
+        when(agentWorkflowFireService.createRun(any(), any(), any(), eq(TENANT_ID), isNull())).thenReturn(run);
         TriggerExecutionResult tr = TriggerExecutionResult.success(
                 "run-1", "trigger:start", TriggerType.MANUAL, Set.of(), 0);
         when(agentWorkflowFireService.fire(any(), any(), any())).thenReturn(tr);
@@ -477,7 +478,7 @@ class WorkflowBuilderProviderExecuteTest {
         WorkflowRunEntity run = mock(WorkflowRunEntity.class);
         lenient().when(run.getRunIdPublic()).thenReturn("run-err");
         when(agentWorkflowFireService.resolveTrigger(any(), any())).thenReturn(trigger);
-        when(agentWorkflowFireService.createRun(any(), any(), any(), eq(TENANT_ID))).thenReturn(run);
+        when(agentWorkflowFireService.createRun(any(), any(), any(), eq(TENANT_ID), isNull())).thenReturn(run);
         when(agentWorkflowFireService.fire(any(), any(), any()))
                 .thenThrow(new RuntimeException("Redis connection refused"));
 
@@ -492,7 +493,7 @@ class WorkflowBuilderProviderExecuteTest {
     void createRun_throws_failure() {
         WorkflowEntity entity = manualTriggerWorkflow();
         when(workflowService.getWorkflow(UUID.fromString(WF_ID))).thenReturn(Optional.of(entity));
-        when(agentWorkflowFireService.createRun(any(), any(), any(), eq(TENANT_ID)))
+        when(agentWorkflowFireService.createRun(any(), any(), any(), eq(TENANT_ID), isNull()))
                 .thenThrow(new IllegalStateException("Run not found after creation: run-ghost"));
 
         ToolExecutionResult result = provider.execute("workflow", params(), CTX);
@@ -531,7 +532,7 @@ class WorkflowBuilderProviderExecuteTest {
         WorkflowRunEntity run = mock(WorkflowRunEntity.class);
         lenient().when(run.getRunIdPublic()).thenReturn("run-replay-3");
         when(agentWorkflowFireService.resolveTrigger(any(), any())).thenReturn(trigger);
-        when(agentWorkflowFireService.createRunForVersion(any(), any(), eq(3), any(), eq(TENANT_ID)))
+        when(agentWorkflowFireService.createRunForVersion(any(), any(), eq(3), any(), eq(TENANT_ID), isNull()))
                 .thenReturn(run);
         TriggerExecutionResult tr = TriggerExecutionResult.success(
                 "run-replay-3", "trigger:start", TriggerType.MANUAL, Set.of(), 0);
@@ -545,8 +546,8 @@ class WorkflowBuilderProviderExecuteTest {
 
         assertThat(result.success()).isTrue();
         verify(planVersionService).getVersion(UUID.fromString(WF_ID), 3);
-        verify(agentWorkflowFireService).createRunForVersion(any(), any(), eq(3), any(), eq(TENANT_ID));
-        verify(agentWorkflowFireService, never()).createRun(any(), any(), any(), any());
+        verify(agentWorkflowFireService).createRunForVersion(any(), any(), eq(3), any(), eq(TENANT_ID), isNull());
+        verify(agentWorkflowFireService, never()).createRun(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -560,7 +561,7 @@ class WorkflowBuilderProviderExecuteTest {
         WorkflowRunEntity run = mock(WorkflowRunEntity.class);
         lenient().when(run.getRunIdPublic()).thenReturn("run-replay-3");
         when(agentWorkflowFireService.resolveTrigger(any(), any())).thenReturn(trigger);
-        when(agentWorkflowFireService.createRunForVersion(any(), any(), eq(3), any(), eq(TENANT_ID))).thenReturn(run);
+        when(agentWorkflowFireService.createRunForVersion(any(), any(), eq(3), any(), eq(TENANT_ID), isNull())).thenReturn(run);
         when(agentWorkflowFireService.fire(any(), any(), any())).thenReturn(
                 TriggerExecutionResult.success("run-replay-3", "trigger:start", TriggerType.MANUAL, Set.of(), 0));
         when(agentWorkflowFireService.buildResult(any(), any(), any(), any(), any())).thenReturn(Map.of());
@@ -570,7 +571,7 @@ class WorkflowBuilderProviderExecuteTest {
         ToolExecutionResult result = provider.execute("workflow", p, CTX);
 
         assertThat(result.success()).isTrue();
-        verify(agentWorkflowFireService).createRunForVersion(any(), any(), eq(3), any(), eq(TENANT_ID));
+        verify(agentWorkflowFireService).createRunForVersion(any(), any(), eq(3), any(), eq(TENANT_ID), isNull());
     }
 
     @Test
@@ -586,8 +587,8 @@ class WorkflowBuilderProviderExecuteTest {
 
         assertThat(result.success()).isFalse();
         assertThat(result.error()).contains("99").contains("not found");
-        verify(agentWorkflowFireService, never()).createRun(any(), any(), any(), any());
-        verify(agentWorkflowFireService, never()).createRunForVersion(any(), any(), anyInt(), any(), any());
+        verify(agentWorkflowFireService, never()).createRun(any(), any(), any(), any(), any());
+        verify(agentWorkflowFireService, never()).createRunForVersion(any(), any(), anyInt(), any(), any(), any());
     }
 
     @Test
@@ -686,8 +687,8 @@ class WorkflowBuilderProviderExecuteTest {
         assertThat(result.success()).isTrue();
         verify(agentWorkflowFireService).fire(prodRun, trigger, Map.of());
         // Critical: no editor run created - the prod run is reused directly.
-        verify(agentWorkflowFireService, never()).createRun(any(), any(), any(), any());
-        verify(agentWorkflowFireService, never()).createRunForVersion(any(), any(), anyInt(), any(), any());
+        verify(agentWorkflowFireService, never()).createRun(any(), any(), any(), any(), any());
+        verify(agentWorkflowFireService, never()).createRunForVersion(any(), any(), anyInt(), any(), any(), any());
     }
 
     // ── early visualization publish ──────────────────────────────────────
@@ -723,7 +724,7 @@ class WorkflowBuilderProviderExecuteTest {
         WorkflowRunEntity seedRun = mock(WorkflowRunEntity.class);
         when(seedRun.getRunIdPublic()).thenReturn("run_seed_viz");
         when(seedRun.getPlanVersion()).thenReturn(1);
-        when(agentWorkflowFireService.createRun(any(), any(), any(), eq(TENANT_ID))).thenReturn(seedRun);
+        when(agentWorkflowFireService.createRun(any(), any(), any(), eq(TENANT_ID), isNull())).thenReturn(seedRun);
         when(agentWorkflowFireService.hasOnlyBootstrapTriggers(any())).thenReturn(true);
 
         provider.execute("workflow", params(), CTX);
@@ -753,9 +754,50 @@ class WorkflowBuilderProviderExecuteTest {
         ToolExecutionResult result = provider.execute("workflow", params(), CTX);
 
         assertThat(result.success()).isTrue();
-        verify(agentWorkflowFireService).createRun(any(), any(), any(), eq(TENANT_ID));
-        verify(agentWorkflowFireService, never()).createRunForVersion(any(), any(), anyInt(), any(), any());
+        verify(agentWorkflowFireService).createRun(any(), any(), any(), eq(TENANT_ID), isNull());
+        verify(agentWorkflowFireService, never()).createRunForVersion(any(), any(), anyInt(), any(), any(), any());
         verify(productionRunResolver, never()).resolve(any(), any());
+    }
+
+    // ── mock_mode (per-run mock override) ───────────────────────────────────
+
+    @Test
+    @DisplayName("mock_mode='all_mcp' is threaded to createRun's mockMode arg")
+    void mockMode_threadedToCreateRun() {
+        WorkflowEntity entity = manualTriggerWorkflow();
+        Trigger trigger = mock(Trigger.class);
+        WorkflowRunEntity run = mock(WorkflowRunEntity.class);
+        when(workflowService.getWorkflow(UUID.fromString(WF_ID))).thenReturn(Optional.of(entity));
+        lenient().when(agentWorkflowFireService.resolveTrigger(any(), any())).thenReturn(trigger);
+        when(agentWorkflowFireService.createRun(any(), any(), any(), eq(TENANT_ID), eq("all_mcp"))).thenReturn(run);
+        TriggerExecutionResult tr = TriggerExecutionResult.success(
+                "run-1", "trigger:start", TriggerType.MANUAL, Set.of(), 0);
+        lenient().when(agentWorkflowFireService.fire(run, trigger, Map.of())).thenReturn(tr);
+        lenient().when(agentWorkflowFireService.buildResult(eq(run), eq(tr), any(), any(), any()))
+                .thenReturn(Map.of("status", "COMPLETED", "run_id", "run-1"));
+        lenient().when(run.getRunIdPublic()).thenReturn("run-1");
+
+        ToolExecutionResult result = provider.execute("workflow", params("mock_mode", "all_mcp"), CTX);
+
+        assertThat(result.success()).isTrue();
+        verify(agentWorkflowFireService).createRun(any(), any(), any(), eq(TENANT_ID), eq("all_mcp"));
+    }
+
+    @Test
+    @DisplayName("HARD GUARD: mock_mode with version='pinned' is refused BEFORE any run resolution")
+    void mockMode_withPinned_refused() {
+        WorkflowEntity entity = manualTriggerWorkflow();
+        when(workflowService.getWorkflow(UUID.fromString(WF_ID))).thenReturn(Optional.of(entity));
+
+        ToolExecutionResult result = provider.execute("workflow",
+                params("version", "pinned", "mock_mode", "all_mcp"), CTX);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.error())
+                .contains("mock_mode is not available with version='pinned'")
+                .contains("never apply mocks");
+        verify(productionRunResolver, never()).resolve(any(), any());
+        verify(agentWorkflowFireService, never()).createRun(any(), any(), any(), any(), any());
     }
 
     // ── resolve_approval / continue_interface (advance a paused run) ────────

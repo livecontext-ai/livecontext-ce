@@ -334,18 +334,39 @@ public final class DataSourceEnhancedModels {
         }
     }
 
-    // Keyset pagination cursor
+    // Keyset pagination cursor.
+    // createdAtUs is epoch MICROSECONDS, matching the microsecond precision of the
+    // `created_at` timestamp column. Truncating to milliseconds silently dropped every
+    // remaining row of a bulk insert (all rows share the same microsecond created_at, so
+    // a millis-truncated cursor never equals their created_at and the tie-break branch
+    // could never fire).
     public record KeysetCursor(
-            @JsonProperty("created_at_ms") Long createdAtMs,
+            @JsonProperty("created_at_us") Long createdAtUs,
             @JsonProperty("id") Long id
     ) {
         public KeysetCursor {
-            Objects.requireNonNull(createdAtMs, "createdAtMs cannot be null");
+            Objects.requireNonNull(createdAtUs, "createdAtUs cannot be null");
             Objects.requireNonNull(id, "id cannot be null");
         }
 
+        /** Builds a cursor from a row's created_at instant, preserving microsecond precision. */
+        public static KeysetCursor of(Instant createdAt, long id) {
+            return new KeysetCursor(toEpochMicros(createdAt), id);
+        }
+
+        /** Reconstructs the microsecond-precision instant for the SQL keyset comparison. */
+        public Instant createdAtInstant() {
+            long secs = Math.floorDiv(createdAtUs, 1_000_000L);
+            long micros = Math.floorMod(createdAtUs, 1_000_000L);
+            return Instant.ofEpochSecond(secs, micros * 1_000L);
+        }
+
+        private static long toEpochMicros(Instant instant) {
+            return instant.getEpochSecond() * 1_000_000L + instant.getNano() / 1_000L;
+        }
+
         public String encode() {
-            return createdAtMs + "_" + id;
+            return createdAtUs + "_" + id;
         }
 
         public static KeysetCursor decode(String cursor) {

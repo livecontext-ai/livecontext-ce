@@ -132,6 +132,8 @@ interface OutputColumnProps {
   currentWorkflowId?: string;
   currentRunId?: string;
   showExecutionData?: boolean;
+  /** Forwarded to RunDataPreview: publishes the loaded output object (the Output header settings menu consumes it). */
+  onLoadedOutputChange?: (data: unknown | null) => void;
 }
 
 export const OutputColumn = ({
@@ -147,6 +149,7 @@ export const OutputColumn = ({
   currentWorkflowId,
   currentRunId,
   showExecutionData = true,
+  onLoadedOutputChange,
 }: OutputColumnProps) => {
   const { isRunMode, runId: contextRunId } = useWorkflowMode();
   const effectiveRunId = currentRunId || contextRunId;
@@ -432,6 +435,7 @@ export const OutputColumn = ({
           workflowId={currentWorkflowId}
           runId={effectiveRunId}
           showExecutionData={showExecutionData}
+          onLoadedOutputChange={onLoadedOutputChange}
         />
       ) : isAggregateNode && currentNode ? (
         /* Aggregate nodes show dynamic fields from aggregateFields config */
@@ -478,6 +482,7 @@ export const OutputColumn = ({
           workflowId={currentWorkflowId}
           runId={effectiveRunId}
           showExecutionData={showExecutionData}
+          onLoadedOutputChange={onLoadedOutputChange}
         />
       ) : (
         <div className="w-full space-y-2">

@@ -44,6 +44,7 @@ describe('workflowPlanGenerator - approval.delegation emission', () => {
         credentialId: 123,
         chatId: '{{trigger:form.output.chat_id}}',
         messageTemplate: 'Approve {{trigger:form.output.amount}}?',
+        image: '{{interface:card.output.screenshot}}',
         allowedUserIds: ['12345678', '87654321'],
       })],
       []
@@ -54,6 +55,7 @@ describe('workflowPlanGenerator - approval.delegation emission', () => {
       credentialId: 123,
       chatId: '{{trigger:form.output.chat_id}}',
       messageTemplate: 'Approve {{trigger:form.output.amount}}?',
+      image: '{{interface:card.output.screenshot}}',
       allowedUserIds: ['12345678', '87654321'],
     });
   });
@@ -77,6 +79,7 @@ describe('workflowPlanGenerator - approval.delegation emission', () => {
         channel: 'telegram',
         chatId: '   ',
         messageTemplate: '',
+        image: '  ',
         allowedUserIds: [],
       })],
       []
@@ -156,6 +159,7 @@ describe('workflowPlanGenerator - approval.delegation emission', () => {
         credentialId: 123,
         chatId: '-100123456789',
         messageTemplate: 'Please approve',
+        image: '{{interface:card.output.screenshot}}',
         allowedUserIds: ['12345678'],
       }, { requiredApprovals: 1, approvalTimeoutMs: 3600000 })],
       []
@@ -169,6 +173,7 @@ describe('workflowPlanGenerator - approval.delegation emission', () => {
       credentialId: 123,
       chatId: '-100123456789',
       messageTemplate: 'Please approve',
+      image: '{{interface:card.output.screenshot}}',
       allowedUserIds: ['12345678'],
     });
 
@@ -176,5 +181,69 @@ describe('workflowPlanGenerator - approval.delegation emission', () => {
     const second = generateWorkflowPlan([imported], []);
     const secondCore = second.cores!.find((c: any) => c.type === 'approval')!;
     expect(JSON.stringify(secondCore.approval)).toBe(JSON.stringify(firstCore.approval));
+  });
+
+  it('emits custom approveLabel/rejectLabel when set and round-trips them losslessly', () => {
+    const first = generateWorkflowPlan(
+      [approvalNode('approval-1', {
+        channel: 'telegram',
+        chatId: '-100123',
+        approveLabel: '👍 Ship it',
+        rejectLabel: '👎 Hold',
+      })],
+      []
+    );
+    expect(approvalBlockOf(first).delegation).toEqual({
+      channel: 'telegram',
+      chatId: '-100123',
+      approveLabel: '👍 Ship it',
+      rejectLabel: '👎 Hold',
+    });
+
+    const firstCore = first.cores!.find((c: any) => c.type === 'approval')!;
+    const imported = (NodeCreationService as any).createCoreNodesInline([firstCore], [], 100, 100).nodes[0];
+    expect(imported.data.approvalDelegation).toEqual({
+      channel: 'telegram',
+      chatId: '-100123',
+      approveLabel: '👍 Ship it',
+      rejectLabel: '👎 Hold',
+    });
+    const second = generateWorkflowPlan([imported], []);
+    const secondCore = second.cores!.find((c: any) => c.type === 'approval')!;
+    expect(JSON.stringify(secondCore.approval)).toBe(JSON.stringify(firstCore.approval));
+  });
+
+  it('regression: a delegation without custom button labels emits NO approveLabel/rejectLabel keys', () => {
+    const plan = generateWorkflowPlan(
+      [approvalNode('approval-1', {
+        channel: 'telegram',
+        chatId: '-100123',
+        approveLabel: '',
+        rejectLabel: '   ',
+      })],
+      []
+    );
+    expect(JSON.stringify(plan)).not.toContain('approveLabel');
+    expect(JSON.stringify(plan)).not.toContain('rejectLabel');
+  });
+
+  it('regression: a delegation without image emits NO image key (text-message plan shape unchanged)', () => {
+    const plan = generateWorkflowPlan(
+      [approvalNode('approval-1', {
+        channel: 'telegram',
+        credentialId: 123,
+        chatId: '-100123',
+        messageTemplate: 'Please approve',
+      })],
+      []
+    );
+
+    expect(approvalBlockOf(plan).delegation).toEqual({
+      channel: 'telegram',
+      credentialId: 123,
+      chatId: '-100123',
+      messageTemplate: 'Please approve',
+    });
+    expect(JSON.stringify(plan)).not.toContain('"image"');
   });
 });

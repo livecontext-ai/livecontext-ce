@@ -49,6 +49,7 @@ class ChatDispatchServiceTest {
     @Mock private AgentDefaultsConfig agentDefaults;
     @Mock private AgentClient agentClient;
     @Mock private RunContextService runContextService;
+    @Mock private ShareInvocationLimiter shareInvocationLimiter;
     @Mock private HashOperations<String, Object, Object> hashOperations;
 
     private ChatDispatchService service;
@@ -64,8 +65,9 @@ class ChatDispatchServiceTest {
         service = new ChatDispatchService(
                 triggerClient, redisTemplate, restTemplate, objectMapper,
                 workflowRepository, runRepository, triggerService, productionRunResolver,
-                creditClient, agentDefaults, agentClient, runContextService, "http://localhost:8087");
+                creditClient, shareInvocationLimiter, agentDefaults, agentClient, runContextService, "http://localhost:8087");
         lenient().when(creditClient.checkCredits(any())).thenReturn(true);
+        lenient().when(shareInvocationLimiter.tryAcquire(any(), any())).thenReturn(true);
 
         // ProductionRunResolver delegates to existing repo stubs (refactor compat).
         lenient().when(productionRunResolver.resolve(any(), any())).thenAnswer(inv -> {

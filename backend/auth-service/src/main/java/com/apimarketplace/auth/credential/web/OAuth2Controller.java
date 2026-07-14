@@ -241,6 +241,11 @@ public class OAuth2Controller {
         log.info("Refreshing token for credential {} user {}", credentialId, userId);
 
         var credential = oAuth2Service.refreshToken(credentialId, userId);
-        return ResponseEntity.ok(credential);
+        // Scrub secrets before the response leaves the server: the refreshed credential
+        // carries the plaintext-decrypted credentialData (oauth_client_secret, and the
+        // refresh_token for providers that don't rotate it). Every CredentialController
+        // response strips these via withoutSecrets(); this endpoint must do the same so
+        // long-lived secrets never reach the browser / access logs.
+        return ResponseEntity.ok(credential.withoutSecrets());
     }
 }

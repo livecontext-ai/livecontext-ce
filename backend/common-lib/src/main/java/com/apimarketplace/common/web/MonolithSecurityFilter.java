@@ -210,13 +210,46 @@ public class MonolithSecurityFilter implements Filter {
                 return;
             }
 
-            String method = httpRequest.getMethod();
-            if (!isShareTokenReadMethod(method)
-                    && !isAllowedShareTokenApplicationBootstrap(method, path, shareContext)
-                    && !isAllowedShareTokenReadOnlyPost(method, path)) {
+            // A share token authenticates the visitor AS THE OWNER. That
+            // owner-impersonation is legitimate ONLY for share types whose UI
+            // reaches the owner's workspace through the authenticated apiClient
+            // (APPLICATION run viewer, CONVERSATION transcript viewer). CHAT and
+            // FORM share links are served entirely by dedicated PUBLIC per-token
+            // endpoints (/chat/{token}, /form/{token}) - their runtime never sends
+            // this ShareToken header, so a CHAT/FORM header is always an out-of-band
+            // attempt to impersonate the owner on every GET (enumerate workflows,
+            // agents, datasources, ...). Reject it. Kept in lockstep with the cloud
+            // AuthenticationFilter counterpart.
+            if (isOwnerImpersonationForbiddenShareType(shareContext.resourceType())) {
                 httpResponse.setStatus(HttpServletResponse.SC_FORBIDDEN);
                 httpResponse.setContentType("application/json");
-                httpResponse.getWriter().write("{\"error\":\"Forbidden\",\"message\":\"Write operations are not allowed in a shared context.\"}");
+                httpResponse.getWriter().write("{\"error\":\"Forbidden\",\"message\":\"This share link type cannot be used for API access.\"}");
+                return;
+            }
+
+            String method = httpRequest.getMethod();
+            // Positive allow-list. A share token authenticates the visitor AS THE
+            // OWNER, so a blanket "any GET is fine" let an APPLICATION share holder
+            // read the owner's ENTIRE workspace (datasource configs with DB passwords,
+            // workflow plans with inline secrets, agent webhook tokens, the whole file
+            // store, the share-link list, ...). Permit only the exact endpoints the
+            // /s/{token} application viewer needs: the allow-listed GET/HEAD reads, the
+            // bootstrap POST, the interactive run POSTs, the read-only metadata POST,
+            // and CORS preflight. Kept in lockstep with the cloud AuthenticationFilter.
+            boolean allowed =
+                    "OPTIONS".equals(method)
+                    || isAllowedShareTokenApplicationGet(method, path, shareContext)
+                    || isAllowedShareTokenApplicationBootstrap(method, path, shareContext)
+                    || isAllowedShareTokenApplicationRunInteraction(method, path, shareContext)
+                    || isAllowedShareTokenReadOnlyPost(method, path);
+            if (!allowed) {
+                httpResponse.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                httpResponse.setContentType("application/json");
+                boolean readMethod = "GET".equals(method) || "HEAD".equals(method);
+                String message = readMethod
+                        ? "This endpoint is not accessible from a shared application link."
+                        : "Write operations are not allowed in a shared context.";
+                httpResponse.getWriter().write("{\"error\":\"Forbidden\",\"message\":\"" + message + "\"}");
                 return;
             }
 
@@ -604,6 +637,10 @@ public class MonolithSecurityFilter implements Filter {
                path.startsWith("/form/") ||
                path.startsWith("/widget/") ||
                path.startsWith("/api/files/download") ||
+               // Anonymous avatar serve (marketplace cards, shared apps, embeds render
+               // avatars via plain <img>). MonolithFileController.avatarById only resolves
+               // rows uploaded through the generic 'avatar' category with an image mime.
+               path.startsWith("/api/files/avatar/") ||
                path.equals("/ws") || path.startsWith("/ws?") ||
                path.startsWith("/share/") ||
                path.startsWith("/s/") ||
@@ -800,8 +837,69 @@ public class MonolithSecurityFilter implements Filter {
     public record ShareTokenContext(String userId, String organizationId, String resourceType,
                                     String resourceToken, String resourceId) {}
 
-    private static boolean isShareTokenReadMethod(String method) {
-        return "GET".equals(method) || "HEAD".equals(method) || "OPTIONS".equals(method);
+    /**
+     * Positive GET/HEAD allow-list for an APPLICATION share context. A share token
+     * resolves to the OWNER's identity, so any GET would otherwise read the owner's
+     * whole workspace. This confines share-context reads to exactly the endpoints
+     * the {@code /s/{token}} application viewer calls to render and operate the
+     * shared app: the shared publication + its reviews + the acquired list, the
+     * shared workflow definition + its run lookups, the DAG run state/signals and
+     * versions, the interface definition + render, interface media by file id, and
+     * the publisher avatar. Everything else (datasource configs, agent webhook
+     * tokens, the file store, the share-link list, bare workflow/plan reads, ...)
+     * is denied. The owner-wide list reads the hidden builder canvas also fires
+     * ({@code /api/agents}, {@code /api/credentials/all}) are deliberately NOT
+     * allow-listed: both call sites tolerate a 403 (try/catch and a non-throwing
+     * useQuery), so denying them costs at most a missing agent avatar while closing
+     * the agent system-prompt and credential-inventory leaks. Kept in lockstep with
+     * the cloud {@code AuthenticationFilter} counterpart.
+     */
+    private static boolean isAllowedShareTokenApplicationGet(
+            String method,
+            String path,
+            ShareTokenContext shareContext) {
+        if (!"GET".equals(method) && !"HEAD".equals(method)) {
+            return false;
+        }
+        if (shareContext == null || !"APPLICATION".equalsIgnoreCase(shareContext.resourceType())) {
+            return false;
+        }
+        return path != null && SHARE_APPLICATION_GET_ALLOW.matcher(path).matches();
+    }
+
+    /**
+     * Anchored allow-list of the exact GET/HEAD paths the shared application viewer
+     * needs (query-free path only; dynamic ids are UUID-constrained where a named
+     * sibling route would otherwise slip through, e.g. {@code /api/publications/shared-links}
+     * must NOT match the by-id branch). Kept byte-identical with the cloud counterpart.
+     */
+    private static final java.util.regex.Pattern SHARE_APPLICATION_GET_ALLOW =
+            java.util.regex.Pattern.compile(
+                    "^/api/(?:"
+                            + "publications/(?:acquired|[0-9a-fA-F\\-]{36}(?:/application-workflow|/reviews(?:/comments-count|/mine|/[0-9a-fA-F\\-]{36}/replies)?)?)"
+                            + "|workflows/[0-9a-fA-F\\-]{36}(?:/runs/(?:application|pinned))?"
+                            + "|v2/workflows/dag/(?:[0-9a-fA-F\\-]{36}/versions|runs/[^/]+/(?:state|signals))"
+                            + "|interfaces/[^/]+(?:/render)?"
+                            + "|files/by-id/[^/]+/raw"
+                            + "|users/[^/]+/avatar"
+                            + ")$");
+
+    /**
+     * A ShareToken authenticates the visitor AS THE OWNER (owner-impersonation).
+     * That is legitimate ONLY for APPLICATION shares: the {@code /s/{token}}
+     * application viewer is the only share UI that reaches owner resources through
+     * the authenticated apiClient. CHAT, FORM, and CONVERSATION shares are served
+     * entirely by dedicated PUBLIC per-token endpoints ({@code /chat/{token}},
+     * {@code /form/{token}}, {@code /c/{token}}) and never send this header, so any
+     * non-APPLICATION ShareToken is an out-of-band attempt to impersonate the owner
+     * and read the owner's whole workspace (workflows, datasources, agents,
+     * conversations, files, ...). Reject everything except APPLICATION. This also
+     * removes the CONVERSATION run-binding bypass in
+     * {@code WorkflowControllerHelper.shareContextPermitsRun}. Kept in lockstep
+     * with the cloud {@code AuthenticationFilter} counterpart.
+     */
+    private static boolean isOwnerImpersonationForbiddenShareType(String resourceType) {
+        return !"APPLICATION".equalsIgnoreCase(resourceType);
     }
 
     private static boolean isAllowedShareTokenApplicationBootstrap(
@@ -816,6 +914,60 @@ public class MonolithSecurityFilter implements Filter {
         }
         return "/api/v2/workflows/dag/execute".equals(path);
     }
+
+    /**
+     * Interactive run endpoints an APPLICATION share visitor needs to OPERATE a
+     * running shared application: fire an interface action / submit an interface
+     * form / advance the DAG (__continue), and resolve a user-approval signal
+     * (single or bulk). These are POSTs (the action/resolution travels in the
+     * body), but every one is bound at the controller to the run's publication
+     * via {@code WorkflowControllerHelper.shareContextPermitsRun} - an
+     * APPLICATION share read only passes when {@code run.publicationId ==
+     * X-Share-Resource-Token}. So a share holder can only interact with the
+     * SHARED application's own run, never the owner's other runs. Gated to
+     * APPLICATION tokens, mirroring the bootstrap carve-out; kept in lockstep
+     * with the cloud {@code AuthenticationFilter} counterpart so a CE share link
+     * behaves like a cloud one. Without this, an interactive shared application
+     * 403s at the first button click / form submit / Continue.
+     */
+    private static boolean isAllowedShareTokenApplicationRunInteraction(
+            String method,
+            String path,
+            ShareTokenContext shareContext) {
+        if (!"POST".equals(method) || shareContext == null) {
+            return false;
+        }
+        if (!"APPLICATION".equalsIgnoreCase(shareContext.resourceType())) {
+            return false;
+        }
+        return path != null && SHARE_APPLICATION_RUN_INTERACTION_PATH.matcher(path).matches();
+    }
+
+    /**
+     * Matches the run-scoped interactive POST paths an APPLICATION share visitor needs
+     * (dynamic {@code {runId}} / {@code {nodeId}} / trigger segments). Anchored and literal
+     * between segments so it cannot widen to any other endpoint. Three shapes:
+     * <ul>
+     *   <li>{@code /api/v2/workflows/dag/runs/{runId}/interface-actions/{nodeId}/fire} and
+     *       {@code .../signals/{nodeId}/resolve[-all]} - interface actions / __continue / approvals;</li>
+     *   <li>{@code /api/v2/workflows/runs/{runId}/trigger/...} (NOTE: {@code /runs/}, no {@code /dag/})
+     *       - fire a trigger button on a trigger-started shared app. Bound at {@code TriggerController}
+     *       via {@code WorkflowControllerHelper.isRunInScope} -> {@code shareContextPermitsRun}
+     *       (run.publicationId == X-Share-Resource-Token);</li>
+     *   <li>{@code /api/files/upload} (exact) - interface-form file upload, written under the owner
+     *       tenant (size- and storage-quota-bounded); NOT widened to other /api/files paths.</li>
+     * </ul>
+     * Kept byte-identical with the cloud {@code AuthenticationFilter} counterpart.
+     */
+    private static final java.util.regex.Pattern SHARE_APPLICATION_RUN_INTERACTION_PATH =
+            java.util.regex.Pattern.compile(
+                    "^(?:"
+                            + "/api/v2/workflows/dag/runs/[^/]+/"
+                                + "(?:interface-actions/[^/]+/fire|signals/[^/]+/resolve(?:-all)?)"
+                            + "|/api/v2/workflows/runs/[^/]+/trigger/"
+                                + "(?:manual|chat|datasource|form|[^/]+/[^/]+)"
+                            + "|/api/files/upload"
+                            + ")$");
 
     /**
      * Read-only POST endpoints allowed in a shared (share-token) context. Mirrors the cloud

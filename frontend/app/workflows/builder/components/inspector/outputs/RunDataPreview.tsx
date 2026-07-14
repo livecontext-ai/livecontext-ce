@@ -10,7 +10,7 @@
 
 import * as React from 'react';
 import clsx from 'clsx';
-import { ChevronRight, Database, GripVertical, Download, Eye } from 'lucide-react';
+import { ChevronRight, Database, GripVertical, Download, Eye, FlaskConical } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { useTranslations } from 'next-intl';
 import { useRunData, type RunDataType } from '../../../hooks/useRunData';
@@ -20,6 +20,7 @@ import { EmptyState } from '../../shared/EmptyState';
 import { OutputError, SkipBanner } from '../shared/OutputError';
 import { isFileRef, normalizeFileRef, fileService, fileRefToUrl, getFilePath, type FileRef } from '@/lib/api/orchestrator/file.service';
 import { openAuthedFileInNewTab } from '@/lib/utils/url-auth';
+import { isMockedOutput } from '../../../utils/nodeMock';
 
 interface RunDataPreviewProps {
   workflowId: string | undefined;
@@ -31,6 +32,13 @@ interface RunDataPreviewProps {
   isDraggable?: boolean;
   /** Prefix for drag expressions, e.g. "mcp:step1.output" or "mcp:step1.params" */
   dragPrefix?: string;
+  /**
+   * Publishes the currently loaded data object (null while loading / when
+   * nothing is loaded / on unmount). The inspector lifts an OUTPUT preview's
+   * object up to its column header, where the settings menu offers
+   * "Use as mock output" on it.
+   */
+  onLoadedOutputChange?: (data: unknown | null) => void;
 }
 
 export function RunDataPreview({
@@ -40,8 +48,10 @@ export function RunDataPreview({
   dataType,
   isDraggable = false,
   dragPrefix,
+  onLoadedOutputChange,
 }: RunDataPreviewProps) {
   const t = useTranslations('workflowBuilder.inspector');
+  const tMock = useTranslations('workflowBuilder.mock');
   const [statusFilter, setStatusFilter] = React.useState<string>(ALL_STATUSES_VALUE);
   const activeStatusFilter: StatusType | null =
     statusFilter === ALL_STATUSES_VALUE ? null : (statusFilter as StatusType);
@@ -92,6 +102,32 @@ export function RunDataPreview({
   // State for loaded data
   const [data, setData] = React.useState<any>(null);
   const [isLoadingData, setIsLoadingData] = React.useState(false);
+
+  // This instance is REUSED across node switches (see the expandedPaths reset
+  // above): without this reset, node A's data would keep rendering (and keep
+  // being published below) when node B has nothing to load (zero items /
+  // error) - the load effect early-returns in those cases and would never
+  // overwrite it.
+  React.useEffect(() => {
+    setData(null);
+  }, [workflowId, stepAlias, runId, dataType]);
+
+  // Publish the loaded object to the caller (ref: identity changes must not
+  // re-run the effect). null while the hook or the object fetch is loading, on
+  // a hook error, when there is nothing to display (zero items), and on
+  // unmount - a consumer acting on the published value (the Output header's
+  // "Use as mock output") must NEVER see another node's stale object.
+  const onLoadedOutputChangeRef = React.useRef(onLoadedOutputChange);
+  onLoadedOutputChangeRef.current = onLoadedOutputChange;
+  const showsLoadedData = !isLoading && !error && totalItems > 0 && !isLoadingData;
+  React.useEffect(() => {
+    onLoadedOutputChangeRef.current?.(showsLoadedData ? data : null);
+  }, [data, showsLoadedData]);
+  React.useEffect(() => {
+    return () => {
+      onLoadedOutputChangeRef.current?.(null);
+    };
+  }, []);
 
   // Load data when the displayed row changes. Keyed on currentItem.id (not
   // just the index): a page merge or targeted jump can swap WHICH row sits at
@@ -163,6 +199,8 @@ export function RunDataPreview({
     );
   }
 
+  const isOutputMocked = dataType === 'output' && isMockedOutput(data);
+
   return (
     <div className="space-y-2">
       {/* Item Navigator */}
@@ -175,6 +213,20 @@ export function RunDataPreview({
         statusFilter={statusFilter}
         onStatusFilterChange={setStatusFilter}
       />
+
+      {/* Mocked pill - provenance of the loaded output object ("Use as mock
+          output" itself lives in the Output header's settings menu) */}
+      {isOutputMocked && (
+        <div className="flex items-center gap-2">
+          <span
+            data-testid="run-data-mocked-pill"
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300"
+          >
+            <FlaskConical className="h-3 w-3" />
+            {tMock('mockedBadge')}
+          </span>
+        </div>
+      )}
 
       {/* Error/Skip banners from envelope fields */}
       {data?._error && <OutputError error={data._error} />}

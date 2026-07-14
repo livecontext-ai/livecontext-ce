@@ -118,7 +118,25 @@ export function NodeBottomBar({ borderColor, isRunning, buttons, playButton, ext
 
   if (!hasPersistent && !showHoverActions) return null;
 
-  const isRevealed = hover ? hover.isVisible : true;
+  // Effective status of the play button (same derivation as the rendered button
+  // below). When a node is runnable right now in run mode - its play button is
+  // in the "ready" state - reveal the whole bar WITHOUT waiting for hover, so the
+  // run affordance is directly visible with its blue shimmer. This is the cue
+  // that replaces the old green node-body "ready" shimmer: a trigger's run button
+  // (auto mode) and every runnable node's run button (step-by-step mode) show up
+  // on their own the moment they can be executed.
+  const playStatus = playButton
+    ? (playButton.isTriggerNode && playButton.stepByStepStatus.isReady
+        ? 'ready'
+        : deriveNodeStatus(playButton.stepByStepStatus))
+    : undefined;
+  // canExecute is required: the play button only renders its ready state when
+  // status === 'ready' AND canExecute, so gating the reveal on it too avoids
+  // revealing an empty bar in the (near-unreachable) ready-but-not-executable
+  // case.
+  const runnableNow = isRunMode && playStatus === 'ready' && !!playButton?.stepByStepStatus.canExecute;
+
+  const isRevealed = runnableNow || (hover ? hover.isVisible : true);
   // Children re-enable pointer events only while revealed: a child with an
   // unconditional pointer-events-auto would stay clickable through the
   // invisible (opacity-0) bar.

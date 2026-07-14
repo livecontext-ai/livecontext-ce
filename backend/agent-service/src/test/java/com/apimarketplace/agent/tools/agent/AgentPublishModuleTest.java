@@ -108,6 +108,66 @@ class AgentPublishModuleTest {
     }
 
     @Nested
+    @DisplayName("structured publish refusals (422)")
+    class ValidationRefusalTests {
+
+        @Test
+        @DisplayName("grant=all refusal names each agent + families and instructs `agent` action=update to custom/none")
+        void allAccessRefusalRendersActionableMessage() {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("error", "AGENT_ALL_ACCESS_NOT_PUBLISHABLE");
+            body.put("message", "This agent cannot be published because it has 'All' access on some resource types.");
+            body.put("violations", java.util.List.of(
+                    Map.of("agentId", AGENT_ID.toString(), "agentName", "Support Copilot", "root", true,
+                            "families", java.util.List.of("tables", "interfaces")),
+                    Map.of("agentId", UUID.randomUUID().toString(), "agentName", "Research Helper", "root", false,
+                            "referencedVia", java.util.List.of("Support Copilot"),
+                            "families", java.util.List.of("agents"))));
+            when(publicationClient.publishAgent(any(), eq(TENANT), eq(TEST_ORG_ID)))
+                    .thenThrow(new com.apimarketplace.publication.client.PublicationValidationException(
+                            "AGENT_ALL_ACCESS_NOT_PUBLISHABLE", (String) body.get("message"), body, null));
+
+            ToolExecutionResult result = module.execute("publish",
+                    Map.of("agent_id", AGENT_ID.toString(), "title", "X", "interface_id", INTERFACE_ID.toString()),
+                    TENANT, ctx()).orElseThrow();
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.error())
+                    .contains("Support Copilot")
+                    .contains("Research Helper")
+                    .contains("sub-agent of \"Support Copilot\"")
+                    .contains("tables")
+                    .contains("action=update")
+                    .contains("\"custom\"")
+                    .contains("\"none\"");
+        }
+
+        @Test
+        @DisplayName("snapshot-too-large refusal relays the size message + heaviest resources + trim guidance")
+        void tooLargeRefusalRendersBreakdown() {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("error", "AGENT_SNAPSHOT_TOO_LARGE");
+            body.put("message", "Publication snapshot is 34.0 MB (max 15.0 MB).");
+            body.put("breakdown", java.util.List.of(
+                    Map.of("type", "datasource", "id", "142", "name", "Leads", "items", 82000)));
+            when(publicationClient.publishAgent(any(), eq(TENANT), eq(TEST_ORG_ID)))
+                    .thenThrow(new com.apimarketplace.publication.client.PublicationValidationException(
+                            "AGENT_SNAPSHOT_TOO_LARGE", (String) body.get("message"), body, null));
+
+            ToolExecutionResult result = module.execute("publish",
+                    Map.of("agent_id", AGENT_ID.toString(), "title", "X", "interface_id", INTERFACE_ID.toString()),
+                    TENANT, ctx()).orElseThrow();
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.error())
+                    .contains("34.0 MB")
+                    .contains("Leads")
+                    .contains("82000 rows")
+                    .contains("action=update");
+        }
+    }
+
+    @Nested
     @DisplayName("publish")
     class PublishTests {
 

@@ -84,6 +84,69 @@ class FileControllerTest {
     }
 
     @Nested
+    @DisplayName("Anonymous avatar serve (/avatar/{id})")
+    class AnonymousAvatarServe {
+
+        private StorageEntity avatarEntity(UUID id) {
+            StorageEntity e = new StorageEntity();
+            e.setId(id);
+            e.setTenantId(OWN_TENANT);
+            e.setStorageType("S3_FILE");
+            e.setS3Key(OWN_TENANT + "/general/avatar/ab12_avatar.svg");
+            e.setFileName("avatar.svg");
+            e.setMimeType("image/svg+xml");
+            return e;
+        }
+
+        @Test
+        @DisplayName("serves an eligible avatar with the security headers the design leans on (CSP no-script, nosniff, public cache)")
+        void servesAvatarWithSecurityHeaders() throws IOException {
+            UUID id = UUID.randomUUID();
+            StorageEntity e = avatarEntity(id);
+            when(storageIndex.getPublicAvatarEntity(id)).thenReturn(Optional.of(e));
+            byte[] payload = "<svg/>".getBytes();
+            DownloadStream ds = new DownloadStream(new ByteArrayInputStream(payload), payload.length, "image/svg+xml");
+            when(fileStorageService.openStream(e.getS3Key())).thenReturn(Optional.of(ds));
+
+            ResponseEntity<StreamingResponseBody> r = controller.avatarById(id);
+
+            assertThat(r.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(r.getHeaders().getFirst("Content-Security-Policy"))
+                    .isEqualTo("default-src 'none'; style-src 'unsafe-inline'");
+            assertThat(r.getHeaders().getFirst("X-Content-Type-Options")).isEqualTo("nosniff");
+            assertThat(r.getHeaders().getFirst("Cache-Control")).isEqualTo("public, max-age=86400");
+            assertThat(r.getHeaders().getFirst("Content-Type")).isEqualTo("image/svg+xml");
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            r.getBody().writeTo(out);
+            assertThat(out.toByteArray()).isEqualTo(payload);
+        }
+
+        @Test
+        @DisplayName("non-eligible id 404s WITHOUT touching object storage (single gate in getPublicAvatarEntity)")
+        void nonEligibleId404sWithoutStorageRead() {
+            UUID id = UUID.randomUUID();
+            when(storageIndex.getPublicAvatarEntity(id)).thenReturn(Optional.empty());
+
+            ResponseEntity<StreamingResponseBody> r = controller.avatarById(id);
+
+            assertThat(r.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+            verify(fileStorageService, never()).openStream(anyString());
+        }
+
+        @Test
+        @DisplayName("no tenant resolution, no org guard - the endpoint is anonymous by design")
+        void anonymousByDesign() {
+            UUID id = UUID.randomUUID();
+            when(storageIndex.getPublicAvatarEntity(id)).thenReturn(Optional.empty());
+
+            controller.avatarById(id);
+
+            verify(tenantResolver, never()).resolve(any(HttpServletRequest.class));
+            verify(orgAccessGuard, never()).canAccess(any(), any(), any(), any(), any());
+        }
+    }
+
+    @Nested
     @DisplayName("Opaque by-id serve")
     class OpaqueById {
 

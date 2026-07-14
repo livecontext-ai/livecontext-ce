@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { useTranslations } from 'next-intl';
+import { renderMarkdownPreview } from '@/lib/utils/renderMarkdownPreview';
 import {
   Bold,
   Italic,
@@ -296,47 +297,9 @@ const RichTextarea: React.FC<RichTextareaProps> = ({
     }
   };
 
-  // Function to convert markdown to HTML for preview
-  const renderMarkdown = (text: string): string => {
-    if (!text) return '';
-    
-    return text
-      // Line breaks
-      .replace(/\n/g, '<br>')
-      
-      // Bold
-      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-      
-      // Italic
-      .replace(/\*(.*?)\*/g, '<em>$1</em>')
-      
-      // Inline code
-      .replace(/`(.*?)`/g, '<code class="inline-code">$1</code>')
-      
-      // Quotes
-      .replace(/^> (.*?)$/gm, '<blockquote class="quote">$1</blockquote>')
-      
-      // Bullet lists
-      .replace(/^- (.*?)$/gm, '<li class="list-item">$1</li>')
-      
-      // Numbered lists
-      .replace(/^\d+\. (.*?)$/gm, '<li class="list-item">$1</li>')
-      
-      // Links
-      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="link">$1</a>')
-      
-      // Emojis (already supported by Unicode)
-      // No transformation needed
-      
-      // Clean up lists
-      .replace(/(<li class="list-item">[\s\S]*?<\/li>)/g, '<ul class="list">$1</ul>')
-      .replace(/<\/ul>\s*<ul class="list">/g, '')
-      
-      // Clean up quotes
-      .replace(/(<blockquote class="quote">[\s\S]*?<\/blockquote>)/g, '<div class="quote-container">$1</div>');
-  };
-
-  const htmlContent = renderMarkdown(value);
+  // Markdown->HTML preview (HTML-escaped + href-scheme-validated to prevent XSS). Extracted to
+  // lib/utils/renderMarkdownPreview so the escaping is unit-testable.
+  const htmlContent = renderMarkdownPreview(value);
 
   // If forcePreview is enabled, always show preview
   const currentViewMode = forcePreview ? 'preview' : viewMode;

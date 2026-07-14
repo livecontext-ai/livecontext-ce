@@ -73,6 +73,15 @@ public class WorkflowResumeService {
     private com.apimarketplace.trigger.client.TriggerClient triggerClient;
 
     /**
+     * Used by {@link #updateRunPlan(String, Map)} to mirror in-run MOCK edits of
+     * editor runs into the workflow's plan (their durable home - run.plan is
+     * refreshed from workflow.plan on every fire). {@code required=false} so
+     * narrow test wirings boot without it; the mirror is then skipped.
+     */
+    @Autowired(required = false)
+    private com.apimarketplace.orchestrator.repository.WorkflowRepository workflowRepository;
+
+    /**
      * Plan v4 §1.6 - advisory-lock helper. {@code required=false} so narrow
      * Spring tests boot without it. When null: pessimistic row-lock path
      * remains correctness backstop (pre-§1.6 semantics).
@@ -356,6 +365,34 @@ public class WorkflowResumeService {
         runRepository.save(runEntity);
 
         logger.info("[updateRunPlan] Updated run plan for runId={} (planVersion={})", runId, runEntity.getPlanVersion());
+
+        // In-run MOCK edits must outlive the run: run.plan is refreshed FROM
+        // workflow.plan on every fire (ReusableTriggerService /
+        // refreshPlanFromWorkflowDefinition), so a mock living only in run.plan is
+        // wiped by the next refresh and vanishes when the editor reloads from
+        // workflow.plan. Editor runs therefore mirror their mock blocks into the
+        // workflow plan - the same durable home the workflow-assistant agent
+        // writes to (UI/agent parity). Params and other node content stay
+        // run-scoped by design; APPLICATION workflows stay untouched (immutable
+        // acquired clones, same rule as the execute-time auto-save).
+        if (isEditorRun && workflow != null && !workflow.isApplication() && workflowRepository != null) {
+            try {
+                Map<String, Object> merged = com.apimarketplace.orchestrator.utils.NodeMockPlanMerger
+                        .mergedWorkflowPlanOrNull(planMap, workflow.getPlan());
+                if (merged != null) {
+                    workflow.setPlan(merged);
+                    workflow.setUpdatedAt(Instant.now());
+                    workflowRepository.save(workflow);
+                    logger.info("[updateRunPlan] Mirrored in-run mock edits into workflow {} plan", workflow.getId());
+                }
+            } catch (Exception e) {
+                // Best-effort: synchronous failures are swallowed so the run keeps
+                // executing its updated plan (the mirror is a durability improvement,
+                // not a correctness requirement). A failure surfacing only at
+                // flush/commit time still rolls back the whole transaction.
+                logger.warn("[updateRunPlan] Mock mirror to workflow plan failed for runId={}: {}", runId, e.getMessage());
+            }
+        }
 
         return WorkflowPlan.fromMap(planMap, runEntity.getWorkflow().getId().toString(), runEntity.getTenantId());
     }

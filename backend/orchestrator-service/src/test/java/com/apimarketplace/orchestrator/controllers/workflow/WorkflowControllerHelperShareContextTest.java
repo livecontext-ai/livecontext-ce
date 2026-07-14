@@ -77,10 +77,26 @@ class WorkflowControllerHelperShareContextTest {
     }
 
     @Test
-    @DisplayName("non-APPLICATION share type → run binding not applied (behavior unchanged)")
-    void nonApplicationShare_unchanged() {
-        shareRequest("true", "INTERFACE", "iface-token");
-        assertThat(WorkflowControllerHelper.isRunInScope(ownerRun("pub-B"), CALLER, ORG)).isTrue();
+    @DisplayName("APPLICATION share + a SUB-WORKFLOW child run (own/absent publication id) → DENIED "
+            + "(a core:sub_workflow node fires a separate reusable run that never inherits the parent's "
+            + "publicationId, so a share-context read addressing that child run must fail closed, never leak)")
+    void applicationShare_subWorkflowChildRun_denied() {
+        shareRequest("true", "APPLICATION", "pub-root");
+        // Child run started independently → publicationId null (the common case).
+        assertThat(WorkflowControllerHelper.isRunInScope(ownerRun(null), CALLER, ORG)).isFalse();
+        // Child run that was itself bootstrapped as a DIFFERENT application → publicationId != root.
+        assertThat(WorkflowControllerHelper.isRunInScope(ownerRun("pub-sub"), CALLER, ORG)).isFalse();
+    }
+
+    @Test
+    @DisplayName("non-APPLICATION share type → run read DENIED (defense-in-depth: the gateway/monolith "
+            + "filter now rejects non-APPLICATION owner-impersonation outright, and this no longer falls "
+            + "back to the permissive strict-scope-only path that let a CONVERSATION token read every run)")
+    void nonApplicationShare_denied() {
+        shareRequest("true", "CONVERSATION", "cs-token");
+        assertThat(WorkflowControllerHelper.isRunInScope(ownerRun("pub-B"), CALLER, ORG)).isFalse();
+        // Even a run whose publication matches some other token is denied for a non-APPLICATION share.
+        assertThat(WorkflowControllerHelper.isRunInScope(ownerRun("cs-token"), CALLER, ORG)).isFalse();
     }
 
     @Test

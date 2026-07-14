@@ -127,6 +127,34 @@ class OptionalComponentValidatorTest {
     }
 
     @Test
+    @DisplayName("interface with generateVideo + renderer unavailable → one WARNING (video rides the same renderer capability)")
+    void interfaceVideoWithoutRendererWarns() {
+        Map<String, Object> node = interfaceNode("Clip UI", null, null);
+        node.put("generateVideo", true);
+        session.getInterfaces().add(node);
+        when(capabilityService.isScreenshotRendererAvailable()).thenReturn(false);
+
+        validator.validate(session, result);
+
+        assertThat(result.getWarnings()).hasSize(1);
+        assertThat(result.getWarnings().get(0).code()).isEqualTo("INTERFACE_RENDERER_UNAVAILABLE");
+        assertThat(result.getWarnings().get(0).nodeId()).isEqualTo("interface:clip_ui");
+    }
+
+    @Test
+    @DisplayName("interface with string 'true' generateVideo → NO warning (strict Boolean.TRUE match, aligned with parser)")
+    void interfaceVideoStringTrueDoesNotWarn() {
+        Map<String, Object> node = interfaceNode("Clip UI", null, null);
+        node.put("generateVideo", "true");
+        session.getInterfaces().add(node);
+
+        validator.validate(session, result);
+
+        assertThat(result.getWarnings()).isEmpty();
+        verify(capabilityService, never()).isScreenshotRendererAvailable();
+    }
+
+    @Test
     @DisplayName("interface with render toggle + renderer AVAILABLE → no warning, browsing verdict never consulted (no HTTP)")
     void interfaceToggleWithRendererAvailableIsSilent() {
         session.getInterfaces().add(interfaceNode("Results UI", true, null));

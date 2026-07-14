@@ -194,13 +194,56 @@ class CeDownloadControllerTest {
             assertThat(response.getBody()).containsEntry("planSnapshot", Map.of("triggers", "raw"));
             verify(creditClient).consumeFixedCredits(CLOUD_USER_ID.toString(), PUB_ID.toString(), 17);
 
+            // Receipt is RESERVED (saveAndFlush) before charging, and kept on success.
             ArgumentCaptor<PublicationReceiptEntity> receipt =
                     ArgumentCaptor.forClass(PublicationReceiptEntity.class);
-            verify(receiptRepository).save(receipt.capture());
+            verify(receiptRepository).saveAndFlush(receipt.capture());
+            verify(receiptRepository, never()).delete(any());
             assertThat(receipt.getValue().getTenantId()).isEqualTo(CLOUD_USER_ID.toString());
             assertThat(receipt.getValue().getPublicationId()).isEqualTo(PUB_ID);
             assertThat(receipt.getValue().getCreditsPaid()).isEqualTo(17);
             assertThat(receipt.getValue().getOrganizationId()).isEqualTo(CLOUD_ORG_ID);
+        }
+
+        @Test
+        @DisplayName("Concurrent acquire loses the unique-index race: returns alreadyOwned and is NEVER charged (double-charge regression)")
+        void concurrentAcquireDoesNotDoubleCharge() {
+            when(publicationRepository.findById(PUB_ID)).thenReturn(Optional.of(publication(17)));
+            when(authClient.getDefaultOrganizationIdForUser(CLOUD_USER_ID.toString())).thenReturn(CLOUD_ORG_ID);
+            // Fast-path existsBy misses (first receipt not yet committed), so both requests
+            // proceed to reserve; this one loses the unique (organization_id, publication_id) race.
+            // The re-check inside the catch then confirms the row now exists -> already owned.
+            when(receiptRepository.existsByOrganizationIdAndPublicationId(CLOUD_ORG_ID, PUB_ID))
+                    .thenReturn(false, true);
+            when(receiptRepository.saveAndFlush(any(PublicationReceiptEntity.class)))
+                    .thenThrow(new org.springframework.dao.DataIntegrityViolationException("duplicate key uq_publication_receipts_org_scope"));
+
+            ResponseEntity<Map<String, Object>> response = controller.acquireWithAuth(PUB_ID, CLOUD_USER_ID);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(response.getBody()).containsEntry("alreadyOwned", true);
+            // The loser must NOT be charged, and must NOT delete the winner's row.
+            verify(creditClient, never()).consumeFixedCredits(anyString(), anyString(), anyInt());
+            verify(receiptRepository, never()).delete(any());
+        }
+
+        @Test
+        @DisplayName("A non-duplicate integrity violation is NOT masked as already-owned - it surfaces (never a free grant)")
+        void unrelatedIntegrityViolationIsRethrown() {
+            when(publicationRepository.findById(PUB_ID)).thenReturn(Optional.of(publication(17)));
+            when(authClient.getDefaultOrganizationIdForUser(CLOUD_USER_ID.toString())).thenReturn(CLOUD_ORG_ID);
+            // existsBy is false both on the fast path AND in the catch re-check: the violation
+            // was something OTHER than the org-scope unique row, so it must propagate.
+            when(receiptRepository.existsByOrganizationIdAndPublicationId(CLOUD_ORG_ID, PUB_ID))
+                    .thenReturn(false, false);
+            when(receiptRepository.saveAndFlush(any(PublicationReceiptEntity.class)))
+                    .thenThrow(new org.springframework.dao.DataIntegrityViolationException("some other constraint"));
+
+            org.assertj.core.api.Assertions.assertThatThrownBy(
+                    () -> controller.acquireWithAuth(PUB_ID, CLOUD_USER_ID))
+                    .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+
+            verify(creditClient, never()).consumeFixedCredits(anyString(), anyString(), anyInt());
         }
 
         @Test
@@ -216,7 +259,9 @@ class CeDownloadControllerTest {
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.PAYMENT_REQUIRED);
             assertThat(response.getBody()).containsEntry("required", 17);
-            verify(receiptRepository, never()).save(any());
+            // The reservation is rolled back on a failed charge, so no receipt survives.
+            verify(receiptRepository).saveAndFlush(any());
+            verify(receiptRepository).delete(any());
         }
 
         @Test
@@ -231,7 +276,8 @@ class CeDownloadControllerTest {
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(response.getBody()).containsEntry("alreadyOwned", true);
             verify(creditClient, never()).consumeFixedCredits(anyString(), anyString(), anyInt());
-            verify(receiptRepository, never()).save(any());
+            // Fast path returns before any reservation attempt.
+            verify(receiptRepository, never()).saveAndFlush(any());
         }
 
         @Test
@@ -245,7 +291,7 @@ class CeDownloadControllerTest {
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             verify(creditClient, never()).consumeFixedCredits(anyString(), anyString(), anyInt());
-            verify(receiptRepository).save(any(PublicationReceiptEntity.class));
+            verify(receiptRepository).saveAndFlush(any(PublicationReceiptEntity.class));
         }
 
         @Test
@@ -338,7 +384,9 @@ class CeDownloadControllerTest {
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
             assertThat(response.getBody()).containsEntry("error", "Purchase processing failed");
             assertThat(response.getBody()).doesNotContainKey("required");
-            verify(receiptRepository, never()).save(any());
+            // Reservation rolled back on the unmapped failure, so no receipt survives.
+            verify(receiptRepository).saveAndFlush(any());
+            verify(receiptRepository).delete(any());
         }
     }
 }

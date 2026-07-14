@@ -56,10 +56,11 @@ function ExploreTab({ remote = false }: { remote?: boolean }) {
   const clearInstall = useMarketplaceInstallStore((s) => s.clear);
   const consumeInstallSuccess = useMarketplaceInstallStore((s) => s.consumeSuccess);
   const [displayFilter, setDisplayFilter] = useState<'apps' | 'agents' | 'interfaces' | 'tables' | 'skills'>('apps');
-  // Display-type filter chips (Applications / Agents / Interfaces / Tables / Skills) are hidden
-  // for now: only Applications are surfaced in the marketplace. The chips and their logic are kept
-  // intact (nothing deleted) - flip this flag back to `true` to restore the full type switcher.
-  const SHOW_DISPLAY_FILTERS = false;
+  // Applications and Agents are surfaced in the marketplace via the type-filter chips below.
+  // Interfaces / Tables / Skills stay hidden for now (their logic is intact - add them to the
+  // chip list below to surface them once ready). The backend marketplace query returns ALL
+  // ACTIVE+PUBLIC types, so this is purely which chips the user can pick.
+  const SHOW_DISPLAY_FILTERS = true;
 
   // Phase 6 (2026-05-18) - `acquiredIds` is workspace-bound (each workspace
   // owns its own publication acquisitions); reset on switch so explore
@@ -215,10 +216,12 @@ function ExploreTab({ remote = false }: { remote?: boolean }) {
       </div>
 
       {/* Display filter chips - always scoped to a single resource type (icons mirror the left sidebar). */}
-      {/* Hidden for now (SHOW_DISPLAY_FILTERS=false): only Applications are surfaced. Kept, not deleted. */}
+      {/* Applications + Agents surfaced for now; Interfaces/Tables/Skills kept in the logic but off the list. */}
       {SHOW_DISPLAY_FILTERS && (
       <div className="flex items-center flex-wrap gap-2">
-        {(['apps', 'agents', 'interfaces', 'tables', 'skills'] as const).map((filter) => {
+        {(['apps', 'agents', 'interfaces', 'tables', 'skills'] as const)
+          .filter((filter) => filter === 'apps' || filter === 'agents')
+          .map((filter) => {
           const isActive = displayFilter === filter;
           const label =
             filter === 'apps' ? t('filterApplications')

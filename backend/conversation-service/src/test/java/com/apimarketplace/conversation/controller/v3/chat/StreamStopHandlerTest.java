@@ -152,6 +152,29 @@ class StreamStopHandlerTest {
         }
 
         @Test
+        @DisplayName("persists the stream's REAL model on the partial message, not hardcoded gpt-4")
+        void savesRealModelNotHardcodedGpt4() {
+            StreamMetadata activeMetadata = new StreamMetadata(
+                    "stream-ds", "user-1", "conv-ds", "deepseek-chat", "deepseek",
+                    StreamState.STREAMING, Instant.now(), Instant.now(), 100
+            );
+            when(stateService.getByConversationId("conv-ds")).thenReturn(Mono.just(activeMetadata));
+            when(stateService.getFullContent("stream-ds")).thenReturn(Mono.just("partial"));
+            when(stateService.stop("stream-ds")).thenReturn(Mono.empty());
+            when(stateService.setCancelKey("stream-ds")).thenReturn(Mono.just(true));
+            when(pubSubService.publishStopped("stream-ds", "partial")).thenReturn(Mono.empty());
+
+            stopHandler.stopStream("user-1", "conv-ds");
+
+            // Regression: pre-fix the 4th arg (model) was the literal "gpt-4".
+            verify(conversationHistoryService).addMessage(
+                    eq("conv-ds"), eq("assistant"), eq("partial"),
+                    eq("deepseek-chat"), anyString(), isNull(), eq("user-1"));
+            verify(conversationHistoryService, never()).addMessage(
+                    any(), any(), any(), eq("gpt-4"), any(), any(), any());
+        }
+
+        @Test
         @DisplayName("should handle null metadata from stateService")
         void shouldHandleNullMetadata() {
             when(stateService.getByConversationId("conv-1")).thenReturn(Mono.empty());

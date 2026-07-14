@@ -45,6 +45,13 @@ public class UserApprovalNode extends BaseNode {
      * (AFTER_COMMIT listener) can send the message statelessly. Null = in-app approval only.
      */
     private final Core.ApprovalDelegation delegation;
+    /**
+     * Split-context continuation mode: "all_items" (default) = successors run once after
+     * every per-item approval resolves; "per_item" = each resolved item continues its own
+     * downstream chain immediately (SignalResumeService reads it back from signal_config).
+     * Ignored outside a split.
+     */
+    private final String continuationMode;
 
     // Port targets: "approved" -> [nodes], "rejected" -> [nodes], "timeout" -> [nodes]
     private final Map<String, List<ExecutionNode>> portTargets;
@@ -57,18 +64,25 @@ public class UserApprovalNode extends BaseNode {
 
     public UserApprovalNode(String nodeId, List<String> approverRoles,
                             int requiredApprovals, long timeoutMs, String contextTemplate) {
-        this(nodeId, approverRoles, requiredApprovals, timeoutMs, contextTemplate, null);
+        this(nodeId, approverRoles, requiredApprovals, timeoutMs, contextTemplate, null, null);
     }
 
     public UserApprovalNode(String nodeId, List<String> approverRoles,
                             int requiredApprovals, long timeoutMs, String contextTemplate,
                             Core.ApprovalDelegation delegation) {
+        this(nodeId, approverRoles, requiredApprovals, timeoutMs, contextTemplate, delegation, null);
+    }
+
+    public UserApprovalNode(String nodeId, List<String> approverRoles,
+                            int requiredApprovals, long timeoutMs, String contextTemplate,
+                            Core.ApprovalDelegation delegation, String continuationMode) {
         super(nodeId, NodeType.APPROVAL);
         this.approverRoles = approverRoles != null ? List.copyOf(approverRoles) : List.of();
         this.requiredApprovals = Math.max(1, requiredApprovals);
         this.timeoutMs = timeoutMs;
         this.contextTemplate = contextTemplate != null ? contextTemplate : "";
         this.delegation = delegation != null && delegation.isConfigured() ? delegation : null;
+        this.continuationMode = Core.ApprovalConfig.normalizeContinuationMode(continuationMode);
         this.portTargets = new HashMap<>();
     }
 
@@ -110,6 +124,9 @@ public class UserApprovalNode extends BaseNode {
                 approverRoles, requiredApprovals,
                 timeoutMs > 0 ? Duration.ofMillis(timeoutMs) : Duration.ofHours(24),
                 resolvedDelegation);
+            // Persisted with the signal so SignalResumeService can branch per-resolution
+            // without reloading the plan (stateless + restart-safe, like the delegation block).
+            signalConfig.put("continuationMode", continuationMode);
 
             // Split context: persist the current item alongside the signal so the
             // approver can SEE what each per-item approval refers to (the signals
@@ -167,10 +184,12 @@ public class UserApprovalNode extends BaseNode {
 
     /**
      * Build the resolved delegation block for signal_config, or null when the node
-     * has no configured delegation. chatId and messageTemplate resolve with the same
-     * soft semantics as contextTemplate ({@link SignalContextResolver#resolveApprovalContext}):
-     * a malformed template falls back (chatId: raw configured string; message: omitted,
-     * the notifier then uses the resolved approval context) and NEVER fails the node.
+     * has no configured delegation. chatId, messageTemplate and imageTemplate resolve
+     * with the same soft semantics as contextTemplate
+     * ({@link SignalContextResolver#resolveApprovalContext}): a malformed template
+     * falls back (chatId: raw configured string; message and image: omitted, the
+     * notifier then uses the resolved approval context / a plain text message) and
+     * NEVER fails the node.
      */
     private Map<String, Object> buildResolvedDelegation(ExecutionContext context) {
         if (delegation == null) {
@@ -188,6 +207,30 @@ public class UserApprovalNode extends BaseNode {
             delegation.messageTemplate(), context, templateAdapter);
         if (resolvedMessage != null && !resolvedMessage.isBlank()) {
             block.put("message", resolvedMessage);
+        }
+        // Optional image: resolved WITHOUT stringifying so a whole-string template
+        // ({{interface:card.output.screenshot}}) keeps its FileRef Map shape - the
+        // exact shape the catalog's telegram send_photo accepts (a String HTTP URL /
+        // file_id works too). Omitted when blank or unresolvable: the notifier then
+        // falls back to the plain text message (soft semantics, never fails the node).
+        Object resolvedImage = SignalContextResolver.resolveApprovalValue(
+            delegation.imageTemplate(), context, templateAdapter);
+        if (resolvedImage != null) {
+            block.put("image", resolvedImage);
+        }
+        // Optional custom inline-button labels (template-capable): resolved like the
+        // message. Omitted when blank so the notifier keeps its channel defaults
+        // ("✅ Approve" / "❌ Reject"). Only the displayed text changes; approve/reject
+        // callback semantics are untouched.
+        String resolvedApproveLabel = SignalContextResolver.resolveApprovalContext(
+            delegation.approveLabel(), context, templateAdapter);
+        if (resolvedApproveLabel != null && !resolvedApproveLabel.isBlank()) {
+            block.put("approveLabel", resolvedApproveLabel);
+        }
+        String resolvedRejectLabel = SignalContextResolver.resolveApprovalContext(
+            delegation.rejectLabel(), context, templateAdapter);
+        if (resolvedRejectLabel != null && !resolvedRejectLabel.isBlank()) {
+            block.put("rejectLabel", resolvedRejectLabel);
         }
         if (!delegation.allowedUserIds().isEmpty()) {
             block.put("allowedUserIds", delegation.allowedUserIds());
@@ -363,6 +406,7 @@ public class UserApprovalNode extends BaseNode {
     public long getTimeoutMs() { return timeoutMs; }
     public String getContextTemplate() { return contextTemplate; }
     public Core.ApprovalDelegation getDelegation() { return delegation; }
+    public String getContinuationMode() { return continuationMode; }
 
     // ========================================================================
     // SERVICE INJECTION (via ExecutionServiceInjector)
@@ -407,6 +451,7 @@ public class UserApprovalNode extends BaseNode {
         private long timeoutMs = 86400000L; // 24h default
         private String contextTemplate = "";
         private Core.ApprovalDelegation delegation;
+        private String continuationMode;
 
         public Builder nodeId(String nodeId) { this.nodeId = nodeId; return this; }
         public Builder approverRoles(List<String> approverRoles) { this.approverRoles = approverRoles; return this; }
@@ -414,9 +459,11 @@ public class UserApprovalNode extends BaseNode {
         public Builder timeoutMs(long timeoutMs) { this.timeoutMs = timeoutMs; return this; }
         public Builder contextTemplate(String contextTemplate) { this.contextTemplate = contextTemplate; return this; }
         public Builder delegation(Core.ApprovalDelegation delegation) { this.delegation = delegation; return this; }
+        public Builder continuationMode(String continuationMode) { this.continuationMode = continuationMode; return this; }
 
         public UserApprovalNode build() {
-            return new UserApprovalNode(nodeId, approverRoles, requiredApprovals, timeoutMs, contextTemplate, delegation);
+            return new UserApprovalNode(nodeId, approverRoles, requiredApprovals, timeoutMs, contextTemplate, delegation,
+                continuationMode);
         }
     }
 

@@ -200,7 +200,10 @@ class InterfaceNodeConfigTest {
                 "expose_rendered_source", "exposeRenderedSource",
                 "generate_pdf", "generatePdf",
                 "pdf_format", "pdfFormat",
-                "pdf_landscape", "pdfLandscape");
+                "pdf_landscape", "pdfLandscape",
+                "generate_video", "generateVideo",
+                "video_preset", "videoPreset",
+                "video_max_duration_seconds", "videoMaxDurationSeconds");
         }
     }
 
@@ -402,6 +405,175 @@ class InterfaceNodeConfigTest {
             assertThat(extras).containsEntry("generate_pdf", true);
             assertThat(extras).containsEntry("pdf_format", "Legal");
             assertThat(extras).containsEntry("pdf_landscape", true);
+        }
+    }
+
+    @Nested
+    @DisplayName("Video plumbing (generateVideo / videoPreset / videoMaxDurationSeconds)")
+    class VideoPlumbing {
+
+        @Test
+        @DisplayName("Agent uses snake_case → video fields extracted, persisted in nodeMap as camelCase")
+        void agentSnakeCaseExtractsAndPersists() {
+            Map<String, Object> params = new HashMap<>();
+            params.put("interface_id", "uuid-1");
+            params.put("generate_video", true);
+            params.put("video_preset", "square");
+            params.put("video_max_duration_seconds", 45);
+
+            InterfaceNodeConfig config = InterfaceNodeConfig.fromParams(params);
+
+            assertThat(config.generateVideo()).isTrue();
+            assertThat(config.videoPreset()).isEqualTo("square");
+            assertThat(config.videoMaxDurationSeconds()).isEqualTo(45);
+
+            Map<String, Object> nodeMap = config.toNodeMap("My Form", Map.of("x", 0, "y", 0));
+            assertThat(nodeMap).containsEntry("generateVideo", true);
+            assertThat(nodeMap).containsEntry("videoPreset", "square");
+            assertThat(nodeMap).containsEntry("videoMaxDurationSeconds", 45);
+            assertThat(nodeMap).doesNotContainKey("generate_video");
+            assertThat(nodeMap).doesNotContainKey("video_preset");
+        }
+
+        @Test
+        @DisplayName("Agent uses camelCase → video fields extracted; string duration is coerced")
+        void agentCamelCaseExtracts() {
+            Map<String, Object> params = new HashMap<>();
+            params.put("interface_id", "uuid-1");
+            params.put("generateVideo", true);
+            params.put("videoPreset", "horizontal");
+            params.put("videoMaxDurationSeconds", "60");
+
+            InterfaceNodeConfig config = InterfaceNodeConfig.fromParams(params);
+
+            assertThat(config.generateVideo()).isTrue();
+            assertThat(config.videoPreset()).isEqualTo("horizontal");
+            assertThat(config.videoMaxDurationSeconds()).isEqualTo(60);
+        }
+
+        @Test
+        @DisplayName("videoPreset is normalised to a supported preset (case-insensitive, lowercased); unknown → null (falls back to vertical at render)")
+        void videoPresetNormalised() {
+            assertThat(fromPreset("VERTICAL").videoPreset()).isEqualTo("vertical");
+            assertThat(fromPreset("Horizontal").videoPreset()).isEqualTo("horizontal");
+            assertThat(fromPreset("square").videoPreset()).isEqualTo("square");
+            assertThat(fromPreset("cinema").videoPreset()).isNull();
+            assertThat(fromPreset("  ").videoPreset()).isNull();
+        }
+
+        private InterfaceNodeConfig fromPreset(String preset) {
+            Map<String, Object> params = new HashMap<>();
+            params.put("interface_id", "uuid-1");
+            params.put("video_preset", preset);
+            return InterfaceNodeConfig.fromParams(params);
+        }
+
+        @Test
+        @DisplayName("videoMaxDurationSeconds is clamped to 5-120; non-positive/junk → null (falls back to 30s default)")
+        void videoDurationClamped() {
+            assertThat(fromDuration(45).videoMaxDurationSeconds()).isEqualTo(45);
+            assertThat(fromDuration(1).videoMaxDurationSeconds()).isEqualTo(5);
+            assertThat(fromDuration(999).videoMaxDurationSeconds()).isEqualTo(120);
+            assertThat(fromDuration(0).videoMaxDurationSeconds()).isNull();
+            assertThat(fromDuration(-3).videoMaxDurationSeconds()).isNull();
+
+            Map<String, Object> junk = new HashMap<>();
+            junk.put("interface_id", "uuid-1");
+            junk.put("video_max_duration_seconds", "not-a-number");
+            assertThat(InterfaceNodeConfig.fromParams(junk).videoMaxDurationSeconds()).isNull();
+        }
+
+        private InterfaceNodeConfig fromDuration(int seconds) {
+            Map<String, Object> params = new HashMap<>();
+            params.put("interface_id", "uuid-1");
+            params.put("video_max_duration_seconds", seconds);
+            return InterfaceNodeConfig.fromParams(params);
+        }
+
+        @Test
+        @DisplayName("Video fields default to null (= omitted) when not supplied - no nodeMap pollution")
+        void videoFieldsDefaultNullWhenMissing() {
+            Map<String, Object> params = new HashMap<>();
+            params.put("interface_id", "uuid-1");
+
+            InterfaceNodeConfig config = InterfaceNodeConfig.fromParams(params);
+
+            assertThat(config.generateVideo()).isNull();
+            assertThat(config.videoPreset()).isNull();
+            assertThat(config.videoMaxDurationSeconds()).isNull();
+
+            Map<String, Object> nodeMap = config.toNodeMap("X", Map.of("x", 0, "y", 0));
+            assertThat(nodeMap).doesNotContainKey("generateVideo");
+            assertThat(nodeMap).doesNotContainKey("videoPreset");
+            assertThat(nodeMap).doesNotContainKey("videoMaxDurationSeconds");
+        }
+
+        @Test
+        @DisplayName("toSavedParams + toExtras emit video fields as snake_case (response visibility for the agent)")
+        void savedParamsAndExtrasEmitSnakeCase() {
+            InterfaceNodeConfig config = new InterfaceNodeConfig(
+                "uuid-1", null, null, false, false, false, null, null, null,
+                true, "vertical", 30);
+
+            Map<String, Object> saved = config.toSavedParams();
+            assertThat(saved).containsEntry("generate_video", true);
+            assertThat(saved).containsEntry("video_preset", "vertical");
+            assertThat(saved).containsEntry("video_max_duration_seconds", 30);
+
+            Map<String, Object> extras = config.toExtras();
+            assertThat(extras).containsEntry("generate_video", true);
+            assertThat(extras).containsEntry("video_preset", "vertical");
+            assertThat(extras).containsEntry("video_max_duration_seconds", 30);
+        }
+
+        @Test
+        @DisplayName("videoMode is normalised (smooth|live, lowercase; unknown → null) and videoFps clamped to 10-60")
+        void videoModeAndFpsNormalised() {
+            Map<String, Object> params = new HashMap<>();
+            params.put("interface_id", "uuid-1");
+            params.put("video_mode", "LIVE");
+            params.put("video_fps", 120);
+            InterfaceNodeConfig config = InterfaceNodeConfig.fromParams(params);
+            assertThat(config.videoMode()).isEqualTo("live");
+            assertThat(config.videoFps()).isEqualTo(60);
+
+            Map<String, Object> unknown = new HashMap<>();
+            unknown.put("interface_id", "uuid-1");
+            unknown.put("videoMode", "turbo");
+            unknown.put("videoFps", 5);
+            InterfaceNodeConfig cfg2 = InterfaceNodeConfig.fromParams(unknown);
+            assertThat(cfg2.videoMode()).isNull();
+            assertThat(cfg2.videoFps()).isEqualTo(10);
+
+            Map<String, Object> nodeMap = config.toNodeMap("X", Map.of("x", 0, "y", 0));
+            assertThat(nodeMap).containsEntry("videoMode", "live");
+            assertThat(nodeMap).containsEntry("videoFps", 60);
+            Map<String, Object> saved = config.toSavedParams();
+            assertThat(saved).containsEntry("video_mode", "live");
+            assertThat(saved).containsEntry("video_fps", 60);
+        }
+
+        @Test
+        @DisplayName("Back-compat 12-arg constructor leaves video mode/fps null (pre-smooth callers unaffected)")
+        void twelveArgConstructorDefaultsModeFpsNull() {
+            InterfaceNodeConfig config = new InterfaceNodeConfig(
+                "uuid-1", null, null, false, false, false, null, null, null,
+                true, "vertical", 30);
+            assertThat(config.videoMode()).isNull();
+            assertThat(config.videoFps()).isNull();
+            assertThat(config.generateVideo()).isTrue();
+        }
+
+        @Test
+        @DisplayName("Back-compat 9-arg constructor leaves video fields null (existing callers unaffected)")
+        void nineArgConstructorDefaultsVideoNull() {
+            InterfaceNodeConfig config = new InterfaceNodeConfig(
+                "uuid-1", null, null, false, false, false, true, "A4", false);
+
+            assertThat(config.generateVideo()).isNull();
+            assertThat(config.videoPreset()).isNull();
+            assertThat(config.videoMaxDurationSeconds()).isNull();
+            assertThat(config.generatePdf()).isTrue();
         }
     }
 

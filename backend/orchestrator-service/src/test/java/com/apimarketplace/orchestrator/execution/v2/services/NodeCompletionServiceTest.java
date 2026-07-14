@@ -694,6 +694,63 @@ class NodeCompletionServiceTest {
     }
 
     @Nested
+    @DisplayName("emitNodeCompletePerItem() - suppressGlobalMark routing (per-item continuation)")
+    class EmitNodeCompletePerItemTests {
+
+        @Test
+        @DisplayName("routes to StepCompletionOrchestrator.completeStep with suppressGlobalMark=true (node-level EpochState mark deferred to seal)")
+        void routesToCompleteStepWithSuppressGlobalMarkTrue() {
+            when(node.getNodeId()).thenReturn("mcp:step1");
+            lenient().when(node.getType()).thenReturn(NodeType.MCP);
+            when(execution.getRunId()).thenReturn("run-1");
+            when(context.epoch()).thenReturn(3);
+            when(context.triggerId()).thenReturn("trigger:start");
+            when(context.getGlobalDataKeys()).thenReturn(Set.of());
+            NodeExecutionResult result = NodeExecutionResult.success("mcp:step1", Map.of("data", "v"));
+
+            service.emitNodeCompletePerItem(execution, node, result, triggerItem, 2, context);
+
+            verify(stepCompletionOrchestrator).completeStep(
+                eq(execution), eq("mcp:step1"), eq("step1"), any(),
+                eq(2), isNull(), eq(3), eq("trigger:start"), eq(true));
+        }
+
+        @Test
+        @DisplayName("REGRESSION: the plain emitNodeComplete keeps suppressGlobalMark=false on the same (epoch, triggerId) path")
+        void plainEmitNodeCompleteKeepsSuppressGlobalMarkFalse() {
+            when(node.getNodeId()).thenReturn("mcp:step1");
+            lenient().when(node.getType()).thenReturn(NodeType.MCP);
+            when(execution.getRunId()).thenReturn("run-1");
+            when(context.epoch()).thenReturn(3);
+            when(context.triggerId()).thenReturn("trigger:start");
+            lenient().when(context.getGlobalDataKeys()).thenReturn(Set.of());
+            NodeExecutionResult result = NodeExecutionResult.success("mcp:step1", Map.of("data", "v"));
+
+            service.emitNodeComplete(execution, node, result, triggerItem, 2, context, null);
+
+            verify(stepCompletionOrchestrator).completeStep(
+                eq(execution), eq("mcp:step1"), eq("step1"), any(),
+                eq(2), isNull(), eq(3), eq("trigger:start"), eq(false));
+        }
+
+        @Test
+        @DisplayName("suppressed completion WITHOUT trigger context still routes through the suppressGlobalMark=true overload (epoch 0, null triggerId)")
+        void suppressedCompletionWithoutTriggerContextStillSuppresses() {
+            when(node.getNodeId()).thenReturn("mcp:step1");
+            lenient().when(node.getType()).thenReturn(NodeType.MCP);
+            when(execution.getRunId()).thenReturn("run-1");
+
+            NodeExecutionResult result = NodeExecutionResult.success("mcp:step1", Map.of());
+
+            service.emitNodeCompletePerItem(execution, node, result, triggerItem, 0, null);
+
+            verify(stepCompletionOrchestrator).completeStep(
+                eq(execution), eq("mcp:step1"), eq("step1"), any(),
+                eq(0), isNull(), eq(0), isNull(), eq(true));
+        }
+    }
+
+    @Nested
     @DisplayName("emitNodeSkippedForItem() - per-item SKIPPED with epoch+triggerId")
     class EmitNodeSkippedForItemTests {
 

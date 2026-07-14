@@ -4,6 +4,7 @@ import com.apimarketplace.common.storage.StorageUsageDto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Service;
 
 /**
@@ -42,14 +43,22 @@ public class InterfaceStorageUsageService {
                 FROM interfaces i
                 WHERE i.tenant_id = ?
                 """;
-            Object[] result = jdbcTemplate.queryForObject(sql, Object[].class, tenantId, tenantId, tenantId);
-            if (result == null) return StorageUsageDto.zero();
-            long bytes = result[0] instanceof Number n ? n.longValue() : 0;
-            int count = result[1] instanceof Number n ? n.intValue() : 0;
-            return new StorageUsageDto(Math.max(0, bytes), Math.max(0, count));
+            StorageUsageDto result = jdbcTemplate.queryForObject(sql, STORAGE_USAGE_MAPPER, tenantId, tenantId, tenantId);
+            return result != null ? result : StorageUsageDto.zero();
         } catch (Exception e) {
             log.warn("Failed to query interface storage for tenant {}: {}", tenantId, e.getMessage());
             return StorageUsageDto.zero();
         }
     }
+
+    // The SELECT returns TWO columns (byte sum, row count). queryForObject(sql, Object[].class, ...)
+    // routes through SingleColumnRowMapper which throws IncorrectResultSetColumnCountException(1,2);
+    // the catch then swallowed it and every tenant reconciled to zero. An explicit 2-column RowMapper
+    // fixes it, mirroring AgentStorageUsageService / ConversationStorageUsageService.
+    private static final RowMapper<StorageUsageDto> STORAGE_USAGE_MAPPER =
+        (rs, rowNum) -> {
+            long bytes = rs.getLong(1);
+            int count = rs.getInt(2);
+            return new StorageUsageDto(Math.max(0L, bytes), Math.max(0, count));
+        };
 }

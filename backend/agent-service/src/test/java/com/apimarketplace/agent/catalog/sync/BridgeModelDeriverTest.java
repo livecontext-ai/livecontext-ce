@@ -84,16 +84,39 @@ class BridgeModelDeriverTest {
     }
 
     @Test
-    @DisplayName("New codex and gemini family versions are auto-discovered too")
-    void autoDiscoversCodexAndGemini() {
+    @DisplayName("New gemini family versions auto-discover; codex gpt-5.5 derives via the curated floor (no codex pattern)")
+    void autoDiscoversGeminiAndDerivesCuratedCodex() {
         List<Map<String, Object>> feed = List.of(
-                cloud("openai", "gpt-5.5", "3", "12"),
-                cloud("google", "gemini-3.2-pro", "2", "10"));
+                cloud("openai", "gpt-5.5", "3", "12"),          // curated codex id
+                cloud("google", "gemini-3.2-pro", "2", "10"));  // pattern-discovered
 
         List<Map<String, Object>> rows = deriver.derive(feed);
 
-        assertThat(find(rows, "codex", "gpt-5.5")).as("gpt-5.5 under codex").isNotNull();
+        // gpt-5.5 is now a curated MODELS["codex"] id, so it derives via the
+        // curated floor (codex has no discovery pattern).
+        assertThat(find(rows, "codex", "gpt-5.5")).as("gpt-5.5 under codex (curated floor)").isNotNull();
         assertThat(find(rows, "gemini-cli", "gemini-3.2-pro")).as("gemini-3.2-pro under gemini-cli").isNotNull();
+    }
+
+    @Test
+    @DisplayName("Codex is curated-only: the real gpt-5.6 tiers derive, the phantom bare gpt-5.6 never does")
+    void codexTiersDeriveButBareGpt56IsNeverDerived() {
+        List<Map<String, Object>> feed = List.of(
+                cloud("openai", "gpt-5.6-sol", "5", "30"),      // curated tier
+                cloud("openai", "gpt-5.6-terra", "2.5", "15"),  // curated tier
+                cloud("openai", "gpt-5.6-luna", "1", "6"),      // curated tier
+                cloud("openai", "gpt-5.6", "5", "30"),          // bare - NOT codex-routable
+                cloud("openai", "gpt-5.1", "1", "5"));          // older bare - not curated
+
+        List<Map<String, Object>> rows = deriver.derive(feed);
+
+        assertThat(find(rows, "codex", "gpt-5.6-sol")).as("sol tier derived").isNotNull();
+        assertThat(find(rows, "codex", "gpt-5.6-terra")).as("terra tier derived").isNotNull();
+        assertThat(find(rows, "codex", "gpt-5.6-luna")).as("luna tier derived").isNotNull();
+        // Regression: the bare gpt-5.6 (real openai API id but Codex returns 400
+        // with a ChatGPT account) must NEVER become a codex bridge row.
+        assertThat(find(rows, "codex", "gpt-5.6")).as("phantom bare gpt-5.6 must not derive under codex").isNull();
+        assertThat(find(rows, "codex", "gpt-5.1")).as("non-curated gpt-5.1 must not derive under codex").isNull();
     }
 
     @Test
@@ -127,8 +150,8 @@ class BridgeModelDeriverTest {
     }
 
     @Test
-    @DisplayName("Codex pattern stays tight - non-codex OpenAI models are not derived")
-    void codexPatternRejectsNonCodexOpenAiModels() {
+    @DisplayName("Codex curated-only - unrelated OpenAI models are not derived")
+    void codexDoesNotDeriveNonCuratedOpenAiModels() {
         List<Map<String, Object>> feed = List.of(
                 cloud("openai", "gpt-5.3-chat-latest", "3", "12"),
                 cloud("openai", "gpt-4o", "5", "15"));

@@ -189,8 +189,14 @@ class AgentAsyncCompletionServiceDrainGuardTest {
 
         // Pre-fix the loop re-dispatched the in-flight sibling every turn up to MAX_LOOP_ITERATIONS.
         // It must now be filtered out entirely - never handed to executeNode on any overload.
+        // (Typed matchers: the bare any() became ambiguous once the SplitExecutionOptions
+        // overload was added - cover BOTH 6-arg overloads explicitly.)
         verify(v2StepByStepService, never())
-            .executeNode(anyString(), eq("agent:sibling"), anyString(), anyInt(), anyString(), any());
+            .executeNode(anyString(), eq("agent:sibling"), anyString(), anyInt(), anyString(),
+                any(com.apimarketplace.orchestrator.execution.v2.cache.ExecutionCacheManager.LoadedExecution.class));
+        verify(v2StepByStepService, never())
+            .executeNode(anyString(), eq("agent:sibling"), anyString(), anyInt(), anyString(),
+                any(com.apimarketplace.orchestrator.execution.v2.split.SplitExecutionOptions.class));
         verify(v2StepByStepService, never())
             .executeNode(anyString(), eq("agent:sibling"), anyString(), anyInt(), anyString());
     }

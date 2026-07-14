@@ -120,6 +120,18 @@ export function getFileUrlById(fileId: string, options?: { inline?: boolean }): 
 }
 
 /**
+ * Anonymous avatar URL - the ONE file class servable without auth, because avatars must render
+ * from a plain {@code <img>} for viewers who are not the uploader (marketplace cards, shared
+ * applications, widget embeds). The backend only resolves files uploaded through the generic
+ * {@code avatar} category with an image mime; anything else 404s. Store THIS URL as an agent's
+ * {@code avatarUrl} after an avatar upload - never {@link getFileUrlById}, which requires the
+ * bearer header an {@code <img>} cannot send.
+ */
+export function getPublicAvatarUrlById(fileId: string): string {
+  return `/api/proxy/files/avatar/${encodeURIComponent(fileId)}`;
+}
+
+/**
  * Build the opaque, id-based URL for a {@link FileRef} - the canonical way to address a file in the
  * frontend after the opaque-URL cutover. Uses the FileRef's storage UUID ({@code id}); a legacy ref
  * without an id cannot be rendered (returns '' - re-run/republish to regenerate it with an id). The

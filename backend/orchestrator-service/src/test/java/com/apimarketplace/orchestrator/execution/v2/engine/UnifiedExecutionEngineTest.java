@@ -413,6 +413,67 @@ class UnifiedExecutionEngineTest {
     }
 
     @Nested
+    @DisplayName("executeSingleNode() - per-item continuation walk (canExecute bypass)")
+    class ExecuteSingleNodePerItemContinuationTests {
+
+        private com.apimarketplace.orchestrator.execution.v2.split.SplitExecutionOptions walkOptions() {
+            return com.apimarketplace.orchestrator.execution.v2.split.SplitExecutionOptions.perItemContinuationWalk();
+        }
+
+        @Test
+        @DisplayName("canExecute=false is BYPASSED with walk options: the node still executes, no SKIPPED result")
+        void walkBypassesCanExecuteGuardAndExecutesNode() {
+            // A mid-region walk node has NO node-level completion marks yet
+            // (suppressGlobalMark until the seal), so canExecute - which reads node-level
+            // completion - returns false mid-walk. Reachability is decided PER ITEM by the
+            // fan-out's row-derived routing instead; the engine must not skip-cascade.
+            ExecutionNode node = createMockNode("mcp:chain", NodeType.MCP, false);
+            ExecutionTree tree = createMockTreeWithNode(node);
+            when(nodeSearchService.findNodeFromAllRoots(tree, "mcp:chain")).thenReturn(node);
+            when(node.execute(any())).thenReturn(NodeExecutionResult.success("mcp:chain", Map.of()));
+            // The walk path routes through the OPTIONS-aware 9-arg executor overload -
+            // delegate to node.execute like the 8-arg default stub does.
+            when(splitAwareExecutor.execute(any(), any(), any(), any(), any(), any(), anyInt(), any(),
+                    any(com.apimarketplace.orchestrator.execution.v2.split.SplitExecutionOptions.class)))
+                .thenAnswer(invocation -> {
+                    ExecutionNode n = invocation.getArgument(0);
+                    ExecutionContext c = invocation.getArgument(1);
+                    return n.execute(c);
+                });
+            when(readyNodeCalculator.calculateReadyNodes(any(), any())).thenReturn(Set.of());
+
+            ExecutionContext context = createContext();
+            TriggerItem item = new TriggerItem("item-1", 0, Map.of());
+
+            StepByStepExecutionResult result = engine.executeSingleNode(
+                "mcp:chain", tree, context, execution, eventService, item, walkOptions());
+
+            verify(node).execute(any());
+            assertNotNull(result.nodeResult());
+            assertEquals(NodeStatus.COMPLETED, result.nodeResult().status());
+        }
+
+        @Test
+        @DisplayName("CONTROL: canExecute=false WITHOUT options keeps the skipped handling (node never executes)")
+        void controlWithoutOptionsKeepsSkippedHandling() {
+            ExecutionNode node = createMockNode("mcp:chain", NodeType.MCP, false);
+            ExecutionTree tree = createMockTreeWithNode(node);
+            when(nodeSearchService.findNodeFromAllRoots(tree, "mcp:chain")).thenReturn(node);
+            when(readyNodeCalculator.calculateReadyNodes(any(), any())).thenReturn(Set.of());
+
+            ExecutionContext context = createContext();
+            TriggerItem item = new TriggerItem("item-1", 0, Map.of());
+
+            StepByStepExecutionResult result = engine.executeSingleNode(
+                "mcp:chain", tree, context, execution, eventService, item);
+
+            verify(node, never()).execute(any());
+            assertNotNull(result.nodeResult());
+            assertEquals(NodeStatus.SKIPPED, result.nodeResult().status());
+        }
+    }
+
+    @Nested
     @DisplayName("findNodeById()")
     class FindNodeByIdTests {
 

@@ -18,6 +18,8 @@ import {
   Store,
   Monitor,
   Bot,
+  CalendarClock,
+  Webhook,
   MoreVertical,
   ExternalLink,
   AppWindow,
@@ -176,6 +178,23 @@ export function ConversationSidebar({
     }
     return map;
   }, [agentsForAvatars]);
+  // Per-agent trigger flags (schedule / webhook) so a conversation's agent shows a small
+  // badge next to its avatar. Backed by the lightweight GET /api/agents/triggers batch.
+  const { data: fleetTriggers } = useOrgScopedQuery({
+    queryKey: ['agents', 'triggers'] as const,
+    queryFn: () => orchestratorApi.getFleetTriggers(),
+    enabled: isAuthenticated,
+    staleTime: 5 * 60 * 1000,
+  });
+  const agentTriggerMap = useMemo(() => {
+    const map = new Map<string, { hasSchedule: boolean; hasWebhook: boolean }>();
+    if (fleetTriggers) {
+      for (const t of fleetTriggers) {
+        if (t.hasSchedule || t.hasWebhook) map.set(t.agentId, { hasSchedule: t.hasSchedule, hasWebhook: t.hasWebhook });
+      }
+    }
+    return map;
+  }, [fleetTriggers]);
   const tenantId = user?.sub || user?.email || 'demo';
 
   // Use userProp if provided, otherwise use user from useAuthGuard
@@ -587,6 +606,16 @@ export function ConversationSidebar({
               ) : (
                 <Bot className="ml-1 w-3 h-3 text-theme-muted flex-shrink-0" />
               )
+            )}
+            {conversation.agentId && agentTriggerMap.has(conversation.agentId) && (
+              <span className="ml-0.5 inline-flex items-center gap-0.5 flex-shrink-0">
+                {agentTriggerMap.get(conversation.agentId)!.hasSchedule && (
+                  <CalendarClock className="w-3 h-3 text-theme-muted" aria-label={t('sidebar.scheduledAgent')} />
+                )}
+                {agentTriggerMap.get(conversation.agentId)!.hasWebhook && (
+                  <Webhook className="w-3 h-3 text-theme-muted" aria-label={t('sidebar.webhookAgent')} />
+                )}
+              </span>
             )}
           </div>
 

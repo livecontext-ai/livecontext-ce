@@ -19,6 +19,9 @@ import java.util.List;
  *   Conditional: no default, absent when not generated.
  * - pdf: object (FileRef) - PDF rendering of the interface (only present when generatePdf=true on
  *   the node AND the renderer sidecar successfully rendered it). Conditional: absent when not generated.
+ * - video: object (FileRef) - MP4 recording of the interface's animation (only present when
+ *   generateVideo=true on the node AND the renderer sidecar successfully recorded it).
+ *   Conditional: absent when not generated.
  * - rendered_html / rendered_css / rendered_js: string - the resolved interface templates
  *   (only present when exposeRenderedSource=true on the node AND the renderer returned a
  *   non-null value for that part). Conditional: no default, absent when not exposed.
@@ -70,6 +73,19 @@ public class InterfaceNodeSpec implements NodeSpec {
                         + "send_document, agent file input) to use it.")
                     .build(),
                 OutputFieldDef.builder()
+                    .key("video")
+                    .type("object")
+                    .description("FileRef to an MP4 recording of the interface's animation. Only "
+                        + "emitted when the generateVideo parameter is true AND the renderer sidecar "
+                        + "returns a successful recording. Capture format follows videoPreset "
+                        + "(vertical 1080x1920 / horizontal 1920x1080 / square 1080x1080, default "
+                        + "vertical); the recording stops when the page sets window.__DONE__ = true "
+                        + "or after videoMaxDurationSeconds (default 30, max 120). Best-effort: a "
+                        + "failed recording leaves this field absent - map the whole FileRef into a "
+                        + "file-accepting param (social upload, Telegram send_video, email "
+                        + "attachment) to use it.")
+                    .build(),
+                OutputFieldDef.builder()
                     .key("rendered_html")
                     .type("string")
                     .description("Resolved HTML template of the rendered interface. Only emitted when "
@@ -93,7 +109,8 @@ public class InterfaceNodeSpec implements NodeSpec {
                     .build()
             ))
             .keywords(List.of("interface", "ui", "page", "form", "display", "screenshot", "capture",
-                "pdf", "document", "print", "html", "css", "javascript", "source", "template"))
+                "pdf", "document", "print", "video", "recording", "mp4", "html", "css", "javascript",
+                "source", "template"))
             .build();
     }
 }

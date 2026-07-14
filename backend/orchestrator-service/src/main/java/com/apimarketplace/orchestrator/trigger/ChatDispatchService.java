@@ -45,6 +45,7 @@ public class ChatDispatchService {
     private final ReusableTriggerService triggerService;
     private final ProductionRunResolver productionRunResolver;
     private final CreditConsumptionClient creditClient;
+    private final ShareInvocationLimiter shareInvocationLimiter;
     private final AgentDefaultsConfig agentDefaults;
     private final AgentClient agentClient;
     private final RunContextService runContextService;
@@ -60,6 +61,7 @@ public class ChatDispatchService {
             ReusableTriggerService triggerService,
             ProductionRunResolver productionRunResolver,
             CreditConsumptionClient creditClient,
+            ShareInvocationLimiter shareInvocationLimiter,
             AgentDefaultsConfig agentDefaults,
             AgentClient agentClient,
             RunContextService runContextService,
@@ -76,6 +78,7 @@ public class ChatDispatchService {
         this.triggerService = triggerService;
         this.productionRunResolver = productionRunResolver;
         this.creditClient = creditClient;
+        this.shareInvocationLimiter = shareInvocationLimiter;
         this.agentDefaults = agentDefaults;
         this.agentClient = agentClient;
         this.runContextService = runContextService;
@@ -187,6 +190,15 @@ public class ChatDispatchService {
         ChatSession session = getSession(sessionId);
         if (session == null || !session.chatEndpointId().equals(endpoint.getId())) {
             throw new IllegalArgumentException("Invalid or expired session");
+        }
+
+        // Anti credit-drain: an anonymous public chat link spends the OWNER's LLM credits.
+        // Cap invocations per-link and per-owner (workspace) per day. Placed AFTER session
+        // validation so an attacker cannot burn the counter (and lock out real users for 24h)
+        // with invalid-session requests.
+        if (!shareInvocationLimiter.tryAcquire(token, endpoint.getOrganizationId())) {
+            throw new ShareInvocationLimitExceededException(
+                    "Daily message limit reached for this chat link. Please try again later.");
         }
 
         refreshSession(sessionId);

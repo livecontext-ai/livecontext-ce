@@ -11,6 +11,7 @@ import com.apimarketplace.publication.repository.WorkflowPublicationRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -145,20 +146,40 @@ public class CeDownloadController {
             return ResponseEntity.ok(response);
         }
 
-        // Deduct credits if paid
         int creditsPerUse = publication.getCreditsPerUse();
-        if (creditsPerUse > 0) {
-            ResponseEntity<Map<String, Object>> creditResult = deductCredits(userId, publicationId, creditsPerUse);
-            if (creditResult != null) {
-                return creditResult; // error response (402, 500)
-            }
-        }
 
-        // Save receipt on cloud side - stamp the resolved cloud org.
+        // Reserve the receipt BEFORE charging so the unique (organization_id, publication_id)
+        // index is the authoritative "already owned" guard. This closes the double-charge race:
+        // two concurrent acquires can no longer both reach deductCredits - exactly one wins the
+        // insert; the loser hits the constraint and returns already-owned WITHOUT being charged.
+        // (The existsBy fast-path above is only an optimization for the common re-download.)
         PublicationReceiptEntity receipt = new PublicationReceiptEntity(
                 userId.toString(), publicationId, creditsPerUse);
         receipt.setOrganizationId(cloudOrgId);
-        receiptRepository.save(receipt);
+        try {
+            receiptRepository.saveAndFlush(receipt);
+        } catch (DataIntegrityViolationException duplicate) {
+            // Only the (organization_id, publication_id) unique index means "already owned".
+            // Any OTHER integrity violation must surface (500), never be masked as a free grant.
+            if (!receiptRepository.existsByOrganizationIdAndPublicationId(cloudOrgId, publicationId)) {
+                throw duplicate;
+            }
+            logger.info("CE acquire: concurrent/duplicate acquisition of publication {} by cloudOrg {} - already owned, no charge",
+                    publicationId, cloudOrgId);
+            Map<String, Object> response = buildSnapshotResponse(publication);
+            response.put("alreadyOwned", true);
+            return ResponseEntity.ok(response);
+        }
+
+        // Deduct credits if paid. On failure roll back the reservation so a user is never left
+        // owning a paid publication without payment, and a later retry can charge cleanly.
+        if (creditsPerUse > 0) {
+            ResponseEntity<Map<String, Object>> creditResult = deductCredits(userId, publicationId, creditsPerUse);
+            if (creditResult != null) {
+                receiptRepository.delete(receipt);
+                return creditResult; // error response (402, 500)
+            }
+        }
 
         // Return snapshot
         Map<String, Object> response = buildSnapshotResponse(publication);

@@ -45,6 +45,10 @@ class TriggerControllerTest {
 
     private TriggerController controller;
 
+    /** Caller identity used by the trigger fires below - matches each run's stubbed tenant so the
+     * TriggerController scope guard (isRunInScope) passes. */
+    private static final String CALLER = "tenant-1";
+
     @BeforeEach
     void setUp() {
         lenient().when(creditClient.checkCredits(any())).thenReturn(true);
@@ -155,7 +159,7 @@ class TriggerControllerTest {
             when(runRepository.findByRunIdPublic("nonexistent")).thenReturn(Optional.empty());
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                controller.triggerManual("nonexistent", null, null);
+                controller.triggerManual("nonexistent", null, null, CALLER, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         }
@@ -164,11 +168,12 @@ class TriggerControllerTest {
         @DisplayName("Should return 409 when run is not WAITING_TRIGGER")
         void shouldReturn409WhenNotWaiting() {
             WorkflowRunEntity run = mock(WorkflowRunEntity.class);
+            lenient().when(run.getTenantId()).thenReturn(CALLER);
             when(run.getStatus()).thenReturn(RunStatus.CANCELLED);
             when(runRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                controller.triggerManual("run-1", null, null);
+                controller.triggerManual("run-1", null, null, CALLER, null);
 
             assertThat(response.getStatusCode().value()).isEqualTo(409);
         }
@@ -182,11 +187,12 @@ class TriggerControllerTest {
             // 73 epochs accumulated before the user noticed. A genuinely terminal run must
             // require an explicit reactivation.
             WorkflowRunEntity run = mock(WorkflowRunEntity.class);
+            lenient().when(run.getTenantId()).thenReturn(CALLER);
             when(run.getStatus()).thenReturn(RunStatus.FAILED);
             when(runRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                controller.triggerManual("run-1", null, null);
+                controller.triggerManual("run-1", null, null, CALLER, null);
 
             assertThat(response.getStatusCode().value()).isEqualTo(409);
             // The run is never handed to the trigger service when terminal - no cycling.
@@ -202,11 +208,12 @@ class TriggerControllerTest {
             // way this controller sees status=COMPLETED is when the reset never ran. Treat
             // it as terminal too.
             WorkflowRunEntity run = mock(WorkflowRunEntity.class);
+            lenient().when(run.getTenantId()).thenReturn(CALLER);
             when(run.getStatus()).thenReturn(RunStatus.COMPLETED);
             when(runRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                controller.triggerManual("run-1", null, null);
+                controller.triggerManual("run-1", null, null, CALLER, null);
 
             assertThat(response.getStatusCode().value()).isEqualTo(409);
             verifyNoInteractions(triggerService);
@@ -218,11 +225,12 @@ class TriggerControllerTest {
             for (RunStatus terminal : new RunStatus[]{
                     RunStatus.TIMEOUT, RunStatus.PARTIAL_SUCCESS, RunStatus.SKIPPED}) {
                 WorkflowRunEntity run = mock(WorkflowRunEntity.class);
+                lenient().when(run.getTenantId()).thenReturn(CALLER);
                 when(run.getStatus()).thenReturn(terminal);
                 when(runRepository.findByRunIdPublic("run-" + terminal)).thenReturn(Optional.of(run));
 
                 ResponseEntity<TriggerController.TriggerResponse> response =
-                    controller.triggerManual("run-" + terminal, null, null);
+                    controller.triggerManual("run-" + terminal, null, null, CALLER, null);
 
                 assertThat(response.getStatusCode().value())
                     .as("status %s must be rejected", terminal)
@@ -240,11 +248,12 @@ class TriggerControllerTest {
             // triggers in the listing UI but the fire returns 409 until the run reaches
             // WAITING_TRIGGER. Document the contract here so the asymmetry doesn't drift.
             WorkflowRunEntity run = mock(WorkflowRunEntity.class);
+            lenient().when(run.getTenantId()).thenReturn(CALLER);
             when(run.getStatus()).thenReturn(RunStatus.PENDING);
             when(runRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                controller.triggerManual("run-1", null, null);
+                controller.triggerManual("run-1", null, null, CALLER, null);
 
             assertThat(response.getStatusCode().value()).isEqualTo(409);
             verifyNoInteractions(triggerService);
@@ -258,12 +267,13 @@ class TriggerControllerTest {
             // would still pass. We don't mock the full plan/trigger pipeline - just assert
             // the controller doesn't return 409 (the canTrigger rejection code).
             WorkflowRunEntity run = mock(WorkflowRunEntity.class);
+            lenient().when(run.getTenantId()).thenReturn(CALLER);
             when(run.getStatus()).thenReturn(RunStatus.WAITING_TRIGGER);
             when(run.getTenantId()).thenReturn("tenant-1");
             when(runRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                controller.triggerManual("run-1", null, null);
+                controller.triggerManual("run-1", null, null, CALLER, null);
 
             assertThat(response.getStatusCode().value())
                 .as("WAITING_TRIGGER must pass canTrigger (not return 409)")
@@ -275,12 +285,13 @@ class TriggerControllerTest {
         void runningAndPausedPassCanTrigger() {
             for (RunStatus fireable : new RunStatus[]{RunStatus.RUNNING, RunStatus.PAUSED}) {
                 WorkflowRunEntity run = mock(WorkflowRunEntity.class);
+                lenient().when(run.getTenantId()).thenReturn(CALLER);
                 when(run.getStatus()).thenReturn(fireable);
                 when(run.getTenantId()).thenReturn("tenant-1");
                 when(runRepository.findByRunIdPublic("run-" + fireable)).thenReturn(Optional.of(run));
 
                 ResponseEntity<TriggerController.TriggerResponse> response =
-                    controller.triggerManual("run-" + fireable, null, null);
+                    controller.triggerManual("run-" + fireable, null, null, CALLER, null);
 
                 assertThat(response.getStatusCode().value())
                     .as("status %s must pass canTrigger (not return 409)", fireable)
@@ -297,7 +308,7 @@ class TriggerControllerTest {
         @DisplayName("Should return 400 when payload missing message")
         void shouldReturn400WhenNoMessage() {
             ResponseEntity<TriggerController.TriggerResponse> response =
-                controller.triggerChat("run-1", Map.of("other", "data"), null);
+                controller.triggerChat("run-1", Map.of("other", "data"), null, CALLER, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
             assertThat(response.getBody()).isNotNull();
@@ -308,7 +319,7 @@ class TriggerControllerTest {
         @DisplayName("Should return 400 when payload is null")
         void shouldReturn400WhenPayloadNull() {
             ResponseEntity<TriggerController.TriggerResponse> response =
-                controller.triggerChat("run-1", null, null);
+                controller.triggerChat("run-1", null, null, CALLER, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         }
@@ -323,7 +334,7 @@ class TriggerControllerTest {
         void shouldReturn404WhenRunNotFound() {
             when(runRepository.findByRunIdPublic("nonexistent")).thenReturn(Optional.empty());
 
-            var response = controller.getAvailableTriggers("nonexistent");
+            var response = controller.getAvailableTriggers("nonexistent", CALLER, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         }
@@ -332,10 +343,11 @@ class TriggerControllerTest {
         @DisplayName("Should return empty list when plan is null")
         void shouldReturnEmptyWhenPlanNull() {
             WorkflowRunEntity run = mock(WorkflowRunEntity.class);
+            lenient().when(run.getTenantId()).thenReturn(CALLER);
             when(run.getPlan()).thenReturn(null);
             when(runRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
 
-            var response = controller.getAvailableTriggers("run-1");
+            var response = controller.getAvailableTriggers("run-1", CALLER, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(response.getBody()).isEmpty();
@@ -352,10 +364,11 @@ class TriggerControllerTest {
                     RunStatus.FAILED, RunStatus.COMPLETED, RunStatus.CANCELLED,
                     RunStatus.TIMEOUT, RunStatus.PARTIAL_SUCCESS, RunStatus.SKIPPED}) {
                 WorkflowRunEntity run = mock(WorkflowRunEntity.class);
+                lenient().when(run.getTenantId()).thenReturn(CALLER);
                 when(run.getStatus()).thenReturn(terminal);
                 when(runRepository.findByRunIdPublic("run-" + terminal)).thenReturn(Optional.of(run));
 
-                var response = controller.getAvailableTriggers("run-" + terminal);
+                var response = controller.getAvailableTriggers("run-" + terminal, CALLER, null);
 
                 assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
                 assertThat(response.getBody())
@@ -382,6 +395,7 @@ class TriggerControllerTest {
 
         private WorkflowRunEntity automaticRun(String runId) {
             WorkflowRunEntity run = mock(WorkflowRunEntity.class);
+            lenient().when(run.getTenantId()).thenReturn(CALLER);
             when(run.getStatus()).thenReturn(RunStatus.WAITING_TRIGGER);
             when(run.getTenantId()).thenReturn("tenant-1");
             when(run.getRunIdPublic()).thenReturn(runId);
@@ -401,6 +415,7 @@ class TriggerControllerTest {
 
         private WorkflowRunEntity sbsRun(String runId) {
             WorkflowRunEntity run = mock(WorkflowRunEntity.class);
+            lenient().when(run.getTenantId()).thenReturn(CALLER);
             when(run.getStatus()).thenReturn(RunStatus.WAITING_TRIGGER);
             when(run.getTenantId()).thenReturn("tenant-1");
             when(run.getRunIdPublic()).thenReturn(runId);
@@ -427,7 +442,7 @@ class TriggerControllerTest {
                 .thenReturn(TriggerExecutionResult.accepted("run-auto", "trigger:manual_trigger", TriggerType.MANUAL));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                controller.triggerManual("run-auto", null, null);
+                controller.triggerManual("run-auto", null, null, CALLER, null);
 
             assertThat(response.getStatusCode().value()).isEqualTo(202);
             assertThat(response.getBody()).isNotNull();
@@ -451,7 +466,7 @@ class TriggerControllerTest {
                     Set.of("mcp:step1"), 0));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                controller.triggerManual("run-sbs", null, null);
+                controller.triggerManual("run-sbs", null, null, CALLER, null);
 
             assertThat(response.getStatusCode().value()).isEqualTo(202);
             assertThat(response.getBody()).isNotNull();
@@ -477,7 +492,7 @@ class TriggerControllerTest {
                     "run-auto-spec", "trigger:manual_trigger", TriggerType.MANUAL));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                controller.triggerSpecific("run-auto-spec", "manual", "trigger:manual_trigger", null, null);
+                controller.triggerSpecific("run-auto-spec", "manual", "trigger:manual_trigger", null, null, CALLER, null);
 
             assertThat(response.getStatusCode().value()).isEqualTo(202);
             verify(triggerService).executeTriggerAsync(eq(run), eq("trigger:manual_trigger"),
@@ -498,7 +513,7 @@ class TriggerControllerTest {
                     Set.of("mcp:next"), 0));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                controller.triggerSpecific("run-sbs-spec", "manual", "trigger:manual_trigger", null, null);
+                controller.triggerSpecific("run-sbs-spec", "manual", "trigger:manual_trigger", null, null, CALLER, null);
 
             assertThat(response.getStatusCode().value()).isEqualTo(202);
             assertThat(response.getBody().readySteps()).containsExactly("mcp:next");
@@ -507,6 +522,108 @@ class TriggerControllerTest {
             verify(triggerService, never())
                 .executeTriggerAsync(eq(run), eq("trigger:manual_trigger"),
                                     eq(TriggerType.MANUAL), any());
+        }
+    }
+
+    @Nested
+    @DisplayName("scope guard - cross-tenant trigger-fire IDOR")
+    class ScopeGuardTests {
+
+        @Test
+        @DisplayName("a caller in a DIFFERENT tenant is blocked (404) and the trigger never fires - the IDOR fix")
+        void crossTenantTriggerFireIsBlocked() {
+            WorkflowRunEntity run = mock(WorkflowRunEntity.class);
+            when(run.getTenantId()).thenReturn("owner-tenant");
+            when(runRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
+
+            // triggerManual and triggerSpecific must BOTH reject a foreign caller before firing.
+            ResponseEntity<TriggerController.TriggerResponse> manual =
+                    controller.triggerManual("run-1", null, null, "attacker-tenant", null);
+            ResponseEntity<TriggerController.TriggerResponse> specific =
+                    controller.triggerSpecific("run-1", "manual", "trigger:x", null, null, "attacker-tenant", null);
+
+            assertThat(manual.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+            assertThat(specific.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+            verifyNoInteractions(triggerService);
+        }
+
+        @Test
+        @DisplayName("the run's owner (matching tenant) is NOT blocked by the scope guard")
+        void sameTenantOwnerPassesScopeGuard() {
+            WorkflowRunEntity run = mock(WorkflowRunEntity.class);
+            when(run.getTenantId()).thenReturn("owner-tenant");
+            when(run.getStatus()).thenReturn(RunStatus.WAITING_TRIGGER);
+            when(runRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
+
+            ResponseEntity<TriggerController.TriggerResponse> response =
+                    controller.triggerManual("run-1", null, null, "owner-tenant", null);
+
+            // Passes the scope guard (not 404); downstream may reject for other reasons, never the guard.
+            assertThat(response.getStatusCode()).isNotEqualTo(HttpStatus.NOT_FOUND);
+        }
+
+        @Test
+        @DisplayName("getAvailableTriggers 404s for a cross-tenant caller (metadata IDOR closed)")
+        void getAvailableTriggersCrossTenantIsBlocked() {
+            WorkflowRunEntity run = mock(WorkflowRunEntity.class);
+            when(run.getTenantId()).thenReturn("owner-tenant");
+            when(runRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
+
+            ResponseEntity<java.util.List<TriggerInfo>> response =
+                    controller.getAvailableTriggers("run-1", "attacker-tenant", null);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        }
+
+        @Test
+        @DisplayName("an APPLICATION share visitor bound to the run's publication is ALLOWED to fire (share-context binding passes) "
+                + "- proves the interactive trigger allow-list is not inert")
+        void shareContextFireAllowedForMatchingPublication() {
+            WorkflowRunEntity run = mock(WorkflowRunEntity.class);
+            when(run.getTenantId()).thenReturn("owner-tenant");
+            when(run.getPublicationId()).thenReturn("pub-1");
+            when(run.getStatus()).thenReturn(RunStatus.WAITING_TRIGGER);
+            when(runRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
+
+            // Simulate the gateway/monolith share-context headers: owner-impersonation for APPLICATION
+            // pub-1, which is exactly the run's publicationId.
+            org.springframework.mock.web.MockHttpServletRequest req = new org.springframework.mock.web.MockHttpServletRequest();
+            req.addHeader("X-Share-Context", "true");
+            req.addHeader("X-Share-Resource-Type", "APPLICATION");
+            req.addHeader("X-Share-Resource-Token", "pub-1");
+            org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(
+                    new org.springframework.web.context.request.ServletRequestAttributes(req));
+            try {
+                ResponseEntity<TriggerController.TriggerResponse> response =
+                        controller.triggerManual("run-1", null, null, "owner-tenant", null);
+                // The share binding passes -> NOT 404 (downstream may 400/409, never the guard's 404).
+                assertThat(response.getStatusCode()).isNotEqualTo(HttpStatus.NOT_FOUND);
+            } finally {
+                org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
+            }
+        }
+
+        @Test
+        @DisplayName("an APPLICATION share visitor whose token does NOT match the run's publication is blocked (404)")
+        void shareContextFireBlockedForForeignPublication() {
+            WorkflowRunEntity run = mock(WorkflowRunEntity.class);
+            when(run.getTenantId()).thenReturn("owner-tenant");
+            when(run.getPublicationId()).thenReturn("pub-1");
+            when(runRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
+
+            org.springframework.mock.web.MockHttpServletRequest req = new org.springframework.mock.web.MockHttpServletRequest();
+            req.addHeader("X-Share-Context", "true");
+            req.addHeader("X-Share-Resource-Type", "APPLICATION");
+            req.addHeader("X-Share-Resource-Token", "pub-OTHER");
+            org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(
+                    new org.springframework.web.context.request.ServletRequestAttributes(req));
+            try {
+                ResponseEntity<TriggerController.TriggerResponse> response =
+                        controller.triggerManual("run-1", null, null, "owner-tenant", null);
+                assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+            } finally {
+                org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
+            }
         }
     }
 }

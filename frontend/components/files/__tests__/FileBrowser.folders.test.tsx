@@ -329,6 +329,55 @@ describe('FileBrowser - manual folders (V313)', () => {
   });
 });
 
+describe('FileBrowser - floating selection pill positioning (regression)', () => {
+  // Bug: the SelectionActionBar (`absolute bottom-6`) was rendered INSIDE the
+  // browser's `relative min-h-…` root, which spans the whole page-scrolled list -
+  // so the pill landed at the bottom of the CONTENT (visible only after scrolling
+  // to the very end, at a height that varied with the list). It must be a SIBLING
+  // of that root so it anchors to the viewport-sized app <main> instead.
+  it('renders the pill OUTSIDE the relative page root (anchors to the app <main>)', () => {
+    hookState.entries = [file('a', 'a.png')];
+    const { container, getByTestId, queryByTestId } = render(<FileBrowser />);
+    // No selection → no pill.
+    expect(queryByTestId('selection-action-bar')).toBeNull();
+    fireEvent.click(getByTestId('select-file-a'));
+    const bar = getByTestId('selection-action-bar');
+    const pageRoot = container.querySelector('.relative.flex.flex-col');
+    expect(pageRoot).toBeTruthy();
+    expect(pageRoot!.contains(bar)).toBe(false);
+    // And no OTHER positioned ancestor may capture the pill inside this component's
+    // output - every ancestor up to the render container must be non-positioned.
+    for (let el = bar.parentElement; el && el !== container; el = el.parentElement) {
+      expect(/(^|\s)(relative|absolute|fixed|sticky)(\s|$)/.test(el.className)).toBe(false);
+    }
+  });
+
+  it('the pill clears the selection via its built-in × button', () => {
+    hookState.entries = [file('a', 'a.png'), file('b', 'b.png')];
+    const { getByTestId, queryByTestId } = render(<FileBrowser />);
+    fireEvent.click(getByTestId('select-file-a'));
+    fireEvent.click(getByTestId('select-file-b'));
+    expect(getByTestId('selection-action-bar')).toBeTruthy();
+    fireEvent.click(getByTestId('selection-action-bar-clear'));
+    expect(queryByTestId('selection-action-bar')).toBeNull();
+  });
+
+  it('an OS file dropped ON the pill still uploads (the pill left the root drop zone)', async () => {
+    // Moving the pill out of the root div also moved it out of the root's
+    // onDragOver/onDrop - a wrapper re-attaches them so a drop released over the
+    // pill uploads instead of falling through to the browser default.
+    hookState.entries = [file('a', 'a.png')];
+    const { getByTestId } = render(<FileBrowser />);
+    fireEvent.click(getByTestId('select-file-a'));
+    const bar = getByTestId('selection-action-bar');
+    const dropped = new File(['x'], 'dropped.txt', { type: 'text/plain' });
+    await act(async () => {
+      fireEvent.drop(bar, { dataTransfer: { files: [dropped] } });
+    });
+    expect(fileService.uploadGeneric).toHaveBeenCalledWith(dropped, 'files', null);
+  });
+});
+
 describe('FileBrowser - virtual workflow folders (Phase 2b)', () => {
   it('renders a VirtualFolderCard (not a FolderCard) for a virtual entry, with its label + count', () => {
     hookState.entries = [vfolder('wf:1', { childCount: 4 })];

@@ -15,6 +15,7 @@ import { CredentialCard } from './CredentialCard';
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { AgentBrowseLivePreview } from './AgentBrowseLivePreview';
 import { ToolResultFileRefPreviews } from './ToolResultFileRefPreviews';
+import { compactJsonForDisplay } from '@/lib/utils/compactJsonForDisplay';
 import MarkdownRender from '@/components/MarkdownRender';
 import { FaviconStack } from '@/components/ui/FaviconStack';
 import { apiClient, orchestratorApi } from '@/lib/api';
@@ -800,7 +801,9 @@ function formatResultForMarkdown(content: string): string {
             acc[k] = parsed[k];
             return acc;
           }, {} as Record<string, unknown>);
-          return `${parsed[field]}\n\n\`\`\`json\n${JSON.stringify(additionalData, null, 2)}\n\`\`\``;
+          // Bounded display: huge extras (verbatim configs, prompts...) are
+          // compacted so the message never drowns under a wall of JSON.
+          return `${parsed[field]}\n\n\`\`\`json\n${compactJsonForDisplay(additionalData)}\n\`\`\``;
         }
         return parsed[field];
       }
@@ -827,8 +830,8 @@ function formatResultForMarkdown(content: string): string {
       }
     }
 
-    // Fallback: JSON code block
-    return `\`\`\`json\n${JSON.stringify(parsed, null, 2)}\n\`\`\``;
+    // Fallback: JSON code block (bounded - see compactJsonForDisplay)
+    return `\`\`\`json\n${compactJsonForDisplay(parsed)}\n\`\`\``;
   } catch {
     // Not JSON, return as-is (might be markdown or plain text)
     return content;

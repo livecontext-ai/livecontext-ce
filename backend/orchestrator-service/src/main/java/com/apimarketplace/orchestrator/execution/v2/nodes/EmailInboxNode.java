@@ -279,6 +279,14 @@ public class EmailInboxNode extends BaseNode {
         return result;
     }
 
+    // IPv6-blackhole caveat: the k3s prod cluster has no IPv6 egress route. If {@code host}
+    // resolves to an AAAA record (e.g. imap.hostinger.com behind Cloudflare), Jakarta Mail
+    // tries IPv6 first and blocks until the 10s connectiontimeout below, so the connect
+    // "times out" against a perfectly reachable server. The fix lives at the JVM level, not
+    // here: the orchestrator-service runs with -Djava.net.preferIPv4Stack=true (helm
+    // values javaToolOptions -> JAVA_TOOL_OPTIONS) so name resolution/connect uses A
+    // records only. Do NOT connect by resolved IPv4 literal instead: that would break TLS
+    // hostname/SNI verification against the server certificate.
     private Store connect(String host, int port, String username, String password, boolean useSsl)
             throws MessagingException {
         Properties props = new Properties();

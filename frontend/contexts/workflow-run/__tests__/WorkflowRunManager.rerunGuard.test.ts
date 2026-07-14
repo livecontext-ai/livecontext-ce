@@ -144,6 +144,50 @@ describe('WorkflowRunManager - Seq-Based Stale Event Filtering', () => {
       expect(state.completedSteps.has('mcp:node3')).toBe(false);
     });
 
+    it('preserves reset steps statusCounts on the post-rerun refresh (badge must not blank)', async () => {
+      // node2 completed carrying a real badge {completed:3, failed:1}
+      mockGetRunState.mockResolvedValueOnce(
+        createRunState({
+          completedStepIds: ['trigger:start', 'mcp:node2'],
+          steps: [
+            { stepId: 'trigger:start', stepAlias: 'Start', status: 'COMPLETED' },
+            { stepId: 'mcp:node2', stepAlias: 'Node 2', status: 'COMPLETED', statusCounts: { completed: 3, failed: 1 } },
+          ],
+          seq: 5,
+        })
+      );
+      await manager.initialize();
+
+      mockRerunFromStep.mockResolvedValueOnce(
+        createRerunResponse({ resetSteps: ['mcp:node2'], readySteps: ['mcp:node2'], seq: 10 })
+      );
+      await manager.rerunStep('mcp:node2');
+
+      // stepRerun WS event -> refreshStateInternal; backend still reports node2's
+      // cumulative NodeCounts (they survive resetDag), status PENDING (ready for rerun).
+      mockGetRunState.mockResolvedValueOnce(
+        createRunState({
+          completedStepIds: ['trigger:start'],
+          readySteps: ['mcp:node2'],
+          steps: [
+            { stepId: 'trigger:start', stepAlias: 'Start', status: 'COMPLETED' },
+            { stepId: 'mcp:node2', stepAlias: 'Node 2', status: 'PENDING', statusCounts: { completed: 3, failed: 1 } },
+          ],
+          seq: 10,
+        })
+      );
+      manager.handleEvent('stepRerun', { stepId: 'mcp:node2' });
+      await vi.advanceTimersByTimeAsync(100);
+
+      const state = manager.getState();
+      // Badge preserved (NOT zeroed) so it stays visible and its accumulated border can derive.
+      const node2 = state.nodes.find(n => n.nodeId === 'mcp:node2');
+      expect(node2?.statusCounts).toEqual({ completed: 3, failed: 1 });
+      // Still classified as ready (not completed) - the reset->ready design is intact.
+      expect(state.completedSteps.has('mcp:node2')).toBe(false);
+      expect(state.readySteps.has('mcp:node2')).toBe(true);
+    });
+
     it('should discard stale batch-update with lower seq', async () => {
       await initManager(manager);
       mockRerunFromStep.mockResolvedValueOnce(createRerunResponse({ seq: 10 }));

@@ -1172,6 +1172,7 @@ export interface UserApprovalParameters {
   requiredApprovals?: number;
   timeoutMs?: number;
   contextTemplate: string;
+  continuationMode?: 'all_items' | 'per_item';
   delegation?: Record<string, any>;
 }
 

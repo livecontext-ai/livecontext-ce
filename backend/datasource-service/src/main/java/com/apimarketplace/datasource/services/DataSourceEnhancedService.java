@@ -117,8 +117,8 @@ public class DataSourceEnhancedService {
                 
                 // Generer le cursor pour la page suivante
                 DataSourceItemRow lastItem = items.get(items.size() - 1);
-                DataSourceEnhancedModels.KeysetCursor cursor = new DataSourceEnhancedModels.KeysetCursor(
-                    lastItem.createdAt().toEpochMilli(),
+                DataSourceEnhancedModels.KeysetCursor cursor = DataSourceEnhancedModels.KeysetCursor.of(
+                    lastItem.createdAt(),
                     lastItem.id()
                 );
                 nextCursor = cursor.encode();
@@ -134,8 +134,8 @@ public class DataSourceEnhancedService {
                 // Generer un cursor pour la page suivante (simulation)
                 if (!items.isEmpty()) {
                     DataSourceItemRow lastItem = items.get(items.size() - 1);
-                    DataSourceEnhancedModels.KeysetCursor cursor = new DataSourceEnhancedModels.KeysetCursor(
-                        lastItem.createdAt().toEpochMilli(),
+                    DataSourceEnhancedModels.KeysetCursor cursor = DataSourceEnhancedModels.KeysetCursor.of(
+                        lastItem.createdAt(),
                         lastItem.id()
                     );
                     nextCursor = cursor.encode();

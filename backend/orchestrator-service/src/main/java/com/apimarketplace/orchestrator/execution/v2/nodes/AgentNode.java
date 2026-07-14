@@ -508,6 +508,48 @@ public class AgentNode extends BaseNode {
         return null;
     }
 
+    /**
+     * Inverse of {@link #getSelectedPort} for the mock mode. Classify agents map
+     * "category_N" back to {@code {selected_category_index: N, selected_category:
+     * <label>}} (same output contract as a real classification). Only classify
+     * agents accept a mock port ({@code WorkflowPlanParser.validateAgentMock});
+     * plain and guardrail agents have no mockable ports and keep the default form.
+     */
+    @Override
+    public Map<String, Object> portSelectionOutput(String port) {
+        String configType = agentConfig.type();
+        if ("classify".equalsIgnoreCase(configType) && port != null && port.startsWith("category_")) {
+            try {
+                int idx = Integer.parseInt(port.substring("category_".length()));
+                List<Map<String, Object>> categories = agentConfig.classifyCategories();
+                if (categories != null && idx >= 0 && idx < categories.size()) {
+                    Map<String, Object> out = new HashMap<>();
+                    out.put("selected_category_index", idx);
+                    Object label = categories.get(idx).get("label");
+                    if (label == null) {
+                        label = categories.get(idx).get("name");
+                    }
+                    if (label != null) {
+                        out.put("selected_category", label);
+                    }
+                    return out;
+                }
+            } catch (NumberFormatException ignored) {
+                // fall through to default
+            }
+        }
+        return super.portSelectionOutput(port);
+    }
+
+    /**
+     * Mock-mode schema tag: same resolution as the outputs a real execution writes
+     * ({@code AGENT} / {@code CLASSIFY} / {@code GUARDRAIL}).
+     */
+    @Override
+    public String schemaNodeType() {
+        return getNodeTypeForAgent();
+    }
+
     @Override
     protected List<String> getDependencies(ExecutionContext context) {
         return dependencies;

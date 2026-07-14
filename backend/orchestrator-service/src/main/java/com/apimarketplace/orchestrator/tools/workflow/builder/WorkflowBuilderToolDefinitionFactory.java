@@ -31,7 +31,7 @@ public class WorkflowBuilderToolDefinitionFactory {
      */
     public AgentToolDefinition buildToolDefinition() {
         List<ToolParameter> params = List.of(
-            stringParam("action", "Action: init, load, save, finish, add_node, connect, disconnect, modify, remove, undo, describe, validate, search, execute, get, list, delete, runs, get_run, wait_run, get_node_output, get_plan, set_plan, pin, unpin, publish, unpublish, resolve_approval, continue_interface, help. " +
+            stringParam("action", "Action: init, load, save, finish, add_node, connect, disconnect, modify, remove, undo, describe, validate, search, execute, get, list, delete, runs, get_run, wait_run, get_node_output, get_plan, set_plan, pin, unpin, publish, unpublish, resolve_approval, continue_interface, mock_suggest, help. " +
                 "'wait_run' blocks until the run leaves the running state (or timeout_seconds elapses) and returns the same report as get_run - after an execute, prefer ONE wait_run over a get_run poll loop. " +
                 "'finish' finalizes and saves the draft and CLOSES the build session - do NOT call any further workflow actions after a successful finish ('create' is a back-compat alias). " +
                 "'pin' promotes a version to production (workflow_id + version; the version needs a successful run); 'unpin' clears it (production triggers stop firing until re-pinned). " +
@@ -48,9 +48,11 @@ public class WorkflowBuilderToolDefinitionFactory {
             stringParam("label", "Node display name - used in connect_after and data references (for: add_node, modify, remove)", false),
             objectParam("params", "Node-specific parameters as {key: value}. Call workflow(action='help', topics=['<type>']) to see required params for each node type.", false),
             stringParam("connect_after", "Label of the predecessor node to connect from. MUST be set for every non-trigger node. For branching nodes, append port: 'MyDecision:if', 'MyFork:branch_0'. This is OUTSIDE params.", false),
+            objectParam("mock", "(for: modify) Per-node mock: the node returns this instead of really executing, in editor runs (production/pinned fires always ignore mocks; pass mock_mode='off' on execute to ignore them for one run). This is OUTSIDE params, like connect_after. Exactly ONE of: {output: {...}} literal output matching the node's output schema; {source: 'catalog_example'} (mcp catalog-tool nodes only - serves the tool's default example response projected to its schema, no real call, no credentials); {error: {message: '...', output: {...}}} to simulate a FAILURE and test error paths. Branching nodes (decision/switch/option/approval cores, classify agents) take {port: 'if'|'case_0'|'approved'|'category_0'|...} instead of (or combined with) output. Add enabled=false to park a mock without deleting it. Pass mock={} to REMOVE the mock. mock_suggest gives you a ready-to-edit proposed output for any node. Full guide: workflow(action='help', topics=['mocking']).", false),
+            stringParam("mock_mode", "(for: execute) Run-level mock override: omit for the DEFAULT (every node carrying an enabled mock returns it, all other nodes execute for real); 'off' = ignore ALL mocks this run without touching their config; 'all_mcp' = full dry-run (configured mocks + every mcp catalog-tool node without one serves its catalog example - no credentials needed). Refused with version='pinned'.", false),
             stringParam("from", "Source node label (for: connect, disconnect). Append port for branching: 'Check:if'", false),
             stringParam("to", "Target node label (for: connect, disconnect)", false),
-            stringParam("node", "Node label to inspect/modify/remove (for: describe, modify, remove)", false),
+            stringParam("node", "Node label to inspect/modify/remove (for: describe, modify, remove, mock_suggest)", false),
             stringParam("interface_id", "Interface UUID to reference. For add_node type='interface': the interface shown in the workflow. For publish: optional showcase/landing page presented on the marketplace listing.", false),
             arrayParam("interface_ids", "Interface UUIDs (for: add_node type='interface')", false),
             objectParam("plan", "Complete workflow plan JSON (for: set_plan)", false),

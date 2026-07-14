@@ -36,7 +36,7 @@ import { formatUtcDateTime } from '@/lib/utils/dateFormatters';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import { useLazyLoadObserver } from '@/app/workflows/builder/components/palette/useLazyLoadObserver';
 import { AvatarDisplay, AvatarPicker, getPresetDefaultName, isPresetDefaultName } from '@/components/agents';
-import { fileService, getFileUrlById } from '@/lib/api/orchestrator/file.service';
+import { fileService, getPublicAvatarUrlById } from '@/lib/api/orchestrator/file.service';
 import { publicationService } from '@/lib/api/orchestrator/publication.service';
 import { storageApi, S3_FILES_FILTER } from '@/lib/api/storage-api';
 import { agentService } from '@/lib/api/orchestrator/agent.service';
@@ -1279,7 +1279,9 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
 
   const handleAvatarUpload = async (file: File): Promise<string> => {
     const result = await fileService.uploadGeneric(file, 'avatar');
-    return getFileUrlById(result.id, { inline: true });
+    // Public avatar URL (anonymous serve): avatars render on marketplace cards and
+    // shared apps via plain <img>, so the auth-gated by-id URL would never load there.
+    return getPublicAvatarUrlById(result.id);
   };
 
   const updateWidgetConfig = <K extends keyof WidgetConfig>(key: K, value: WidgetConfig[K]) => {
@@ -1534,10 +1536,14 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
       onClose();
     } catch (err) {
       console.error('Error creating agent:', err);
+      // Surface a clear message for the common duplicate-name case (default preset names
+      // like "Nova" collide) instead of a generic failure - and without the agent-tool
+      // jargon the backend message carries ("Use agent(action='update', ...)").
+      const isDuplicateName = err instanceof Error && /already exists/i.test(err.message);
       addToast({
         type: 'error',
         title: t('error'),
-        message: t('createFailed'),
+        message: isDuplicateName ? t('duplicateName', { name: name.trim() }) : t('createFailed'),
       });
     } finally {
       setIsCreating(false);
@@ -1740,6 +1746,8 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                       <AvatarPicker
                         value={avatarUrl}
                         onChange={handleAvatarChange}
+                        onUpload={handleAvatarUpload}
+                        onGenerate={(prompt) => agentService.generateAvatar(prompt)}
                         size="sm"
                       />
                     </PopoverContent>
@@ -1816,122 +1824,6 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                   modelLabel={t('modelNameLabel')}
                 />
 
-                {/* Temperature */}
-                <div>
-                  <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
-                    {t('temperatureLabel')}
-                    <TooltipProvider delayDuration={0}>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
-                        </TooltipTrigger>
-                        <TooltipContent side="top" className="max-w-xs">
-                          <p className="text-xs">{t('temperatureInfo')}</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  </label>
-                  <div className="space-y-2">
-                    <Slider value={[temperature]} onValueChange={(values) => setTemperature(values[0])} min={0} max={2} step={0.1} className="w-full" />
-                    <div className="flex justify-between text-xs text-theme-secondary">
-                      <span>0</span>
-                      <span className="font-medium text-theme-primary">{temperature.toFixed(1)}</span>
-                      <span>2</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Reasoning effort - only for effort-capable bridge models (claude-code, codex) */}
-                {supportsReasoningEffort({ provider: modelProvider }) && (
-                  <div>
-                    <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
-                      {t('reasoningEffortLabel')}
-                    </label>
-                    <Select
-                      value={reasoningEffort || SELECT_EMPTY_VALUE_SENTINEL}
-                      onValueChange={(v) => setReasoningEffort(v === SELECT_EMPTY_VALUE_SENTINEL ? '' : v)}
-                    >
-                      <SelectTrigger className="w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="">{t('reasoningEffortInherit')}</SelectItem>
-                        {REASONING_EFFORT_LEVELS.map((lvl) => (
-                          <SelectItem key={lvl} value={lvl}>{lvl}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-
-                {/* Max Tokens, Iterations, Timeout & Inactivity (2x2 grid) */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
-                      {t('maxTokensLabel')}
-                      <TooltipProvider delayDuration={0}>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="max-w-xs">
-                            <p className="text-xs">{t('maxTokensInfo')}</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    </label>
-                    <Input type="number" value={maxTokens} onChange={(e) => setMaxTokens(parseInt(e.target.value) || 1000)} placeholder="1000" className="w-full" min="1" />
-                  </div>
-                  <div className={toolsMode === 'none' ? 'opacity-50' : ''}>
-                    <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
-                      {t('maxIterationsLabel')}
-                      <TooltipProvider delayDuration={0}>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="max-w-xs">
-                            <p className="text-xs">{t('maxIterationsInfo')}</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    </label>
-                    <Input type="number" value={maxIterations} onChange={(e) => setMaxIterations(parseInt(e.target.value) || 100)} placeholder="100" className="w-full" min="1" max="1000" disabled={toolsMode === 'none'} />
-                  </div>
-                  <div>
-                    <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
-                      {t('executionTimeoutLabel')}
-                      <TooltipProvider delayDuration={0}>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="max-w-xs">
-                            <p className="text-xs">{t('executionTimeoutInfo')}</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    </label>
-                    <Input type="number" value={executionTimeout} onChange={(e) => setExecutionTimeout(parseInt(e.target.value) || 3600)} placeholder="3600" className="w-full" min="10" max="7200" />
-                  </div>
-                  <div>
-                    <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
-                      {t('inactivityTimeoutLabel')}
-                      <TooltipProvider delayDuration={0}>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
-                          </TooltipTrigger>
-                          <TooltipContent side="top" className="max-w-xs">
-                            <p className="text-xs">{t('inactivityTimeoutInfo')}</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    </label>
-                    <Input type="number" value={inactivityTimeout} onChange={(e) => setInactivityTimeout(parseInt(e.target.value) || 0)} placeholder="300" className="w-full" min="0" max="7200" />
-                  </div>
-                </div>
-
                 {/* Credit Budget */}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
@@ -1978,7 +1870,7 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                   </div>
                 </div>
                 {isEditMode && agent && (agent.creditsConsumed ?? 0) > 0 && (
-                  <div className="flex items-center justify-between p-3 rounded-lg border border-theme-border bg-theme-bg-secondary">
+                  <div className="flex items-center justify-between p-3 rounded-xl border border-theme bg-theme-secondary">
                     <div className="text-sm text-theme-secondary">
                       {t('creditsUsed')}: <span className="font-medium text-theme-primary">{formatCost(agent.creditsConsumed ?? 0, 2)}</span>
                       {agent.creditBudget != null && (
@@ -2267,35 +2159,6 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                       <span>{webSearchEnabled ? t('enabled') : t('disabled')}</span>
                     </div>
                     <Switch checked={webSearchEnabled} presentational />
-                  </button>
-                </div>
-
-                {/* Image Generation toggle - opt-in (default off). Persists to
-                    toolsConfig.imageGeneration; read by AgentModuleResolver. */}
-                <div>
-                  <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
-                    {tc('imageGenerationLabel')}
-                    <TooltipProvider delayDuration={0}>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
-                        </TooltipTrigger>
-                        <TooltipContent side="top" className="max-w-xs">
-                          <p className="text-xs">{tc('imageGenerationInfo')}</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => setImageGenerationEnabled(!imageGenerationEnabled)}
-                    className="flex h-auto min-h-[44px] w-full items-center justify-between rounded-xl border border-theme bg-[var(--bg-primary)] px-4 py-3 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] transition-colors"
-                  >
-                    <div className="flex items-center gap-2">
-                      <ImageIcon className="w-4 h-4 text-theme-secondary" />
-                      <span>{imageGenerationEnabled ? t('enabled') : t('disabled')}</span>
-                    </div>
-                    <Switch checked={imageGenerationEnabled} presentational />
                   </button>
                 </div>
 
@@ -2596,37 +2459,6 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                   </Popover>
                 </div>
 
-                {/* Sensitive actions - agents always run install/execute/sub-agent/catalog
-                    actions WITHOUT the approval card (the authorization gate is exempt for
-                    agent-backed runs). Surfaced read-only so the behavior is explicit; it
-                    cannot be turned off for an agent today. Placed BELOW Resource Access. */}
-                <div>
-                  <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
-                    {t('sensitiveActionsLabel')}
-                    <TooltipProvider delayDuration={0}>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
-                        </TooltipTrigger>
-                        <TooltipContent side="top" className="max-w-xs">
-                          <p className="text-xs">{t('sensitiveActionsLockedInfo')}</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  </label>
-                  <div
-                    aria-disabled="true"
-                    title={t('sensitiveActionsLockedInfo')}
-                    className="flex h-auto min-h-[44px] w-full items-center justify-between rounded-xl border border-theme bg-[var(--bg-secondary)] px-4 py-3 text-sm text-theme-secondary cursor-not-allowed"
-                  >
-                    <div className="flex items-center gap-2">
-                      <ShieldCheck className="w-4 h-4 text-theme-secondary" />
-                      <span>{t('sensitiveActionsAlwaysOn')}</span>
-                    </div>
-                    <Switch checked presentational disabled />
-                  </div>
-                </div>
-
                 {/* Advanced limits - the 3 turn-limit overrides (maxPerResourcePerTurn /
                     loopIdenticalStop / loopConsecutiveStop). Available at CREATE and EDIT:
                     both POST and PUT /agents accept these columns, so native local-state
@@ -2644,6 +2476,181 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
                   {advancedModeOpen && (
                     <div className="mt-2 space-y-3 rounded-xl border border-theme bg-[var(--bg-secondary)] p-4">
                       <p className="text-xs text-theme-secondary">{tc('advancedSectionDescription')}</p>
+
+                      {/* Temperature */}
+                      <div>
+                        <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                          {t('temperatureLabel')}
+                          <TooltipProvider delayDuration={0}>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="max-w-xs">
+                                <p className="text-xs">{t('temperatureInfo')}</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        </label>
+                        <div className="space-y-2">
+                          <Slider value={[temperature]} onValueChange={(values) => setTemperature(values[0])} min={0} max={2} step={0.1} className="w-full" />
+                          <div className="flex justify-between text-xs text-theme-secondary">
+                            <span>0</span>
+                            <span className="font-medium text-theme-primary">{temperature.toFixed(1)}</span>
+                            <span>2</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Reasoning effort - only for effort-capable bridge models (claude-code, codex) */}
+                      {supportsReasoningEffort({ provider: modelProvider }) && (
+                        <div>
+                          <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                            {t('reasoningEffortLabel')}
+                          </label>
+                          <Select
+                            value={reasoningEffort || SELECT_EMPTY_VALUE_SENTINEL}
+                            onValueChange={(v) => setReasoningEffort(v === SELECT_EMPTY_VALUE_SENTINEL ? '' : v)}
+                          >
+                            <SelectTrigger className="w-full">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="">{t('reasoningEffortInherit')}</SelectItem>
+                              {REASONING_EFFORT_LEVELS.map((lvl) => (
+                                <SelectItem key={lvl} value={lvl}>{lvl}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      )}
+
+                      {/* Max Tokens, Iterations, Timeout & Inactivity (2x2 grid) */}
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                            {t('maxTokensLabel')}
+                            <TooltipProvider delayDuration={0}>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
+                                </TooltipTrigger>
+                                <TooltipContent side="top" className="max-w-xs">
+                                  <p className="text-xs">{t('maxTokensInfo')}</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          </label>
+                          <Input type="number" value={maxTokens} onChange={(e) => setMaxTokens(parseInt(e.target.value) || 1000)} placeholder="1000" className="w-full" min="1" />
+                        </div>
+                        <div className={toolsMode === 'none' ? 'opacity-50' : ''}>
+                          <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                            {t('maxIterationsLabel')}
+                            <TooltipProvider delayDuration={0}>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
+                                </TooltipTrigger>
+                                <TooltipContent side="top" className="max-w-xs">
+                                  <p className="text-xs">{t('maxIterationsInfo')}</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          </label>
+                          <Input type="number" value={maxIterations} onChange={(e) => setMaxIterations(parseInt(e.target.value) || 100)} placeholder="100" className="w-full" min="1" max="1000" disabled={toolsMode === 'none'} />
+                        </div>
+                        <div>
+                          <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                            {t('executionTimeoutLabel')}
+                            <TooltipProvider delayDuration={0}>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
+                                </TooltipTrigger>
+                                <TooltipContent side="top" className="max-w-xs">
+                                  <p className="text-xs">{t('executionTimeoutInfo')}</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          </label>
+                          <Input type="number" value={executionTimeout} onChange={(e) => setExecutionTimeout(parseInt(e.target.value) || 3600)} placeholder="3600" className="w-full" min="10" max="7200" />
+                        </div>
+                        <div>
+                          <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                            {t('inactivityTimeoutLabel')}
+                            <TooltipProvider delayDuration={0}>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
+                                </TooltipTrigger>
+                                <TooltipContent side="top" className="max-w-xs">
+                                  <p className="text-xs">{t('inactivityTimeoutInfo')}</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          </label>
+                          <Input type="number" value={inactivityTimeout} onChange={(e) => setInactivityTimeout(parseInt(e.target.value) || 0)} placeholder="300" className="w-full" min="0" max="7200" />
+                        </div>
+                      </div>
+
+                      {/* Image Generation toggle - opt-in (default off). Persists to
+                          toolsConfig.imageGeneration; read by AgentModuleResolver. */}
+                      <div>
+                        <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                          {tc('imageGenerationLabel')}
+                          <TooltipProvider delayDuration={0}>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="max-w-xs">
+                                <p className="text-xs">{tc('imageGenerationInfo')}</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setImageGenerationEnabled(!imageGenerationEnabled)}
+                          className="flex h-auto min-h-[44px] w-full items-center justify-between rounded-xl border border-theme bg-[var(--bg-primary)] px-4 py-3 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] transition-colors"
+                        >
+                          <div className="flex items-center gap-2">
+                            <ImageIcon className="w-4 h-4 text-theme-secondary" />
+                            <span>{imageGenerationEnabled ? t('enabled') : t('disabled')}</span>
+                          </div>
+                          <Switch checked={imageGenerationEnabled} presentational />
+                        </button>
+                      </div>
+
+                      {/* Sensitive actions - always on for agent-backed runs (approval gate
+                          exempt); surfaced read-only so the behavior is explicit. */}
+                      <div>
+                        <label className="flex items-center gap-1.5 text-sm font-medium text-theme-primary mb-2">
+                          {t('sensitiveActionsLabel')}
+                          <TooltipProvider delayDuration={0}>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Info className="h-3.5 w-3.5 text-theme-secondary cursor-help" />
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="max-w-xs">
+                                <p className="text-xs">{t('sensitiveActionsLockedInfo')}</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        </label>
+                        <div
+                          aria-disabled="true"
+                          title={t('sensitiveActionsLockedInfo')}
+                          className="flex h-auto min-h-[44px] w-full items-center justify-between rounded-xl border border-theme bg-[var(--bg-primary)] px-4 py-3 text-sm text-theme-secondary cursor-not-allowed"
+                        >
+                          <div className="flex items-center gap-2">
+                            <ShieldCheck className="w-4 h-4 text-theme-secondary" />
+                            <span>{t('sensitiveActionsAlwaysOn')}</span>
+                          </div>
+                          <Switch checked presentational disabled />
+                        </div>
+                      </div>
+
                       {([
                         { label: tc('maxPerResourcePerTurnLabel'), info: tc('maxPerResourcePerTurnInfo'), value: maxPerResourcePerTurn, set: setMaxPerResourcePerTurn, min: 1, max: 100 },
                         { label: tc('loopIdenticalStopLabel'), info: tc('loopIdenticalStopInfo'), value: loopIdenticalStop, set: setLoopIdenticalStop, min: 2, max: 100 },

@@ -2,9 +2,11 @@ import type { Node } from 'reactflow';
 import type { BuilderNodeData } from '../types';
 import type { PlanGeneratorContext } from './planGeneratorContext';
 import { gateNodePolicyForNode, sanitizeNodePolicy } from './nodePolicy';
+import { gateNodeMockForNode, sanitizeNodeMock } from './nodeMock';
 
 /**
- * Attaches each node's `nodePolicy` block to its emitted plan entry.
+ * Attaches each node's `nodePolicy` and `mock` blocks to its emitted plan
+ * entry.
  *
  * Runs AFTER every other processor so it covers ALL executable entries
  * uniformly - mcps / tables / agents / cores (including the control cores
@@ -12,8 +14,9 @@ import { gateNodePolicyForNode, sanitizeNodePolicy } from './nodePolicy';
  * `graphNodeId` pointing back to its builder node, which is the join key.
  *
  * Triggers and notes are excluded by design (the backend parser ignores a
- * policy there), and a default/absent policy adds NOTHING to the entry, so
- * plans without policies regenerate byte-identical to before.
+ * policy there and rejects a mock there), and a default/absent block adds
+ * NOTHING to the entry, so plans without them regenerate byte-identical to
+ * before.
  */
 export function attachNodePolicies(ctx: PlanGeneratorContext): void {
   const nodesById = new Map<string, Node<BuilderNodeData>>(
@@ -35,6 +38,10 @@ export function attachNodePolicies(ctx: PlanGeneratorContext): void {
       );
       if (policy) {
         entry.nodePolicy = policy;
+      }
+      const mock = gateNodeMockForNode(sanitizeNodeMock(node.data?.mock), node);
+      if (mock) {
+        entry.mock = mock;
       }
     }
   };

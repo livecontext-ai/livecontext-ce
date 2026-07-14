@@ -127,6 +127,9 @@ export default function OrganizationSettingsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [memberAvatars, setMemberAvatars] = useState<Record<number, string>>({});
+  // Mirrors memberAvatars so the unmount cleanup can revoke the object URLs (createObjectURL
+  // leaks the backing blob until revoked or the document unloads).
+  const memberAvatarsRef = useRef<Record<number, string>>({});
   const [editingName, setEditingName] = useState(false);
   const [newName, setNewName] = useState("");
   const [saving, setSaving] = useState(false);
@@ -223,7 +226,12 @@ export default function OrganizationSettingsPage() {
             for (const entry of avatarEntries) {
               if (entry) avatarMap[entry[0]] = entry[1];
             }
-            setMemberAvatars(avatarMap);
+            // Revoke the previous batch before replacing so repeated reloads don't leak blob URLs.
+            setMemberAvatars((prev) => {
+              Object.values(prev).forEach((u) => URL.revokeObjectURL(u));
+              return avatarMap;
+            });
+            memberAvatarsRef.current = avatarMap;
           }
         }
       }
@@ -242,6 +250,11 @@ export default function OrganizationSettingsPage() {
     }
     fetchData();
   }, [isAuthenticated, isAuthChecking, fetchData]);
+
+  // Revoke any remaining member-avatar object URLs on unmount.
+  useEffect(() => () => {
+    Object.values(memberAvatarsRef.current).forEach((u) => URL.revokeObjectURL(u));
+  }, []);
 
   // Auto-open the invite modal when arriving via the sidebar
   // "Invite teammates" entry (which deep-links with ?invite=1). Gated on the

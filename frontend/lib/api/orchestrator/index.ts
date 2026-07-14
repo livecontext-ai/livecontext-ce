@@ -239,6 +239,7 @@ export const orchestratorApi = {
   // ========================================
   getAgents: agentService.getAgents.bind(agentService),
   getAgentAvatars: agentService.getAgentAvatars.bind(agentService),
+  getFleetTriggers: agentService.getFleetTriggers.bind(agentService),
   getAgent: agentService.getAgent.bind(agentService),
   getAgentByConversationId: agentService.getAgentByConversationId.bind(agentService),
   createAgent: agentService.createAgent.bind(agentService),

@@ -390,8 +390,19 @@ public class CrudExecutorService {
         // row on a realistic datasource that's ~20 MB, well under any tomcat
         // request budget. Above this the caller should paginate via offset.
         int requestedLimit = request.getLimit() != null ? request.getLimit() : 20;
-        int limit = Math.min(Math.max(requestedLimit, 1), MAX_READ_LIMIT);
         int offset = request.getOffset() != null ? request.getOffset() : 0;
+
+        // Honor the "use 0 for no rows" contract (query_rows help) instead of clamping 0 up to 1
+        // (which returned a single row when an agent asked for none, e.g. a cheap existence probe).
+        if (requestedLimit == 0) {
+            return CrudResult.success(
+                CrudOperation.READ_ROW,
+                String.format("Read 0 row(s) from datasource '%s'", dataSource.name()),
+                CrudResult.ResultData.forRead(List.of(), false, offset)
+            );
+        }
+
+        int limit = Math.min(Math.max(requestedLimit, 1), MAX_READ_LIMIT);
 
         // Fetch limit+1 rows to detect if more exist
         List<Map<String, Object>> rawRows = crudRepository.readRows(
@@ -491,17 +502,53 @@ public class CrudExecutorService {
      * Build a WHERE clause fragment for hybrid search (similarity + JSONB filter).
      * Operates on the items table alias 'i'.
      */
-    private String buildWhereClauseForSimilarity(WhereCondition where, MapSqlParameterSource params) {
-        String column = sqlSanitizer.sanitizeColumnName(where.column());
-        String operator = where.getNormalizedOperator();
-        Object value = where.value();
+    // Package-visible for unit testing the hybrid-search WHERE generation (operators, id, data. strip).
+    String buildWhereClauseForSimilarity(WhereCondition where, MapSqlParameterSource params) {
+        // Mirror CrudRepository.buildWhereClause exactly (operator handling, `data.` strip, `id`
+        // mapping) but on the items alias 'i'. The prior version emitted
+        // `jsonb_extract_path_text(i.data,:c) <op> :v` unconditionally, so IS NULL/IS NOT NULL bound
+        // a stray value (invalid SQL), IN lacked parentheses (invalid SQL), and column 'id' filtered
+        // a non-existent JSONB key (silently matched nothing).
+        String rawColumn = where.column();
+        if (rawColumn != null && rawColumn.startsWith("data.")) {
+            rawColumn = rawColumn.substring("data.".length());
+        }
+        String safeColumn = sqlSanitizer.sanitizeColumnName(rawColumn);
+        String operator = sqlSanitizer.sanitizeOperator(where.operator());
 
-        String paramName = "sim_where_val";
-        params.addValue(paramName, value);
+        String columnAccess;
+        if (safeColumn.equals("id")) {
+            columnAccess = "i.id::text";
+        } else {
+            params.addValue("sim_where_col", safeColumn);
+            columnAccess = "jsonb_extract_path_text(i.data, :sim_where_col)";
+        }
 
-        // Use jsonb_extract_path_text for safe parameterized JSONB access
-        params.addValue("sim_where_col", column);
-        return String.format("jsonb_extract_path_text(i.data, :sim_where_col) %s :%s", operator, paramName);
+        return switch (operator) {
+            case "IS NULL" -> columnAccess + " IS NULL";
+            case "IS NOT NULL" -> columnAccess + " IS NOT NULL";
+            case "IN" -> {
+                if (where.value() instanceof List<?> list) {
+                    if (list.isEmpty()) {
+                        throw new IllegalArgumentException("IN operator requires a non-empty list value");
+                    }
+                    List<String> stringList = list.stream().map(Object::toString).toList();
+                    params.addValue("sim_where_val", stringList);
+                    yield columnAccess + " IN (:sim_where_val)";
+                }
+                throw new IllegalArgumentException("IN operator requires a list value");
+            }
+            case "LIKE" -> {
+                sqlSanitizer.validateValueLength(where.value());
+                params.addValue("sim_where_val", where.value().toString());
+                yield columnAccess + " LIKE :sim_where_val";
+            }
+            default -> {
+                sqlSanitizer.validateValueLength(where.value());
+                params.addValue("sim_where_val", where.value().toString());
+                yield columnAccess + " " + operator + " :sim_where_val";
+            }
+        };
     }
 
     /**

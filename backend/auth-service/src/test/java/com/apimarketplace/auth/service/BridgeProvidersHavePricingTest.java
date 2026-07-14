@@ -74,7 +74,8 @@ class BridgeProvidersHavePricingTest {
      */
     private static final List<String> SEED_MIGRATION_RELS = List.of(
             "migration-service/src/main/resources/db/migration/V128__bridge_catalog_allowlist_v1.sql",
-            "migration-service/src/main/resources/db/migration/V378__bridge_catalog_sync_fable_5.sql");
+            "migration-service/src/main/resources/db/migration/V378__bridge_catalog_sync_fable_5.sql",
+            "migration-service/src/main/resources/db/migration/V399__bridge_catalog_sync_gpt56_tiers.sql");
 
     @Test
     @DisplayName("application.yml bridge models == BridgeAllowlist MODELS")

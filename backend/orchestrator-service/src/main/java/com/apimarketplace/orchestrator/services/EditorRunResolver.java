@@ -63,6 +63,18 @@ public class EditorRunResolver {
     private final WorkflowExecutionService executionService;
     private final WorkflowRunRepository runRepository;
 
+    /**
+     * Optional: mock-mode gate cache, invalidated when {@code __mockMode__} is
+     * reconciled on a reused run so the next node execution sees the fresh flag
+     * without waiting out the gate's TTL. Null in unit tests.
+     */
+    private com.apimarketplace.orchestrator.execution.v2.engine.MockRunGate mockRunGate;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setMockRunGate(com.apimarketplace.orchestrator.execution.v2.engine.MockRunGate mockRunGate) {
+        this.mockRunGate = mockRunGate;
+    }
+
     public EditorRunResolver(WorkflowPlanVersionService versionService,
                              WorkflowExecutionService executionService,
                              WorkflowRunRepository runRepository) {
@@ -96,7 +108,22 @@ public class EditorRunResolver {
     public Resolution findOrCreateRun(WorkflowEntity workflow, WorkflowPlan plan,
                                       Map<String, Object> dataInputs, String tenantId,
                                       ExecutionMode requestedMode) {
+        return findOrCreateRun(workflow, plan, dataInputs, tenantId, requestedMode, null);
+    }
+
+    /**
+     * Overload with the run-level mock override ({@code mockMode}: null = default,
+     * "off" = ignore all mocks this run, "all_mcp" = catalog-example dry-run for
+     * every mcp catalog tool). The FIRE REQUEST decides: the flag is stamped on
+     * create AND reconciled on reuse, so a refire without the override removes it.
+     * Only editor paths reach this resolver - production runs never carry the flag.
+     */
+    @Transactional
+    public Resolution findOrCreateRun(WorkflowEntity workflow, WorkflowPlan plan,
+                                      Map<String, Object> dataInputs, String tenantId,
+                                      ExecutionMode requestedMode, String mockMode) {
         UUID workflowId = workflow.getId();
+        String normalizedMockMode = normalizeMockMode(mockMode);
 
         // Step 1: resolve plan version. Executions never mint version numbers:
         // canvas content matching the latest version is a read-only resolve; drifted
@@ -138,16 +165,20 @@ public class EditorRunResolver {
                 // Re-adopt as the current-canvas run: clear any replay flag left by a
                 // prior findOrCreateRunForVersion reuse, otherwise the passive-fire
                 // refresh in ReusableTriggerService would keep skipping workflow.plan
-                // propagation for this run forever.
-                Map<String, Object> existingMeta = existing.getMetadata();
-                if (existingMeta != null && existingMeta.get("__versionReplay__") != null) {
-                    Map<String, Object> cleared = new HashMap<>(existingMeta);
-                    cleared.remove("__versionReplay__");
-                    existing.setMetadata(cleared);
+                // propagation for this run forever. Also reconcile the mock override -
+                // the fire request decides, so a refire without it must REMOVE the flag.
+                Map<String, Object> existingMeta = existing.getMetadata() != null
+                        ? new HashMap<>(existing.getMetadata()) : new HashMap<>();
+                boolean metaChanged = existingMeta.remove("__versionReplay__") != null;
+                metaChanged |= reconcileMockMode(existingMeta, normalizedMockMode);
+                if (metaChanged) {
+                    existing.setMetadata(existingMeta);
                     runRepository.save(existing);
+                    invalidateMockGate(existing.getRunIdPublic());
                 }
-                log.info("[EditorRunResolver] Reusing existing run={} at planVersion={} (status={}, mode={}) for workflow={}",
-                        existing.getRunIdPublic(), planVersion, existing.getStatus(), requestedMode, workflowId);
+                log.info("[EditorRunResolver] Reusing existing run={} at planVersion={} (status={}, mode={}, mockMode={}) for workflow={}",
+                        existing.getRunIdPublic(), planVersion, existing.getStatus(), requestedMode,
+                        normalizedMockMode, workflowId);
                 return new Resolution(existing, null, planVersion, true);
             }
         }
@@ -163,13 +194,66 @@ public class EditorRunResolver {
         Map<String, Object> metadata = runEntity.getMetadata() != null
                 ? new HashMap<>(runEntity.getMetadata()) : new HashMap<>();
         metadata.put("__editorRun__", true);
+        reconcileMockMode(metadata, normalizedMockMode);
         runEntity.setMetadata(metadata);
         runRepository.save(runEntity);
+        invalidateMockGate(runId);
 
-        log.info("[EditorRunResolver] Created new run={} at planVersion={} for workflow={} (__editorRun__=true)",
-                runId, planVersion, workflowId);
+        log.info("[EditorRunResolver] Created new run={} at planVersion={} for workflow={} (__editorRun__=true, mockMode={})",
+                runId, planVersion, workflowId, normalizedMockMode);
 
         return new Resolution(runEntity, execution, planVersion, false);
+    }
+
+    // ===== Mock-mode reconciliation =====
+
+    /**
+     * Normalizes the requested run-level mock override. Null / blank / "default"
+     * mean "no override" (the metadata key is absent and enabled node mocks apply).
+     *
+     * @throws IllegalArgumentException on an unknown value (clear failure at fire
+     *         time instead of a silently-real run the caller believed was mocked)
+     */
+    private static String normalizeMockMode(String mockMode) {
+        if (mockMode == null || mockMode.isBlank()) {
+            return null;
+        }
+        String normalized = mockMode.trim().toLowerCase(java.util.Locale.ROOT);
+        if ("default".equals(normalized)) {
+            return null;
+        }
+        if (com.apimarketplace.orchestrator.execution.v2.engine.MockRunGate.MODE_OFF.equals(normalized)
+                || com.apimarketplace.orchestrator.execution.v2.engine.MockRunGate.MODE_ALL_MCP.equals(normalized)) {
+            return normalized;
+        }
+        throw new IllegalArgumentException(
+                "Invalid mockMode '" + mockMode + "'. Valid values: 'off' (ignore all mocks this run), "
+                        + "'all_mcp' (mock every API tool node with its catalog example), or omit for the "
+                        + "default (enabled node mocks apply).");
+    }
+
+    /**
+     * Reconciles {@code __mockMode__} on the run metadata to the requested state.
+     *
+     * @return true when the metadata map was changed
+     */
+    private static boolean reconcileMockMode(Map<String, Object> metadata, String normalizedMockMode) {
+        String key = com.apimarketplace.orchestrator.execution.v2.engine.MockRunGate.MOCK_MODE_METADATA_KEY;
+        Object current = metadata.get(key);
+        if (normalizedMockMode == null) {
+            return metadata.remove(key) != null;
+        }
+        if (normalizedMockMode.equals(current)) {
+            return false;
+        }
+        metadata.put(key, normalizedMockMode);
+        return true;
+    }
+
+    private void invalidateMockGate(String runId) {
+        if (mockRunGate != null) {
+            mockRunGate.invalidate(runId);
+        }
     }
 
     /**
@@ -195,9 +279,20 @@ public class EditorRunResolver {
     public Resolution findOrCreateRunForVersion(WorkflowEntity workflow, WorkflowPlan versionedPlan,
                                                  int planVersion, Map<String, Object> dataInputs,
                                                  String tenantId, ExecutionMode requestedMode) {
+        return findOrCreateRunForVersion(workflow, versionedPlan, planVersion, dataInputs,
+                tenantId, requestedMode, null);
+    }
+
+    /** Overload with the run-level mock override - same semantics as {@link #findOrCreateRun}. */
+    @Transactional
+    public Resolution findOrCreateRunForVersion(WorkflowEntity workflow, WorkflowPlan versionedPlan,
+                                                 int planVersion, Map<String, Object> dataInputs,
+                                                 String tenantId, ExecutionMode requestedMode,
+                                                 String mockMode) {
         UUID workflowId = workflow.getId();
-        log.info("[EditorRunResolver] findOrCreateRunForVersion workflow={} planVersion={} mode={}",
-                workflowId, planVersion, requestedMode);
+        String normalizedMockMode = normalizeMockMode(mockMode);
+        log.info("[EditorRunResolver] findOrCreateRunForVersion workflow={} planVersion={} mode={} mockMode={}",
+                workflowId, planVersion, requestedMode, normalizedMockMode);
 
         Optional<WorkflowRunEntity> reusable = runRepository
                 .findFirstByWorkflowIdAndPlanVersionAndExecutionModeAndStatusInOrderByStartedAtDesc(
@@ -226,11 +321,13 @@ public class EditorRunResolver {
                         ? new HashMap<>(existing.getMetadata()) : new HashMap<>();
                 metadata.put("__editorRun__", true);
                 metadata.put("__versionReplay__", planVersion);
+                reconcileMockMode(metadata, normalizedMockMode);
                 existing.setMetadata(metadata);
                 if (versionContent != null) {
                     existing.setPlan(new HashMap<>(versionContent));
                 }
                 runRepository.save(existing);
+                invalidateMockGate(existing.getRunIdPublic());
                 log.info("[EditorRunResolver] Reusing run={} at requested planVersion={} for workflow={} (plan re-frozen, __versionReplay__ stamped)",
                         existing.getRunIdPublic(), planVersion, workflowId);
                 return new Resolution(existing, null, planVersion, true);
@@ -249,8 +346,10 @@ public class EditorRunResolver {
                 ? new HashMap<>(runEntity.getMetadata()) : new HashMap<>();
         metadata.put("__editorRun__", true);
         metadata.put("__versionReplay__", planVersion);
+        reconcileMockMode(metadata, normalizedMockMode);
         runEntity.setMetadata(metadata);
         runRepository.save(runEntity);
+        invalidateMockGate(runId);
 
         log.info("[EditorRunResolver] Created run={} at replayed planVersion={} for workflow={}",
                 runId, planVersion, workflowId);

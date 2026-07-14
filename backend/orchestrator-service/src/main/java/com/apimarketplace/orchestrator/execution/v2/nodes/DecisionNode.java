@@ -275,6 +275,37 @@ public class DecisionNode extends BaseNode {
     }
 
     /**
+     * Inverse of {@link #getSelectedPort} for the mock mode: maps a port name
+     * ("if" / "elseif_N" / "else") back to {@code {selected_branch_index: N}} so a
+     * mocked decision routes through the exact same output contract as a real one.
+     * Unknown port (should not happen - validated at plan parse time) falls back to
+     * the default {@code selected_port} form, which this node ignores (no branch
+     * selected).
+     */
+    @Override
+    public Map<String, Object> portSelectionOutput(String port) {
+        int elsifCounter = 0;
+        for (int i = 0; i < branches.size(); i++) {
+            ConditionalBranch branch = branches.get(i);
+            String candidate = switch (branch.type()) {
+                case "if" -> "if";
+                case "else" -> "else";
+                case "elsif" -> "elseif_" + elsifCounter;
+                default -> branch.type();
+            };
+            if ("elsif".equals(branch.type())) {
+                elsifCounter++;
+            }
+            if (candidate.equals(port)) {
+                Map<String, Object> out = new HashMap<>();
+                out.put("selected_branch_index", i);
+                return out;
+            }
+        }
+        return super.portSelectionOutput(port);
+    }
+
+    /**
      * Maps a branch index to its port name.
      */
     private String getPortForBranchIndex(int targetIndex) {

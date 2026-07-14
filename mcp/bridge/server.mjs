@@ -20,6 +20,7 @@
 
 import express from 'express';
 import { spawn } from 'child_process';
+import { randomBytes } from 'crypto';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 import { createInterface } from 'readline';
@@ -43,6 +44,15 @@ import { internalSignedHeaders } from './lib/gatewayAuth.mjs';
 import { resolveInactivityMs } from './lib/inactivityResolver.mjs';
 import { createInactivityWatchdog } from './lib/inactivityWatchdog.mjs';
 import { detectAll, detectOne, invalidateCache, CLI_IDS } from './cli-detector.mjs';
+import { parseBridgeMeta } from './lib/toolContent.mjs';
+
+// Per-process secret that authenticates the trusted `__BRIDGE_META__` channel. Minted ONCE
+// at startup and handed to the agent-cli MCP subprocess via env, so only content this bridge
+// and its own MCP server emit carries the marker `\n__BRIDGE_META__:<nonce>:`. Untrusted tool
+// output (shell/read/fetch) cannot guess it and can no longer forge frontend metadata cards.
+if (!process.env.BRIDGE_META_NONCE) {
+  process.env.BRIDGE_META_NONCE = randomBytes(16).toString('hex');
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -186,7 +196,13 @@ function stripMcpPrefix(toolName) {
 
 /**
  * Extract tool result text content and embedded metadata.
- * agent-cli-server.mjs appends metadata as: \n__BRIDGE_META__:{json}
+ *
+ * agent-cli-server.mjs (this bridge's trusted MCP subprocess) appends metadata as
+ * `\n__BRIDGE_META__:<nonce>:{json}`, where <nonce> is the per-process BRIDGE_META_NONCE.
+ * Only that nonce-stamped marker is parsed, so untrusted tool output (shell/read/fetch)
+ * containing a bare or wrong-nonce `__BRIDGE_META__:` sentinel is left as plain text and
+ * can never forge trusted frontend cards. `lastIndexOf` matches the trusted append, which
+ * is always the final block.
  */
 function extractToolResultAndMetadata(rawContent) {
   let text = '';
@@ -200,19 +216,7 @@ function extractToolResultAndMetadata(rawContent) {
     text = String(rawContent);
   }
 
-  let metadata = null;
-  const metaIdx = text.indexOf('\n__BRIDGE_META__:');
-  if (metaIdx !== -1) {
-    const metaJson = text.substring(metaIdx + '\n__BRIDGE_META__:'.length).trim();
-    try {
-      metadata = JSON.parse(metaJson);
-    } catch (e) {
-      console.warn('[BRIDGE] Failed to parse tool metadata:', e.message);
-    }
-    text = text.substring(0, metaIdx);
-  }
-
-  return { content: text, metadata };
+  return parseBridgeMeta(text);
 }
 
 // ─── Express App ──────────────────────────────────────────────────────────
@@ -656,6 +660,10 @@ async function executeViaCli({ prompt, systemPrompt, model, maxTurns, spawnTimeo
     env: {
       AGENT_CLI_USER: tenantId,
       AGENT_CLI_URL: AGENT_CLI_URL,
+      // Trusted-metadata channel nonce (see BRIDGE_META_NONCE mint at startup): the MCP
+      // subprocess stamps it into every `__BRIDGE_META__` block so the bridge can tell
+      // genuine tool metadata from a forged sentinel in untrusted tool output.
+      BRIDGE_META_NONCE: process.env.BRIDGE_META_NONCE,
       CONVERSATION_ID: publisher.conversationId || '',
       CONVERSATION_SERVICE_URL: CONVERSATION_SERVICE_URL,
       STREAM_ID: publisher.streamId || '',
@@ -726,11 +734,14 @@ async function executeViaCli({ prompt, systemPrompt, model, maxTurns, spawnTimeo
   }
 
   // Build CLI args via adapter. Adapters always return `{ args, stdinPayload }`
-  // - `stdinPayload` is null for adapters that take the prompt via flags
-  // (claude `-p`) and a string for adapters that read from stdin via `-`
-  // (codex/gemini/mistral). The unified shape was introduced to fix a race
-  // where the previous `adapter._stdinPrompt` back-channel mutated a singleton
-  // adapter and corrupted concurrent runs.
+  // - `stdinPayload` is a string for EVERY adapter now: the prompt travels via
+  // stdin, never argv. codex/gemini/mistral read it via a `-` sentinel; claude
+  // via `-p` with no positional. Putting a large prompt in argv overflows the OS
+  // arg-size limit (Linux MAX_ARG_STRLEN ~128 KB) and spawn dies with E2BIG. Only
+  // a truly null payload (an adapter that genuinely needs no stdin) leaves stdin
+  // ignored. The unified shape was introduced to fix a race where the previous
+  // `adapter._stdinPrompt` back-channel mutated a singleton and corrupted
+  // concurrent runs.
   const { args: rawSpawnArgs, stdinPayload } = adapter.buildArgs({
     prompt: finalPrompt,
     systemPrompt,
@@ -821,7 +832,13 @@ async function executeViaCli({ prompt, systemPrompt, model, maxTurns, spawnTimeo
         console.log(`[BRIDGE] killing child (pid=${child.pid}) - reason=${label}`);
         child.kill('SIGTERM');
         setTimeout(() => {
-          try { if (!child.killed) child.kill('SIGKILL'); } catch { /* dead */ }
+          // `child.killed` only means "a signal was sent" (already true from the SIGTERM
+          // above), NOT "the process exited" - so it can never gate the escalation. Check
+          // whether the process is still running instead, so a child that ignores SIGTERM
+          // is actually force-killed.
+          try {
+            if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+          } catch { /* dead */ }
         }, SIGKILL_GRACE_MS);
       } catch { /* already dead */ }
     };

@@ -126,6 +126,55 @@ public final class ConceptsHelpProvider {
         return result;
     }
 
+    // ==================== MOCKING ====================
+
+    public static Map<String, Object> getMockingHelp() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("title", "Node Mocks - Pin a Node's Output Ahead of Time");
+        result.put("description",
+            "A mock pins a node's output: instead of really executing (no API call, no LLM call, no DB write, "
+                + "no approval wait), the node returns exactly what you configured. Mocks apply per node - "
+                + "mock ONE node while every other node runs for real (hybrid runs). They apply to editor runs "
+                + "only: pinned production fires ALWAYS execute for real, so mocks can safely stay on a workflow.");
+
+        result.put("SET_AND_CLEAR", Map.of(
+            "static_output", "workflow(action='modify', node='Fetch Tweets', mock={output: {tweets: [{id: 1, text: 'hi'}], count: 1}}) - the node returns this object verbatim as its output.",
+            "catalog_example", "workflow(action='modify', node='Fetch Tweets', mock={source: 'catalog_example'}) - mcp catalog-tool nodes only: serves the tool's default example response projected to its output schema. No credentials needed, always up to date, nothing to paste.",
+            "branch_selection", "workflow(action='modify', node='Check Status', mock={port: 'if'}) - decision/switch/option/approval cores and classify agents take a port instead of (or combined with) an output. Ports: decision if/elseif_N/else, switch case_N/default, option choice_N, approval approved/rejected/timeout, classify category_N.",
+            "simulated_failure", "workflow(action='modify', node='Send Email', mock={error: {message: 'Rate limit exceeded', output: {error_code: 429}}}) - marks the node FAILED to exercise error branches, retry policies and continueOnFailure paths.",
+            "park", "Add enabled=false inside the mock to PARK it (kept but not applied) without deleting it.",
+            "clear", "workflow(action='modify', node='Fetch Tweets', mock={}) - removes the mock; the node executes for real again.",
+            "inspect", "workflow(action='describe', node='...') shows the node's current mock block."));
+
+        result.put("PROPOSED_OUTPUT", Map.of(
+            "what", "workflow(action='mock_suggest', node='Fetch Tweets') returns a ready-to-edit suggested_output for ANY node: the projected catalog example for mcp catalog tools, a schema-synthesized skeleton (right keys, placeholder values) for every other node type.",
+            "flow", "mock_suggest -> edit the suggested_output freely -> workflow(action='modify', node=..., mock={output: <edited>}). You are never constrained by the proposal - include exactly the fields downstream templates reference.",
+            "seed_from_real_run", "After a real run, workflow(action='get_node_output', ...) gives you the node's actual output - paste (a trimmed copy of) it into mock={output: ...}. Trim large outputs to the fields downstream nodes actually use; for mcp nodes prefer source='catalog_example' over pasting large payloads."));
+
+        result.put("RUN_AND_VERIFY", Map.of(
+            "default", "workflow(action='execute', id='...') - every node carrying an ENABLED mock returns it; all other nodes execute for real. The report then contains mock_mode + mocked_nodes.",
+            "run_all_real_once", "workflow(action='execute', id='...', mock_mode='off') - ignores ALL mocks for this run without touching their config.",
+            "full_dry_run", "workflow(action='execute', id='...', mock_mode='all_mcp') - configured mocks PLUS every mcp catalog-tool node without one serves its catalog example. Runs a whole workflow with zero credentials and zero external calls.",
+            "verify", "workflow(action='get_node_output', run_id=..., epoch=..., node_id=...) shows mocked=true and mock_source on rows whose output is a configured mock - that is how you tell mocked data from real data."));
+
+        result.put("RULES", Map.of(
+            "granular", "Per node. Nodes without an enabled mock ALWAYS execute for real in default mode.",
+            "not_on", "Triggers and notes (fake a trigger payload with data_inputs on execute instead), and split/merge/aggregate/loop/fork cores (mock the node that FEEDS the split - its items list - and the split fans out over the mocked items for real).",
+            "production_safe", "execute with version='pinned' refuses mock_mode, and production trigger fires never apply mocks - a published workflow carrying mock blocks runs them as inert data.",
+            "shape", "The output is persisted through the node's NORMAL output-schema mapping, so match the node's output schema: fields the schema does not declare are silently dropped. Code nodes are the main trap - wrap custom fields under result (mock={output: {success: true, result: {your: 'fields'}}}) and read them downstream as {{core:<label>.output.result.your}}. mock_suggest returns the right skeleton per node; validate reports mock shape problems.",
+            "no_side_effects", "A mocked table CRUD node writes nothing, a mocked agent calls no LLM, a mocked approval never waits (it completes immediately on the chosen port)."));
+
+        result.put("TYPICAL_FLOW", List.of(
+            "1. Build the workflow (webhook -> gmail list -> decision -> send email).",
+            "2. workflow(action='modify', node='Gmail List', mock={source: 'catalog_example'}) - no Gmail credentials needed.",
+            "3. workflow(action='modify', node='Check Urgent', mock={port: 'if'}) - force the branch you want to test.",
+            "4. workflow(action='execute', id='...') then ONE wait_run - the report lists mocked_nodes.",
+            "5. workflow(action='get_node_output', ...) on the downstream node - verify it consumed the mocked values.",
+            "6. Leave the mocks in place: production fires ignore them, and the next editor run keeps benefiting."));
+
+        return result;
+    }
+
     // ==================== VARIABLES ====================
 
     public static Map<String, Object> getVariablesHelp() {

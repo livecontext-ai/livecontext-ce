@@ -55,8 +55,11 @@ class InterfaceScreenshotServiceImplTest {
     @Mock private FileStorageService fileStorageService;
     @Mock private WorkflowRunRepository workflowRunRepository;
     @Mock private RestTemplate restTemplate;
+    @Mock private RestTemplate videoRestTemplate;
 
     private ObjectMapper objectMapper;
+
+    private static final long DEFAULT_VIDEO_MAX_BYTES = 52_428_800L;
 
     @BeforeEach
     void setUp() {
@@ -64,13 +67,17 @@ class InterfaceScreenshotServiceImplTest {
     }
 
     private InterfaceScreenshotServiceImpl newService(String rendererUrl) {
+        return newService(rendererUrl, DEFAULT_VIDEO_MAX_BYTES);
+    }
+
+    private InterfaceScreenshotServiceImpl newService(String rendererUrl, long videoMaxBytes) {
         // Pass an unbounded InMemorySemaphore so tests that don't exercise backpressure
         // can ignore the cap. The Backpressure nested class uses an explicit semaphore.
         return new InterfaceScreenshotServiceImpl(
             renderService, fileStorageService, workflowRunRepository,
-            restTemplate, objectMapper, rendererUrl,
+            restTemplate, videoRestTemplate, objectMapper, rendererUrl,
             new com.apimarketplace.common.scaling.lock.InMemorySemaphore(),
-            Integer.MAX_VALUE);
+            Integer.MAX_VALUE, Integer.MAX_VALUE, videoMaxBytes);
     }
 
     private ResolvedTemplateSnapshot sampleSnapshot() {
@@ -98,7 +105,7 @@ class InterfaceScreenshotServiceImplTest {
                 .toList();
 
         assertEquals(1, autowiredConstructors.size());
-        assertEquals(8, autowiredConstructors.get(0).getParameterCount());
+        assertEquals(11, autowiredConstructors.get(0).getParameterCount());
     }
 
     @Nested
@@ -375,6 +382,264 @@ class InterfaceScreenshotServiceImplTest {
     }
 
     @Nested
+    @DisplayName("Video render (captureVideo)")
+    class VideoRender {
+
+        @Test
+        @DisplayName("Successful recording → uploads <label>_video_epoch_N_spawn_M.mp4 with mime video/mp4 and sourceType INTERFACE_VIDEO, via the LONG-TIMEOUT RestTemplate")
+        void successfulVideoUploadsWithVideoNameMimeAndSourceType() {
+            byte[] mp4 = "fake-mp4-bytes".getBytes();
+            FileRef uploaded = FileRef.of("k", "n.mp4", "video/mp4", mp4.length);
+
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+                .thenReturn(Optional.of(sampleSnapshot()));
+            when(videoRestTemplate.exchange(anyString(), eq(HttpMethod.POST), any(), eq(byte[].class)))
+                .thenReturn(new ResponseEntity<>(mp4, HttpStatus.OK));
+            stubWorkflowLookup();
+
+            ArgumentCaptor<String> fileNameCaptor = ArgumentCaptor.forClass(String.class);
+            ArgumentCaptor<String> sourceTypeCaptor = ArgumentCaptor.forClass(String.class);
+            when(fileStorageService.upload(eq(TENANT), anyString(), eq(RUN_ID), eq(NODE_ID),
+                fileNameCaptor.capture(), eq("video/mp4"), any(InputStream.class), eq((long) mp4.length),
+                anyInt(), anyInt(), nullable(Integer.class), sourceTypeCaptor.capture()))
+                .thenReturn(uploaded);
+
+            Optional<FileRef> result = newService(RENDERER_URL)
+                .captureVideo(TENANT, RUN_ID, /* epoch */ 2, /* spawn */ 3, /* itemIndex */ 4,
+                    NODE_ID, INTERFACE_UUID, "vertical", 30, null, null);
+
+            assertTrue(result.isPresent());
+            assertEquals(uploaded, result.get());
+            assertEquals("my_form_video_epoch_2_spawn_3.mp4", fileNameCaptor.getValue(),
+                "video filename must carry the _video_ segment + epoch + spawn and a .mp4 extension");
+            assertEquals(
+                com.apimarketplace.common.storage.service.StorageSourceTypes.INTERFACE_VIDEO,
+                sourceTypeCaptor.getValue(),
+                "interface videos are tagged sourceType=INTERFACE_VIDEO");
+            // The recording outlives the default 30s read timeout - it MUST go through the
+            // dedicated long-timeout template, never the shared one.
+            verifyNoInteractions(restTemplate);
+        }
+
+        @Test
+        @DisplayName("Request targets /internal/render/video and forwards preset + mp4 format + maxDurationMs + waitForDone")
+        @SuppressWarnings("unchecked")
+        void requestTargetsVideoEndpointWithPresetAndDuration() {
+            byte[] mp4 = "mp4".getBytes();
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+                .thenReturn(Optional.of(sampleSnapshot()));
+            ArgumentCaptor<String> urlCaptor = ArgumentCaptor.forClass(String.class);
+            ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor = ArgumentCaptor.forClass(HttpEntity.class);
+            when(videoRestTemplate.exchange(urlCaptor.capture(), eq(HttpMethod.POST), bodyCaptor.capture(), eq(byte[].class)))
+                .thenReturn(new ResponseEntity<>(mp4, HttpStatus.OK));
+            stubWorkflowLookup();
+            when(fileStorageService.upload(any(), anyString(), any(), any(), anyString(), anyString(),
+                any(InputStream.class), anyLong(), anyInt(), anyInt(), nullable(Integer.class), anyString()))
+                .thenReturn(FileRef.of("p", "f.mp4", "video/mp4", mp4.length));
+
+            newService(RENDERER_URL)
+                .captureVideo(TENANT, RUN_ID, EPOCH, 0, null, NODE_ID, INTERFACE_UUID, "Square", 45, null, null);
+
+            assertTrue(urlCaptor.getValue().endsWith("/internal/render/video"),
+                "video render must hit the /internal/render/video endpoint, got: " + urlCaptor.getValue());
+            Map<String, Object> sent = bodyCaptor.getValue().getBody();
+            assertEquals("square", sent.get("preset"), "preset is lowercased before hitting the sidecar");
+            assertEquals("mp4", sent.get("format"));
+            assertEquals(45_000, sent.get("maxDurationMs"));
+            assertEquals(Boolean.TRUE, sent.get("waitForDone"),
+                "the page must be able to end its own clip via window.__DONE__");
+        }
+
+        @Test
+        @DisplayName("Null preset/duration default to vertical + 30s; out-of-range durations are clamped to 5-120s")
+        @SuppressWarnings("unchecked")
+        void presetAndDurationDefaultsAndClamps() {
+            byte[] mp4 = "mp4".getBytes();
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+                .thenReturn(Optional.of(sampleSnapshot()));
+            ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor = ArgumentCaptor.forClass(HttpEntity.class);
+            when(videoRestTemplate.exchange(anyString(), eq(HttpMethod.POST), bodyCaptor.capture(), eq(byte[].class)))
+                .thenReturn(new ResponseEntity<>(mp4, HttpStatus.OK));
+            stubWorkflowLookup();
+            when(fileStorageService.upload(any(), anyString(), any(), any(), anyString(), anyString(),
+                any(InputStream.class), anyLong(), anyInt(), anyInt(), nullable(Integer.class), anyString()))
+                .thenReturn(FileRef.of("p", "f.mp4", "video/mp4", mp4.length));
+
+            InterfaceScreenshotServiceImpl service = newService(RENDERER_URL);
+
+            service.captureVideo(TENANT, RUN_ID, EPOCH, 0, null, NODE_ID, INTERFACE_UUID, null, null, null, null);
+            Map<String, Object> defaults = bodyCaptor.getValue().getBody();
+            assertEquals("vertical", defaults.get("preset"));
+            assertEquals(30_000, defaults.get("maxDurationMs"));
+
+            service.captureVideo(TENANT, RUN_ID, EPOCH, 0, null, NODE_ID, INTERFACE_UUID, "vertical", 999, null, null);
+            assertEquals(120_000, bodyCaptor.getValue().getBody().get("maxDurationMs"),
+                "durations above 120s must clamp to the renderer's hard maximum");
+
+            service.captureVideo(TENANT, RUN_ID, EPOCH, 0, null, NODE_ID, INTERFACE_UUID, "vertical", 2, null, null);
+            assertEquals(5_000, bodyCaptor.getValue().getBody().get("maxDurationMs"),
+                "durations below 5s clamp up to the minimum useful clip length");
+        }
+
+        @Test
+        @DisplayName("Oversized recording (> videoMaxBytes) → empty, no upload (storage guard)")
+        void oversizedVideoSkipsUpload() {
+            byte[] big = new byte[64];
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+                .thenReturn(Optional.of(sampleSnapshot()));
+            when(videoRestTemplate.exchange(anyString(), eq(HttpMethod.POST), any(), eq(byte[].class)))
+                .thenReturn(new ResponseEntity<>(big, HttpStatus.OK));
+
+            // Cap below the returned payload: the upload must be skipped, best-effort style.
+            Optional<FileRef> result = newService(RENDERER_URL, /* videoMaxBytes */ 32L)
+                .captureVideo(TENANT, RUN_ID, EPOCH, 0, null, NODE_ID, INTERFACE_UUID, "vertical", 30, null, null);
+
+            assertTrue(result.isEmpty());
+            verifyNoInteractions(fileStorageService);
+        }
+
+        @Test
+        @DisplayName("Sidecar failure → RestClientException swallowed, empty result (best-effort)")
+        void sidecarErrorIsSwallowedForVideo() {
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+                .thenReturn(Optional.of(sampleSnapshot()));
+            when(videoRestTemplate.exchange(anyString(), eq(HttpMethod.POST), any(), eq(byte[].class)))
+                .thenThrow(new RestClientException("recording timed out"));
+
+            Optional<FileRef> result = newService(RENDERER_URL)
+                .captureVideo(TENANT, RUN_ID, EPOCH, 0, null, NODE_ID, INTERFACE_UUID, "vertical", 30, null, null);
+
+            assertTrue(result.isEmpty());
+            verifyNoInteractions(fileStorageService);
+        }
+
+        @Test
+        @DisplayName("Blank renderer URL → empty, no render/HTTP/upload (best-effort skip)")
+        void blankUrlSkipsVideo() {
+            Optional<FileRef> result = newService("")
+                .captureVideo(TENANT, RUN_ID, EPOCH, 0, null, NODE_ID, INTERFACE_UUID, "vertical", 30, null, null);
+            assertTrue(result.isEmpty());
+            verifyNoInteractions(renderService, restTemplate, videoRestTemplate, fileStorageService, workflowRunRepository);
+        }
+
+        @Test
+        @DisplayName("Video renders draw permits from the SEPARATE video:sidecar pool with their own cap")
+        void videoUsesDedicatedSemaphorePool() {
+            com.apimarketplace.common.scaling.lock.DistributedSemaphore sem =
+                mock(com.apimarketplace.common.scaling.lock.DistributedSemaphore.class);
+            when(sem.tryAcquire(eq("video:sidecar"), eq(2), anyString())).thenReturn(false);
+            InterfaceScreenshotServiceImpl service = new InterfaceScreenshotServiceImpl(
+                renderService, fileStorageService, workflowRunRepository,
+                restTemplate, videoRestTemplate, objectMapper, RENDERER_URL, sem,
+                /* maxConcurrent */ 4, /* videoMaxConcurrent */ 2, DEFAULT_VIDEO_MAX_BYTES);
+
+            Optional<FileRef> result = service
+                .captureVideo(TENANT, RUN_ID, EPOCH, 0, null, NODE_ID, INTERFACE_UUID, "vertical", 30, null, null);
+
+            assertTrue(result.isEmpty(), "at video capacity the render is skipped silently");
+            verify(sem).tryAcquire(eq("video:sidecar"), eq(2), anyString());
+            verify(sem, never()).tryAcquire(eq("screenshot:sidecar"), anyInt(), anyString());
+            verifyNoInteractions(renderService, videoRestTemplate, fileStorageService);
+        }
+
+        @Test
+        @DisplayName("Unknown preset from a hand-written/imported plan falls back to vertical in the sidecar body (never forwarded raw)")
+        @SuppressWarnings("unchecked")
+        void unknownPresetFallsBackToVertical() {
+            // The agent path normalises via InterfaceNodeConfig, but WorkflowPlanParser keeps the
+            // raw plan string - the service is the last line of defence. Forwarding 'cinema'
+            // would 400 at the sidecar and silently drop the output.
+            byte[] mp4 = "mp4".getBytes();
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+                .thenReturn(Optional.of(sampleSnapshot()));
+            ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor = ArgumentCaptor.forClass(HttpEntity.class);
+            when(videoRestTemplate.exchange(anyString(), eq(HttpMethod.POST), bodyCaptor.capture(), eq(byte[].class)))
+                .thenReturn(new ResponseEntity<>(mp4, HttpStatus.OK));
+            stubWorkflowLookup();
+            when(fileStorageService.upload(any(), anyString(), any(), any(), anyString(), anyString(),
+                any(InputStream.class), anyLong(), anyInt(), anyInt(), nullable(Integer.class), anyString()))
+                .thenReturn(FileRef.of("p", "f.mp4", "video/mp4", mp4.length));
+
+            newService(RENDERER_URL)
+                .captureVideo(TENANT, RUN_ID, EPOCH, 0, null, NODE_ID, INTERFACE_UUID, "cinema", 30, null, null);
+
+            assertEquals("vertical", bodyCaptor.getValue().getBody().get("preset"),
+                "unknown presets must fall back to vertical, honouring the documented contract");
+        }
+
+        @Test
+        @DisplayName("Sidecar body carries mode=smooth + fps=30 by default; explicit live/60 forwarded; clamps applied")
+        @SuppressWarnings("unchecked")
+        void modeAndFpsDefaultsAndForwarding() {
+            byte[] mp4 = "mp4".getBytes();
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+                .thenReturn(Optional.of(sampleSnapshot()));
+            ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor = ArgumentCaptor.forClass(HttpEntity.class);
+            when(videoRestTemplate.exchange(anyString(), eq(HttpMethod.POST), bodyCaptor.capture(), eq(byte[].class)))
+                .thenReturn(new ResponseEntity<>(mp4, HttpStatus.OK));
+            stubWorkflowLookup();
+            when(fileStorageService.upload(any(), anyString(), any(), any(), anyString(), anyString(),
+                any(InputStream.class), anyLong(), anyInt(), anyInt(), nullable(Integer.class), anyString()))
+                .thenReturn(FileRef.of("p", "f.mp4", "video/mp4", mp4.length));
+
+            InterfaceScreenshotServiceImpl service = newService(RENDERER_URL);
+
+            // Defaults: null mode/fps → the fluid offline renderer at 30fps.
+            service.captureVideo(TENANT, RUN_ID, EPOCH, 0, null, NODE_ID, INTERFACE_UUID, "vertical", 30, null, null);
+            Map<String, Object> defaults = bodyCaptor.getValue().getBody();
+            assertEquals("smooth", defaults.get("mode"), "smooth is the default render mode");
+            assertEquals(30, defaults.get("fps"));
+
+            // Explicit live + 60fps forwarded (mode lowercased).
+            service.captureVideo(TENANT, RUN_ID, EPOCH, 0, null, NODE_ID, INTERFACE_UUID, "vertical", 30, "LIVE", 60);
+            Map<String, Object> explicit = bodyCaptor.getValue().getBody();
+            assertEquals("live", explicit.get("mode"), "mode is lowercased before hitting the sidecar");
+            assertEquals(60, explicit.get("fps"));
+
+            // Unknown mode falls back to smooth; out-of-range fps clamps to 60.
+            service.captureVideo(TENANT, RUN_ID, EPOCH, 0, null, NODE_ID, INTERFACE_UUID, "vertical", 30, "turbo", 240);
+            Map<String, Object> clamped = bodyCaptor.getValue().getBody();
+            assertEquals("smooth", clamped.get("mode"));
+            assertEquals(60, clamped.get("fps"), "fps above 60 clamps to the maximum");
+        }
+
+        @Test
+        @DisplayName("normalizeVideoModeOrDefault + clampVideoFps: bounds and fallbacks")
+        void modeAndFpsHelperBounds() {
+            assertEquals("smooth", InterfaceScreenshotServiceImpl.normalizeVideoModeOrDefault(null));
+            assertEquals("smooth", InterfaceScreenshotServiceImpl.normalizeVideoModeOrDefault("  "));
+            assertEquals("smooth", InterfaceScreenshotServiceImpl.normalizeVideoModeOrDefault("turbo"));
+            assertEquals("live", InterfaceScreenshotServiceImpl.normalizeVideoModeOrDefault("Live "));
+            assertEquals(30, InterfaceScreenshotServiceImpl.clampVideoFps(null));
+            assertEquals(30, InterfaceScreenshotServiceImpl.clampVideoFps(0));
+            assertEquals(10, InterfaceScreenshotServiceImpl.clampVideoFps(5));
+            assertEquals(60, InterfaceScreenshotServiceImpl.clampVideoFps(120));
+            assertEquals(24, InterfaceScreenshotServiceImpl.clampVideoFps(24));
+        }
+
+        @Test
+        @DisplayName("normalizeVideoPresetOrDefault: supported presets normalised, unknown/blank/null → vertical")
+        void normalizeVideoPresetOrDefaultBounds() {
+            assertEquals("vertical", InterfaceScreenshotServiceImpl.normalizeVideoPresetOrDefault(null));
+            assertEquals("vertical", InterfaceScreenshotServiceImpl.normalizeVideoPresetOrDefault("  "));
+            assertEquals("vertical", InterfaceScreenshotServiceImpl.normalizeVideoPresetOrDefault("cinema"));
+            assertEquals("horizontal", InterfaceScreenshotServiceImpl.normalizeVideoPresetOrDefault("Horizontal"));
+            assertEquals("square", InterfaceScreenshotServiceImpl.normalizeVideoPresetOrDefault("SQUARE "));
+        }
+
+        @Test
+        @DisplayName("clampVideoDurationSeconds: null/non-positive → default 30; bounds enforced")
+        void clampVideoDurationSecondsBounds() {
+            assertEquals(30, InterfaceScreenshotServiceImpl.clampVideoDurationSeconds(null));
+            assertEquals(30, InterfaceScreenshotServiceImpl.clampVideoDurationSeconds(0));
+            assertEquals(30, InterfaceScreenshotServiceImpl.clampVideoDurationSeconds(-10));
+            assertEquals(5, InterfaceScreenshotServiceImpl.clampVideoDurationSeconds(1));
+            assertEquals(60, InterfaceScreenshotServiceImpl.clampVideoDurationSeconds(60));
+            assertEquals(120, InterfaceScreenshotServiceImpl.clampVideoDurationSeconds(500));
+        }
+    }
+
+    @Nested
     @DisplayName("isCompleteHtml helper")
     class IsCompleteHtml {
 
@@ -483,7 +748,8 @@ class InterfaceScreenshotServiceImplTest {
             com.apimarketplace.common.scaling.lock.DistributedSemaphore sem, int max) {
             return new InterfaceScreenshotServiceImpl(
                 renderService, fileStorageService, workflowRunRepository,
-                restTemplate, objectMapper, RENDERER_URL, sem, max);
+                restTemplate, videoRestTemplate, objectMapper, RENDERER_URL, sem, max,
+                /* videoMaxConcurrent */ 2, DEFAULT_VIDEO_MAX_BYTES);
         }
 
         @Test
@@ -547,7 +813,7 @@ class InterfaceScreenshotServiceImplTest {
                 mock(com.apimarketplace.common.scaling.lock.DistributedSemaphore.class);
             InterfaceScreenshotServiceImpl service = new InterfaceScreenshotServiceImpl(
                 renderService, fileStorageService, workflowRunRepository,
-                restTemplate, objectMapper, "", sem, 4);
+                restTemplate, videoRestTemplate, objectMapper, "", sem, 4, 2, DEFAULT_VIDEO_MAX_BYTES);
 
             Optional<FileRef> result = service.capture(TENANT, RUN_ID, EPOCH, NODE_ID, INTERFACE_UUID);
 

@@ -10,19 +10,27 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.DeleteObjectsRequest;
+import software.amazon.awssdk.services.s3.model.DeleteObjectsResponse;
+import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
+import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.S3Object;
 
 import java.io.ByteArrayInputStream;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -147,6 +155,52 @@ class S3FileStorageServiceIndexingTest {
         verify(storageIndexService).saveS3FileIndex(
                 eq("t"), isNull(), isNull(), isNull(),
                 eq("k"), eq("f.png"), eq("image/png"), eq(1L), eq(0));
+    }
+
+    @Test
+    @DisplayName("deleteRunFiles follows the continuation token so a run with >1000 files is fully deleted (not just the first 1000)")
+    void deleteRunFilesPaginatesBeyondFirstPage() {
+        S3FileStorageService svc = new S3FileStorageService();
+        ReflectionTestUtils.setField(svc, "s3Client", s3Client);
+        ReflectionTestUtils.setField(svc, "bucket", "test-bucket");
+
+        // Page 1 is truncated (simulating the 1000-key cap) and hands back a continuation token;
+        // page 2 is the tail. Pre-fix, only page 1 was deleted and the tail was orphaned forever.
+        ListObjectsV2Response page1 = ListObjectsV2Response.builder()
+                .contents(S3Object.builder().key("t/w/r/a").build(),
+                          S3Object.builder().key("t/w/r/b").build())
+                .isTruncated(true).nextContinuationToken("TOKEN-2").build();
+        ListObjectsV2Response page2 = ListObjectsV2Response.builder()
+                .contents(S3Object.builder().key("t/w/r/c").build())
+                .isTruncated(false).build();
+        when(s3Client.listObjectsV2(any(ListObjectsV2Request.class)))
+                .thenReturn(page1).thenReturn(page2);
+        when(s3Client.deleteObjects(any(DeleteObjectsRequest.class)))
+                .thenReturn(DeleteObjectsResponse.builder().build());
+
+        int deleted = svc.deleteRunFiles("t", "w", "r");
+
+        assertThat(deleted).isEqualTo(3); // both pages counted, not just the first 2
+        ArgumentCaptor<ListObjectsV2Request> listCap = ArgumentCaptor.forClass(ListObjectsV2Request.class);
+        verify(s3Client, times(2)).listObjectsV2(listCap.capture());
+        assertThat(listCap.getAllValues().get(0).continuationToken()).isNull();
+        assertThat(listCap.getAllValues().get(1).continuationToken()).isEqualTo("TOKEN-2");
+        verify(s3Client, times(2)).deleteObjects(any(DeleteObjectsRequest.class));
+    }
+
+    @Test
+    @DisplayName("deleteRunFiles with no matching objects returns 0 and issues no delete")
+    void deleteRunFilesEmptyReturnsZero() {
+        S3FileStorageService svc = new S3FileStorageService();
+        ReflectionTestUtils.setField(svc, "s3Client", s3Client);
+        ReflectionTestUtils.setField(svc, "bucket", "test-bucket");
+        when(s3Client.listObjectsV2(any(ListObjectsV2Request.class)))
+                .thenReturn(ListObjectsV2Response.builder().isTruncated(false).build());
+
+        int deleted = svc.deleteRunFiles("t", "w", "r");
+
+        assertThat(deleted).isZero();
+        verify(s3Client, never()).deleteObjects(any(DeleteObjectsRequest.class));
     }
 
     @Test

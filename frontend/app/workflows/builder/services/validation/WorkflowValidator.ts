@@ -79,6 +79,7 @@ export class WorkflowValidator {
           td?.credentialSource,
           td?.platformCredentialId,
           (data as any)?.smtpCredentialId,
+          (data as any)?.imapCredentialId,
           (data as any)?.sshCredentialId,
           (data as any)?.sftpCredentialId,
           (data as any)?.dbCredentialId,

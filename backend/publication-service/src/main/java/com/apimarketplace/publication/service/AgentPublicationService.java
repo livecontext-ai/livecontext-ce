@@ -57,6 +57,23 @@ public class AgentPublicationService {
     private static final Logger logger = LoggerFactory.getLogger(AgentPublicationService.class);
     private static final int MAX_AGENT_DEPTH = 15;
 
+    /** The 5 internal resource families carrying a {@code <family>Grant} in toolsConfig. */
+    private static final List<String> GRANT_FAMILIES =
+            List.of("workflows", "tables", "interfaces", "agents", "applications");
+
+    /**
+     * Snapshot size guards. A publication embeds an explicit resource selection;
+     * these caps turn a runaway selection (huge tables, dozens of heavy resources)
+     * into an explicit 422 with a per-resource breakdown instead of an unbounded
+     * JSONB row + OOM-prone build. Field defaults apply to plain unit-test
+     * constructions; Spring overrides from properties.
+     */
+    @org.springframework.beans.factory.annotation.Value("${publication.agent-snapshot.max-bytes:15728640}")
+    long agentSnapshotMaxBytes = 15L * 1024 * 1024;
+
+    @org.springframework.beans.factory.annotation.Value("${publication.agent-snapshot.max-table-rows:5000}")
+    int agentSnapshotMaxTableRows = 5000;
+
     private final WorkflowPublicationRepository publicationRepository;
     private final PublicationReceiptRepository receiptRepository;
     private final AgentClient agentClient;
@@ -70,6 +87,15 @@ public class AgentPublicationService {
     private final EntitlementGuard entitlementGuard;
     private final DataSourceFileCloneService fileCloneService;
     private final LandingInterfaceSnapshotter landingInterfaceSnapshotter;
+
+    /**
+     * Acquire-time avatar file copy (snapshot autonomy: the acquired agent must not
+     * depend on the publisher's storage). Field-injected to spare the ~30 test
+     * constructions of this service; null (unit tests) falls back to the plain
+     * publishable pass-through.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    AvatarFileCloneService avatarFileCloneService;
     private final AuthClient authClient;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -154,11 +180,9 @@ public class AgentPublicationService {
             throw new IllegalArgumentException("Invalid agentConfigId format: " + agentConfigIdStr);
         }
 
-        // Landing interface: mandatory for agent publications (marketplace presentation page).
+        // Landing interface: optional presentation page. When absent, the marketplace
+        // renders the agent's identity hero (avatar + gradient) instead.
         UUID landingInterfaceId = landingInterfaceSnapshotter.parseInterfaceId(request.get("interfaceId"));
-        if (landingInterfaceId == null) {
-            throw new IllegalArgumentException("interfaceId is required to publish an AGENT (landing page)");
-        }
 
         // Validate agent exists and belongs to tenant
         AgentDto agent = agentClient.getAgent(agentConfigId, tenantId, organizationId);
@@ -168,6 +192,22 @@ public class AgentPublicationService {
         String orgId = TenantResolver.currentRequestOrganizationId();
         if (!ScopeGuard.isInStrictScope(tenantId, orgId, agent.getTenantId(), agent.getOrganizationId())) {
             throw new IllegalArgumentException("Agent does not belong to tenant");
+        }
+
+        // A publication ships an EXPLICIT resource selection. A per-family grant of
+        // "all" (on the agent or any sub-agent of its closure) would embed every
+        // resource of the publisher's account - unbounded snapshot + wholesale data
+        // export - so it is refused up-front with the FULL violation list (all agents,
+        // all families, in one pass) so the publisher fixes everything in one go.
+        // The source agent keeps its "all" locally; only the published copy needs an
+        // explicit selection. Acquirer-side access is theirs to widen after install.
+        List<Map<String, Object>> violations = collectAllGrantViolations(agent, tenantId, organizationId);
+        if (!violations.isEmpty()) {
+            throw new PublicationValidationException(
+                    PublicationValidationException.AGENT_ALL_ACCESS_NOT_PUBLISHABLE,
+                    "This agent cannot be published because it has 'All' access on some resource types. "
+                            + "Set each listed resource type to an explicit selection (custom) or to none, then republish.",
+                    Map.of("violations", violations));
         }
 
         // Check if already published (update if exists)
@@ -279,8 +319,15 @@ public class AgentPublicationService {
             throw new IllegalStateException("Failed to build agent snapshot for " + agentConfigId);
         }
         // Presentation-only landing page (rendered verbatim in the marketplace, never cloned).
-        agentSnapshot.put("landingInterface",
-                landingInterfaceSnapshotter.buildSnapshot(landingInterfaceId, tenantId, organizationId));
+        // Optional: without it the card shows the agent identity hero instead.
+        if (landingInterfaceId != null) {
+            agentSnapshot.put("landingInterface",
+                    landingInterfaceSnapshotter.buildSnapshot(landingInterfaceId, tenantId, organizationId));
+        }
+        // Size guard AFTER the full snapshot (incl. landing interface) is assembled,
+        // BEFORE anything is persisted - a refused publish must leave no state behind.
+        enforceSnapshotSizeCap(agentSnapshot);
+
         publication.setShowcaseInterfaceId(landingInterfaceId);
         publication.setAgentSnapshot(agentSnapshot);
 
@@ -389,12 +436,8 @@ public class AgentPublicationService {
         agentData.put("maxIterations", agent.getMaxIterations());
         agentData.put("executionTimeout", agent.getExecutionTimeout());
 
-        // Avatar: keep preset and HTTP URLs
-        String avatarUrl = agent.getAvatarUrl();
-        if (avatarUrl != null && !avatarUrl.startsWith("preset:") && !avatarUrl.startsWith("http")) {
-            avatarUrl = null;
-        }
-        agentData.put("avatarUrl", avatarUrl);
+        // Avatar: keep only viewer-independent URLs (presets, http, public avatar serve)
+        agentData.put("avatarUrl", com.apimarketplace.publication.utils.AvatarUrlPolicy.publishable(agent.getAvatarUrl()));
         agentData.put("config", agent.getConfig());
         agentData.put("dataSourceId", agent.getDataSourceId());
 
@@ -480,13 +523,12 @@ public class AgentPublicationService {
         Object wfRaw = toolsConfig != null ? toolsConfig.get("workflows") : null;
         Object appRaw = toolsConfig != null ? toolsConfig.get("applications") : null;
 
-        // Workflows are gated by workflowsGrant.
+        // Workflows are gated by workflowsGrant. grant=all is NOT publishable (validated
+        // up-front by publishAgent with the aggregated violation list) - a snapshot only
+        // ever embeds an explicit selection, never a tenant enumeration.
         String workflowsGrant = familyGrant(toolsConfig, "workflows");
         if ("all".equals(workflowsGrant)) {
-            // workflowsGrant=all: snapshot ALL tenant workflows, ignore explicit list.
-            logger.info("Agent {} has workflowsGrant=all, listing all tenant workflows", agentConfigId);
-            List<String> allWfIds = orchestratorClient.getWorkflowIdsByTenant(tenantId, organizationId);
-            collectWorkflowSnapshots(allWfIds, false, tenantId, organizationId, visitedWorkflowIds, workflows);
+            throw allGrantRefused(agentConfigId, agent.getName(), "workflows");
         } else if ("custom".equals(workflowsGrant)) {
             // workflowsGrant=custom: respect the explicit workflows list.
             collectWorkflowSnapshots(wfRaw, false, tenantId, organizationId, visitedWorkflowIds, workflows);
@@ -494,15 +536,17 @@ public class AgentPublicationService {
         // workflowsGrant none/absent ⇒ no direct workflows.
 
         // Applications are gated SEPARATELY by applicationsGrant (publication UUIDs resolved
-        // to workflow UUIDs in collectWorkflowSnapshots). PRESERVE THE PRIOR BEHAVIOR for
-        // unrestricted: the old mode-based code only enumerated all WORKFLOWS when unrestricted,
-        // never all applications - so applicationsGrant=all is a no-op here (matching today),
-        // and only "custom" enumerates the explicit applications list.
+        // to workflow UUIDs in collectWorkflowSnapshots). Only "custom" enumerates the
+        // explicit applications list; "all" is refused like every other family (the
+        // verbatim-persisted toolsConfig must never ship an "all" grant to acquirers).
         String applicationsGrant = familyGrant(toolsConfig, "applications");
+        if ("all".equals(applicationsGrant)) {
+            throw allGrantRefused(agentConfigId, agent.getName(), "applications");
+        }
         if ("custom".equals(applicationsGrant)) {
             collectWorkflowSnapshots(appRaw, true, tenantId, organizationId, visitedWorkflowIds, workflows);
         }
-        // applicationsGrant all (no-op, see above) / none / absent ⇒ no applications.
+        // applicationsGrant none / absent ⇒ no applications.
         if (!workflows.isEmpty()) {
             snapshot.put("workflows", workflows);
         }
@@ -518,11 +562,7 @@ public class AgentPublicationService {
         String interfacesGrant = familyGrant(toolsConfig, "interfaces");
         List<?> ifaceIds;
         if ("all".equals(interfacesGrant)) {
-            List<InterfaceDto> allIfaces = interfaceClient.listInterfaces(tenantId, organizationId, null);
-            ifaceIds = allIfaces.stream().map(i -> i.getId().toString()).toList();
-            if (!ifaceIds.isEmpty()) {
-                logger.info("Agent {} interfacesGrant=all, resolved {} tenant interfaces", agentConfigId, ifaceIds.size());
-            }
+            throw allGrantRefused(agentConfigId, agent.getName(), "interfaces");
         } else if ("custom".equals(interfacesGrant) && ifacesRaw instanceof List<?> explicitIds) {
             ifaceIds = explicitIds;
         } else {
@@ -565,11 +605,7 @@ public class AgentPublicationService {
         String tablesGrant = familyGrant(toolsConfig, "tables");
         List<?> tableIds;
         if ("all".equals(tablesGrant)) {
-            List<DataSourceDto> allDs = dataSourceClient.getDataSources(tenantId, organizationId, null);
-            tableIds = allDs.stream().map(d -> d.id().toString()).toList();
-            if (!tableIds.isEmpty()) {
-                logger.info("Agent {} tablesGrant=all, resolved {} tenant datasources", agentConfigId, tableIds.size());
-            }
+            throw allGrantRefused(agentConfigId, agent.getName(), "tables");
         } else if ("custom".equals(tablesGrant) && tablesRaw instanceof List<?> explicitIds) {
             tableIds = explicitIds;
         } else {
@@ -596,8 +632,20 @@ public class AgentPublicationService {
                     dsSnapshot.put("mappingSpec", ds.mappingSpec() != null
                             ? objectMapper.convertValue(ds.mappingSpec(), new TypeReference<Map<String, Object>>() {}) : null);
 
-                    // Include items
+                    // Include items - capped: a published table ships as inline snapshot
+                    // rows, so an oversized table must fail loudly (never truncate silently).
                     List<DataSourceItemDto> items = dataSourceClient.getAllItems(dsId, tenantId, organizationId);
+                    if (items.size() > agentSnapshotMaxTableRows) {
+                        throw new PublicationValidationException(
+                                PublicationValidationException.AGENT_SNAPSHOT_TOO_LARGE,
+                                "Table '" + ds.name() + "' has " + items.size() + " rows (max "
+                                        + agentSnapshotMaxTableRows + " rows per published table). "
+                                        + "Remove it from the agent's resource selection or reduce its content.",
+                                Map.of(
+                                        "maxTableRows", agentSnapshotMaxTableRows,
+                                        "breakdown", List.of(
+                                                breakdownEntry("datasource", dsIdStr, ds.name(), items.size(), null))));
+                    }
                     if (!items.isEmpty()) {
                         List<Map<String, Object>> itemSnapshots = items.stream()
                                 .map(item -> {
@@ -626,14 +674,7 @@ public class AgentPublicationService {
         String agentsGrant = familyGrant(toolsConfig, "agents");
         List<?> subAgentIds;
         if ("all".equals(agentsGrant)) {
-            List<AgentDto> allAgents = agentClient.getAgents(tenantId, organizationId, null);
-            subAgentIds = allAgents.stream()
-                    .map(a -> a.getId().toString())
-                    .filter(id -> !id.equals(agentConfigId.toString()))
-                    .toList();
-            if (!subAgentIds.isEmpty()) {
-                logger.info("Agent {} agentsGrant=all, resolved {} tenant agents", agentConfigId, subAgentIds.size());
-            }
+            throw allGrantRefused(agentConfigId, agent.getName(), "agents");
         } else if ("custom".equals(agentsGrant) && agentsRaw instanceof List<?> explicitIds) {
             subAgentIds = explicitIds;
         } else {
@@ -829,6 +870,185 @@ public class AgentPublicationService {
         if (tc == null) return null;
         Object grant = tc.get(family + "Grant");
         return grant != null ? grant.toString() : null;
+    }
+
+    // ========================================================================
+    // Publish-time validation: no "all" grant may enter a publication
+    // ========================================================================
+
+    /**
+     * Walk the agent closure (root + sub-agents reachable through explicit
+     * {@code agentsGrant=custom} lists) and collect every family granted
+     * {@code "all"}. Returns ALL violations in one pass so the publisher fixes
+     * everything in a single round-trip. Never enumerates the tenant: an
+     * {@code agentsGrant=all} is itself a violation, not a traversal edge.
+     */
+    private List<Map<String, Object>> collectAllGrantViolations(AgentDto rootAgent, String tenantId, String organizationId) {
+        List<Map<String, Object>> violations = new ArrayList<>();
+        collectAllGrantViolations(rootAgent, tenantId, organizationId,
+                new HashSet<>(), List.of(), violations, 0);
+        return violations;
+    }
+
+    private void collectAllGrantViolations(AgentDto agent, String tenantId, String organizationId,
+                                            Set<UUID> visited, List<String> referencedVia,
+                                            List<Map<String, Object>> violations, int depth) {
+        // Depth check BEFORE marking visited: an agent first reached beyond the depth
+        // cap must stay re-validatable through a shorter path, or its violation would
+        // silently drop out of the aggregate.
+        if (agent == null || agent.getId() == null || depth > MAX_AGENT_DEPTH || !visited.add(agent.getId())) {
+            return;
+        }
+        Map<String, Object> tc = agent.getToolsConfig();
+        List<String> allFamilies = new ArrayList<>();
+        for (String family : GRANT_FAMILIES) {
+            if ("all".equals(familyGrant(tc, family))) {
+                allFamilies.add(family);
+            }
+        }
+        if (!allFamilies.isEmpty()) {
+            Map<String, Object> violation = new LinkedHashMap<>();
+            violation.put("agentId", agent.getId().toString());
+            violation.put("agentName", agent.getName() != null ? agent.getName() : agent.getId().toString());
+            violation.put("root", referencedVia.isEmpty());
+            if (!referencedVia.isEmpty()) {
+                violation.put("referencedVia", referencedVia);
+            }
+            violation.put("families", allFamilies);
+            violations.add(violation);
+        }
+        // Recurse only through the explicit custom sub-agent list (grant=all on the
+        // agents family was recorded as a violation above - never expanded).
+        if ("custom".equals(familyGrant(tc, "agents")) && tc.get("agents") instanceof List<?> subIds) {
+            List<String> childPath = new ArrayList<>(referencedVia);
+            childPath.add(agent.getName() != null ? agent.getName() : agent.getId().toString());
+            for (Object idObj : subIds) {
+                if (idObj == null) continue;
+                UUID subId;
+                try {
+                    subId = UUID.fromString(idObj.toString());
+                } catch (IllegalArgumentException ignored) {
+                    // invalid UUID in the list - the snapshot builder skips it the same way
+                    continue;
+                }
+                if (visited.contains(subId)) continue;
+                AgentDto sub = agentClient.getAgent(subId, tenantId, organizationId);
+                collectAllGrantViolations(sub, tenantId, organizationId,
+                        visited, List.copyOf(childPath), violations, depth + 1);
+            }
+        }
+    }
+
+    /**
+     * Defense-in-depth for the snapshot builder: {@code publishAgent} pre-validates
+     * the whole closure and refuses grant=all with the aggregated violation list.
+     * Reaching this from a new call path means that validation was skipped - fail
+     * closed with a single-violation body, never enumerate the tenant.
+     */
+    private static PublicationValidationException allGrantRefused(UUID agentId, String agentName, String family) {
+        Map<String, Object> violation = new LinkedHashMap<>();
+        violation.put("agentId", agentId.toString());
+        violation.put("agentName", agentName != null ? agentName : agentId.toString());
+        violation.put("root", true);
+        violation.put("families", List.of(family));
+        return new PublicationValidationException(
+                PublicationValidationException.AGENT_ALL_ACCESS_NOT_PUBLISHABLE,
+                "Agent '" + (agentName != null ? agentName : agentId) + "' has 'All' access on '" + family
+                        + "'. A publication ships an explicit resource selection; set this resource type to custom or none.",
+                Map.of("violations", List.of(violation)));
+    }
+
+    // ========================================================================
+    // Snapshot size guard
+    // ========================================================================
+
+    /**
+     * Refuse a snapshot whose serialized size exceeds the configured cap, with a
+     * heaviest-first per-resource breakdown so the publisher immediately sees what
+     * to trim. Serialization failures are ignored here (this is only a size guard;
+     * a truly unserializable snapshot fails at persistence with its own error).
+     */
+    void enforceSnapshotSizeCap(Map<String, Object> snapshot) {
+        long size;
+        try {
+            size = objectMapper.writeValueAsBytes(snapshot).length;
+        } catch (Exception e) {
+            logger.warn("Snapshot size guard skipped (serialization failed): {}", e.getMessage());
+            return;
+        }
+        if (size <= agentSnapshotMaxBytes) {
+            return;
+        }
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("sizeBytes", size);
+        details.put("maxBytes", agentSnapshotMaxBytes);
+        details.put("breakdown", computeSnapshotBreakdown(snapshot));
+        throw new PublicationValidationException(
+                PublicationValidationException.AGENT_SNAPSHOT_TOO_LARGE,
+                "Publication snapshot is " + toMb(size) + " MB (max " + toMb(agentSnapshotMaxBytes)
+                        + " MB). Remove the heaviest resources from the agent's selection or reduce their content.",
+                details);
+    }
+
+    /**
+     * Per-resource serialized weight, heaviest first (top 8). Sections walked:
+     * workflows / interfaces / datasources / subAgents / landingInterface.
+     */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> computeSnapshotBreakdown(Map<String, Object> snapshot) {
+        List<Map<String, Object>> entries = new ArrayList<>();
+        for (Map.Entry<String, String> section : Map.of(
+                "workflows", "workflow",
+                "interfaces", "interface",
+                "datasources", "datasource",
+                "subAgents", "agent").entrySet()) {
+            Object raw = snapshot.get(section.getKey());
+            if (!(raw instanceof Map<?, ?> map)) continue;
+            for (Map.Entry<?, ?> e : map.entrySet()) {
+                Object value = e.getValue();
+                String name = null;
+                Integer items = null;
+                if (value instanceof Map<?, ?> vm) {
+                    Object n = vm.get("name");
+                    if (n == null && vm.get("agent") instanceof Map<?, ?> am) n = am.get("name");
+                    name = n != null ? n.toString() : null;
+                    if (vm.get("items") instanceof List<?> l) items = l.size();
+                }
+                entries.add(breakdownEntry(section.getValue(),
+                        String.valueOf(e.getKey()), name, items, approxBytes(value)));
+            }
+        }
+        Object landing = snapshot.get("landingInterface");
+        if (landing != null) {
+            entries.add(breakdownEntry("landingInterface", null, null, null, approxBytes(landing)));
+        }
+        entries.sort((a, b) -> Long.compare(
+                ((Number) b.getOrDefault("approxBytes", 0L)).longValue(),
+                ((Number) a.getOrDefault("approxBytes", 0L)).longValue()));
+        return entries.size() > 8 ? new ArrayList<>(entries.subList(0, 8)) : entries;
+    }
+
+    private long approxBytes(Object value) {
+        try {
+            return value != null ? objectMapper.writeValueAsBytes(value).length : 0L;
+        } catch (Exception e) {
+            return 0L;
+        }
+    }
+
+    private static Map<String, Object> breakdownEntry(String type, String id, String name,
+                                                       Integer items, Long approxBytes) {
+        Map<String, Object> entry = new LinkedHashMap<>();
+        entry.put("type", type);
+        if (id != null) entry.put("id", id);
+        if (name != null) entry.put("name", name);
+        if (items != null) entry.put("items", items);
+        if (approxBytes != null) entry.put("approxBytes", approxBytes);
+        return entry;
+    }
+
+    private static String toMb(long bytes) {
+        return String.valueOf(Math.round(bytes / (1024.0 * 1024.0) * 10.0) / 10.0);
     }
 
     /**
@@ -1295,7 +1515,12 @@ public class AgentPublicationService {
         cloneRequest.put("maxIterations", agentData.get("maxIterations"));
         cloneRequest.put("executionTimeout", agentData.get("executionTimeout"));
         cloneRequest.put("config", agentData.get("config"));
-        cloneRequest.put("avatarUrl", agentData.get("avatarUrl"));
+        // Avatar: copy an uploaded/AI file into the ACQUIRER's storage so the clone
+        // survives the publisher deleting theirs (presets/http pass through).
+        String snapshotAvatarUrl = agentData.get("avatarUrl") != null ? agentData.get("avatarUrl").toString() : null;
+        cloneRequest.put("avatarUrl", avatarFileCloneService != null
+                ? avatarFileCloneService.cloneForTenant(snapshotAvatarUrl, tenantId, normalizeScope(organizationId))
+                : com.apimarketplace.publication.utils.AvatarUrlPolicy.publishable(snapshotAvatarUrl));
         cloneRequest.put("creditBudget", agentData.get("creditBudget"));
         cloneRequest.put("budgetResetMode", agentData.get("budgetResetMode"));
 

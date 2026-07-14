@@ -5,6 +5,7 @@ import com.apimarketplace.orchestrator.tools.workflow.builder.WorkflowBuilderVal
 import com.apimarketplace.orchestrator.tools.workflow.builder.WorkflowBuilderValidator.ValidationWarning;
 import com.apimarketplace.orchestrator.tools.workflow.builder.validation.CoreValidator;
 import com.apimarketplace.orchestrator.tools.workflow.builder.validation.EdgeValidator;
+import com.apimarketplace.orchestrator.tools.workflow.builder.validation.MockConfigValidator;
 import com.apimarketplace.orchestrator.tools.workflow.builder.validation.GraphValidation;
 import com.apimarketplace.orchestrator.tools.workflow.builder.validation.NodeStructureValidator;
 import com.apimarketplace.orchestrator.tools.workflow.builder.validation.OptionalComponentValidator;
@@ -145,6 +146,7 @@ class WorkflowBuilderValidatorTest {
         @Mock private ReferenceValidator referenceValidator;
         @Mock private NodeStructureValidator nodeStructureValidator;
         @Mock private OptionalComponentValidator optionalComponentValidator;
+        @Mock private MockConfigValidator mockConfigValidator;
         @Mock private WorkflowErrorChecker workflowErrorChecker;
 
         private WorkflowBuilderValidator validator;
@@ -155,7 +157,7 @@ class WorkflowBuilderValidatorTest {
             validator = new WorkflowBuilderValidator(
                 triggerValidator, stepValidator, coreValidator, edgeValidator,
                 graphValidator, referenceValidator, nodeStructureValidator,
-                optionalComponentValidator, workflowErrorChecker);
+                optionalComponentValidator, mockConfigValidator, workflowErrorChecker);
 
             session = WorkflowBuilderSession.builder()
                 .sessionId("s")
@@ -307,7 +309,7 @@ class WorkflowBuilderValidatorTest {
         void setUp() {
             // We never call validate() in this nested class, so sub-validator mocks
             // aren't needed - passing nulls is safe for pure toAgentFormat() tests.
-            validator = new WorkflowBuilderValidator(null, null, null, null, null, null, null, null, null);
+            validator = new WorkflowBuilderValidator(null, null, null, null, null, null, null, null, null, null);
         }
 
         @Test

@@ -808,6 +808,285 @@ class OAuth2ServiceTest {
             verify(credentialService, never()).updateCredentialData(anyLong(), anyString(), anyMap());
         }
 
+        /**
+         * Meta access-token grant renewal (Instagram Login shape): the credential has NO
+         * refresh_token - the CURRENT access token is renewed via a GET on the provider's
+         * refresh endpoint. Fails on pre-fix code at "No refresh token available".
+         */
+        @Test
+        @DisplayName("accessTokenGrant: renews with the current access token via GET, no refresh_token")
+        void refreshToken_accessTokenGrantRenewsWithCurrentToken() {
+            Credential cred = buildCredential(1L, USER_ID, "instagram_login", Map.of(
+                    "credential_template_id", "template-instagram-login",
+                    "access_token", "ENC:old-long-lived",
+                    "client_id", "cid",
+                    "oauth_client_secret", "ENC:csec"
+            ));
+            when(credentialService.getCredential(1L)).thenReturn(Optional.of(cred));
+            when(encryptionService.decrypt("ENC:old-long-lived")).thenReturn("old-long-lived");
+            when(encryptionService.encrypt(anyString())).thenAnswer(inv -> "ENC:" + inv.getArgument(0));
+
+            com.fasterxml.jackson.databind.node.ObjectNode template = objectMapper.createObjectNode();
+            com.fasterxml.jackson.databind.node.ObjectNode oauth2 =
+                    template.putObject("metadata").putObject("oauth2Config");
+            oauth2.put("authorizationUrl", "https://www.instagram.com/oauth/authorize");
+            oauth2.put("tokenUrl", "https://api.instagram.com/oauth/access_token");
+            oauth2.putArray("scopes");
+            com.fasterxml.jackson.databind.node.ObjectNode refresh = oauth2.putObject("refresh");
+            refresh.put("supported", true);
+            com.fasterxml.jackson.databind.node.ObjectNode grant = refresh.putObject("accessTokenGrant");
+            grant.put("url", "https://graph.instagram.com/refresh_access_token");
+            grant.put("grantType", "ig_refresh_token");
+            stubCatalogTemplate(template);
+
+            com.fasterxml.jackson.databind.node.ObjectNode tokenBody = objectMapper.createObjectNode();
+            tokenBody.put("access_token", "renewed-long-lived");
+            tokenBody.put("token_type", "bearer");
+            tokenBody.put("expires_in", 5183944);
+
+            org.springframework.web.client.RestTemplate mockRest =
+                    mock(org.springframework.web.client.RestTemplate.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(
+                    oAuth2Service, "restTemplate", mockRest);
+            java.net.URI expectedUri = java.net.URI.create("https://graph.instagram.com/refresh_access_token"
+                    + "?grant_type=ig_refresh_token&access_token=old-long-lived");
+            when(mockRest.getForEntity(eq(expectedUri), eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                    .thenReturn(new org.springframework.http.ResponseEntity<>(
+                            (com.fasterxml.jackson.databind.JsonNode) tokenBody,
+                            org.springframework.http.HttpStatus.OK));
+            when(credentialService.updateCredentialData(eq(1L), eq(USER_ID), anyMap())).thenReturn(cred);
+
+            oAuth2Service.refreshToken(1L, USER_ID);
+
+            // GET path used - the RFC refresh_token POST must never fire. The URI overload
+            // matters: the String overload would re-encode the pre-encoded query.
+            verify(mockRest).getForEntity(eq(expectedUri), eq(com.fasterxml.jackson.databind.JsonNode.class));
+            verify(mockRest, never()).postForEntity(anyString(),
+                    any(org.springframework.http.HttpEntity.class),
+                    eq(com.fasterxml.jackson.databind.JsonNode.class));
+
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<Map<String, Object>> dataCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(credentialService).updateCredentialData(eq(1L), eq(USER_ID), dataCaptor.capture());
+            assertThat(dataCaptor.getValue())
+                    .containsEntry("access_token", "ENC:renewed-long-lived")
+                    .containsEntry("refresh_mode", "access_token");
+            assertThat(dataCaptor.getValue()).containsKey("expires_at");
+        }
+
+        /**
+         * Provider rejection on the access-token grant path must ride the SAME classifier
+         * pipeline as the RFC path: a 401 flips the credential terminal (re-auth required)
+         * instead of looping the scheduler forever.
+         */
+        @Test
+        @DisplayName("accessTokenGrant: provider 401 classifies terminal like the RFC path")
+        void refreshToken_accessTokenGrant401IsTerminal() {
+            Credential cred = buildCredential(1L, USER_ID, "instagram_login", Map.of(
+                    "credential_template_id", "template-instagram-login",
+                    "access_token", "ENC:expired-tok"
+            ));
+            when(credentialService.getCredential(1L)).thenReturn(Optional.of(cred));
+            when(encryptionService.decrypt("ENC:expired-tok")).thenReturn("expired-tok");
+
+            com.fasterxml.jackson.databind.node.ObjectNode template = objectMapper.createObjectNode();
+            com.fasterxml.jackson.databind.node.ObjectNode oauth2 =
+                    template.putObject("metadata").putObject("oauth2Config");
+            oauth2.put("authorizationUrl", "https://www.instagram.com/oauth/authorize");
+            oauth2.put("tokenUrl", "https://api.instagram.com/oauth/access_token");
+            oauth2.putArray("scopes");
+            com.fasterxml.jackson.databind.node.ObjectNode refresh = oauth2.putObject("refresh");
+            refresh.put("supported", true);
+            com.fasterxml.jackson.databind.node.ObjectNode grant = refresh.putObject("accessTokenGrant");
+            grant.put("url", "https://graph.instagram.com/refresh_access_token");
+            grant.put("grantType", "ig_refresh_token");
+            stubCatalogTemplate(template);
+
+            org.springframework.web.client.RestTemplate mockRest =
+                    mock(org.springframework.web.client.RestTemplate.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(
+                    oAuth2Service, "restTemplate", mockRest);
+            when(mockRest.getForEntity(any(java.net.URI.class), eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                    .thenThrow(org.springframework.web.client.HttpClientErrorException.create(
+                            org.springframework.http.HttpStatus.UNAUTHORIZED, "Unauthorized",
+                            org.springframework.http.HttpHeaders.EMPTY,
+                            "{\"error\":{\"message\":\"Error validating access token\",\"code\":190}}"
+                                    .getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                            java.nio.charset.StandardCharsets.UTF_8));
+
+            assertThatThrownBy(() -> oAuth2Service.refreshToken(1L, USER_ID))
+                    .isInstanceOf(com.apimarketplace.auth.credential.service.oauth2.refresh.RefreshTerminalException.class);
+
+            // No token persisted on the failure path.
+            verify(credentialService, never()).updateCredentialData(anyLong(), anyString(), argThat(
+                    m -> m.containsKey("access_token") && String.valueOf(m.get("access_token")).startsWith("ENC:renewed")));
+        }
+
+        /**
+         * Facebook-shaped renewal (fb_exchange_token re-exchange): client_id AND client_secret
+         * ride the query, and the current token travels under fb_exchange_token - exercises the
+         * credential-data sourcing (client_id / oauth_client_secret decrypt) that the IG shape
+         * never touches. 3 of the 4 shipped Meta seeds use this shape.
+         */
+        @Test
+        @DisplayName("accessTokenGrant (Facebook shape): client_id + decrypted secret + fb_exchange_token param")
+        void refreshToken_accessTokenGrantFacebookShape() {
+            Credential cred = buildCredential(1L, USER_ID, "facebook", Map.of(
+                    "credential_template_id", "template-facebook",
+                    "access_token", "ENC:fb-current",
+                    "client_id", "fb-cid",
+                    "oauth_client_secret", "ENC:fb-secret"
+            ));
+            when(credentialService.getCredential(1L)).thenReturn(Optional.of(cred));
+            when(encryptionService.decrypt("ENC:fb-current")).thenReturn("fb-current");
+            when(encryptionService.decrypt("ENC:fb-secret")).thenReturn("fb-secret");
+            when(encryptionService.encrypt(anyString())).thenAnswer(inv -> "ENC:" + inv.getArgument(0));
+
+            com.fasterxml.jackson.databind.node.ObjectNode template = objectMapper.createObjectNode();
+            com.fasterxml.jackson.databind.node.ObjectNode oauth2 =
+                    template.putObject("metadata").putObject("oauth2Config");
+            oauth2.put("authorizationUrl", "https://www.facebook.com/v25.0/dialog/oauth");
+            oauth2.put("tokenUrl", "https://graph.facebook.com/v25.0/oauth/access_token");
+            oauth2.putArray("scopes");
+            com.fasterxml.jackson.databind.node.ObjectNode refresh = oauth2.putObject("refresh");
+            refresh.put("supported", true);
+            com.fasterxml.jackson.databind.node.ObjectNode grant = refresh.putObject("accessTokenGrant");
+            grant.put("url", "https://graph.facebook.com/v25.0/oauth/access_token");
+            grant.put("grantType", "fb_exchange_token");
+            grant.put("tokenParam", "fb_exchange_token");
+            grant.put("sendClientId", true);
+            grant.put("sendClientSecret", true);
+            stubCatalogTemplate(template);
+
+            com.fasterxml.jackson.databind.node.ObjectNode tokenBody = objectMapper.createObjectNode();
+            tokenBody.put("access_token", "fb-renewed");
+            tokenBody.put("token_type", "bearer");
+            tokenBody.put("expires_in", 5183944);
+
+            org.springframework.web.client.RestTemplate mockRest =
+                    mock(org.springframework.web.client.RestTemplate.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(oAuth2Service, "restTemplate", mockRest);
+            java.net.URI expectedUri = java.net.URI.create("https://graph.facebook.com/v25.0/oauth/access_token"
+                    + "?grant_type=fb_exchange_token&client_id=fb-cid&client_secret=fb-secret"
+                    + "&fb_exchange_token=fb-current");
+            when(mockRest.getForEntity(eq(expectedUri), eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                    .thenReturn(new org.springframework.http.ResponseEntity<>(
+                            (com.fasterxml.jackson.databind.JsonNode) tokenBody,
+                            org.springframework.http.HttpStatus.OK));
+            when(credentialService.updateCredentialData(eq(1L), eq(USER_ID), anyMap())).thenReturn(cred);
+
+            oAuth2Service.refreshToken(1L, USER_ID);
+
+            verify(mockRest).getForEntity(eq(expectedUri), eq(com.fasterxml.jackson.databind.JsonNode.class));
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<Map<String, Object>> dataCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(credentialService).updateCredentialData(eq(1L), eq(USER_ID), dataCaptor.capture());
+            assertThat(dataCaptor.getValue()).containsEntry("access_token", "ENC:fb-renewed");
+        }
+
+        /**
+         * A 200 with a garbage body (no access_token - Meta interstitial page) must ride the
+         * SAME failure bookkeeping as HTTP errors: without the generic catch the exception
+         * escapes with no cooldown and the sweeper hammers the provider every tick.
+         */
+        @Test
+        @DisplayName("accessTokenGrant: 200 with garbage body classifies transient + writes cooldown")
+        void refreshToken_accessTokenGrantGarbageBodyGetsCooldown() {
+            Credential cred = buildCredential(1L, USER_ID, "instagram_login", Map.of(
+                    "credential_template_id", "template-instagram-login",
+                    "access_token", "ENC:tok"
+            ));
+            when(credentialService.getCredential(1L)).thenReturn(Optional.of(cred));
+            when(encryptionService.decrypt("ENC:tok")).thenReturn("tok");
+
+            com.fasterxml.jackson.databind.node.ObjectNode template = objectMapper.createObjectNode();
+            com.fasterxml.jackson.databind.node.ObjectNode oauth2 =
+                    template.putObject("metadata").putObject("oauth2Config");
+            oauth2.put("authorizationUrl", "https://www.instagram.com/oauth/authorize");
+            oauth2.put("tokenUrl", "https://api.instagram.com/oauth/access_token");
+            oauth2.putArray("scopes");
+            com.fasterxml.jackson.databind.node.ObjectNode refresh = oauth2.putObject("refresh");
+            refresh.put("supported", true);
+            com.fasterxml.jackson.databind.node.ObjectNode grant = refresh.putObject("accessTokenGrant");
+            grant.put("url", "https://graph.instagram.com/refresh_access_token");
+            grant.put("grantType", "ig_refresh_token");
+            stubCatalogTemplate(template);
+
+            com.fasterxml.jackson.databind.node.ObjectNode garbage = objectMapper.createObjectNode();
+            garbage.put("unexpected", "shape");
+
+            org.springframework.web.client.RestTemplate mockRest =
+                    mock(org.springframework.web.client.RestTemplate.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(oAuth2Service, "restTemplate", mockRest);
+            when(mockRest.getForEntity(any(java.net.URI.class), eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                    .thenReturn(new org.springframework.http.ResponseEntity<>(
+                            (com.fasterxml.jackson.databind.JsonNode) garbage,
+                            org.springframework.http.HttpStatus.OK));
+
+            assertThatThrownBy(() -> oAuth2Service.refreshToken(1L, USER_ID))
+                    .isInstanceOf(com.apimarketplace.auth.credential.service.oauth2.refresh.RefreshTransientException.class);
+
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<Map<String, Object>> dataCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(credentialService).updateCredentialData(eq(1L), eq(USER_ID), dataCaptor.capture());
+            assertThat(dataCaptor.getValue())
+                    .as("transient failure must write the cooldown so the sweeper backs off")
+                    .containsKey("refresh_cooldown_until");
+        }
+
+        /**
+         * Success WITHOUT expires_in (Meta re-issuing an unchanged token) must not leave the
+         * stale expires_at in place - the row would match the sweep predicate on every tick
+         * and re-refresh forever. Dropping expires_at parks the credential on the lazy path.
+         */
+        @Test
+        @DisplayName("accessTokenGrant: success without expires_in drops expires_at (no sweep loop)")
+        void refreshToken_accessTokenGrantNoExpiresInDropsExpiresAt() {
+            Credential cred = buildCredential(1L, USER_ID, "instagram_login", Map.of(
+                    "credential_template_id", "template-instagram-login",
+                    "access_token", "ENC:tok",
+                    "expires_at", Instant.now().plusSeconds(120).toString()
+            ));
+            when(credentialService.getCredential(1L)).thenReturn(Optional.of(cred));
+            when(encryptionService.decrypt("ENC:tok")).thenReturn("tok");
+            when(encryptionService.encrypt(anyString())).thenAnswer(inv -> "ENC:" + inv.getArgument(0));
+
+            com.fasterxml.jackson.databind.node.ObjectNode template = objectMapper.createObjectNode();
+            com.fasterxml.jackson.databind.node.ObjectNode oauth2 =
+                    template.putObject("metadata").putObject("oauth2Config");
+            oauth2.put("authorizationUrl", "https://www.instagram.com/oauth/authorize");
+            oauth2.put("tokenUrl", "https://api.instagram.com/oauth/access_token");
+            oauth2.putArray("scopes");
+            com.fasterxml.jackson.databind.node.ObjectNode refresh = oauth2.putObject("refresh");
+            refresh.put("supported", true);
+            com.fasterxml.jackson.databind.node.ObjectNode grant = refresh.putObject("accessTokenGrant");
+            grant.put("url", "https://graph.instagram.com/refresh_access_token");
+            grant.put("grantType", "ig_refresh_token");
+            stubCatalogTemplate(template);
+
+            com.fasterxml.jackson.databind.node.ObjectNode tokenBody = objectMapper.createObjectNode();
+            tokenBody.put("access_token", "same-token");
+            // deliberately NO expires_in
+
+            org.springframework.web.client.RestTemplate mockRest =
+                    mock(org.springframework.web.client.RestTemplate.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(oAuth2Service, "restTemplate", mockRest);
+            when(mockRest.getForEntity(any(java.net.URI.class), eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                    .thenReturn(new org.springframework.http.ResponseEntity<>(
+                            (com.fasterxml.jackson.databind.JsonNode) tokenBody,
+                            org.springframework.http.HttpStatus.OK));
+            when(credentialService.updateCredentialData(eq(1L), eq(USER_ID), anyMap())).thenReturn(cred);
+
+            oAuth2Service.refreshToken(1L, USER_ID);
+
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<Map<String, Object>> dataCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(credentialService).updateCredentialData(eq(1L), eq(USER_ID), dataCaptor.capture());
+            assertThat(dataCaptor.getValue())
+                    .containsEntry("access_token", "ENC:same-token")
+                    .doesNotContainKey("expires_at");
+        }
+
         /** Minimal WebClient chain mock returning the given JsonNode for any catalog lookup. */
         @SuppressWarnings({"unchecked", "rawtypes"})
         private void stubCatalogTemplate(com.fasterxml.jackson.databind.JsonNode template) {
@@ -2679,6 +2958,161 @@ class OAuth2ServiceTest {
             // TERMINAL_CONFIG → error status, access_token + refresh_token must be in the scrub set.
             assertThat(statusCaptor.getValue()).isEqualTo(CredentialStatus.error);
             assertThat(fieldsCaptor.getValue()).contains("access_token", "refresh_token");
+        }
+    }
+
+    // ========== handleCallback - Meta long-lived exchange ==========
+
+    /**
+     * Instagram Login's callback token lives ONE HOUR. The connect flow must exchange it for
+     * the ~60-day long-lived token ({@code oauth2Config.longLivedExchange}) BEFORE persisting,
+     * and must survive an exchange failure by keeping the short-lived token (degraded, but the
+     * connect still succeeds - the pre-feature behavior).
+     */
+    @Nested
+    @DisplayName("handleCallback - long-lived token exchange (Meta)")
+    class HandleCallbackLongLivedExchangeTests {
+
+        private static final String STATE = "state-ig-1";
+
+        private void stubStateAndTemplate() throws Exception {
+            var stateRecord = new com.apimarketplace.auth.credential.domain.OAuth2Models.OAuth2State(
+                    USER_ID, "template-instagram-login", "Instagram",
+                    "cid", "csec",
+                    "https://www.instagram.com/oauth/authorize",
+                    "https://api.instagram.com/oauth/access_token",
+                    "instagram_business_basic",
+                    "Production", "instagram_login", "/icons/services/instagram.svg",
+                    "/app/settings/credentials", Instant.parse("2026-07-14T10:00:00Z"),
+                    null);
+            when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+            when(valueOperations.get("oauth2:state:" + STATE))
+                    .thenReturn(objectMapper.writeValueAsString(stateRecord));
+
+            com.fasterxml.jackson.databind.node.ObjectNode template = objectMapper.createObjectNode();
+            com.fasterxml.jackson.databind.node.ObjectNode oauth2 =
+                    template.putObject("metadata").putObject("oauth2Config");
+            oauth2.put("authorizationUrl", "https://www.instagram.com/oauth/authorize");
+            oauth2.put("tokenUrl", "https://api.instagram.com/oauth/access_token");
+            oauth2.putArray("scopes").add("instagram_business_basic");
+            com.fasterxml.jackson.databind.node.ObjectNode exchange = oauth2.putObject("longLivedExchange");
+            exchange.put("url", "https://graph.instagram.com/access_token");
+            exchange.put("grantType", "ig_exchange_token");
+            exchange.put("sendClientSecret", true);
+            com.fasterxml.jackson.databind.node.ObjectNode refresh = oauth2.putObject("refresh");
+            refresh.put("supported", true);
+            com.fasterxml.jackson.databind.node.ObjectNode grant = refresh.putObject("accessTokenGrant");
+            grant.put("url", "https://graph.instagram.com/refresh_access_token");
+            grant.put("grantType", "ig_refresh_token");
+
+            org.springframework.web.reactive.function.client.WebClient wc =
+                    mock(org.springframework.web.reactive.function.client.WebClient.class);
+            var uriSpec = mock(
+                    org.springframework.web.reactive.function.client.WebClient.RequestHeadersUriSpec.class);
+            var headersSpec = mock(
+                    org.springframework.web.reactive.function.client.WebClient.RequestHeadersSpec.class);
+            var responseSpec = mock(
+                    org.springframework.web.reactive.function.client.WebClient.ResponseSpec.class);
+            when(wc.get()).thenReturn(uriSpec);
+            when(uriSpec.uri(anyString(), any(Object[].class))).thenReturn(headersSpec);
+            when(headersSpec.retrieve()).thenReturn(responseSpec);
+            when(responseSpec.bodyToMono(com.fasterxml.jackson.databind.JsonNode.class))
+                    .thenReturn(reactor.core.publisher.Mono.just(template));
+            org.springframework.test.util.ReflectionTestUtils.setField(oAuth2Service, "catalogClient", wc);
+        }
+
+        private org.springframework.web.client.RestTemplate mockRestWithCodeExchange() {
+            com.fasterxml.jackson.databind.node.ObjectNode shortLived = objectMapper.createObjectNode();
+            shortLived.put("access_token", "short-lived-tok");
+            // Instagram's callback response has NO expires_in and NO refresh_token.
+            org.springframework.web.client.RestTemplate mockRest =
+                    mock(org.springframework.web.client.RestTemplate.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(oAuth2Service, "restTemplate", mockRest);
+            when(mockRest.postForEntity(
+                    eq("https://api.instagram.com/oauth/access_token"),
+                    any(org.springframework.http.HttpEntity.class),
+                    eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                    .thenReturn(new org.springframework.http.ResponseEntity<>(
+                            (com.fasterxml.jackson.databind.JsonNode) shortLived,
+                            org.springframework.http.HttpStatus.OK));
+            return mockRest;
+        }
+
+        @Test
+        @DisplayName("exchanges the short-lived callback token for the 60-day one before persisting")
+        void exchangesShortLivedForLongLived() throws Exception {
+            stubStateAndTemplate();
+            org.springframework.web.client.RestTemplate mockRest = mockRestWithCodeExchange();
+
+            com.fasterxml.jackson.databind.node.ObjectNode longLived = objectMapper.createObjectNode();
+            longLived.put("access_token", "long-lived-tok");
+            longLived.put("token_type", "bearer");
+            longLived.put("expires_in", 5183944);
+            java.net.URI exchangeUri = java.net.URI.create("https://graph.instagram.com/access_token"
+                    + "?grant_type=ig_exchange_token&client_secret=csec&access_token=short-lived-tok");
+            when(mockRest.getForEntity(eq(exchangeUri), eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                    .thenReturn(new org.springframework.http.ResponseEntity<>(
+                            (com.fasterxml.jackson.databind.JsonNode) longLived,
+                            org.springframework.http.HttpStatus.OK));
+
+            when(encryptionService.encrypt(anyString())).thenAnswer(inv -> "ENC:" + inv.getArgument(0));
+            Credential created = buildCredential(1L, USER_ID, Map.of());
+            when(credentialService.createCredential(
+                    anyString(), org.mockito.ArgumentMatchers.<String>any(), anyString(), anyString(),
+                    any(CredentialType.class), any(CredentialEnvironment.class),
+                    anyString(), anyMap(), anyList(), anyList(), anyString(), anyString()))
+                    .thenReturn(created);
+
+            String redirect = oAuth2Service.handleCallback("auth-code", STATE);
+
+            assertThat(redirect).contains("success=true").doesNotContain("error=");
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<Map<String, Object>> dataCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(credentialService).createCredential(
+                    anyString(), org.mockito.ArgumentMatchers.<String>any(), anyString(), anyString(),
+                    any(CredentialType.class), any(CredentialEnvironment.class),
+                    anyString(), dataCaptor.capture(), anyList(), anyList(), anyString(), anyString());
+            assertThat(dataCaptor.getValue())
+                    .as("the persisted token must be the LONG-LIVED one")
+                    .containsEntry("access_token", "ENC:long-lived-tok")
+                    .containsEntry("refresh_mode", "access_token");
+            assertThat(dataCaptor.getValue())
+                    .as("expires_at comes from the exchange's expires_in - the scheduler needs it")
+                    .containsKey("expires_at");
+        }
+
+        @Test
+        @DisplayName("exchange failure keeps the short-lived token - connect still succeeds")
+        void exchangeFailureKeepsShortLivedToken() throws Exception {
+            stubStateAndTemplate();
+            org.springframework.web.client.RestTemplate mockRest = mockRestWithCodeExchange();
+            when(mockRest.getForEntity(any(java.net.URI.class), eq(com.fasterxml.jackson.databind.JsonNode.class)))
+                    .thenThrow(org.springframework.web.client.HttpClientErrorException.create(
+                            org.springframework.http.HttpStatus.BAD_REQUEST, "Bad Request",
+                            org.springframework.http.HttpHeaders.EMPTY,
+                            "{\"error\":{\"message\":\"nope\"}}".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                            java.nio.charset.StandardCharsets.UTF_8));
+
+            when(encryptionService.encrypt(anyString())).thenAnswer(inv -> "ENC:" + inv.getArgument(0));
+            Credential created = buildCredential(1L, USER_ID, Map.of());
+            when(credentialService.createCredential(
+                    anyString(), org.mockito.ArgumentMatchers.<String>any(), anyString(), anyString(),
+                    any(CredentialType.class), any(CredentialEnvironment.class),
+                    anyString(), anyMap(), anyList(), anyList(), anyString(), anyString()))
+                    .thenReturn(created);
+
+            String redirect = oAuth2Service.handleCallback("auth-code", STATE);
+
+            assertThat(redirect).contains("success=true").doesNotContain("error=");
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<Map<String, Object>> dataCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(credentialService).createCredential(
+                    anyString(), org.mockito.ArgumentMatchers.<String>any(), anyString(), anyString(),
+                    any(CredentialType.class), any(CredentialEnvironment.class),
+                    anyString(), dataCaptor.capture(), anyList(), anyList(), anyString(), anyString());
+            assertThat(dataCaptor.getValue())
+                    .as("degraded but connected: the short-lived token is persisted")
+                    .containsEntry("access_token", "ENC:short-lived-tok");
         }
     }
 

@@ -296,6 +296,38 @@ export function LandingFooter({ siteBaseUrl }: { siteBaseUrl?: string } = {}) {
           </ul>
         </div>
       </div>
+      {/* Discreet "As featured on" directory badge. Kept deliberately low-key
+          (muted, grayscale, small; brightens on hover) so it does not compete
+          with the footer. It also carries the reciprocal badge/link that the
+          Fazier launch board fetches from this page to verify the listing
+          (Launchpadly is verified by DNS, so it needs no badge here). Boards
+          parse the anchor/img markup, so the grayscale filter does not affect
+          verification. Intl-context-free like the rest of this shell (no
+          next-intl here). */}
+      <div className="max-w-6xl mx-auto px-6 pb-4">
+        <div
+          className="flex flex-wrap items-center gap-x-4 gap-y-2 opacity-40 hover:opacity-90 transition-opacity duration-300"
+          style={{ filter: 'grayscale(1)' }}
+        >
+          <span className="text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
+            As featured on
+          </span>
+          <a
+            href="https://fazier.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="LiveContext on Fazier"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="https://fazier.com/api/v1/public/badges/launch_badges.svg?badge_type=launched&theme=neutral"
+              alt="Featured on Fazier"
+              style={{ display: 'block', border: 0, height: 26, width: 'auto' }}
+              loading="lazy"
+            />
+          </a>
+        </div>
+      </div>
       <div className="max-w-6xl mx-auto px-6 pb-8 text-xs flex items-center justify-between gap-4" style={{ color: 'var(--text-muted)' }}>
         <p>© {new Date().getFullYear()} LIVECONTEXT SAS. All rights reserved.</p>
         <div className="flex items-center gap-2">

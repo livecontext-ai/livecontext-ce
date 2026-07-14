@@ -731,6 +731,28 @@ describe('NodeConfigurationRule', () => {
       expect(result.issues.filter((i) => i.context?.rule === 'interface_renderer_unavailable')).toHaveLength(1);
     });
 
+    it('warns on an interface node with generateVideo when the renderer is unavailable', () => {
+      const result = rule.validate(
+        withCaps(
+          [makeInterfaceNode({ generateVideo: true })],
+          { screenshotRenderer: false, browserAgent: true, webSearch: true },
+        )
+      );
+
+      expect(result.issues.filter((i) => i.context?.rule === 'interface_renderer_unavailable')).toHaveLength(1);
+    });
+
+    it('does not warn on an interface node with generateVideo when the renderer IS available', () => {
+      const result = rule.validate(
+        withCaps(
+          [makeInterfaceNode({ generateVideo: true })],
+          { screenshotRenderer: true, browserAgent: true, webSearch: true },
+        )
+      );
+
+      expect(result.issues.filter((i) => i.context?.rule === 'interface_renderer_unavailable')).toHaveLength(0);
+    });
+
     it('does not warn on an interface node with NO render toggle even when the renderer is unavailable', () => {
       const result = rule.validate(
         withCaps(

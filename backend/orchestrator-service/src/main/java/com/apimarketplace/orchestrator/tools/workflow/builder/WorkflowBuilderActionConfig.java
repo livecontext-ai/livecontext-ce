@@ -34,6 +34,8 @@ public final class WorkflowBuilderActionConfig {
             "connect", "disconnect",
             // Modification
             "modify", "remove", "undo",
+            // Mock mode: propose a ready-to-edit mock output for a node
+            "mock_suggest",
             // Table operations
             "insert_row", "read_rows", "update_row", "delete_row", "find_rows",
             // Production pin lifecycle

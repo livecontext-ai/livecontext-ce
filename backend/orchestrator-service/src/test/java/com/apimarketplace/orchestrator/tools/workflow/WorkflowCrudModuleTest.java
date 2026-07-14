@@ -252,6 +252,47 @@ class WorkflowCrudModuleTest {
     @DisplayName("executeRuns")
     class RunsTests {
 
+        /** Stubs getWorkflow so the tenant/org scope check passes for the caller's TENANT_ID. */
+        private void stubInScopeWorkflow(UUID workflowId) {
+            WorkflowEntity wf = new WorkflowEntity();
+            wf.setId(workflowId);
+            wf.setTenantId(TENANT_ID);
+            when(workflowService.getWorkflow(workflowId)).thenReturn(Optional.of(wf));
+        }
+
+        @Test
+        @DisplayName("cross-tenant: runs for a workflow owned by another tenant returns WORKFLOW_NOT_FOUND (IDOR fix)")
+        void runs_crossTenant_notFound() {
+            UUID workflowId = UUID.randomUUID();
+            WorkflowEntity foreign = new WorkflowEntity();
+            foreign.setId(workflowId);
+            foreign.setTenantId("other-tenant");
+            when(workflowService.getWorkflow(workflowId)).thenReturn(Optional.of(foreign));
+
+            var result = module.execute("runs",
+                    Map.of("workflow_id", workflowId.toString()), TENANT_ID, null);
+
+            assertThat(result).isPresent();
+            assertThat(result.get().success()).isFalse();
+            assertThat(result.get().error()).contains("Workflow not found");
+            // Must NOT read the foreign tenant's run history.
+            verify(workflowRunRepository, never()).findRunSummariesByWorkflowId(any(), any());
+        }
+
+        @Test
+        @DisplayName("unknown workflow: runs returns WORKFLOW_NOT_FOUND without touching run history")
+        void runs_unknownWorkflow_notFound() {
+            UUID workflowId = UUID.randomUUID();
+            when(workflowService.getWorkflow(workflowId)).thenReturn(Optional.empty());
+
+            var result = module.execute("runs",
+                    Map.of("workflow_id", workflowId.toString()), TENANT_ID, null);
+
+            assertThat(result).isPresent();
+            assertThat(result.get().success()).isFalse();
+            verify(workflowRunRepository, never()).findRunSummariesByWorkflowId(any(), any());
+        }
+
         @Test
         @DisplayName("allow-list: runs on a workflow_id NOT in allowedWorkflowIds is denied (run-history read leak)")
         void runs_outOfAllowList_denied() {
@@ -272,6 +313,7 @@ class WorkflowCrudModuleTest {
         @DisplayName("returns paged results with mapped fields")
         void runs_returnsPagedResults() {
             UUID workflowId = UUID.randomUUID();
+            stubInScopeWorkflow(workflowId);
             var p1 = mockProjection("run-1", RunStatus.COMPLETED, 1);
             var p2 = mockProjection("run-2", RunStatus.WAITING_TRIGGER, 2);
 
@@ -314,6 +356,7 @@ class WorkflowCrudModuleTest {
         @DisplayName("returns empty list when no runs exist")
         void runs_emptyWhenNoRuns() {
             UUID workflowId = UUID.randomUUID();
+            stubInScopeWorkflow(workflowId);
             Page<WorkflowRunSummaryProjection> emptyPage = new PageImpl<>(
                     List.of(), PageRequest.of(0, 20), 0);
             when(workflowRunRepository.findRunSummariesByWorkflowId(eq(workflowId), any()))
@@ -343,6 +386,7 @@ class WorkflowCrudModuleTest {
             // OffsetLimitPageable that overrides getOffset() so Hibernate calls
             // setFirstResult(33) with the agent's literal value, not the page-aligned 25.
             UUID workflowId = UUID.randomUUID();
+            stubInScopeWorkflow(workflowId);
             var p1 = mockProjection("run-x", RunStatus.COMPLETED, 1);
 
             ArgumentCaptor<Pageable> pageableCaptor = ArgumentCaptor.forClass(Pageable.class);
@@ -366,6 +410,7 @@ class WorkflowCrudModuleTest {
         @SuppressWarnings("unchecked")
         void runs_emitsCanonicalEnvelope() {
             UUID workflowId = UUID.randomUUID();
+            stubInScopeWorkflow(workflowId);
             var p1 = mockProjection("r", RunStatus.COMPLETED, 1);
             when(workflowRunRepository.findRunSummariesByWorkflowId(eq(workflowId), any()))
                 .thenReturn(new PageImpl<>(List.of(p1), PageRequest.of(0, 20), 1));
@@ -386,6 +431,7 @@ class WorkflowCrudModuleTest {
         @DisplayName("caps limit at 100 (LARGE.maxLimit) - workflow.runs has the highest cap of the 3 buckets")
         void runs_capsAtLargeMax() {
             UUID workflowId = UUID.randomUUID();
+            stubInScopeWorkflow(workflowId);
             ArgumentCaptor<Pageable> cap = ArgumentCaptor.forClass(Pageable.class);
             when(workflowRunRepository.findRunSummariesByWorkflowId(
                     eq(workflowId), cap.capture()))

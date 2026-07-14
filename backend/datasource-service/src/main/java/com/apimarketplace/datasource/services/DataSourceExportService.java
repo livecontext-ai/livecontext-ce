@@ -151,8 +151,8 @@ public class DataSourceExportService {
                 // Générer le cursor suivant si on a récupéré une batch complète
                 if (batch.size() > BATCH_SIZE) {
                     DataSourceItemRow lastItem = actualBatch.get(actualBatch.size() - 1);
-                    DataSourceEnhancedModels.KeysetCursor cursorObj = new DataSourceEnhancedModels.KeysetCursor(
-                        lastItem.createdAt().toEpochMilli(),
+                    DataSourceEnhancedModels.KeysetCursor cursorObj = DataSourceEnhancedModels.KeysetCursor.of(
+                        lastItem.createdAt(),
                         lastItem.id()
                     );
                     nextCursor = cursorObj.encode();

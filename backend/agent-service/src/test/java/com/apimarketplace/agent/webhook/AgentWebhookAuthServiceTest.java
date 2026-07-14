@@ -99,13 +99,28 @@ class AgentWebhookAuthServiceTest {
         }
 
         @Test
-        @DisplayName("should return success for unknown auth type (treated as no-auth)")
-        void shouldSucceedForUnknownAuthType() {
+        @DisplayName("should FAIL CLOSED for an unrecognized auth type (requiresAuth is true)")
+        void shouldFailClosedForUnknownAuthType() {
+            // Regression: an authType outside {none,basic,header,jwt} still makes
+            // requiresAuth()==true, so it must be rejected, not accepted with no check.
             AgentWebhookConfig config = new AgentWebhookConfig("POST", "custom_unknown", null, null, null, null, null, null);
 
             AgentWebhookAuthService.AuthResult result = service.validateAuth(config, new HttpHeaders());
 
-            assertThat(result.valid()).isTrue();
+            assertThat(result.valid()).isFalse();
+            assertThat(result.message()).contains("Unsupported authentication type");
+        }
+
+        @Test
+        @DisplayName("should FAIL CLOSED for 'bearer' authType even with a Bearer header present")
+        void shouldFailClosedForBearerLikeType() {
+            AgentWebhookConfig config = new AgentWebhookConfig("POST", "bearer", null, null, null, null, null, null);
+            HttpHeaders headers = new HttpHeaders();
+            headers.set(HttpHeaders.AUTHORIZATION, "Bearer anything");
+
+            AgentWebhookAuthService.AuthResult result = service.validateAuth(config, headers);
+
+            assertThat(result.valid()).isFalse();
         }
     }
 

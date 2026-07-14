@@ -8,15 +8,18 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useTranslations } from 'next-intl';
 import { publicationService } from '@/lib/api/orchestrator/publication.service';
-import { interfaceService } from '@/lib/api/orchestrator/interface.service';
-import type { Interface } from '@/lib/api/orchestrator/types';
-import { InterfacePreview } from '@/components/marketplace/InterfacePreview';
 import { AvatarDisplay } from '@/components/agents';
+import { heroGradientCss } from '@/components/agents/avatarColors';
 import { useAuthGuard } from '@/hooks/useAuthGuard';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { isCeMode } from '@/lib/format-cost';
 import { CategoryPicker } from '@/components/marketplace/CategoryPicker';
 import { PAID_TEMPLATES_ENABLED } from '@/lib/featureFlags';
+import {
+  parsePublishAgentError,
+  bytesToMb,
+  type ParsedPublishAgentError,
+} from '@/components/marketplace/publishAgentError';
 
 type ModalState = 'form' | 'publishing' | 'success' | 'error';
 
@@ -43,16 +46,13 @@ export default function PublishAgentModal({
   const { user } = useAuthGuard();
   const { profile: userProfile } = useUserProfile();
   const [state, setState] = useState<ModalState>('form');
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ParsedPublishAgentError | null>(null);
   const [title, setTitle] = useState(agentName);
   const [description, setDescription] = useState(agentDescription || '');
   const [price, setPrice] = useState(0);
   // 'none' = no category selected. Shared sentinel with the workflow/resource
   // publish flows so the backend's category-clear semantics apply uniformly.
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>('none');
-  const [interfaces, setInterfaces] = useState<Interface[]>([]);
-  const [interfaceId, setInterfaceId] = useState<string>('');
-  const [loadingInterfaces, setLoadingInterfaces] = useState(false);
   const [mounted, setMounted] = useState(false);
   const mountedRef = useRef(true);
 
@@ -66,24 +66,6 @@ export default function PublishAgentModal({
     setTitle(agentName);
     setDescription(agentDescription || '');
   }, [agentName, agentDescription]);
-
-  // Load user interfaces when the modal opens (landing-page picker)
-  useEffect(() => {
-    if (!isOpen) return;
-    let cancelled = false;
-    setLoadingInterfaces(true);
-    interfaceService.getInterfaces()
-      .then((list) => {
-        if (cancelled) return;
-        const pageOnly = list.filter((i: any) => !i.interfaceType || i.interfaceType !== 'web_search');
-        setInterfaces(pageOnly);
-        // Auto-select the first one so the common case needs no clicks
-        if (pageOnly.length > 0) setInterfaceId((prev) => prev || pageOnly[0].id);
-      })
-      .catch(() => { if (!cancelled) setInterfaces([]); })
-      .finally(() => { if (!cancelled) setLoadingInterfaces(false); });
-    return () => { cancelled = true; };
-  }, [isOpen]);
 
   if (!isOpen || !mounted) return null;
 
@@ -99,7 +81,6 @@ export default function PublishAgentModal({
       const effectivePrice = PAID_TEMPLATES_ENABLED ? price : 0;
       await publicationService.publishAgent({
         agentConfigId: agentId,
-        interfaceId,
         title: title.trim() || agentName,
         description: description.trim(),
         visibility: 'PUBLIC',
@@ -113,8 +94,21 @@ export default function PublishAgentModal({
       onSuccess?.();
     } catch (err: any) {
       if (!mountedRef.current) return;
-      setError(err.message || t('agents.publishError'));
+      // Structured 422 refusals (grant=all violations, snapshot size cap) are
+      // rendered as readable explanations - never raw JSON.
+      setError(parsePublishAgentError(err, t('publishError')));
       setState('error');
+    }
+  };
+
+  const familyLabel = (family: string): string => {
+    switch (family) {
+      case 'workflows': return t('familyWorkflows');
+      case 'tables': return t('familyTables');
+      case 'interfaces': return t('familyInterfaces');
+      case 'agents': return t('familyAgents');
+      case 'applications': return t('familyApplications');
+      default: return family;
     }
   };
 
@@ -171,8 +165,62 @@ export default function PublishAgentModal({
             <div className="w-16 h-16 bg-theme-secondary rounded-full flex items-center justify-center mx-auto mb-5">
               <AlertTriangle className="h-8 w-8 text-theme-primary" />
             </div>
-            <h2 className="text-xl font-semibold text-theme-primary mb-2">{t('publishError')}</h2>
-            <p className="text-sm text-theme-secondary mb-6">{error}</p>
+            {error?.kind === 'allAccess' ? (
+              <>
+                <h2 className="text-xl font-semibold text-theme-primary mb-2">{t('allAccessErrorTitle')}</h2>
+                <p className="text-sm text-theme-secondary mb-4">{t('allAccessErrorIntro')}</p>
+                <ul className="text-sm text-theme-primary text-left mb-4 space-y-1.5 bg-theme-secondary rounded-xl p-4">
+                  {error.violations.map((v) => (
+                    <li key={v.agentId}>
+                      <span className="font-medium">{v.agentName}</span>
+                      {v.referencedVia && v.referencedVia.length > 0 && (
+                        <span className="text-theme-secondary">
+                          {' '}({t('allAccessErrorSubAgentOf', { parent: v.referencedVia[v.referencedVia.length - 1] })})
+                        </span>
+                      )}
+                      {': '}
+                      {v.families.map(familyLabel).join(', ')}
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-sm text-theme-secondary mb-6">{t('allAccessErrorFix')}</p>
+              </>
+            ) : error?.kind === 'tooLarge' ? (
+              <>
+                <h2 className="text-xl font-semibold text-theme-primary mb-2">{t('snapshotTooLargeTitle')}</h2>
+                <p className="text-sm text-theme-secondary mb-4">
+                  {error.sizeBytes != null && error.maxBytes != null
+                    ? t('snapshotTooLargeMessage', {
+                        size: bytesToMb(error.sizeBytes),
+                        max: bytesToMb(error.maxBytes),
+                      })
+                    : error.maxTableRows != null && error.breakdown[0]?.name != null && error.breakdown[0]?.items != null
+                      ? t('snapshotTooLargeRowsMessage', {
+                          name: error.breakdown[0].name,
+                          items: error.breakdown[0].items,
+                          max: error.maxTableRows,
+                        })
+                      : t('snapshotTooLargeTitle')}
+                </p>
+                {error.sizeBytes != null && error.breakdown.length > 0 && (
+                  <ul className="text-sm text-theme-primary text-left mb-4 space-y-1.5 bg-theme-secondary rounded-xl p-4">
+                    {error.breakdown.map((b, i) => (
+                      <li key={`${b.type}-${b.id ?? i}`}>
+                        <span className="font-medium">{b.name ?? b.id ?? b.type}</span>
+                        {b.approxBytes != null && <>{': '}{bytesToMb(b.approxBytes)} MB</>}
+                        {b.items != null && <span className="text-theme-secondary"> ({t('breakdownRows', { items: b.items })})</span>}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <p className="text-sm text-theme-secondary mb-6">{t('snapshotTooLargeHint')}</p>
+              </>
+            ) : (
+              <>
+                <h2 className="text-xl font-semibold text-theme-primary mb-2">{t('publishError')}</h2>
+                <p className="text-sm text-theme-secondary mb-6">{error?.kind === 'generic' ? error.message : null}</p>
+              </>
+            )}
             <div className="flex gap-3">
               <Button onClick={handleClose} variant="outline" className="flex-1">{t('close')}</Button>
               <Button onClick={handlePublish} className="flex-1">{t('retry')}</Button>
@@ -204,43 +252,22 @@ export default function PublishAgentModal({
 
         {/* Form */}
         <div className="space-y-4 mb-6">
+          {/* Marketplace-card preview: the agent identity hero (avatar over its own
+              gradient) - exactly what the card renders now that no landing interface
+              is attached at publish time. */}
           <div>
-            <label className="text-xs font-medium text-theme-secondary mb-1 block">{t('landingInterfaceLabel')}</label>
-            {loadingInterfaces ? (
-              <div className="rounded-xl border border-theme bg-theme-primary px-4 py-3 text-sm text-theme-secondary">
-                {t('loadingInterfaces')}
+            <label className="text-xs font-medium text-theme-secondary mb-1 block">{t('cardPreviewLabel')}</label>
+            <div
+              className="relative rounded-xl border border-theme overflow-hidden"
+              style={{
+                aspectRatio: '16 / 10',
+                background: heroGradientCss(agentAvatarUrl),
+              }}
+            >
+              <div className="absolute inset-0 z-10 flex items-center justify-center">
+                <AvatarDisplay avatarUrl={agentAvatarUrl} name={agentName} size="xl" />
               </div>
-            ) : interfaces.length === 0 ? (
-              <div className="rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-4 py-3 text-sm text-amber-800 dark:text-amber-200">
-                {t('noInterfacesAvailable', { type: 'AGENT' })}
-              </div>
-            ) : (
-              <>
-                <select
-                  value={interfaceId}
-                  onChange={(e) => setInterfaceId(e.target.value)}
-                  className="w-full h-9 rounded-xl border border-theme bg-theme-primary px-4 text-sm text-theme-primary focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]"
-                >
-                  {interfaces.map((iface) => (
-                    <option key={iface.id} value={iface.id}>{iface.name}</option>
-                  ))}
-                </select>
-                <p className="text-xs text-theme-secondary mt-1">{t('landingInterfaceHint')}</p>
-                {interfaceId && (
-                  <div className="mt-2 relative rounded-xl border border-theme overflow-hidden bg-white dark:bg-slate-900" style={{ aspectRatio: '16 / 10' }}>
-                    <InterfacePreview
-                      snapshot={interfaces.find(i => i.id === interfaceId) ?? null}
-                      className="absolute inset-0 h-full w-full"
-                      emptyLabel={t('noLandingPreview')}
-                    />
-                    <div className="absolute inset-0 bg-gradient-to-b from-white/10 via-white/30 to-white/70 dark:from-slate-900/10 dark:via-slate-900/40 dark:to-slate-900/80" />
-                    <div className="absolute inset-0 z-10 flex items-center justify-center">
-                      <AvatarDisplay avatarUrl={agentAvatarUrl} name={agentName} size="xl" />
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
+            </div>
           </div>
           <div>
             <label className="text-xs font-medium text-theme-secondary mb-1 block">{t('publishTitleLabel')}</label>
@@ -303,7 +330,7 @@ export default function PublishAgentModal({
           <Button
             onClick={handlePublish}
             className="flex-1"
-            disabled={!title.trim() || !interfaceId || loadingInterfaces}
+            disabled={!title.trim()}
           >
             {t('publish')}
           </Button>

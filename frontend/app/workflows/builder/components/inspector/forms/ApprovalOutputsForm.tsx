@@ -5,8 +5,9 @@ import { Info } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ExpressionEditor } from '@/components/ui/expression-editor';
-import type { ApprovalDelegation } from '../../../types';
+import type { ApprovalContinuationMode, ApprovalDelegation } from '../../../types';
 import { ApprovalDelegationSection } from './ApprovalDelegationSection';
 
 /** Syntax example for the approval context (code/syntax token, intentionally not translated). */
@@ -19,6 +20,8 @@ interface ApprovalOutputsFormProps {
   handleTimeoutChange: (timeoutMs: number | undefined) => void;
   approvalContextTemplate?: string;
   handleContextTemplateChange: (template: string | undefined) => void;
+  approvalContinuationMode?: ApprovalContinuationMode;
+  handleContinuationModeChange: (mode: ApprovalContinuationMode | undefined) => void;
   approvalDelegation?: ApprovalDelegation;
   handleDelegationChange: (delegation: ApprovalDelegation | undefined) => void;
 }
@@ -52,6 +55,8 @@ export function ApprovalOutputsForm({
   handleTimeoutChange,
   approvalContextTemplate,
   handleContextTemplateChange,
+  approvalContinuationMode,
+  handleContinuationModeChange,
   approvalDelegation,
   handleDelegationChange,
 }: ApprovalOutputsFormProps) {
@@ -186,6 +191,44 @@ export function ApprovalOutputsForm({
           </div>
         </div>
       )}
+
+      {/* Continuation mode (only relevant inside a split: per-item vs all-items fan-out) */}
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-1.5">
+          <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('approval.continuationLabel')}</span>
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className="inline-flex items-center justify-center rounded-full hover:bg-slate-200 dark:hover:bg-slate-700 p-0.5"
+              >
+                <Info className="h-3 w-3 text-slate-400 dark:text-slate-500" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent className="w-72 p-3 bg-[var(--bg-primary)] border border-gray-200/50 dark:border-gray-700/50 rounded-xl z-[99999]" side="right" align="start">
+              <div className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
+                <p className="font-semibold text-slate-900 dark:text-slate-100">{t('approval.continuationInfoTitle')}</p>
+                <p>{t('approval.continuationInfoBody')}</p>
+                <p className="text-xs">{t('approval.continuationInfoScope')}</p>
+              </div>
+            </PopoverContent>
+          </Popover>
+        </div>
+        <Select
+          value={approvalContinuationMode ?? 'all_items'}
+          onValueChange={(value) => handleContinuationModeChange(value === 'per_item' ? 'per_item' : undefined)}
+          disabled={isRunMode}
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all_items">{t('approval.continuationAllItems')}</SelectItem>
+            <SelectItem value="per_item">{t('approval.continuationPerItem')}</SelectItem>
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-slate-400 dark:text-slate-500">{t('approval.continuationHint')}</p>
+      </div>
 
       {/* Delegate via external channel (optional, v1: Telegram) */}
       <ApprovalDelegationSection

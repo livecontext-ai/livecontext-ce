@@ -1,12 +1,14 @@
 import type { DataTableController } from '@/components/data-table/useDataTableController';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { useTranslations } from 'next-intl';
 
 interface DataTablePaginationProps {
   controller: DataTableController;
 }
 
 export function DataTablePagination({ controller }: DataTablePaginationProps) {
+  const t = useTranslations('dataTable');
   const { pagination, handlePageChange, handlePageSizeChange, rows } = controller;
 
   // Use rows.length as the source of truth for displayed rows count
@@ -22,10 +24,9 @@ export function DataTablePagination({ controller }: DataTablePaginationProps) {
       <div className="text-sm text-theme-secondary">
         {hasSelection && (
           <span>
-            {selectedRows.size > 0 && `${selectedRows.size} row${selectedRows.size > 1 ? 's' : ''}`}
+            {selectedRows.size > 0 && t('rowsSelected', { count: selectedRows.size })}
             {selectedRows.size > 0 && selectedColumns.size > 0 && ' + '}
-            {selectedColumns.size > 0 && `${selectedColumns.size} column${selectedColumns.size > 1 ? 's' : ''}`}
-            {' selected'}
+            {selectedColumns.size > 0 && t('columnsSelected', { count: selectedColumns.size })}
           </span>
         )}
       </div>
@@ -36,7 +37,7 @@ export function DataTablePagination({ controller }: DataTablePaginationProps) {
             className="w-7 h-7 p-0 rounded-full transition-colors inline-flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--text-primary)] hover:text-[var(--bg-primary)] disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-[var(--text-secondary)]"
             onClick={() => handlePageChange(pagination.currentPage - 1)}
             disabled={pagination.currentPage <= 1}
-            aria-label="Previous"
+            aria-label={t('previous')}
           >
             <ChevronLeft className="h-3.5 w-3.5" />
           </button>
@@ -49,7 +50,7 @@ export function DataTablePagination({ controller }: DataTablePaginationProps) {
             className="w-7 h-7 p-0 rounded-full transition-colors inline-flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--text-primary)] hover:text-[var(--bg-primary)] disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-[var(--text-secondary)]"
             onClick={() => handlePageChange(pagination.currentPage + 1)}
             disabled={pagination.currentPage >= pagination.totalPages}
-            aria-label="Next"
+            aria-label={t('next')}
           >
             <ChevronRight className="h-3.5 w-3.5" />
           </button>
@@ -57,7 +58,7 @@ export function DataTablePagination({ controller }: DataTablePaginationProps) {
       )}
 
       <div className="flex items-center gap-2 ml-4">
-        <span className="text-sm text-theme-secondary">Rows per page:</span>
+        <span className="text-sm text-theme-secondary">{t('rowsPerPage')}</span>
         <Select value={pagination.pageSize.toString()} onValueChange={(value) => handlePageSizeChange(Number(value))}>
           <SelectTrigger className="w-[120px] h-9 text-sm">
             <SelectValue />
@@ -72,7 +73,7 @@ export function DataTablePagination({ controller }: DataTablePaginationProps) {
       </div>
 
       <div className="text-sm text-theme-secondary ml-4">
-        {total === 0 ? 'No rows' : `Showing ${visibleRows} of ${total} rows`}
+        {total === 0 ? t('noRows') : t('showingRows', { visible: visibleRows, total })}
       </div>
       </div>
     </div>

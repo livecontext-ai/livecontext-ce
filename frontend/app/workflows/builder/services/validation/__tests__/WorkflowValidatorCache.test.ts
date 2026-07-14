@@ -3,6 +3,7 @@ import { WorkflowValidator } from '../WorkflowValidator';
 import {
   makeStepWithCredentials,
   makeTriggerNode,
+  makeEmailInboxNode,
   makeEdge,
   resetNodeCounter,
   resetEdgeCounter,
@@ -77,6 +78,28 @@ describe('WorkflowValidator cache key invalidation', () => {
     });
 
     const result2 = WorkflowValidator.validate([trigger, stepOnPlatform], [edge]);
+    const warnings2 = Object.values(result2.issuesByElement)
+      .flat()
+      .filter(i => i.context?.rule === 'missing_credential');
+    expect(warnings2).toHaveLength(0);
+  });
+
+  it('should invalidate cache when imapCredentialId changes on an email_inbox node', () => {
+    // Regression: the node signature hashed smtp/ssh/sftp/db credential ids but
+    // omitted imapCredentialId, so selecting an IMAP credential on an otherwise
+    // unchanged graph could serve the stale "not connected" warning from cache.
+    const trigger = makeTriggerNode('Start', 'trigger-1');
+    const inbox = makeEmailInboxNode('Read Unread', { id: 'inbox-1', imapCredentialId: null });
+    const edge = makeEdge('trigger-1', 'inbox-1');
+
+    const result1 = WorkflowValidator.validate([trigger, inbox], [edge]);
+    const warnings1 = Object.values(result1.issuesByElement)
+      .flat()
+      .filter(i => i.context?.rule === 'missing_credential');
+    expect(warnings1).toHaveLength(1);
+
+    const inboxWithCred = makeEmailInboxNode('Read Unread', { id: 'inbox-1', imapCredentialId: 42 });
+    const result2 = WorkflowValidator.validate([trigger, inboxWithCred], [edge]);
     const warnings2 = Object.values(result2.issuesByElement)
       .flat()
       .filter(i => i.context?.rule === 'missing_credential');

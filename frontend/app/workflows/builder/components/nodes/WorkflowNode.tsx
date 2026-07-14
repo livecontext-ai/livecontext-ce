@@ -7,7 +7,7 @@ import { Handle, NodeProps, Position } from 'reactflow';
 import { getNodeVisual } from '../../data/nodeVisuals';
 import type { BuilderNodeData, DerivedNodeStatus, NodeStatus } from '../../types';
 import { useValidation } from '../../contexts/ValidationContext';
-import { NodeHeader, useHoverVisibility, getIconSlug, getStatusBorderColor, ReadyShimmerOverlay } from './shared';
+import { NodeHeader, useHoverVisibility, getIconSlug, getStatusBorderColor } from './shared';
 import { findNodeClassById } from '../../nodes/nodeClasses';
 import { NodeStatusBadge } from '../NodeStatusBadge';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
@@ -58,7 +58,7 @@ export function WorkflowNode({ data, selected, id }: NodeProps<BuilderNodeData>)
 
   // Get border color based on status
   // Always use status color for border
-  const statusBorderColor = getStatusBorderColor(effectiveStatus, hasError, isRunMode || viewingEpoch != null);
+  const statusBorderColor = getStatusBorderColor(effectiveStatus, hasError, isRunMode || viewingEpoch != null, data.statusCounts);
   const borderColor = statusBorderColor;
 
   // Don't apply skipped styling in step-by-step mode
@@ -104,10 +104,6 @@ export function WorkflowNode({ data, selected, id }: NodeProps<BuilderNodeData>)
           }}
         />
       )}
-      {stepByStepStatus.isStepByStepMode && effectiveStatus === 'ready' && (
-        <ReadyShimmerOverlay className="absolute inset-0 pointer-events-none rounded-2xl z-[5]" />
-      )}
-
       {/* Node content */}
       <div className="p-3 space-y-2">
         <NodeHeader

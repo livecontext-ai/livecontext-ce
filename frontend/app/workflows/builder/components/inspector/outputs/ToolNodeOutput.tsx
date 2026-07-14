@@ -31,6 +31,8 @@ interface ToolNodeOutputProps {
   workflowId?: string;
   runId?: string;
   showExecutionData?: boolean;
+  /** Forwarded to RunDataPreview: publishes the loaded output object (the Output header settings menu consumes it). */
+  onLoadedOutputChange?: (data: unknown | null) => void;
 }
 
 export function ToolNodeOutput({
@@ -46,6 +48,7 @@ export function ToolNodeOutput({
   workflowId,
   runId,
   showExecutionData = true,
+  onLoadedOutputChange,
 }: ToolNodeOutputProps) {
   const stepAlias = currentNode?.data?.label;
 
@@ -69,6 +72,7 @@ export function ToolNodeOutput({
           stepAlias={stepAlias}
           dataType="output"
           isDraggable={false}
+          onLoadedOutputChange={onLoadedOutputChange}
         />
       ) : structureId ? (
         <LazyStructureTree

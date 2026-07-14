@@ -53,8 +53,10 @@ public class InternalLoadTestController {
     public ResponseEntity<TriggerController.TriggerResponse> triggerManual(
             @PathVariable("runId") String runId,
             @RequestBody(required = false) Map<String, Object> payload,
-            @RequestHeader(value = "X-User-Plan", required = false) String userPlan) {
+            @RequestHeader(value = "X-User-Plan", required = false) String userPlan,
+            @RequestHeader(value = "X-User-ID", required = false) String userId,
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
         log.debug("[LoadTest] trigger/manual runId={} plan={}", runId, userPlan);
-        return triggerController.triggerManual(runId, payload, userPlan);
+        return triggerController.triggerManual(runId, payload, userPlan, userId, orgId);
     }
 }

@@ -194,7 +194,8 @@ public class WorkflowExecutionController {
             var requestedMode = request.isStepByStepMode()
                     ? com.apimarketplace.orchestrator.domain.workflow.ExecutionMode.STEP_BY_STEP
                     : com.apimarketplace.orchestrator.domain.workflow.ExecutionMode.AUTOMATIC;
-            var resolution = editorRunResolver.findOrCreateRun(workflow, plan, dataInputs, userId, requestedMode);
+            var resolution = editorRunResolver.findOrCreateRun(workflow, plan, dataInputs, userId, requestedMode,
+                    request.getMockMode());
             WorkflowRunEntity runEntity = resolution.runEntity();
             String resolvedRunId = runEntity.getRunIdPublic();
 
@@ -255,6 +256,10 @@ public class WorkflowExecutionController {
 
             return ResponseEntity.ok(responseFactory.createSuccessResponse(execution));
 
+        } catch (IllegalArgumentException e) {
+            // e.g. invalid mockMode value - a caller mistake, not a server fault
+            logger.warn("Invalid workflow execution request: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(responseFactory.createFailureResponse(e.getMessage()));
         } catch (Exception e) {
             logger.error("Error in workflow execution endpoint", e);
             return ResponseEntity.internalServerError().body(responseFactory.createFailureResponse("Internal server error: " + e.getMessage()));

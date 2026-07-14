@@ -8,7 +8,7 @@ import { getNodeVisual } from '../../data/nodeVisuals';
 import { deriveStatusFromCounts } from '../../utils/statusCounts';
 import type { BuilderNodeData, DerivedNodeStatus, NodeStatus } from '../../types';
 import { useValidation } from '../../contexts/ValidationContext';
-import { NodeHeader, useHoverVisibility, getIconSlug, getIconUrl, getStatusBorderColor, ReadyShimmerOverlay } from './shared';
+import { NodeHeader, useHoverVisibility, getIconSlug, getIconUrl, getStatusBorderColor } from './shared';
 import { findNodeClassById } from '../../nodes/nodeClasses';
 import { NodeStatusBadge } from '../NodeStatusBadge';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
@@ -281,7 +281,7 @@ export function FlowNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
 
   // Get border color based on status
   // Always use status-based color for border
-  const statusBorderColor = getStatusBorderColor(effectiveStatus, hasError, isRunMode || viewingEpoch != null);
+  const statusBorderColor = getStatusBorderColor(effectiveStatus, hasError, isRunMode || viewingEpoch != null, data.statusCounts);
   // Toujours utiliser la couleur de statut pour la bordure,
   // même quand le node est sélectionné (le focus sera rendu à l'extérieur).
   // All nodes use status-based border color - blue only appears during running state with shimmer
@@ -393,9 +393,6 @@ export function FlowNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
             animation: 'shimmer-scan 2.5s ease-in-out infinite',
           }}
         />
-      )}
-      {stepByStepStatus.isStepByStepMode && effectiveStatus === 'ready' && !isShowingHtml && (
-        <ReadyShimmerOverlay className="absolute inset-0 pointer-events-none rounded-[26px]" />
       )}
       {/* Fleet trigger buttons (webhook / schedule) are rendered to the LEFT of the
           agent node (see the FleetTriggerButtons block further down), so the old

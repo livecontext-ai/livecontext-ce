@@ -8,6 +8,17 @@ import type { Node } from 'reactflow';
 import type { BuilderNodeData, NodePolicy } from '../../../types';
 import { NodeSettingsSection } from '../NodeSettingsSection';
 
+// Heavy MockOutputSection collaborators not under test here.
+vi.mock('@/lib/api/unified-api-service', () => ({
+  unifiedApiService: { getToolResponses: vi.fn().mockResolvedValue([]) },
+}));
+vi.mock('../../../hooks/useNodeDefinitions', () => ({
+  useNodeDefinitions: () => ({ getOutputSchema: () => [] }),
+}));
+vi.mock('../SourceCoreNodeInspector', () => ({
+  getCoreNodeSchema: () => [],
+}));
+
 const messages: AbstractIntlMessages = {
   workflowBuilder: {
     nodeSettings: {
@@ -24,6 +35,24 @@ const messages: AbstractIntlMessages = {
       executeOnceLabel: 'Execute once',
       executeOnceHelp: 'In a split, run for the first item only.',
       executeOnceBlockedTooltip: 'Not available on split, aggregate, merge or loop nodes.',
+    },
+    mock: {
+      title: 'Mock output',
+      toggleHelp: 'Editor runs return the configured mock instead of executing this node.',
+      sourceLabel: 'Mock source',
+      sourceCustom: 'Custom JSON',
+      sourceCatalogExample: 'Catalog example',
+      sourceError: 'Simulated error',
+      customJsonLabel: 'Output JSON',
+      customJsonHelp: 'Used as this node output when the workflow runs from the editor.',
+      invalidJson: 'Invalid JSON',
+      catalogExampleHelp: 'Serves this tool default example response.',
+      previewExample: 'Preview example',
+      previewProjectionNote: 'Preview of the stored example.',
+      resetToExample: 'Reset to example',
+      portLabel: 'Branch to take',
+      errorMessageLabel: 'Error message',
+      clear: 'Remove mock',
     },
   },
 };
@@ -187,5 +216,176 @@ describe('NodeSettingsSection', () => {
     expect(toggle.disabled).toBe(true);
     fireEvent.change(retry, { target: { value: '5' } });
     expect(onUpdate).not.toHaveBeenCalled();
+  });
+
+  describe('nested Mock output block', () => {
+    function withMock(node: Node<BuilderNodeData>, mock: unknown): Node<BuilderNodeData> {
+      (node.data as BuilderNodeData & { mock?: unknown }).mock = mock;
+      return node;
+    }
+
+    it('renders the Mock output row inside the expanded section, configuration hidden while off', () => {
+      renderSection(makeNode('flowNode', 'action'));
+      expandSection();
+      expect(screen.getByTestId('mock-output-section')).toBeTruthy();
+      const toggle = screen.getByRole('switch', { name: 'Mock output' }) as HTMLButtonElement;
+      expect(toggle.getAttribute('aria-checked')).toBe('false');
+      expect(screen.queryByTestId('mock-source-select')).toBeNull();
+    });
+
+    it('does not render the Mock output row on a mock-blocked split node', () => {
+      renderSection(makeNode('splitNode', 'split'));
+      expandSection();
+      expect(screen.queryByTestId('mock-output-section')).toBeNull();
+    });
+
+    it('reveals the configuration when toggled on, without committing anything', () => {
+      const onUpdate = renderSection(makeNode('flowNode', 'action'));
+      expandSection();
+      fireEvent.click(screen.getByRole('switch', { name: 'Mock output' }));
+      expect(screen.getByTestId('mock-source-select')).toBeTruthy();
+      // Nothing is written until the user commits a source (JSON blur / select).
+      expect(onUpdate).not.toHaveBeenCalled();
+    });
+
+    it('starts expanded with the badge counting an enabled mock, and disables it on toggle off', () => {
+      const node = withMock(makeNode('flowNode', 'action'), { output: { ok: true } });
+      const onUpdate = renderSection(node);
+      // Active mock = section open without clicking, counted in the header badge.
+      const header = screen.getByRole('button', { name: /Settings/ });
+      expect(header.textContent).toContain('(1)');
+      const toggle = screen.getByRole('switch', { name: 'Mock output' }) as HTMLButtonElement;
+      expect(toggle.getAttribute('aria-checked')).toBe('true');
+
+      fireEvent.click(toggle);
+      expect(onUpdate).toHaveBeenCalledTimes(1);
+      const updated = onUpdate.mock.calls[0][0] as BuilderNodeData & { mock?: { enabled?: boolean } };
+      expect(updated.mock).toEqual({ output: { ok: true }, enabled: false });
+      // Configuration hides with the switch.
+      expect(screen.queryByTestId('mock-source-select')).toBeNull();
+    });
+
+    it('re-enables a disabled mock when toggled back on', () => {
+      const node = withMock(makeNode('flowNode', 'action'), {
+        output: { ok: true },
+        enabled: false,
+      });
+      const onUpdate = renderSection(node);
+      expandSection();
+      const toggle = screen.getByRole('switch', { name: 'Mock output' }) as HTMLButtonElement;
+      expect(toggle.getAttribute('aria-checked')).toBe('false');
+
+      fireEvent.click(toggle);
+      const updated = onUpdate.mock.calls[0][0] as BuilderNodeData & { mock?: { enabled?: boolean } };
+      // enabled true is the default and stays omitted (plan-clean shape).
+      expect(updated.mock).toEqual({ output: { ok: true } });
+    });
+
+    it('has no separate Remove action: the switch is the single mock control', () => {
+      const node = withMock(makeNode('flowNode', 'action'), { output: { ok: true } });
+      renderSection(node);
+      expect(screen.queryByTestId('mock-remove')).toBeNull();
+      expect(screen.queryByText('Remove mock')).toBeNull();
+    });
+
+    it('keeps the mock switch disabled in run mode', () => {
+      const node = withMock(makeNode('flowNode', 'action'), { output: { ok: true } });
+      const onUpdate = renderSection(node, vi.fn(), true);
+      const toggle = screen.getByRole('switch', { name: 'Mock output' }) as HTMLButtonElement;
+      expect(toggle.disabled).toBe(true);
+      fireEvent.click(toggle);
+      expect(onUpdate).not.toHaveBeenCalled();
+    });
+
+    it('keeps a DISABLED mock inspectable in run mode (config shown, switch off and frozen)', () => {
+      const node = withMock(makeNode('flowNode', 'action'), {
+        output: { ok: true },
+        enabled: false,
+      });
+      renderSection(node, vi.fn(), true);
+      expandSection();
+      const toggle = screen.getByRole('switch', { name: 'Mock output' }) as HTMLButtonElement;
+      expect(toggle.getAttribute('aria-checked')).toBe('false');
+      expect(toggle.disabled).toBe(true);
+      // Read-only inspection: the configuration stays reachable.
+      expect(screen.getByTestId('mock-source-select')).toBeTruthy();
+    });
+
+    it('does not write anything when toggled on then off before any commit', () => {
+      const onUpdate = renderSection(makeNode('flowNode', 'action'));
+      expandSection();
+      const toggle = screen.getByRole('switch', { name: 'Mock output' });
+      fireEvent.click(toggle); // on: reveal only
+      fireEvent.click(toggle); // off again: still nothing committed
+      expect(onUpdate).not.toHaveBeenCalled();
+      expect(screen.queryByTestId('mock-source-select')).toBeNull();
+    });
+
+    it('excludes a disabled mock from the header badge and the auto-open', () => {
+      const node = withMock(makeNode('flowNode', 'action'), {
+        output: { ok: true },
+        enabled: false,
+      });
+      renderSection(node);
+      const header = screen.getByRole('button', { name: /Settings/ });
+      expect(header.textContent).not.toContain('(');
+      // Disabled mock = section starts collapsed like a policy-less node.
+      expect(screen.queryByTestId('mock-output-section')).toBeNull();
+    });
+
+    it('reseeds the switch when the mock changes externally (Use as mock output / removal)', () => {
+      const node = makeNode('flowNode', 'action');
+      const onUpdate = vi.fn();
+      const view = render(
+        <NextIntlClientProvider locale="en" messages={messages}>
+          <NodeSettingsSection node={node} data={node.data} onUpdate={onUpdate} isRunMode={false} />
+        </NextIntlClientProvider>
+      );
+      expandSection();
+      const toggle = () => screen.getByRole('switch', { name: 'Mock output' });
+      expect(toggle().getAttribute('aria-checked')).toBe('false');
+
+      // External write (e.g. "Use as mock output" from the run panel).
+      const withExternalMock = { ...node.data, mock: { output: { copied: true } } };
+      view.rerender(
+        <NextIntlClientProvider locale="en" messages={messages}>
+          <NodeSettingsSection node={node} data={withExternalMock} onUpdate={onUpdate} isRunMode={false} />
+        </NextIntlClientProvider>
+      );
+      expect(toggle().getAttribute('aria-checked')).toBe('true');
+      expect(screen.getByTestId('mock-source-select')).toBeTruthy();
+
+      // External removal flips it back off.
+      view.rerender(
+        <NextIntlClientProvider locale="en" messages={messages}>
+          <NodeSettingsSection node={node} data={node.data} onUpdate={onUpdate} isRunMode={false} />
+        </NextIntlClientProvider>
+      );
+      expect(toggle().getAttribute('aria-checked')).toBe('false');
+    });
+
+    it('reseeds the switch from the newly selected node when the inspected node changes', () => {
+      const bare = makeNode('flowNode', 'action', undefined, 'action-reseed-a');
+      const onUpdate = vi.fn();
+      const view = render(
+        <NextIntlClientProvider locale="en" messages={messages}>
+          <NodeSettingsSection node={bare} data={bare.data} onUpdate={onUpdate} isRunMode={false} />
+        </NextIntlClientProvider>
+      );
+      expandSection();
+      const toggle = () => screen.getByRole('switch', { name: 'Mock output' });
+      // Locally revealed on the first node (nothing committed).
+      fireEvent.click(toggle());
+      expect(toggle().getAttribute('aria-checked')).toBe('true');
+
+      // Switching to a mock-less node must NOT keep the previous node's local ON.
+      const other = makeNode('flowNode', 'action', undefined, 'action-reseed-b');
+      view.rerender(
+        <NextIntlClientProvider locale="en" messages={messages}>
+          <NodeSettingsSection node={other} data={other.data} onUpdate={onUpdate} isRunMode={false} />
+        </NextIntlClientProvider>
+      );
+      expect(toggle().getAttribute('aria-checked')).toBe('false');
+    });
   });
 });

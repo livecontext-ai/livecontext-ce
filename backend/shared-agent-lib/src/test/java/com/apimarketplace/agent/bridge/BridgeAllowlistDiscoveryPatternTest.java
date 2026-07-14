@@ -27,8 +27,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayName("BridgeAllowlist discovery patterns")
 class BridgeAllowlistDiscoveryPatternTest {
 
+    // codex is intentionally NOT here: OpenAI's Codex-routable set is irregular
+    // (codenamed gpt-5.6 tiers + unroutable bare gpt-5.x in the feed), so codex
+    // is curated-only like mistral-vibe - see codexHasNoDiscoveryPattern().
     private static final Set<String> PATTERN_BRIDGES =
-            Set.of("claude-code", "codex", "gemini-cli");
+            Set.of("claude-code", "gemini-cli");
 
     @Test
     @DisplayName("Every curated id of a pattern-bridge matches that bridge's own pattern (seed ⊆ pattern)")
@@ -52,6 +55,23 @@ class BridgeAllowlistDiscoveryPatternTest {
     }
 
     @Test
+    @DisplayName("codex is curated-only - no discovery pattern, and the phantom bare gpt-5.6 is never auto-derived")
+    void codexHasNoDiscoveryPattern() {
+        // Regression for the prod bug: a codex discovery pattern
+        // (^gpt-5\.\d+(-mini|-codex)?$) auto-derived a phantom codex/gpt-5.6 that
+        // Codex with a ChatGPT account cannot route (typed 400). OpenAI's
+        // Codex-routable set is irregular, so codex now ships fully curated.
+        assertThat(BridgeAllowlist.DISCOVERY_PATTERNS).doesNotContainKey("codex");
+        // The bare gpt-5.6 (a real openai API id, but not codex-routable) and
+        // any other feed gpt-5.x must never be auto-discovered under codex.
+        assertThat(BridgeAllowlist.matchesDiscoveryPattern("codex", "gpt-5.6")).isFalse();
+        assertThat(BridgeAllowlist.matchesDiscoveryPattern("codex", "gpt-5.5")).isFalse();
+        assertThat(BridgeAllowlist.matchesDiscoveryPattern("codex", "gpt-5.6-sol")).isFalse();
+        // Even its curated ids are not discoverable - they ship via MODELS + migration.
+        assertThat(BridgeAllowlist.matchesDiscoveryPattern("codex", "gpt-5.4")).isFalse();
+    }
+
+    @Test
     @DisplayName("A new same-family version is discovered without a code change")
     void discoversNewSameFamilyVersions() {
         // The whole point of this feature: these ids are NOT in MODELS yet.
@@ -59,8 +79,6 @@ class BridgeAllowlistDiscoveryPatternTest {
         assertThat(BridgeAllowlist.matchesDiscoveryPattern("claude-code", "claude-opus-4-8")).isTrue();
         assertThat(BridgeAllowlist.matchesDiscoveryPattern("claude-code", "claude-sonnet-4-7")).isTrue();
         assertThat(BridgeAllowlist.matchesDiscoveryPattern("claude-code", "claude-haiku-5-0")).isTrue();
-        assertThat(BridgeAllowlist.matchesDiscoveryPattern("codex", "gpt-5.5")).isTrue();
-        assertThat(BridgeAllowlist.matchesDiscoveryPattern("codex", "gpt-5.5-mini")).isTrue();
         assertThat(BridgeAllowlist.matchesDiscoveryPattern("gemini-cli", "gemini-3.2-pro")).isTrue();
         assertThat(BridgeAllowlist.matchesDiscoveryPattern("gemini-cli", "gemini-4-flash-preview")).isTrue();
     }

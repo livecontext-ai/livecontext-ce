@@ -557,7 +557,7 @@ public class DecisionNodeCreator extends CreatorBase {
         if (contextTemplate == null) contextTemplate = safeString(parameters.get("context_template"));
 
         // Optional external-channel delegation block (channel/credentialId/chatId/
-        // messageTemplate/allowedUserIds). Sanitized, not verbatim: LLMs routinely
+        // messageTemplate/image/allowedUserIds). Sanitized, not verbatim: LLMs routinely
         // quote numbers, and a credentialId stored as the string "40" used to pass
         // creation, WARN at validate, then be silently dropped by the plan parser at
         // run time (no Telegram message, no error). Coerce it to a number here so the

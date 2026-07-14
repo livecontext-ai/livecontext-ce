@@ -135,6 +135,16 @@ export class AgentService {
   }
 
   /**
+   * One-shot AI avatar generation: prompt in, sanitized SVG markup out.
+   * The SVG is NOT persisted by this call - the caller previews it and, on
+   * accept, uploads it through the regular avatar upload path.
+   */
+  async generateAvatar(prompt: string): Promise<string> {
+    const res = await apiClient.post<{ svg: string }>('/agents/avatar/generate', { prompt });
+    return res.svg;
+  }
+
+  /**
    * Update an agent.
    * Sending `creditsConsumed`, `creditsReserved`, or `creditsFree` is rejected by the
    * backend with 400 `read_only_field` - `AgentUpdateInput` blocks this at compile time.

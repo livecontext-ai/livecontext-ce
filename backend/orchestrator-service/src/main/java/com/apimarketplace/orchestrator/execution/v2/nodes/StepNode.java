@@ -347,6 +347,15 @@ public class StepNode extends BaseNode {
     }
 
     /**
+     * Mock-mode schema tag: same resolution as real executions ({@code MCP} or the
+     * CRUD-specific tag), so schema mappers dispatch identically on mocked outputs.
+     */
+    @Override
+    public String schemaNodeType() {
+        return resolveNodeType();
+    }
+
+    /**
      * Resolves the correct node_type for CRUD schema mapper dispatch.
      */
     private String resolveNodeType() {

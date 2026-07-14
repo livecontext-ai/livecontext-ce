@@ -7,6 +7,8 @@ import {
   makeTriggerNode,
   makeNoteNode,
   makeSendEmailNode,
+  makeEmailInboxNode,
+  makeCoreCredentialNode,
   buildContext,
   resetNodeCounter,
   resetEdgeCounter,
@@ -201,6 +203,177 @@ describe('CredentialValidationRule', () => {
       const credIssues = result.issues.filter((i) => i.context?.rule === 'missing_credential');
       expect(credIssues).toHaveLength(1); // only s1
       expect(credIssues[0].message).toContain('Slack');
+    });
+  });
+
+  // ====== Regression: core-node warning ignored the user's credentials ======
+  // Bug: a workflow with email_inbox nodes warned "requires IMAP credential
+  // (not connected)" even though the user HAD an active default `imap`
+  // credential. The core-node branches checked only the node-level saved id
+  // (imapCredentialId/smtpCredentialId/...) and never consulted
+  // context.userCredentials, unlike the toolData path right below them - while
+  // both the inspector (CredentialSection auto-pick) and the backend node
+  // (getDefaultCredential fallback) treat such a credential as satisfying.
+  describe('regression: core nodes must honor existing user credentials', () => {
+    it('does NOT warn on email_inbox with no saved id when the user has an imap credential', () => {
+      const node = makeEmailInboxNode('Read Unread', { imapCredentialId: null });
+      const userCreds = [
+        makeUserCredential({
+          id: 12,
+          integration: 'imap',
+          name: 'Hostinger IMAP (contact@livecontext.ai)',
+          type: 'API Key',
+          is_default: true,
+        }),
+      ];
+      const ctx = buildContext([node], [], undefined, userCreds);
+      const result = rule.validate(ctx);
+
+      const credIssues = result.issues.filter((i) => i.context?.rule === 'missing_credential');
+      expect(credIssues).toHaveLength(0);
+    });
+
+    it('does NOT warn on multiple email_inbox nodes when one imap credential exists', () => {
+      // Mirrors the reported workflow: 3 email_inbox nodes -> 3 false warnings.
+      const nodes = [
+        makeEmailInboxNode('Read Unread'),
+        makeEmailInboxNode('Mark Replied Read'),
+        makeEmailInboxNode('Delete Mail'),
+      ];
+      const userCreds = [
+        makeUserCredential({ id: 12, integration: 'imap', is_default: true }),
+      ];
+      const ctx = buildContext(nodes, [], undefined, userCreds);
+      const result = rule.validate(ctx);
+
+      const credIssues = result.issues.filter((i) => i.context?.rule === 'missing_credential');
+      expect(credIssues).toHaveLength(0);
+    });
+
+    it('does NOT warn on send_email with no saved id when the user has an smtp credential', () => {
+      const node = makeSendEmailNode('Send Reply', { smtpCredentialId: null });
+      const userCreds = [
+        makeUserCredential({ id: 13, integration: 'smtp', is_default: true }),
+      ];
+      const ctx = buildContext([node], [], undefined, userCreds);
+      const result = rule.validate(ctx);
+
+      const credIssues = result.issues.filter((i) => i.context?.rule === 'missing_credential');
+      expect(credIssues).toHaveLength(0);
+    });
+
+    it('still warns on email_inbox when the user has credentials only for OTHER integrations', () => {
+      const node = makeEmailInboxNode('Read Unread', { imapCredentialId: null });
+      const userCreds = [
+        makeUserCredential({ id: 13, integration: 'smtp', is_default: true }),
+        makeUserCredential({ id: 14, integration: 'github' }),
+      ];
+      const ctx = buildContext([node], [], undefined, userCreds);
+      const result = rule.validate(ctx);
+
+      const credIssues = result.issues.filter((i) => i.context?.rule === 'missing_credential');
+      expect(credIssues).toHaveLength(1);
+      expect(credIssues[0].message).toContain('IMAP');
+    });
+
+    it('still warns on email_inbox when the user has no credentials at all', () => {
+      const node = makeEmailInboxNode('Read Unread', { imapCredentialId: null });
+      const ctx = buildContext([node], [], undefined, []);
+      const result = rule.validate(ctx);
+
+      const credIssues = result.issues.filter((i) => i.context?.rule === 'missing_credential');
+      expect(credIssues).toHaveLength(1);
+      expect(credIssues[0].message).toContain('IMAP');
+    });
+
+    // Same class of bug for the remaining core credential nodes. Each pair
+    // pins BOTH paths of the new check: suppressed when a credential with the
+    // node's exact integration slug exists, warning when it does not - so a
+    // slug typo in resolveCoreCredentialCheck (e.g. 'databases') fails here.
+    it.each([
+      ['ssh' as const, 'SSH'],
+      ['sftp' as const, 'SFTP'],
+      ['database' as const, 'Database'],
+    ])('does NOT warn on %s node when the user has a matching credential, still warns without one', (kind, displayName) => {
+      const node = makeCoreCredentialNode(kind, `My ${displayName}`, { credentialId: null });
+
+      const withMatch = rule.validate(
+        buildContext([node], [], undefined, [
+          makeUserCredential({ id: 20, integration: kind, is_default: true }),
+        ])
+      );
+      expect(
+        withMatch.issues.filter((i) => i.context?.rule === 'missing_credential')
+      ).toHaveLength(0);
+
+      const withoutMatch = rule.validate(
+        buildContext([node], [], undefined, [
+          makeUserCredential({ id: 21, integration: 'github' }),
+        ])
+      );
+      const credIssues = withoutMatch.issues.filter(
+        (i) => i.context?.rule === 'missing_credential'
+      );
+      expect(credIssues).toHaveLength(1);
+      expect(credIssues[0].message).toContain(displayName);
+    });
+
+    it('suppresses even when the saved id is the "[redacted]" scrub sentinel, if a matching credential exists', () => {
+      // Acquired application: the publication scrubber left "[redacted]" in
+      // imapCredentialId, but the buyer has their own imap credential - the
+      // inspector auto-picks it and the backend falls back to the default, so
+      // no warning. (Without a matching credential the sentinel still warns -
+      // pinned by the "[redacted]" regression suite below.)
+      const node = makeEmailInboxNode('Read Unread', {
+        imapCredentialId: '[redacted]' as any,
+      });
+      const userCreds = [
+        makeUserCredential({ id: 12, integration: 'imap', is_default: true }),
+      ];
+      const ctx = buildContext([node], [], undefined, userCreds);
+      const result = rule.validate(ctx);
+
+      const credIssues = result.issues.filter((i) => i.context?.rule === 'missing_credential');
+      expect(credIssues).toHaveLength(0);
+    });
+
+    it('flags missing email_inbox when imapCredentialId is "[redacted]" and the user has no imap credential', () => {
+      const node = makeEmailInboxNode('Read Unread', {
+        imapCredentialId: '[redacted]' as any,
+      });
+      const ctx = buildContext([node], [], undefined, []);
+      const result = rule.validate(ctx);
+
+      const credIssues = result.issues.filter((i) => i.context?.rule === 'missing_credential');
+      expect(credIssues).toHaveLength(1);
+      expect(credIssues[0].message).toContain('IMAP');
+    });
+
+    it('matches the integration case-insensitively (credential stored as "IMAP")', () => {
+      const node = makeEmailInboxNode('Read Unread', { imapCredentialId: null });
+      const userCreds = [
+        makeUserCredential({ id: 12, integration: 'IMAP', is_default: true }),
+      ];
+      const ctx = buildContext([node], [], undefined, userCreds);
+      const result = rule.validate(ctx);
+
+      const credIssues = result.issues.filter((i) => i.context?.rule === 'missing_credential');
+      expect(credIssues).toHaveLength(0);
+    });
+
+    it('an smtp credential does not satisfy an email_inbox node and vice versa (strict integration match)', () => {
+      const inbox = makeEmailInboxNode('Read Unread');
+      const send = makeSendEmailNode('Send Reply');
+      // Only imap available: send_email must still warn, email_inbox must not.
+      const userCreds = [
+        makeUserCredential({ id: 12, integration: 'imap', is_default: true }),
+      ];
+      const ctx = buildContext([inbox, send], [], undefined, userCreds);
+      const result = rule.validate(ctx);
+
+      const credIssues = result.issues.filter((i) => i.context?.rule === 'missing_credential');
+      expect(credIssues).toHaveLength(1);
+      expect(credIssues[0].message).toContain('SMTP');
     });
   });
 

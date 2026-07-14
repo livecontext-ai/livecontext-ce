@@ -38,6 +38,11 @@ public class InterfaceNode extends BaseNode {
     private final boolean generatePdf;
     private final String pdfFormat;
     private final boolean pdfLandscape;
+    private final boolean generateVideo;
+    private final String videoPreset;
+    private final Integer videoMaxDurationSeconds;
+    private final String videoMode;
+    private final Integer videoFps;
 
     /**
      * Per-field cap on the {@code rendered_html} / {@code rendered_css} / {@code rendered_js}
@@ -58,7 +63,9 @@ public class InterfaceNode extends BaseNode {
     public InterfaceNode(String nodeId, String interfaceId,
                          Map<String, String> actionMapping, boolean isEntryInterface,
                          boolean generateScreenshot, boolean exposeRenderedSource,
-                         boolean generatePdf, String pdfFormat, boolean pdfLandscape) {
+                         boolean generatePdf, String pdfFormat, boolean pdfLandscape,
+                         boolean generateVideo, String videoPreset, Integer videoMaxDurationSeconds,
+                         String videoMode, Integer videoFps) {
         super(nodeId, NodeType.INTERFACE);
         this.interfaceId = interfaceId;
         this.actionMapping = actionMapping != null ? actionMapping : Map.of();
@@ -68,6 +75,31 @@ public class InterfaceNode extends BaseNode {
         this.generatePdf = generatePdf;
         this.pdfFormat = pdfFormat;
         this.pdfLandscape = pdfLandscape;
+        this.generateVideo = generateVideo;
+        this.videoPreset = videoPreset;
+        this.videoMaxDurationSeconds = videoMaxDurationSeconds;
+        this.videoMode = videoMode;
+        this.videoFps = videoFps;
+    }
+
+    /** Backward-compatible 12-arg constructor: video mode/fps default null (smooth / 30 at render). */
+    public InterfaceNode(String nodeId, String interfaceId,
+                         Map<String, String> actionMapping, boolean isEntryInterface,
+                         boolean generateScreenshot, boolean exposeRenderedSource,
+                         boolean generatePdf, String pdfFormat, boolean pdfLandscape,
+                         boolean generateVideo, String videoPreset, Integer videoMaxDurationSeconds) {
+        this(nodeId, interfaceId, actionMapping, isEntryInterface, generateScreenshot,
+            exposeRenderedSource, generatePdf, pdfFormat, pdfLandscape,
+            generateVideo, videoPreset, videoMaxDurationSeconds, null, null);
+    }
+
+    /** Backward-compatible 9-arg constructor: video options default off (no video output). */
+    public InterfaceNode(String nodeId, String interfaceId,
+                         Map<String, String> actionMapping, boolean isEntryInterface,
+                         boolean generateScreenshot, boolean exposeRenderedSource,
+                         boolean generatePdf, String pdfFormat, boolean pdfLandscape) {
+        this(nodeId, interfaceId, actionMapping, isEntryInterface, generateScreenshot,
+            exposeRenderedSource, generatePdf, pdfFormat, pdfLandscape, false, null, null);
     }
 
     /** Backward-compatible 6-arg constructor: PDF options default off (no PDF output). */
@@ -108,6 +140,14 @@ public class InterfaceNode extends BaseNode {
         if (generatePdf) {
             resolvedParams.put("pdfFormat", pdfFormat != null ? pdfFormat : "A4");
             resolvedParams.put("pdfLandscape", pdfLandscape);
+        }
+        resolvedParams.put("generateVideo", generateVideo);
+        if (generateVideo) {
+            resolvedParams.put("videoPreset", videoPreset != null ? videoPreset : "vertical");
+            resolvedParams.put("videoMaxDurationSeconds",
+                videoMaxDurationSeconds != null ? videoMaxDurationSeconds : 30);
+            resolvedParams.put("videoMode", videoMode != null ? videoMode : "smooth");
+            resolvedParams.put("videoFps", videoFps != null ? videoFps : 30);
         }
 
         try {
@@ -166,6 +206,13 @@ public class InterfaceNode extends BaseNode {
             if (generatePdf) {
                 Optional<FileRef> pdf = capturePdf(context, effectiveEpoch);
                 pdf.ifPresent(fileRef -> output.put("pdf", fileRef));
+            }
+
+            // Best-effort MP4 recording of the interface's animation, same continue-on-failure
+            // contract: sidecar error/absence → log + omit the `video` field, workflow continues.
+            if (generateVideo) {
+                Optional<FileRef> video = captureVideo(context, effectiveEpoch);
+                video.ifPresent(fileRef -> output.put("video", fileRef));
             }
 
             // Best-effort source exposure: emit the iframe-equivalent rendered HTML/CSS/JS as
@@ -328,6 +375,42 @@ public class InterfaceNode extends BaseNode {
         }
     }
 
+    private Optional<FileRef> captureVideo(ExecutionContext context, int effectiveEpoch) {
+        if (screenshotService == null) {
+            // Same high-confusion "toggle on, bean missing" case as the screenshot branch.
+            logger.warn("generateVideo toggle is ON but no InterfaceScreenshotService is wired - skipping video: nodeId={}", nodeId);
+            return Optional.empty();
+        }
+        try {
+            UUID parsedInterfaceId;
+            try {
+                parsedInterfaceId = UUID.fromString(interfaceId);
+            } catch (IllegalArgumentException invalid) {
+                logger.warn("Cannot record video: interfaceId is not a valid UUID - nodeId={}, interfaceId={}",
+                    nodeId, interfaceId);
+                return Optional.empty();
+            }
+            return screenshotService.captureVideo(
+                context.tenantId(),
+                context.runId(),
+                effectiveEpoch,
+                context.spawn(),
+                context.itemIndex(),
+                nodeId,
+                parsedInterfaceId,
+                videoPreset,
+                videoMaxDurationSeconds,
+                videoMode,
+                videoFps
+            );
+        } catch (Exception e) {
+            // Continue-on-failure: cosmetic feature must never break the workflow.
+            logger.warn("Video recording failed (continuing without video): nodeId={}, error={}",
+                nodeId, e.getMessage());
+            return Optional.empty();
+        }
+    }
+
     @Override
     public void acceptServices(ServiceRegistry registry) {
         super.acceptServices(registry);
@@ -367,6 +450,26 @@ public class InterfaceNode extends BaseNode {
 
     public boolean isPdfLandscape() {
         return pdfLandscape;
+    }
+
+    public boolean isGenerateVideo() {
+        return generateVideo;
+    }
+
+    public String getVideoPreset() {
+        return videoPreset;
+    }
+
+    public Integer getVideoMaxDurationSeconds() {
+        return videoMaxDurationSeconds;
+    }
+
+    public String getVideoMode() {
+        return videoMode;
+    }
+
+    public Integer getVideoFps() {
+        return videoFps;
     }
 
     public void setDagTriggerId(String dagTriggerId) {

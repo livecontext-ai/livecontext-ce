@@ -19,6 +19,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { resolve, basename } from 'node:path';
 import { resolveInlineText, buildAttachmentPrompt } from '../lib/attachmentPrompt.mjs';
 
 // Build NUL at runtime - never a literal in source (a literal would make git
@@ -290,4 +291,58 @@ test('E2E: a NUL in the base chat text is stripped before it reaches spawn args'
   for (const a of safe) {
     if (typeof a === 'string') assert.ok(!a.includes(NUL), 'no spawn arg may contain a NUL');
   }
+});
+
+// ───────────────────── path-traversal on att.fileName ───────────────────────
+// att.fileName is attacker-controlled. Before the fix, resolve(attachDir, fileName)
+// let a crafted name escape attachDir and write an arbitrary file on the bridge host.
+// Assertions are platform-neutral (resolve/basename) so they hold on the Linux host
+// and on a Windows dev box alike: the invariant is "confined to attachDir, basename only".
+const ATTACH_DIR = '/tmp/att';
+
+test('SECURITY: a "../" traversal fileName is confined to attachDir (binary path)', () => {
+  const { writeFile, writes } = recordingWriter();
+  const r = buildAttachmentPrompt('q', [
+    { type: 'OTHER', mimeType: 'application/octet-stream',
+      data: b64bin([1, 2, 3]), fileName: '../../../../etc/cron.d/pwn' },
+  ], { attachDir: ATTACH_DIR, writeFile });
+
+  assert.equal(writes.length, 1);
+  const p = writes[0].path;
+  assert.equal(basename(p), 'pwn');                    // no directory components survived
+  assert.equal(p, resolve(ATTACH_DIR, 'pwn'));         // confined to attachDir
+  assert.ok(!r.finalPrompt.includes('/etc/cron.d/'));  // prompt never references the escaped path
+});
+
+test('SECURITY: an absolute fileName cannot redirect the write outside attachDir', () => {
+  const { writeFile, writes } = recordingWriter();
+  buildAttachmentPrompt('q', [
+    { type: 'OTHER', mimeType: 'application/octet-stream',
+      data: b64bin([9]), fileName: '/etc/passwd' },
+  ], { attachDir: ATTACH_DIR, writeFile });
+
+  assert.equal(writes[0].path, resolve(ATTACH_DIR, 'passwd'));
+});
+
+test('SECURITY: a backslash traversal fileName is confined (bridge host is Linux)', () => {
+  const { writeFile, writes } = recordingWriter();
+  buildAttachmentPrompt('q', [
+    { type: 'OTHER', mimeType: 'application/octet-stream',
+      data: b64bin([7]), fileName: String.raw`..\..\..\evil.sh` },
+  ], { attachDir: ATTACH_DIR, writeFile });
+
+  assert.equal(basename(writes[0].path), 'evil.sh');
+  assert.equal(writes[0].path, resolve(ATTACH_DIR, 'evil.sh'));
+});
+
+test('SECURITY: oversized extracted text with a traversal name writes .txt inside attachDir', () => {
+  const { writeFile, writes } = recordingWriter();
+  const huge = 'a'.repeat(200 * 1024); // exceeds INLINE_PROMPT_BUDGET_BYTES -> written to disk
+  buildAttachmentPrompt('q', [
+    { type: 'PDF', mimeType: 'application/pdf',
+      extractedText: huge, fileName: '../../secret' },
+  ], { attachDir: ATTACH_DIR, writeFile });
+
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].path, resolve(ATTACH_DIR, 'secret.txt'));
 });

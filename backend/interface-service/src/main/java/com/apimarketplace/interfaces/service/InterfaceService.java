@@ -235,6 +235,11 @@ public class InterfaceService {
 
         validateCreateOrUpdate(tenantId, name != null ? name : existing.getName());
 
+        // Capture size BEFORE mutating: estimateInterfaceSize is a pure function of the
+        // entity's fields, so measuring after the setters (and save() returns the same
+        // managed instance) yielded a delta of ~0 and update growth was never tracked.
+        long oldSize = estimateInterfaceSize(existing);
+
         if (name != null) existing.setName(name);
         if (description != null) existing.setDescription(description);
         boolean templateChanged = false;
@@ -270,7 +275,6 @@ public class InterfaceService {
         if (isPublic != null) existing.setIsPublic(isPublic);
         if (isActive != null) existing.setIsActive(isActive);
 
-        long oldSize = estimateInterfaceSize(existing);
         InterfaceEntity saved = interfaceRepository.save(existing);
         // Size delta accrues to the row owner's storage budget, not the
         // caller's - relevant when a teammate edits via an org workspace.
@@ -939,11 +943,14 @@ public class InterfaceService {
                     "interface", id.toString());
         }
 
+        // Capture size BEFORE mutating (see updateInterface): measuring after the setters
+        // gives a ~0 delta so slide-data growth would never be tracked.
+        long oldSize = estimateInterfaceSize(existing);
+
         if (name != null) existing.setName(name);
         if (description != null) existing.setDescription(description);
         if (slideData != null) existing.setData(slideData);
 
-        long oldSize = estimateInterfaceSize(existing);
         InterfaceEntity saved = interfaceRepository.save(existing);
         breakdownService.increment(tenantId, "INTERFACES", estimateInterfaceSize(saved) - oldSize, 0);
         return saved;

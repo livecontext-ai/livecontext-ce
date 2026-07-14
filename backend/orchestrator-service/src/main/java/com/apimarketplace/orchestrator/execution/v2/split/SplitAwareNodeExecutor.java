@@ -6,6 +6,7 @@ import com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataK
 import com.apimarketplace.orchestrator.execution.v2.engine.ExecutionContext;
 import com.apimarketplace.orchestrator.execution.v2.engine.TriggerItem;
 import com.apimarketplace.orchestrator.execution.v2.nodes.ExecutionNode;
+import com.apimarketplace.orchestrator.execution.v2.nodes.NodeType;
 import com.apimarketplace.orchestrator.domain.execution.NodeStatus;
 import com.apimarketplace.orchestrator.execution.v2.nodes.NodeExecutionResult;
 import com.apimarketplace.orchestrator.execution.v2.services.NodeCompletionService;
@@ -193,6 +194,26 @@ public class SplitAwareNodeExecutor {
     }
 
     /**
+     * Optional: per-node mock mode. Consulted at the two leaf execution points of
+     * this executor ({@link #executeNodeBody} and the per-item fan-out invoker) -
+     * the choke points every mockable node family funnels through in AUTO,
+     * step-by-step and split-per-item paths. Null in unit tests → no mock lookup,
+     * behavior byte-identical.
+     */
+    private com.apimarketplace.orchestrator.execution.v2.engine.MockExecutionService mockExecutionService;
+
+    @Autowired(required = false)
+    public void setMockExecutionService(
+            com.apimarketplace.orchestrator.execution.v2.engine.MockExecutionService mockExecutionService) {
+        this.mockExecutionService = mockExecutionService;
+    }
+
+    /** Null-tolerant mock consult: returns the substituted result, or null = execute real. */
+    private NodeExecutionResult tryMock(ExecutionNode node, ExecutionContext ctx) {
+        return mockExecutionService != null ? mockExecutionService.tryMock(node, ctx) : null;
+    }
+
+    /**
      * Optional: durable per-item output store used to backfill {@link #injectPredecessorPerItemOutputs}
      * when the in-memory {@link SplitContext#resultsByNode} is missing a predecessor slot for the current
      * item (cross-pod async/signal resume where {@code restoreContext} rebuilt items only, a restart that
@@ -232,6 +253,12 @@ public class SplitAwareNodeExecutor {
      * exceptions are byte-identical to calling {@code node.execute(ctx)} directly.
      */
     private NodeExecutionResult executeNodeBody(ExecutionNode node, ExecutionContext ctx) {
+        // Per-node mock mode: checked BEFORE the timeout wrapper - a mock is a
+        // constant-time substitution, bounding it would be pointless overhead.
+        NodeExecutionResult mocked = tryMock(node, ctx);
+        if (mocked != null) {
+            return mocked;
+        }
         com.apimarketplace.orchestrator.domain.workflow.NodePolicy policy =
             nodePolicyRunner.resolve(ctx != null ? ctx.plan() : null, node.getNodeId());
         if (!policy.hasTimeout()) {
@@ -331,6 +358,24 @@ public class SplitAwareNodeExecutor {
             TriggerItem triggerItem,
             int workflowItemIndex,
             SuccessorTraverser successorTraverser) {
+        return execute(node, context, runId, nodeMap, execution, triggerItem, workflowItemIndex,
+            successorTraverser, SplitExecutionOptions.NONE);
+    }
+
+    /**
+     * Options-aware variant - see {@link SplitExecutionOptions} for the per-item
+     * continuation disposition. All other callers use the default (NONE) overloads.
+     */
+    public NodeExecutionResult execute(
+            ExecutionNode node,
+            ExecutionContext context,
+            String runId,
+            Map<String, ExecutionNode> nodeMap,
+            WorkflowExecution execution,
+            TriggerItem triggerItem,
+            int workflowItemIndex,
+            SuccessorTraverser successorTraverser,
+            SplitExecutionOptions options) {
 
         String nodeId = node.getNodeId();
 
@@ -360,6 +405,15 @@ public class SplitAwareNodeExecutor {
             Optional<SplitContext> routingSplitCtx = findSplitContextWithFallback(
                 runId, nodeId, workflowItemIndex, nodeMap, node);
             if (routingSplitCtx.isEmpty()) {
+                // Per-item continuation walks fail CLOSED: a walk node is by construction in
+                // split scope; a missing context (failed cross-pod restore, eviction) must
+                // defer, never degrade to a single node-level execution mid-barrier - the
+                // walk bypasses canExecute/idempotency guards, so this branch would persist
+                // node-level state and strand every sibling item's continuation.
+                if (options != null && options.perItemContinuation()) {
+                    logger.warn("[SplitAware] Per-item continuation: split context unavailable, deferring instead of degrading: nodeId={}", nodeId);
+                    return deferredContinuationResult(runId, nodeId, context.epoch());
+                }
                 // Not in split scope - normal execution
                 logger.debug("[SplitAware] Node not in split scope, executing normally: nodeId={}, type={}",
                     nodeId, node.getType());
@@ -381,6 +435,13 @@ public class SplitAwareNodeExecutor {
             runId, nodeId, workflowItemIndex, nodeMap, node);
 
         if (splitContextOpt.isEmpty()) {
+            // Per-item continuation walks fail CLOSED (see the routing branch above): a
+            // missing split context defers the walk step instead of degrading to a single
+            // unguarded node-level execution.
+            if (options != null && options.perItemContinuation()) {
+                logger.warn("[SplitAware] Per-item continuation: split context unavailable, deferring instead of degrading: nodeId={}", nodeId);
+                return deferredContinuationResult(runId, nodeId, context.epoch());
+            }
             // No split context - normal execution. NOTE: nodePolicy.executeOnce is a
             // NO-OP here by design - outside a split the node executes once anyway
             // (context.itemIndex() is the WORKFLOW item index, not a split item index).
@@ -433,7 +494,7 @@ public class SplitAwareNodeExecutor {
         // Execute for all items and launch parallel traversals
         return executeForAllItemsAndTraverse(
             node, context, splitContext, runId,
-            execution, triggerItem, workflowItemIndex, successorTraverser);
+            execution, triggerItem, workflowItemIndex, successorTraverser, options);
     }
 
     /**
@@ -473,11 +534,13 @@ public class SplitAwareNodeExecutor {
             WorkflowExecution execution,
             TriggerItem triggerItem,
             int workflowItemIndex,
-            SuccessorTraverser successorTraverser) {
+            SuccessorTraverser successorTraverser,
+            SplitExecutionOptions options) {
 
         String nodeId = node.getNodeId();
         List<Object> items = splitContext.items();
         int itemCount = items.size();
+        final boolean perItemContinuation = options != null && options.perItemContinuation();
 
         if (itemCount == 0) {
             logger.info("[SplitAware] Empty split, marking node as SKIPPED: nodeId={}", nodeId);
@@ -487,6 +550,39 @@ public class SplitAwareNodeExecutor {
         // Determine which items should be executed
         // For nodes after Classify/Decision, only execute items that were routed to this node
         Set<Integer> routedItemIndices = getRoutedItemIndices(node, runId, itemCount, context.epoch(), splitContext.splitNodeId());
+
+        // Per-item continuation walk (SplitExecutionOptions.perItemContinuation): durable
+        // per-item idempotency. A walk runs once per signal resolution; items whose terminal
+        // row already landed in a PRIOR walk must never re-execute (their side effects ran).
+        // Rows are the cross-pod / crash-safe record - no in-memory or Redis state to lose.
+        if (perItemContinuation && stepDataRepository != null) {
+            try {
+                java.util.List<Integer> persistedIndices =
+                    stepDataRepository.findTerminalItemIndicesByEpoch(runId, nodeId, context.epoch());
+                if (!persistedIndices.isEmpty()) {
+                    Set<Integer> remaining = new HashSet<>(routedItemIndices);
+                    remaining.removeAll(persistedIndices);
+                    logger.info("[SplitAware] Per-item continuation: excluding {} already-persisted items: nodeId={}, routed={}, remaining={}",
+                        persistedIndices.size(), nodeId, routedItemIndices, remaining);
+                    routedItemIndices = remaining;
+                }
+            } catch (Exception e) {
+                // Fail CLOSED: without the exclusion set we cannot prove an item was not
+                // already executed - deferring is always safe (the seal or a later walk
+                // re-derives), re-executing a side-effecting item is not.
+                logger.warn("[SplitAware] Per-item continuation: could not load persisted item indices, deferring walk: nodeId={}, error={}",
+                    nodeId, e.getMessage());
+                routedItemIndices = Set.of();
+            }
+        }
+        if (perItemContinuation && routedItemIndices.isEmpty()) {
+            // Benign deferred no-op: nothing newly routed to this node yet (wrong port for
+            // the resolved item, or all routed items already persisted). Do NOT mark the
+            // node SKIPPED - routing only becomes final at seal, once every sibling signal
+            // has resolved.
+            logger.info("[SplitAware] Per-item continuation: no executable item this walk, deferring: nodeId={}", nodeId);
+            return deferredContinuationResult(runId, nodeId, context.epoch());
+        }
 
         // nodePolicy.executeOnce - generic per-node policy: in a split, execute for
         // split item index 0 ONLY; every other routed item is suppressed and persisted
@@ -606,17 +702,42 @@ public class SplitAwareNodeExecutor {
         // WARM-PATH SKIP (mirrors SplitMergeHandler.mergeDurablePerItem): when the in-memory
         // resultsByNode is already dense for every routed item, memory can serve every slot, so the
         // durable read would be pure waste (a healthy single-pod run must stay query-free). The
-        // collapse cases this fix targets all leave resultsByNode empty or sparse: restoreContext
+        // collapse cases this fix targets leave resultsByNode empty or sparse: restoreContext
         // rebuilds items only (cross-pod/restart), and an unsealed async barrier leaves gaps -
         // inMemorySlotsComplete returns false for exactly those, so the durable read fires only when
         // it can actually help. Memory always wins over the backfill (injectPredecessorPerItemOutputs
         // only fills nodes ABSENT from memory), so an over-eager load can never corrupt a good value.
         // Null-tolerant: unset stepOutputService (unit tests) → no backfill, behavior unchanged.
+        //
+        // THREE readers bypass the warm-skip veto entirely (multi-pod blind spot fix, 2026-07-14 -
+        // the veto used to read a NON-EMPTY map whose every PRESENT node was dense as "warm", but a
+        // per-item node that ran entirely on ANOTHER pod is ABSENT from the map, not
+        // present-with-null, so a dense-but-incomplete map silently starved the reader and its
+        // yield-time templates collapsed to the base context's item-0 value):
+        //   a. perItemContinuation walks - they span multiple resumes (and possibly pods): the
+        //      in-memory resultsByNode is rebuilt items-only on each signal restore, so chained
+        //      reads must ALWAYS be durable-backed, even when nodes executed earlier in THIS walk
+        //      have already re-populated the map densely for themselves.
+        //   b. signal-yielding nodes (approval/interface/browser-agent) - they resolve arbitrary
+        //      user-authored templates at YIELD time (approval delegation message, interface render
+        //      snapshot, browser-agent task) and the registered signal_config freezes
+        //      (UnifiedSignalService.registerSignal is first-registration-wins), so a degraded
+        //      resolution is unrecoverable. One durable epoch query per pause inside a split is the
+        //      accepted cost of never freezing a collapsed message.
+        //   c. (inside inMemorySlotsComplete) a direct non-split predecessor of the reader that is
+        //      entirely ABSENT from the map - memory provably cannot serve it, so the map is not
+        //      warm no matter how dense the present entries are.
+        // The second clause (consumer SHAPE) still gates all of them: a DIRECT split successor
+        // (only predecessor = the split itself) reads nothing but {{item}}/current_item and stays
+        // query-free - including a signal-yielding node placed directly after the split.
         final Map<String, Map<Integer, Object>> durableEpochOutputs =
             (stepOutputService != null
-                    && !inMemorySlotsComplete(splitContext, routedItemIndices)
+                    && (perItemContinuation
+                        || isSignalYieldingNode(node)
+                        || !inMemorySlotsComplete(splitContext, routedItemIndices, node))
                     && (isCrossItemPerItemConsumer(node)
-                        || readsNonSplitPredecessor(node, splitContext.splitNodeId())))
+                        || readsNonSplitPredecessor(node, splitContext.splitNodeId())
+                        || perItemContinuation))
                 ? loadDurableEpochOutputs(context)
                 : null;
 
@@ -663,8 +784,19 @@ public class SplitAwareNodeExecutor {
                         com.apimarketplace.orchestrator.domain.workflow.NodePolicy itemPolicy =
                             nodePolicyRunner.resolve(itemContext.plan(), nodeId);
                         NodeExecutionResult result = nodePolicyRunner.run(itemPolicy, nodeId,
-                            () -> nodePolicyRunner.callWithTimeout(itemPolicy, nodeId,
-                                () -> node.execute(itemContext)),
+                            () -> {
+                                // Per-item mock consult: a mocked node returns the same
+                                // configured result for every item (item_index stamped
+                                // below as for real results). Checked inside the policy
+                                // invoker so error mocks compose with retries exactly
+                                // like real failures.
+                                NodeExecutionResult itemMocked = tryMock(node, itemContext);
+                                if (itemMocked != null) {
+                                    return itemMocked;
+                                }
+                                return nodePolicyRunner.callWithTimeout(itemPolicy, nodeId,
+                                    () -> node.execute(itemContext));
+                            },
                             (annotatedFailure, attempt, maxAttempts) -> failedAttempts.add(
                                 addItemIndexToResult(annotatedFailure, subItemIndex, itemCount)));
 
@@ -850,8 +982,11 @@ public class SplitAwareNodeExecutor {
                 }
 
                 // Terminal sync result - persist + traverse on the main thread (transactional context).
+                // Per-item continuation: suppress the node-level EpochState mark (same Phase 2.E
+                // mechanism as the split-async path) - the seal writes it once at the end.
                 if (canPersist && itemResult.context != null) {
-                    persistItemResult(execution, node, itemResult.result, triggerItem, itemResult.index, itemResult.context);
+                    persistItemResult(execution, node, itemResult.result, triggerItem, itemResult.index,
+                        itemResult.context, perItemContinuation);
                 }
 
                 // continueOnFailure policy: this item's final result is FAILED (recorded as
@@ -890,11 +1025,14 @@ public class SplitAwareNodeExecutor {
         // Two disjoint per-item skip sets, each with its honest reason:
         //  - branch-unrouted items (complement of the PRE-executeOnce routed set);
         //  - executeOnce-suppressed items (routed here, suppressed by the policy).
-        if (canPersist && routedBeforeExecuteOnce.size() < itemCount) {
+        // Per-item continuation: unrouted items are PENDING (their signal has not resolved
+        // yet), not skipped - the seal materializes the real per-item SKIPPED rows once
+        // every sibling signal resolved and routing is final.
+        if (canPersist && !perItemContinuation && routedBeforeExecuteOnce.size() < itemCount) {
             persistSkippedItemRecords(execution, node, routedBeforeExecuteOnce, itemCount,
                 context.epoch(), context.triggerId());
         }
-        if (canPersist && !executeOnceSuppressed.isEmpty()) {
+        if (canPersist && !perItemContinuation && !executeOnceSuppressed.isEmpty()) {
             Set<Integer> executedOrUnrouted = new HashSet<>();
             for (int i = 0; i < itemCount; i++) {
                 if (!executeOnceSuppressed.contains(i)) {
@@ -972,6 +1110,27 @@ public class SplitAwareNodeExecutor {
 
         logger.info("[SplitAware] Completed {} items: nodeId={}, failures={}, duration={}ms, successorsHandled={}",
             itemCount, nodeId, errors.size(), duration, canTraverseSuccessors);
+
+        // Per-item continuation walk: the items executed here were persisted per item
+        // (suppressGlobalMark) - the node as a whole is NOT terminal until the seal.
+        // Return the summary flagged SPLIT_ALREADY_PERSISTED so the engine records no
+        // node-level completion for it.
+        if (perItemContinuation) {
+            NodeExecutionResult continuationSummary =
+                createSummaryResult(nodeId, results, errors, hasFailure, duration, true);
+            Map<String, Object> continuationMetadata = new HashMap<>(
+                continuationSummary.metadata() != null ? continuationSummary.metadata() : Map.of());
+            continuationMetadata.put(ExecutionMetadataKeys.SPLIT_ALREADY_PERSISTED, true);
+            continuationMetadata.put("per_item_continuation", true);
+            return new NodeExecutionResult(
+                nodeId,
+                continuationSummary.status(),
+                continuationSummary.output(),
+                continuationSummary.errorMessage(),
+                continuationMetadata,
+                continuationSummary.durationMs()
+            );
+        }
 
         // Return result with metadata
         // If we handled successors, set flag to prevent engine from re-traversing
@@ -1440,19 +1599,35 @@ public class SplitAwareNodeExecutor {
     /**
      * True when the in-memory {@link SplitContext#resultsByNode} can already serve every routed item
      * from RAM, so a durable read would be wasted work. "Complete" means the cache is non-empty AND
-     * every node currently in it has a non-null slot for every routed item index. An empty cache
-     * (restoreContext rebuilt items only after a cross-pod/restart) or any missing/short/null slot
-     * (unsealed async barrier) returns {@code false} - exactly the states where the durable backfill
-     * recovers a real per-item value instead of the collapsed "item 0" value.
+     * every node currently in it has a non-null slot for every routed item index AND (absent-key
+     * hardening, see below) every direct non-split predecessor of {@code node} has an entry at all.
+     * An empty cache (restoreContext rebuilt items only after a cross-pod/restart) or any
+     * missing/short/null slot (unsealed async barrier) returns {@code false} - exactly the states
+     * where the durable backfill recovers a real per-item value instead of the collapsed "item 0"
+     * value.
      *
-     * <p>Deliberate residual: a node that ran entirely on another pod is absent from the map rather
-     * than present-with-null. When the rest of the map is dense this returns {@code true} and skips
-     * the read; in practice the absent-node case coincides with an empty/sparse map (a resumed pod
-     * starts from a rebuilt-items-only context), so the observed collapse still triggers a load. The
-     * merge path ({@link SplitMergeHandler#mergeDurablePerItem}) closes even that residual by scoping
-     * against the split-subgraph ancestors, which this executor path lacks the node map to compute.
+     * <p>Absent-key hardening (multi-pod blind spot, 2026-07-14): a node that ran entirely on
+     * another pod is ABSENT from the map rather than present-with-null, so a dense-but-incomplete
+     * map used to read as warm and starve the durable backfill (prod symptom: with 2 replicas and
+     * sequential async agents, the pod sealing the barrier held a dense map for the walk-executed
+     * nodes but no entry for a post-agent code node that ran elsewhere - the approval delegation
+     * template referencing it froze empty). This method now returns {@code false} when a DIRECT
+     * non-split predecessor step key of {@code node} has no entry in the map: memory provably
+     * cannot serve that predecessor. The split node itself is exempt (its per-item value is
+     * current_item, injected separately by enrichContextWithItem), so the first-node-after-split
+     * hot path stays query-free. INDIRECT absent predecessors (a template reaching two hops back)
+     * are not detectable here without graph plumbing; signal-yielding nodes and per-item
+     * continuation walks are covered by their unconditional durable load (see the gate in
+     * executeForAllItemsAndTraverse), but a PLAIN chained node outside a walk keeps that residual
+     * (bounded scope - the full fix is SplitMergeHandler-style subgraph-ancestor scoping).
+     * {@code node == null} skips the hardening (defensive, pre-existing 2-arg semantics).
+     *
+     * <p>The merge path ({@link SplitMergeHandler#mergeDurablePerItem}) closes the same class of
+     * residual by scoping against the split-subgraph ancestors, which this executor path lacks the
+     * node map to compute.
      */
-    boolean inMemorySlotsComplete(SplitContext splitContext, Set<Integer> routedItemIndices) {  // package-private for tests
+    boolean inMemorySlotsComplete(SplitContext splitContext, Set<Integer> routedItemIndices,
+            ExecutionNode node) {  // package-private for tests
         if (splitContext == null) {
             return false;
         }
@@ -1467,7 +1642,60 @@ public class SplitAwareNodeExecutor {
                 }
             }
         }
+        // Absent-key hardening: a direct non-split predecessor with NO entry in the map means
+        // it ran on another pod (or was never recorded here) - the map is dense but incomplete.
+        if (node != null && splitContext.splitNodeId() != null) {
+            String splitKey = extractBaseSplitKey(splitContext.splitNodeId());
+            if (splitKey == null) {
+                splitKey = splitContext.splitNodeId();
+            }
+            for (String predId : node.getPredecessorIds()) {
+                if (predId == null) {
+                    continue;
+                }
+                String predKey = EdgeRefParser.getNodeKey(predId);
+                if (predKey == null) {
+                    predKey = predId;
+                }
+                if (!splitKey.equals(predKey) && !allResults.containsKey(predKey)) {
+                    return false; // predecessor ran elsewhere → memory cannot serve it
+                }
+            }
+        }
         return true;
+    }
+
+    /**
+     * True for the node types that PAUSE at execute() (register a signal / async barrier and yield)
+     * while resolving arbitrary user-authored templates against the yield-time context:
+     * approval (UserApprovalNode delegation chatId/message/image + contextTemplate),
+     * interface (InterfaceNode screenshot/PDF/video/rendered-source template snapshot), and
+     * browser-agent (BrowserAgentNode task/config resolution before async dispatch).
+     *
+     * <p>Their resolved values FREEZE at yield - UnifiedSignalService.registerSignal is
+     * first-registration-wins - so a per-item template that collapses to the base item-0 value
+     * (dense-but-incomplete in-memory map after a cross-pod async resume) is unrecoverable: the
+     * degraded message is what the human approver sees. These nodes therefore always load the
+     * durable per-item outputs when they read past the split (the consumer-shape clause of the
+     * gate still applies), accepting one epoch-rows query per pause inside a split.
+     *
+     * <p>The wait node ({@code WAIT}) also yields a signal but is deliberately EXCLUDED: it
+     * resolves no user templates at yield (its duration is static config), so a durable load
+     * would buy nothing. Checked by type (plus the polymorphic {@link ExecutionNode#isApprovalNode}
+     * for approval subclasses), mirroring how {@link #isCrossItemPerItemConsumer} stays
+     * strictly type-based.
+     */
+    boolean isSignalYieldingNode(ExecutionNode node) {  // package-private for tests
+        if (node == null) {
+            return false;
+        }
+        if (node.isApprovalNode()) {
+            return true;
+        }
+        NodeType type = node.getType();
+        return type == NodeType.APPROVAL
+            || type == NodeType.INTERFACE
+            || type == NodeType.BROWSER_AGENT;
     }
 
     /**
@@ -1612,6 +1840,17 @@ public class SplitAwareNodeExecutor {
             TriggerItem triggerItem,
             int subItemIndex,
             ExecutionContext context) {
+        persistItemResult(execution, node, result, triggerItem, subItemIndex, context, false);
+    }
+
+    private void persistItemResult(
+            WorkflowExecution execution,
+            ExecutionNode node,
+            NodeExecutionResult result,
+            TriggerItem triggerItem,
+            int subItemIndex,
+            ExecutionContext context,
+            boolean suppressGlobalMark) {
         try {
             if (nodeCompletionService == null) {
                 return;
@@ -1621,9 +1860,16 @@ public class SplitAwareNodeExecutor {
             Integer iteration = nodeCompletionService.extractCurrentIteration(context, node, result);
 
             // All nodes go through the standard persistence path:
-            // DB persistence (with OutputSchemaMapper) → StateSnapshot update → streaming event
-            nodeCompletionService.emitNodeComplete(
-                execution, node, result, triggerItem, subItemIndex, context);
+            // DB persistence (with OutputSchemaMapper) → StateSnapshot update → streaming event.
+            // suppressGlobalMark=true (per-item continuation walks) keeps the node-level
+            // EpochState mark for the seal - Phase 2.E semantics, same as split-async.
+            if (suppressGlobalMark) {
+                nodeCompletionService.emitNodeCompletePerItem(
+                    execution, node, result, triggerItem, subItemIndex, context);
+            } else {
+                nodeCompletionService.emitNodeComplete(
+                    execution, node, result, triggerItem, subItemIndex, context);
+            }
             logger.debug("[SplitAware] Persisted item result: nodeId={}, subItem={}",
                 node.getNodeId(), subItemIndex);
 
@@ -1804,6 +2050,52 @@ public class SplitAwareNodeExecutor {
             String triggerId) {
         persistSkippedItemRecords(execution, node, routedItemIndices, totalItems, epoch, triggerId,
             true, false, "Not routed to this branch");
+    }
+
+    /**
+     * Benign deferred no-op result for a per-item continuation walk step that must not
+     * execute anything (no newly-routed item, or split context unavailable). Carries
+     * SPLIT_ALREADY_PERSISTED so the engine records NO node-level state, and clears the
+     * running tracker set by emitNodeStart so the per-epoch running count doesn't drift
+     * up on each no-op walk.
+     */
+    private NodeExecutionResult deferredContinuationResult(String runId, String nodeId, int epoch) {
+        if (runningNodeTracker != null) {
+            runningNodeTracker.markCompleted(runId, epoch, nodeId);
+        }
+        Map<String, Object> deferredOutput = new HashMap<>();
+        deferredOutput.put("per_item_continuation_deferred", true);
+        Map<String, Object> deferredMetadata = new HashMap<>();
+        deferredMetadata.put("split_execution", true);
+        deferredMetadata.put("per_item_continuation_deferred", true);
+        deferredMetadata.put(ExecutionMetadataKeys.SPLIT_ALREADY_PERSISTED, true);
+        return new NodeExecutionResult(
+            nodeId,
+            NodeStatus.COMPLETED,
+            deferredOutput,
+            Optional.empty(),
+            deferredMetadata,
+            0L
+        );
+    }
+
+    /**
+     * Seal-time skip materialization for per-item continuation walks
+     * ({@code PerItemContinuationService.sealRegion}). Walks suppress the fan-out's
+     * inline skip records (unrouted siblings are PENDING until every signal resolves);
+     * once routing is final, the seal writes the same per-item SKIPPED rows the
+     * all_items fan-out would have written, for statusCounts parity. The routed set
+     * here is "items with a terminal row on this node" - post-seal that IS the final
+     * routed set (every routed item was executed by a walk).
+     */
+    public void persistSealSkipRecords(
+            WorkflowExecution execution,
+            ExecutionNode node,
+            Set<Integer> itemsWithRows,
+            int totalItems,
+            int epoch,
+            String triggerId) {
+        persistSkippedItemRecords(execution, node, itemsWithRows, totalItems, epoch, triggerId);
     }
 
     private void persistSkippedItemRecords(

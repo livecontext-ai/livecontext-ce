@@ -55,6 +55,73 @@ class StepPayloadServiceTest {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // Mock-marker preservation (per-node mock mode)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("Mock markers (__mocked__/__mock_source__) survive schema transformation")
+    class MockMarkerPreservationTests {
+
+        @Test
+        @DisplayName("REGRESSION: generic schema mappers rebuild the output map - the mock markers must be re-injected into the persisted payload")
+        void mockMarkersReinjectedAfterTransform() {
+            when(execution.getPlan()).thenReturn(plan);
+            when(plan.getTenantId()).thenReturn("tenant-1");
+            when(plan.findStep(anyString())).thenReturn(Optional.empty());
+            when(storageService.saveJsonWithContext(anyString(), any(), anyString(), any(), any(), any(), any(), anyInt(), anyInt(), anyInt(), any(), any()))
+                    .thenReturn(UUID.randomUUID());
+            // Simulate GenericOutputSchemaMapper: builds a NEW map with only declared
+            // fields - the __mocked__/__mock_source__ keys are dropped.
+            when(outputSchemaMapper.hasMapper("DECISION")).thenReturn(true);
+            when(outputSchemaMapper.transformToDbSchema(any(), eq("DECISION")))
+                    .thenReturn(new HashMap<>(Map.of("selected_branch", "if")));
+
+            Map<String, Object> mockedOutput = new HashMap<>();
+            mockedOutput.put("node_type", "DECISION");
+            mockedOutput.put("selected_branch_index", 0);
+            mockedOutput.put("__mocked__", true);
+            mockedOutput.put("__mock_source__", "static");
+            StepExecutionResult result = new StepExecutionResult(
+                    "core:check", NodeStatus.COMPLETED, "Success", mockedOutput, 5L, null);
+
+            service.persistStepPayload(execution, "core:check", "alias", result, Map.of(), 0);
+
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(storageService).saveJsonWithContext(eq("tenant-1"), payloadCaptor.capture(),
+                    anyString(), any(), any(), any(), any(), anyInt(), anyInt(), anyInt(), any(), any());
+            @SuppressWarnings("unchecked")
+            Map<String, Object> output = (Map<String, Object>) payloadCaptor.getValue().get("output");
+            assertEquals(Boolean.TRUE, output.get("__mocked__"));
+            assertEquals("static", output.get("__mock_source__"));
+            assertEquals("if", output.get("selected_branch"));
+        }
+
+        @Test
+        @DisplayName("non-mocked outputs stay byte-identical: no mock keys are ever injected")
+        void nonMockedOutputsUntouched() {
+            when(execution.getPlan()).thenReturn(plan);
+            when(plan.getTenantId()).thenReturn("tenant-1");
+            when(plan.findStep(anyString())).thenReturn(Optional.empty());
+            when(storageService.saveJsonWithContext(anyString(), any(), anyString(), any(), any(), any(), any(), anyInt(), anyInt(), anyInt(), any(), any()))
+                    .thenReturn(UUID.randomUUID());
+
+            StepExecutionResult result = new StepExecutionResult(
+                    "step-1", NodeStatus.COMPLETED, "Success",
+                    Map.of("data", "value"), 100L, null);
+
+            service.persistStepPayload(execution, "step-1", "alias", result, Map.of(), 0);
+
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(storageService).saveJsonWithContext(eq("tenant-1"), payloadCaptor.capture(),
+                    anyString(), any(), any(), any(), any(), anyInt(), anyInt(), anyInt(), any(), any());
+            @SuppressWarnings("unchecked")
+            Map<String, Object> output = (Map<String, Object>) payloadCaptor.getValue().get("output");
+            assertFalse(output.containsKey("__mocked__"));
+            assertFalse(output.containsKey("__mock_source__"));
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // persistStepPayload() tests
     // ═══════════════════════════════════════════════════════════════════════════
 

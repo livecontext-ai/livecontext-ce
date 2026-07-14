@@ -68,11 +68,25 @@ class WebhookAuthServiceTest {
         }
 
         @Test
-        @DisplayName("Should return success for unknown auth type")
-        void shouldSucceedForUnknownAuthType() {
+        @DisplayName("Should FAIL CLOSED for an unrecognized auth type (requiresAuth is true)")
+        void shouldFailClosedForUnknownAuthType() {
+            // Regression: a webhook whose authType is not one of {none,basic,header,jwt}
+            // (e.g. "bearer", "apikey", a typo) still has requiresAuth()==true, so it MUST
+            // be rejected, never accepted with no credential check.
             WebhookConfig config = new WebhookConfig(null, "POST", "custom_type", null, null, null, null, null, null);
             var result = authService.validateAuth(config, new HttpHeaders());
-            assertThat(result.valid()).isTrue();
+            assertThat(result.valid()).isFalse();
+            assertThat(result.message()).contains("Unsupported authentication type");
+        }
+
+        @Test
+        @DisplayName("Should FAIL CLOSED for 'bearer' authType even when a valid-looking bearer token is present")
+        void shouldFailClosedForBearerLikeType() {
+            WebhookConfig config = new WebhookConfig(null, "POST", "bearer", null, null, null, null, null, null);
+            HttpHeaders headers = new HttpHeaders();
+            headers.set(HttpHeaders.AUTHORIZATION, "Bearer anything");
+            var result = authService.validateAuth(config, headers);
+            assertThat(result.valid()).isFalse();
         }
     }
 

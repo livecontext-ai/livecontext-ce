@@ -6,6 +6,7 @@
  */
 
 import { apiClient, ApiError } from '../api-client';
+import { getActiveOrgHeaderForRequest } from '@/lib/stores/current-org-store';
 import type { DataSource, DataSourceColumn, DataSourceItem, PaginatedResponse } from './types';
 
 export class DataSourceService {
@@ -316,7 +317,13 @@ export class DataSourceService {
     const token = await apiClient.getTokenProvider()?.();
 
     const response = await fetch(url, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      // Include the active-workspace header like every other raw-fetch site, otherwise the
+      // gateway resolves the export under the user's DEFAULT org and a datasource opened from
+      // a non-default workspace 404s (or exports the wrong workspace's data).
+      headers: {
+        ...getActiveOrgHeaderForRequest(),
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
       credentials: 'include'
     });
 

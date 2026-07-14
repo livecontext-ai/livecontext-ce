@@ -51,6 +51,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -103,6 +104,7 @@ class WorkflowBuilderProviderTest {
     @Mock private ProductionRunResolver productionRunResolver;
     @Mock private AgentDefaultsConfig agentDefaults;
     @Mock private ConversationEventPublisher conversationEventPublisher;
+    @Mock private MockOutputSuggester mockOutputSuggester;
 
     @InjectMocks private WorkflowBuilderProvider provider;
 
@@ -1071,7 +1073,7 @@ class WorkflowBuilderProviderTest {
 
             WorkflowRunEntity run = org.mockito.Mockito.mock(WorkflowRunEntity.class);
             lenient().when(run.getRunIdPublic()).thenReturn("run-1");
-            when(agentWorkflowFireService.createRun(eq(wf), any(), any(), eq(TENANT))).thenReturn(run);
+            when(agentWorkflowFireService.createRun(eq(wf), any(), any(), eq(TENANT), isNull())).thenReturn(run);
             when(agentWorkflowFireService.hasOnlyBootstrapTriggers(any())).thenReturn(false);
             when(agentWorkflowFireService.resolveTrigger(any(), any()))
                     .thenReturn(new com.apimarketplace.orchestrator.domain.workflow.Trigger("t1", "T1", "single", "manual"));
@@ -1095,7 +1097,7 @@ class WorkflowBuilderProviderTest {
             WorkflowRunEntity run = org.mockito.Mockito.mock(WorkflowRunEntity.class);
             lenient().when(run.getRunIdPublic()).thenReturn("seed-1");
             lenient().when(run.getPlanVersion()).thenReturn(1);
-            when(agentWorkflowFireService.createRun(eq(wf), any(), any(), eq(TENANT))).thenReturn(run);
+            when(agentWorkflowFireService.createRun(eq(wf), any(), any(), eq(TENANT), isNull())).thenReturn(run);
             when(agentWorkflowFireService.hasOnlyBootstrapTriggers(any())).thenReturn(true);
 
             ToolExecutionResult r = exec(params("action", "execute", "id", id.toString()));
@@ -1248,6 +1250,130 @@ class WorkflowBuilderProviderTest {
             ToolExecutionResult r = exec(params("action", "continue_interface", "run_id", RUN));
             assertThat(r.success()).isTrue();
             assertThat(data(r)).containsEntry("status", "resolved").containsEntry("node_id", "interface:page1");
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    @Nested
+    @DisplayName("mock_suggest (propose a ready-to-edit mock output for a node)")
+    class MockSuggest {
+
+        @Test
+        @DisplayName("missing 'node' param → MISSING_PARAMETER naming the param")
+        void missingNodeParam() {
+            ToolExecutionResult r = exec(params("action", "mock_suggest"));
+
+            assertThat(r.errorCode()).isEqualTo(ToolErrorCode.MISSING_PARAMETER);
+            assertThat(r.error()).contains("'node'");
+        }
+
+        @Test
+        @DisplayName("blank 'node' param → MISSING_PARAMETER")
+        void blankNodeParam() {
+            ToolExecutionResult r = exec(params("action", "mock_suggest", "node", "  "));
+
+            assertThat(r.errorCode()).isEqualTo(ToolErrorCode.MISSING_PARAMETER);
+        }
+
+        @Test
+        @DisplayName("unknown node → RESOURCE_NOT_FOUND echoing the reference")
+        void unknownNode() {
+            when(session.resolveNodeReference("ghost")).thenReturn("mcp:ghost");
+            when(session.findNode("mcp:ghost")).thenReturn(Optional.empty());
+
+            ToolExecutionResult r = exec(params("action", "mock_suggest", "node", "ghost"));
+
+            assertThat(r.errorCode()).isEqualTo(ToolErrorCode.RESOURCE_NOT_FOUND);
+            assertThat(r.error()).contains("ghost");
+        }
+
+        @Test
+        @DisplayName("trigger node → refused with the data_inputs alternative (mocking not available on triggers)")
+        void triggerNodeRefused() {
+            when(session.resolveNodeReference("My Webhook")).thenReturn("trigger:my_webhook");
+            when(session.findNode("trigger:my_webhook"))
+                    .thenReturn(Optional.of(Map.of("type", "webhook", "label", "My Webhook")));
+
+            ToolExecutionResult r = exec(params("action", "mock_suggest", "node", "My Webhook"));
+
+            assertThat(r.success()).isFalse();
+            assertThat(r.errorCode()).isEqualTo(ToolErrorCode.EXECUTION_FAILED);
+            assertThat(r.error()).contains("trigger").contains("data_inputs");
+            org.mockito.Mockito.verifyNoInteractions(mockOutputSuggester);
+        }
+
+        @Test
+        @DisplayName("note node → refused like a trigger (notes are not executed steps)")
+        void noteNodeRefused() {
+            when(session.resolveNodeReference("Reminder")).thenReturn("note:reminder");
+            when(session.findNode("note:reminder"))
+                    .thenReturn(Optional.of(Map.of("label", "Reminder")));
+
+            ToolExecutionResult r = exec(params("action", "mock_suggest", "node", "Reminder"));
+
+            assertThat(r.errorCode()).isEqualTo(ToolErrorCode.EXECUTION_FAILED);
+            org.mockito.Mockito.verifyNoInteractions(mockOutputSuggester);
+        }
+
+        @Test
+        @DisplayName("mcp catalog node → suggested_output + source=catalog_example + NEXT with the source shortcut")
+        void mcpNodeCatalogExampleSuggestion() {
+            Map<String, Object> nodeData = Map.of("id", "gmail/gmail-list-messages", "label", "Fetch Emails");
+            when(session.resolveNodeReference("Fetch Emails")).thenReturn("mcp:fetch_emails");
+            when(session.findNode("mcp:fetch_emails")).thenReturn(Optional.of(nodeData));
+            Map<String, Object> suggested = Map.of("messages", List.of(), "result_count", 0);
+            when(mockOutputSuggester.suggest("mcp:fetch_emails", nodeData, TENANT))
+                    .thenReturn(new MockOutputSuggester.Suggestion(suggested, "catalog_example", "projected example"));
+
+            ToolExecutionResult r = exec(params("action", "mock_suggest", "node", "Fetch Emails"));
+
+            assertThat(r.success()).isTrue();
+            Map<String, Object> d = data(r);
+            assertThat(d).containsEntry("status", "OK")
+                    .containsEntry("node", "mcp:fetch_emails")
+                    .containsEntry("suggested_output", suggested)
+                    .containsEntry("source", "catalog_example")
+                    .containsEntry("hint", "projected example");
+            assertThat((String) d.get("NEXT"))
+                    .contains("workflow(action='modify'")
+                    .contains("mock={output")
+                    .contains("mock={source: 'catalog_example'}");
+        }
+
+        @Test
+        @DisplayName("non-mcp node (schema skeleton) → NEXT points at the mocking help guide, no catalog shortcut")
+        void nonMcpNodeSchemaSuggestion() {
+            Map<String, Object> nodeData = Map.of("type", "transform", "label", "Format");
+            when(session.resolveNodeReference("Format")).thenReturn("core:format");
+            when(session.findNode("core:format")).thenReturn(Optional.of(nodeData));
+            Map<String, Object> skeleton = Map.of("result", "<string>");
+            when(mockOutputSuggester.suggest("core:format", nodeData, TENANT))
+                    .thenReturn(new MockOutputSuggester.Suggestion(skeleton, "schema", "skeleton from documented outputs"));
+
+            ToolExecutionResult r = exec(params("action", "mock_suggest", "node", "Format"));
+
+            assertThat(r.success()).isTrue();
+            Map<String, Object> d = data(r);
+            assertThat(d).containsEntry("suggested_output", skeleton)
+                    .containsEntry("source", "schema");
+            assertThat((String) d.get("NEXT"))
+                    .contains("topics=['mocking']")
+                    .doesNotContain("catalog_example");
+        }
+
+        @Test
+        @DisplayName("'node_id' alias is accepted in place of 'node'")
+        void nodeIdAliasAccepted() {
+            Map<String, Object> nodeData = Map.of("type", "transform", "label", "Format");
+            when(session.resolveNodeReference("core:format")).thenReturn("core:format");
+            when(session.findNode("core:format")).thenReturn(Optional.of(nodeData));
+            when(mockOutputSuggester.suggest("core:format", nodeData, TENANT))
+                    .thenReturn(new MockOutputSuggester.Suggestion(Map.of(), "none", "no docs"));
+
+            ToolExecutionResult r = exec(params("action", "mock_suggest", "node_id", "core:format"));
+
+            assertThat(r.success()).isTrue();
+            assertThat(data(r)).containsEntry("node", "core:format");
         }
     }
 

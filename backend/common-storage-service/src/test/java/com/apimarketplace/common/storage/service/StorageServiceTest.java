@@ -85,6 +85,78 @@ class StorageServiceTest {
     }
 
     @Nested
+    @DisplayName("getPublicAvatarEntity (anonymous avatar serve eligibility)")
+    class GetPublicAvatarEntityTests {
+
+        private StorageEntity avatarRow(String s3Key, String mimeType) {
+            StorageEntity entity = new StorageEntity();
+            entity.setId(UUID.randomUUID());
+            entity.setTenantId(TENANT_ID);
+            entity.setS3Key(s3Key);
+            entity.setMimeType(mimeType);
+            entity.setFileName("avatar.svg");
+            return entity;
+        }
+
+        @Test
+        @DisplayName("resolves a generic 'avatar' category image row - no tenant/org in the lookup")
+        void resolvesAvatarCategoryImage() {
+            StorageEntity row = avatarRow(TENANT_ID + "/general/avatar/ab12_avatar.svg", "image/svg+xml");
+            when(storageRepository.findById(row.getId())).thenReturn(Optional.of(row));
+
+            assertThat(storageService.getPublicAvatarEntity(row.getId())).contains(row);
+        }
+
+        @Test
+        @DisplayName("a non-avatar file NEVER resolves (endpoint must not be a generic file oracle)")
+        void rejectsNonAvatarCategory() {
+            StorageEntity row = avatarRow(TENANT_ID + "/general/documents/ab12_secret.pdf", "application/pdf");
+            when(storageRepository.findById(row.getId())).thenReturn(Optional.of(row));
+
+            assertThat(storageService.getPublicAvatarEntity(row.getId())).isEmpty();
+        }
+
+        @Test
+        @DisplayName("an avatar-category row with a non-image mime is rejected")
+        void rejectsNonImageMime() {
+            StorageEntity row = avatarRow(TENANT_ID + "/general/avatar/ab12_notes.txt", "text/plain");
+            when(storageRepository.findById(row.getId())).thenReturn(Optional.of(row));
+
+            assertThat(storageService.getPublicAvatarEntity(row.getId())).isEmpty();
+        }
+
+        @Test
+        @DisplayName("soft-DELETED rows stop serving anonymously (regression: raw findById ignored status)")
+        void rejectsSoftDeletedRow() {
+            StorageEntity row = avatarRow(TENANT_ID + "/general/avatar/ab12_avatar.svg", "image/svg+xml");
+            row.setStatus(StorageStatus.DELETED);
+            when(storageRepository.findById(row.getId())).thenReturn(Optional.of(row));
+
+            assertThat(storageService.getPublicAvatarEntity(row.getId())).isEmpty();
+        }
+
+        @Test
+        @DisplayName("a crafted upload category merely CONTAINING the marker does not qualify (key must be tenant-anchored)")
+        void rejectsCraftedCategoryKey() {
+            StorageEntity row = avatarRow(TENANT_ID + "/general/x/general/avatar/ab12_file.png", "image/png");
+            when(storageRepository.findById(row.getId())).thenReturn(Optional.of(row));
+
+            assertThat(storageService.getPublicAvatarEntity(row.getId())).isEmpty();
+        }
+
+        @Test
+        @DisplayName("expired rows are rejected; unknown ids resolve empty")
+        void rejectsExpiredAndUnknown() {
+            StorageEntity row = avatarRow(TENANT_ID + "/general/avatar/ab12_avatar.png", "image/png");
+            row.setExpiresAt(Instant.now().minusSeconds(60));
+            when(storageRepository.findById(row.getId())).thenReturn(Optional.of(row));
+
+            assertThat(storageService.getPublicAvatarEntity(row.getId())).isEmpty();
+            assertThat(storageService.getPublicAvatarEntity(UUID.randomUUID())).isEmpty();
+        }
+    }
+
+    @Nested
     @DisplayName("deleteVirtualScopeForScope (Files virtual workflow-folder delete)")
     class DeleteVirtualScopeForScopeTests {
 

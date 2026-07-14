@@ -384,16 +384,31 @@ public final class WorkflowBuilderPrompts {
                   only a warning - the run still proceeds, but the approver sees no context.
                 Optional: timeoutMs (ms before the timeout port fires, default 86400000 = 24h),
                   requiredApprovals (default 1), approverRoles (array).
+                Optional continuationMode ('all_items' | 'per_item', default 'all_items') - only
+                  matters when this approval runs inside a split (one approval per item).
+                  'all_items': downstream steps start once, after every item's approval is decided.
+                  'per_item': each approved/rejected item continues its own downstream chain
+                  immediately (use it to process each approved item without waiting for the rest of
+                  the batch); the first cross-item node (merge, aggregate, loop, fork, nested split)
+                  still waits for all items. Outside a split the setting has no effect.
                 Optional delegation (external channel): params.delegation={channel: 'telegram',
                   chatId: '<chat id, {{...}} allowed>', credentialId: <optional numeric id to pin a
                   specific Telegram bot credential; omit it and the send uses the user's own Telegram
                   credential automatically>, messageTemplate: '<optional body, {{...}} allowed;
-                  defaults to the resolved contextTemplate>', allowedUserIds: ['<telegram user id>',
-                  ...]}. The channel message shows Approve/Reject buttons; a tap resolves this
-                  approval exactly like an in-app decision (you can still resolve it with
-                  workflow(action='resolve_approval')). Empty allowedUserIds = anyone in the chat can
-                  decide. Only channel 'telegram' exists. Output delegated_channel is set when
-                  delegation is configured.
+                  defaults to the resolved contextTemplate>', image: '<optional image, {{...}} allowed;
+                  a file output from an earlier node, e.g. an interface node screenshot
+                  ({{interface:card.output.screenshot}}), or an HTTP image URL>', allowedUserIds:
+                  ['<telegram user id>', ...], approveLabel: '<optional custom approve-button text,
+                  {{...}} allowed; default "✅ Approve">', rejectLabel: '<optional custom reject-button
+                  text, {{...}} allowed; default "❌ Reject">'}. The channel message shows Approve/Reject
+                  buttons; a tap resolves this approval exactly like an in-app decision (you can still
+                  resolve it with workflow(action='resolve_approval')). approveLabel/rejectLabel only
+                  change the button text - the approve/reject outcome is unaffected; leave them out to
+                  keep the defaults. When image is set the Telegram
+                  message becomes a single photo: the image, the message text as its caption and the
+                  same buttons; omit image for a plain text message. Empty allowedUserIds = anyone in
+                  the chat can decide. Only channel 'telegram' exists. Output delegated_channel is
+                  set when delegation is configured.
                 Ports: approved, rejected, timeout. Connect: from='Manager Review:approved', to='Next Step'.
                 """;
             case "add_guardrail", "guardrail" -> """

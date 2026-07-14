@@ -10,7 +10,7 @@ import { ItemNavigator } from '../inspector/outputs/ItemNavigator';
 
 import type { BuilderNodeData, DerivedNodeStatus, NodeStatus } from '../../types';
 import { NodeStatusBadge } from '../NodeStatusBadge';
-import { NodeActionButtons, NodeHeader, useHoverVisibility, getIconSlug, getStatusBorderColor, ReadyShimmerOverlay } from './shared';
+import { NodeActionButtons, NodeHeader, useHoverVisibility, getIconSlug, getStatusBorderColor } from './shared';
 import { getNodeVisual } from '../../data/nodeVisuals';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
 import { useRun } from '@/contexts/WorkflowRunContext';
@@ -248,7 +248,7 @@ export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNod
   // Get node visuals for compact view - always use 'interface' kind for interface nodes
   const visuals = getNodeVisual('interface');
 
-  const borderColor = getStatusBorderColor(effectiveStatus);
+  const borderColor = getStatusBorderColor(effectiveStatus, undefined, undefined, data.statusCounts);
   const isSkipped = !stepByStepStatus.isStepByStepMode && effectiveStatus === 'skipped';
 
   // Application mode handler (dispatch event to parent)
@@ -300,9 +300,6 @@ export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNod
               animation: 'shimmer-scan 2.5s ease-in-out infinite',
             }}
           />
-        )}
-        {stepByStepStatus.isStepByStepMode && effectiveStatus === 'ready' && (
-          <ReadyShimmerOverlay className="absolute inset-0 pointer-events-none rounded-[26px]" />
         )}
 
         {/* Node header - same as FlowNode */}
@@ -485,9 +482,6 @@ export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNod
             animation: 'shimmer-scan 2.5s ease-in-out infinite',
           }}
         />
-      )}
-      {stepByStepStatus.isStepByStepMode && effectiveStatus === 'ready' && (
-        <ReadyShimmerOverlay className="absolute inset-0 pointer-events-none rounded-[26px]" />
       )}
 
       {/* Pagination controls - below node (spawn items only, not epochs) */}

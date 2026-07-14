@@ -808,6 +808,26 @@ class WorkflowSignalControllerTest {
         }
     }
 
+    @Nested
+    @DisplayName("cancelSignal (DELETE /{nodeId})")
+    class CancelSignalTests {
+
+        @Test
+        @DisplayName("cancels ONLY the named node's signal(s), never the whole run")
+        void cancelsOnlyNamedNode() {
+            when(signalService.cancelForNodes(eq(RUN_ID), eq(java.util.Set.of(NODE_ID)), eq(-1))).thenReturn(1);
+
+            ResponseEntity<Map<String, Object>> response = controller.cancelSignal(RUN_ID, NODE_ID, USER_ID, null);
+
+            assertEquals(HttpStatus.OK, response.getStatusCode());
+            assertEquals(1, response.getBody().get("cancelledCount"));
+            assertEquals(NODE_ID, response.getBody().get("nodeId"));
+            // Regression: pre-fix called cancelByRun(runId) which cancelled EVERY signal in the run.
+            verify(signalService).cancelForNodes(RUN_ID, java.util.Set.of(NODE_ID), -1);
+            verify(signalService, never()).cancelByRun(any());
+        }
+    }
+
     // ========================================================================
     // Additional helper
     // ========================================================================

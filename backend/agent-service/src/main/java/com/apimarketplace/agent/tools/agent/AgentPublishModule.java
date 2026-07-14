@@ -141,11 +141,75 @@ public class AgentPublishModule implements ToolModule {
                     : "Agent published. ")
                     + "Marketplace publication id: " + response.get("id"));
             return ToolExecutionResult.success(data);
+        } catch (com.apimarketplace.publication.client.PublicationValidationException e) {
+            String msg = buildValidationFailureMessage(e);
+            log.warn("Agent publish refused for {}: {}", agentIdStr, e.getMessage());
+            return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, msg);
         } catch (RuntimeException e) {
             String msg = extractPublicationErrorMessage(e);
             log.warn("Failed to publish agent {}: {}", agentIdStr, msg);
             return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, "Failed to publish agent: " + msg);
         }
+    }
+
+    /**
+     * Render publication-service's structured 422 refusal as an agent-actionable
+     * message: name the offending agents/resource types and the exact follow-up
+     * actions available through this tool surface (`agent` update / list actions).
+     */
+    @SuppressWarnings("unchecked")
+    private static String buildValidationFailureMessage(com.apimarketplace.publication.client.PublicationValidationException e) {
+        Map<String, Object> body = e.getBody();
+        String code = e.getErrorCode();
+
+        if ("AGENT_ALL_ACCESS_NOT_PUBLISHABLE".equals(code)
+                && body.get("violations") instanceof List<?> violations && !violations.isEmpty()) {
+            StringBuilder sb = new StringBuilder("Publish refused: ");
+            boolean first = true;
+            for (Object vRaw : violations) {
+                if (!(vRaw instanceof Map<?, ?> v)) continue;
+                if (!first) sb.append("; ");
+                first = false;
+                Object name = v.get("agentName");
+                String families = v.get("families") instanceof List<?> f
+                        ? f.stream().map(String::valueOf).reduce((a, b) -> a + ", " + b).orElse("")
+                        : String.valueOf(v.get("families"));
+                sb.append("agent \"").append(name != null ? name : v.get("agentId")).append('"');
+                if (v.get("referencedVia") instanceof List<?> via && !via.isEmpty()) {
+                    sb.append(" (sub-agent of \"").append(via.get(via.size() - 1)).append("\")");
+                }
+                sb.append(" has grant \"all\" on ").append(families);
+            }
+            sb.append(". A publication only ships an explicit resource selection; \"all\" would embed every ")
+              .append("resource of the account and is not publishable. Fix: call `agent` with action=update on each ")
+              .append("listed agent and set those resource types to \"custom\" with the exact resource ids to ship ")
+              .append("(use the `table` / `interface` / `workflow` list actions to find the ids), or to \"none\". ")
+              .append("Then retry publish. The source agents keep working with \"all\" locally; only the published ")
+              .append("copy needs an explicit selection.");
+            return sb.toString();
+        }
+
+        if ("AGENT_SNAPSHOT_TOO_LARGE".equals(code)) {
+            StringBuilder sb = new StringBuilder("Publish refused: ").append(e.getMessage());
+            if (body.get("breakdown") instanceof List<?> breakdown && !breakdown.isEmpty()) {
+                sb.append(" Heaviest resources: ");
+                boolean first = true;
+                for (Object bRaw : breakdown) {
+                    if (!(bRaw instanceof Map<?, ?> b)) continue;
+                    if (!first) sb.append(", ");
+                    first = false;
+                    Object name = b.get("name") != null ? b.get("name") : b.get("id");
+                    sb.append(b.get("type")).append(" \"").append(name).append('"');
+                    if (b.get("items") != null) sb.append(" (").append(b.get("items")).append(" rows)");
+                }
+                sb.append('.');
+            }
+            sb.append(" Fix: call `agent` with action=update and remove the heaviest resources from the agent's ")
+              .append("custom selection (or reduce the table content), then retry publish.");
+            return sb.toString();
+        }
+
+        return "Failed to publish agent: " + e.getMessage();
     }
 
     // ==================== Unpublish ====================

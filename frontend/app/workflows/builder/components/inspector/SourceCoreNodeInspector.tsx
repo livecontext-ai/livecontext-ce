@@ -32,8 +32,9 @@ interface SourceCoreNodeInspectorProps {
 /**
  * Get the output schema for a core node based on its type,
  * using centralized definitions from the backend API.
+ * Exported for reuse (MockOutputSection builds its JSON skeleton from it).
  */
-function getCoreNodeSchema(
+export function getCoreNodeSchema(
   node: Node<BuilderNodeData>,
   getOutputSchema: (nodeType: string) => OutputSchema[],
 ): OutputSchema[] {

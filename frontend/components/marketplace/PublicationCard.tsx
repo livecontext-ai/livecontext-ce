@@ -14,6 +14,7 @@ import { PublisherAvatar } from '@/components/marketplace/PublisherAvatar';
 import { UserActionMenu } from '@/components/profile/UserActionMenu';
 import { WorkflowNodeIcons } from '@/components/WorkflowNodeIcons';
 import { AvatarDisplay } from '@/components/agents';
+import { heroGradientCss } from '@/components/agents/avatarColors';
 import { VisibilityBadge } from '@/components/ui/VisibilityBadge';
 import { isCeMode } from '@/lib/format-cost';
 
@@ -71,7 +72,7 @@ export function PricePill({ publication, isFree }: { publication: WorkflowPublic
 // (embedded landing snapshot - TABLE / INTERFACE / SKILL / AGENT) based on what the
 // publication actually carries.
 
-export function PublicationPreview({ publication, fallback, overlay, fill, ownerPreview, remote, acquired }: { publication: WorkflowPublication; fallback?: React.ReactNode; overlay?: React.ReactNode; fill?: boolean; ownerPreview?: boolean; remote?: boolean; acquired?: boolean }) {
+export function PublicationPreview({ publication, fallback, overlay, overlayFallbackStyle, fill, ownerPreview, remote, acquired }: { publication: WorkflowPublication; fallback?: React.ReactNode; overlay?: React.ReactNode; overlayFallbackStyle?: React.CSSProperties; fill?: boolean; ownerPreview?: boolean; remote?: boolean; acquired?: boolean }) {
   const hasRun = !!publication.showcaseRunId && !!publication.showcaseInterfaceId;
   const [landing, setLanding] = useState<InterfaceSnapshotLike | null>(null);
   const [loadingLanding, setLoadingLanding] = useState(!hasRun);
@@ -131,7 +132,12 @@ export function PublicationPreview({ publication, fallback, overlay, fill, owner
         {landing ? (
           <InterfacePreview snapshot={landing} className="absolute inset-0 h-full w-full" />
         ) : (
-          <div className="absolute inset-0 bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-800 dark:to-slate-900" />
+          // Identity hero: no landing snapshot -> paint the overlay's own backdrop
+          // (agent avatar gradient) instead of the generic slate wash.
+          <div
+            className="absolute inset-0 bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-800 dark:to-slate-900"
+            style={overlayFallbackStyle}
+          />
         )}
         {landing && (
           <div className="absolute inset-0 bg-gradient-to-b from-white/10 via-white/30 to-white/70 dark:from-slate-900/10 dark:via-slate-900/40 dark:to-slate-900/80" />
@@ -286,6 +292,7 @@ export const PublicationCard = memo(function PublicationCard({ publication, curr
               remote={remote}
               acquired={acquired}
               overlay={<AvatarDisplay avatarUrl={publication.agentAvatarUrl} name={publication.title} size="xl" />}
+              overlayFallbackStyle={{ background: heroGradientCss(publication.agentAvatarUrl) }}
               fallback={<StandardFallback publication={publication} />}
             />
           ) : hasInterfacePreview ? (
@@ -420,13 +427,15 @@ export const PublicationCard = memo(function PublicationCard({ publication, curr
               {publication.publisherName || t('anonymous')}
             </span>
           </UserActionMenu>
+          {/* Node/integration icons sit right next to the publisher (not pushed to the
+              far edge): they read as "published by X, built with these integrations". */}
           {publication.nodeIcons && publication.nodeIcons.length > 0 && (
             <WorkflowNodeIcons
               nodeIcons={publication.nodeIcons}
               maxDisplay={3}
               prioritizeMcpAndTriggers
               size="inline"
-              className="ml-auto shrink-0"
+              className="shrink-0"
             />
           )}
         </div>

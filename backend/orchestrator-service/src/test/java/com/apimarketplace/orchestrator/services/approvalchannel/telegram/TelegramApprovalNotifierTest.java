@@ -63,6 +63,9 @@ class TelegramApprovalNotifierTest {
     private static final long CREDENTIAL_ID = 42L;
     private static final String CHAT_ID = "123456";
     private static final ToolRef EDIT_TOOL = new ToolRef("telegram/telegram-edit-message-text", 1);
+    private static final ToolRef SEND_TOOL = new ToolRef("telegram/telegram-send-message", 1);
+    private static final ToolRef PHOTO_TOOL = new ToolRef("telegram/telegram-send-photo", 1);
+    private static final ToolRef EDIT_CAPTION_TOOL = new ToolRef("telegram/telegram-edit-message-caption", 1);
 
     @Mock private ObjectProvider<ToolsGateway> toolsGatewayProvider;
     @Mock private ToolsGateway toolsGateway;
@@ -101,7 +104,16 @@ class TelegramApprovalNotifierTest {
     }
 
     private ApprovalDelegationConfig config(String message) {
-        return new ApprovalDelegationConfig("telegram", CREDENTIAL_ID, CHAT_ID, message, List.of());
+        return new ApprovalDelegationConfig("telegram", CREDENTIAL_ID, CHAT_ID, message, null, List.of(), null, null);
+    }
+
+    private ApprovalDelegationConfig configWithImage(String message, Object image) {
+        return new ApprovalDelegationConfig("telegram", CREDENTIAL_ID, CHAT_ID, message, image, List.of(), null, null);
+    }
+
+    private ApprovalDelegationConfig configWithLabels(String message, String approveLabel, String rejectLabel) {
+        return new ApprovalDelegationConfig("telegram", CREDENTIAL_ID, CHAT_ID, message, null, List.of(),
+                approveLabel, rejectLabel);
     }
 
     private ApprovalChannelDeliveryEntity pendingDelivery() {
@@ -163,6 +175,52 @@ class TelegramApprovalNotifierTest {
                     (List<List<Map<String, Object>>>) replyMarkup.get("inline_keyboard");
             assertThat(keyboard).hasSize(1);
             assertThat(keyboard.get(0)).hasSize(2);
+            assertThat(keyboard.get(0).get(0).get("text")).isEqualTo("✅ Approve");
+            assertThat(keyboard.get(0).get(1).get("text")).isEqualTo("❌ Reject");
+        }
+
+        @Test
+        @DisplayName("custom labels: approveLabel/rejectLabel replace the button text while callback_data stays :a / :r")
+        void customButtonLabelsAreUsed() {
+            stubOwnedInsert();
+            when(toolsGatewayProvider.getIfAvailable()).thenReturn(toolsGateway);
+            when(toolsGateway.executeTool(any(ToolRef.class), anyMap(), anyString(), anyMap()))
+                    .thenReturn(sendSuccess(123));
+
+            notifier.notifyPending(signal(),
+                    configWithLabels("Please approve", "👍 Ship it", "👎 Hold"), run(), null);
+
+            verify(toolsGateway).executeTool(any(ToolRef.class), paramsCaptor.capture(), eq(TENANT_ID), anyMap());
+            @SuppressWarnings("unchecked")
+            Map<String, Object> replyMarkup = (Map<String, Object>) paramsCaptor.getValue().get("reply_markup");
+            @SuppressWarnings("unchecked")
+            List<List<Map<String, Object>>> keyboard =
+                    (List<List<Map<String, Object>>>) replyMarkup.get("inline_keyboard");
+            assertThat(keyboard.get(0).get(0).get("text")).isEqualTo("👍 Ship it");
+            assertThat(keyboard.get(0).get(1).get("text")).isEqualTo("👎 Hold");
+            // Custom text must NOT touch the resolution contract: callback_data stays :a / :r.
+            assertThat((String) keyboard.get(0).get(0).get("callback_data")).endsWith(":a");
+            assertThat((String) keyboard.get(0).get(1).get("callback_data")).endsWith(":r");
+        }
+
+        @Test
+        @DisplayName("regression: blank/null labels fall back to the ✅ Approve / ❌ Reject defaults (backward compat)")
+        void blankLabelsFallBackToDefaults() {
+            stubOwnedInsert();
+            when(toolsGatewayProvider.getIfAvailable()).thenReturn(toolsGateway);
+            when(toolsGateway.executeTool(any(ToolRef.class), anyMap(), anyString(), anyMap()))
+                    .thenReturn(sendSuccess(123));
+
+            // approveLabel blank, rejectLabel null: both must fall back independently.
+            notifier.notifyPending(signal(),
+                    configWithLabels("Please approve", "   ", null), run(), null);
+
+            verify(toolsGateway).executeTool(any(ToolRef.class), paramsCaptor.capture(), eq(TENANT_ID), anyMap());
+            @SuppressWarnings("unchecked")
+            Map<String, Object> replyMarkup = (Map<String, Object>) paramsCaptor.getValue().get("reply_markup");
+            @SuppressWarnings("unchecked")
+            List<List<Map<String, Object>>> keyboard =
+                    (List<List<Map<String, Object>>>) replyMarkup.get("inline_keyboard");
             assertThat(keyboard.get(0).get(0).get("text")).isEqualTo("✅ Approve");
             assertThat(keyboard.get(0).get(1).get("text")).isEqualTo("❌ Reject");
         }
@@ -283,7 +341,7 @@ class TelegramApprovalNotifierTest {
                     .thenReturn(sendSuccess(123));
 
             notifier.notifyPending(signal(),
-                    new ApprovalDelegationConfig("telegram", null, CHAT_ID, "msg", List.of()), run(), null);
+                    new ApprovalDelegationConfig("telegram", null, CHAT_ID, "msg", null, List.of(), null, null), run(), null);
 
             verify(toolsGateway).executeTool(
                     eq(new ToolRef("telegram/telegram-send-message", 1)),
@@ -331,7 +389,7 @@ class TelegramApprovalNotifierTest {
             ApprovalChannelDeliveryEntity delivery = stubOwnedInsert();
 
             notifier.notifyPending(signal(),
-                    new ApprovalDelegationConfig("telegram", CREDENTIAL_ID, "  ", "msg", List.of()), run(), null);
+                    new ApprovalDelegationConfig("telegram", CREDENTIAL_ID, "  ", "msg", null, List.of(), null, null), run(), null);
 
             verify(toolsGateway, never()).executeTool(any(ToolRef.class), anyMap(), anyString(), anyMap());
             assertThat(delivery.getStatus()).isEqualTo(DeliveryStatus.FAILED);
@@ -506,6 +564,236 @@ class TelegramApprovalNotifierTest {
 
             assertThat(sentText(signal, config("Approve this order"), run(), null))
                     .isEqualTo("Approve this order\n\nItem #3");
+        }
+    }
+
+    @Nested
+    @DisplayName("notifyPending() / edits - photo delegation (image)")
+    class PhotoDelegation {
+
+        private static final Map<String, Object> FILE_REF = Map.of(
+                "_type", "file",
+                "path", "tenant-1/wf/run/screenshot.png",
+                "name", "screenshot.png",
+                "mimeType", "image/png");
+
+        private SignalWaitEntity signalWithImageDelegation() {
+            SignalWaitEntity signal = signal();
+            signal.setSignalConfig(Map.of(
+                    "type", "USER_APPROVAL",
+                    "delegation", Map.of(
+                            "channel", "telegram",
+                            "chatId", CHAT_ID,
+                            "image", FILE_REF)));
+            return signal;
+        }
+
+        @Test
+        @DisplayName("image set: sends telegram-send-photo with the FileRef as photo, the text as caption and the SAME two-button keyboard - and NEVER send-message")
+        void imageSendsPhotoWithCaptionAndKeyboard() {
+            ApprovalChannelDeliveryEntity delivery = stubOwnedInsert();
+            when(toolsGatewayProvider.getIfAvailable()).thenReturn(toolsGateway);
+            when(toolsGateway.executeTool(any(ToolRef.class), anyMap(), anyString(), anyMap()))
+                    .thenReturn(sendSuccess(123));
+
+            notifier.notifyPending(signal(), configWithImage("Approve this listing?", FILE_REF), run(), null);
+
+            verify(toolsGateway).executeTool(eq(PHOTO_TOOL), paramsCaptor.capture(), eq(TENANT_ID), anyMap());
+            verify(toolsGateway, never()).executeTool(eq(SEND_TOOL), anyMap(), anyString(), anyMap());
+            Map<String, Object> params = paramsCaptor.getValue();
+            assertThat(params).containsEntry("chat_id", CHAT_ID);
+            // The FileRef Map rides verbatim: the catalog's multipart encoder uploads the bytes.
+            assertThat(params).containsEntry("photo", FILE_REF);
+            assertThat(params).containsEntry("caption", "Approve this listing?");
+            assertThat(params).doesNotContainKey("text");
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> replyMarkup = (Map<String, Object>) params.get("reply_markup");
+            @SuppressWarnings("unchecked")
+            List<List<Map<String, Object>>> keyboard =
+                    (List<List<Map<String, Object>>>) replyMarkup.get("inline_keyboard");
+            assertThat(keyboard).hasSize(1);
+            assertThat(keyboard.get(0)).hasSize(2);
+            assertThat(keyboard.get(0).get(0).get("text")).isEqualTo("✅ Approve");
+            assertThat(keyboard.get(0).get(1).get("text")).isEqualTo("❌ Reject");
+            // The photo message carries the SAME lcapr callback tokens as a text
+            // message, so the existing webhook callback handler resolves both.
+            assertThat(String.valueOf(keyboard.get(0).get(0).get("callback_data")))
+                    .matches("lcapr:[A-Za-z0-9_-]{22}:a");
+            assertThat(String.valueOf(keyboard.get(0).get(1).get("callback_data")))
+                    .matches("lcapr:[A-Za-z0-9_-]{22}:r");
+
+            // extractMessageId works on the send_photo result shape ({ok, result:{message_id}}).
+            assertThat(delivery.getStatus()).isEqualTo(DeliveryStatus.SENT);
+            assertThat(delivery.getMessageId()).isEqualTo("123");
+            assertThat(delivery.getMessageText()).isEqualTo("Approve this listing?");
+        }
+
+        @Test
+        @DisplayName("custom labels apply to the photo path too (shared keyboard), callback_data still :a / :r")
+        void customButtonLabelsApplyToPhotoPath() {
+            stubOwnedInsert();
+            when(toolsGatewayProvider.getIfAvailable()).thenReturn(toolsGateway);
+            when(toolsGateway.executeTool(any(ToolRef.class), anyMap(), anyString(), anyMap()))
+                    .thenReturn(sendSuccess(123));
+
+            notifier.notifyPending(signal(),
+                    new ApprovalDelegationConfig("telegram", CREDENTIAL_ID, CHAT_ID, "Approve this listing?",
+                            FILE_REF, List.of(), "👍 Ship it", "👎 Hold"),
+                    run(), null);
+
+            verify(toolsGateway).executeTool(eq(PHOTO_TOOL), paramsCaptor.capture(), eq(TENANT_ID), anyMap());
+            @SuppressWarnings("unchecked")
+            Map<String, Object> replyMarkup = (Map<String, Object>) paramsCaptor.getValue().get("reply_markup");
+            @SuppressWarnings("unchecked")
+            List<List<Map<String, Object>>> keyboard =
+                    (List<List<Map<String, Object>>>) replyMarkup.get("inline_keyboard");
+            assertThat(keyboard.get(0).get(0).get("text")).isEqualTo("👍 Ship it");
+            assertThat(keyboard.get(0).get(1).get("text")).isEqualTo("👎 Hold");
+            assertThat(String.valueOf(keyboard.get(0).get(0).get("callback_data"))).endsWith(":a");
+            assertThat(String.valueOf(keyboard.get(0).get(1).get("callback_data"))).endsWith(":r");
+        }
+
+        @Test
+        @DisplayName("a String URL image passes through verbatim as the photo param")
+        void stringUrlImagePassesThroughAsPhoto() {
+            stubOwnedInsert();
+            when(toolsGatewayProvider.getIfAvailable()).thenReturn(toolsGateway);
+            when(toolsGateway.executeTool(any(ToolRef.class), anyMap(), anyString(), anyMap()))
+                    .thenReturn(sendSuccess(123));
+
+            notifier.notifyPending(signal(),
+                    configWithImage("msg", "https://example.com/img.png"), run(), null);
+
+            verify(toolsGateway).executeTool(eq(PHOTO_TOOL), paramsCaptor.capture(), eq(TENANT_ID), anyMap());
+            assertThat(paramsCaptor.getValue()).containsEntry("photo", "https://example.com/img.png");
+        }
+
+        @Test
+        @DisplayName("regression: no image -> the send-message path is untouched (text param, telegram-send-message, no photo/caption)")
+        void noImageKeepsSendMessagePathUnchanged() {
+            stubOwnedInsert();
+            when(toolsGatewayProvider.getIfAvailable()).thenReturn(toolsGateway);
+            when(toolsGateway.executeTool(any(ToolRef.class), anyMap(), anyString(), anyMap()))
+                    .thenReturn(sendSuccess(123));
+
+            notifier.notifyPending(signal(), config("Plain approval"), run(), null);
+
+            verify(toolsGateway).executeTool(eq(SEND_TOOL), paramsCaptor.capture(), eq(TENANT_ID), anyMap());
+            verify(toolsGateway, never()).executeTool(eq(PHOTO_TOOL), anyMap(), anyString(), anyMap());
+            Map<String, Object> params = paramsCaptor.getValue();
+            assertThat(params).containsEntry("text", "Plain approval");
+            assertThat(params).doesNotContainKey("photo");
+            assertThat(params).doesNotContainKey("caption");
+        }
+
+        @Test
+        @DisplayName("the sent caption is capped BELOW Telegram's 1024 limit, reserving room for the verdict line the resolution edit appends")
+        void captionCappedWithVerdictReserve() {
+            ApprovalChannelDeliveryEntity delivery = stubOwnedInsert();
+            when(toolsGatewayProvider.getIfAvailable()).thenReturn(toolsGateway);
+            when(toolsGateway.executeTool(any(ToolRef.class), anyMap(), anyString(), anyMap()))
+                    .thenReturn(sendSuccess(123));
+            String longMessage = "x".repeat(2000);
+
+            notifier.notifyPending(signal(), configWithImage(longMessage, FILE_REF), run(), null);
+
+            verify(toolsGateway).executeTool(eq(PHOTO_TOOL), paramsCaptor.capture(), eq(TENANT_ID), anyMap());
+            String caption = String.valueOf(paramsCaptor.getValue().get("caption"));
+            // 1024 minus the verdict reserve: "caption + \n\n + longest verdict" must fit at edit time.
+            assertThat(caption).hasSize(960);
+            // The stored message text matches what was actually sent (later edits build on it).
+            assertThat(delivery.getMessageText()).isEqualTo(caption);
+        }
+
+        @Test
+        @DisplayName("regression: a max-length caption still shows the verdict after resolution (the reserve keeps 'caption+verdict' under 1024, so the verdict is never truncated away)")
+        void maxLengthCaptionStillShowsVerdictAfterEdit() {
+            // Send with an over-long message: caption gets capped with the verdict reserve.
+            ApprovalChannelDeliveryEntity delivery = stubOwnedInsert();
+            when(toolsGatewayProvider.getIfAvailable()).thenReturn(toolsGateway);
+            when(toolsGateway.executeTool(any(ToolRef.class), anyMap(), anyString(), anyMap()))
+                    .thenReturn(sendSuccess(555));
+            notifier.notifyPending(signal(), configWithImage("x".repeat(2000), FILE_REF), run(), null);
+
+            // Resolve: the caption edit must still contain the verdict line.
+            delivery.setMessageId("555");
+            when(signalWaitRepository.findById(55L))
+                    .thenReturn(Optional.of(signalWithImageDelegation()));
+            notifier.onResolved(delivery, SignalResolution.APPROVED, "telegram:777");
+
+            verify(toolsGateway).executeTool(eq(EDIT_CAPTION_TOOL), paramsCaptor.capture(), anyString(), anyMap());
+            String edited = String.valueOf(paramsCaptor.getValue().get("caption"));
+            assertThat(edited).contains("Approved via Telegram");
+            assertThat(edited.length()).isLessThanOrEqualTo(1024);
+        }
+
+        @Test
+        @DisplayName("verdict edit on a photo delivery goes through telegram-edit-message-caption (editMessageText would fail: 'no text in the message') with the verdict appended and the keyboard stripped")
+        void resolvedPhotoDeliveryEditsCaption() {
+            ApprovalChannelDeliveryEntity delivery = pendingDelivery();
+            delivery.setStatus(DeliveryStatus.SENT);
+            delivery.setMessageId("555");
+            delivery.setMessageText("Original photo caption");
+            when(signalWaitRepository.findById(55L))
+                    .thenReturn(Optional.of(signalWithImageDelegation()));
+            when(toolsGatewayProvider.getIfAvailable()).thenReturn(toolsGateway);
+            when(toolsGateway.executeTool(any(ToolRef.class), anyMap(), anyString(), anyMap()))
+                    .thenReturn(new ExecutionResult(true, Map.of(), null, null));
+
+            notifier.onResolved(delivery, SignalResolution.APPROVED, "telegram:777");
+
+            verify(toolsGateway).executeTool(eq(EDIT_CAPTION_TOOL), paramsCaptor.capture(),
+                    eq(TENANT_ID), anyMap());
+            verify(toolsGateway, never()).executeTool(eq(EDIT_TOOL), anyMap(), anyString(), anyMap());
+            Map<String, Object> params = paramsCaptor.getValue();
+            assertThat(params).containsEntry("chat_id", CHAT_ID);
+            assertThat(params).containsEntry("message_id", "555");
+            assertThat(params).containsEntry("caption",
+                    "Original photo caption\n\n✅ Approved via Telegram");
+            assertThat(params).doesNotContainKey("text");
+            assertThat(params).containsEntry("reply_markup", Map.of("inline_keyboard", List.of()));
+            assertThat(delivery.getStatus()).isEqualTo(DeliveryStatus.RESOLVED);
+        }
+
+        @Test
+        @DisplayName("cancellation on a photo delivery also edits the caption")
+        void cancelledPhotoDeliveryEditsCaption() {
+            ApprovalChannelDeliveryEntity delivery = pendingDelivery();
+            delivery.setStatus(DeliveryStatus.SENT);
+            delivery.setMessageId("555");
+            delivery.setMessageText("Original photo caption");
+            when(signalWaitRepository.findById(55L))
+                    .thenReturn(Optional.of(signalWithImageDelegation()));
+            when(toolsGatewayProvider.getIfAvailable()).thenReturn(toolsGateway);
+            when(toolsGateway.executeTool(any(ToolRef.class), anyMap(), anyString(), anyMap()))
+                    .thenReturn(new ExecutionResult(true, Map.of(), null, null));
+
+            notifier.onCancelled(delivery);
+
+            verify(toolsGateway).executeTool(eq(EDIT_CAPTION_TOOL), paramsCaptor.capture(),
+                    eq(TENANT_ID), anyMap());
+            assertThat(paramsCaptor.getValue())
+                    .containsEntry("caption", "Original photo caption\n\n🚫 Approval cancelled");
+            assertThat(delivery.getStatus()).isEqualTo(DeliveryStatus.CANCELLED);
+        }
+
+        @Test
+        @DisplayName("best-effort: signal row gone at edit time -> falls back to the text edit (never throws)")
+        void missingSignalRowFallsBackToTextEdit() {
+            ApprovalChannelDeliveryEntity delivery = pendingDelivery();
+            delivery.setStatus(DeliveryStatus.SENT);
+            delivery.setMessageId("555");
+            delivery.setMessageText("Original photo caption");
+            when(signalWaitRepository.findById(55L)).thenReturn(Optional.empty());
+            when(toolsGatewayProvider.getIfAvailable()).thenReturn(toolsGateway);
+            when(toolsGateway.executeTool(any(ToolRef.class), anyMap(), anyString(), anyMap()))
+                    .thenReturn(new ExecutionResult(true, Map.of(), null, null));
+
+            notifier.onResolved(delivery, SignalResolution.APPROVED, "telegram:777");
+
+            verify(toolsGateway).executeTool(eq(EDIT_TOOL), anyMap(), eq(TENANT_ID), anyMap());
+            assertThat(delivery.getStatus()).isEqualTo(DeliveryStatus.RESOLVED);
         }
     }
 

@@ -1,10 +1,12 @@
 'use client';
 
 import React from 'react';
+import { useTranslations } from 'next-intl';
 import { getClientLocale } from '@/lib/utils/locale';
 import type { VisualCellProps } from './types';
 
 export function NumberCell({ value, displayConfig, isEditing, onSaveAndExit }: VisualCellProps) {
+  const t = useTranslations('dataTable');
   const format = (displayConfig?.format as string) || 'plain';
   const decimals = Number(displayConfig?.decimals ?? 0);
   const currencySymbol = (displayConfig?.currencySymbol as string) || '$';
@@ -25,7 +27,7 @@ export function NumberCell({ value, displayConfig, isEditing, onSaveAndExit }: V
 
   const num = typeof value === 'number' ? value : Number(value);
   if (value === null || value === undefined || value === '' || isNaN(num)) {
-    return <span className="text-xs text-theme-secondary">No data</span>;
+    return <span className="text-xs text-theme-secondary">{t('noData')}</span>;
   }
 
   let formatted: string;

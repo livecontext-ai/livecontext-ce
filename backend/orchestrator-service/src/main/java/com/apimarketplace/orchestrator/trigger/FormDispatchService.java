@@ -39,6 +39,7 @@ public class FormDispatchService {
     private final ReusableTriggerService triggerService;
     private final ProductionRunResolver productionRunResolver;
     private final CreditConsumptionClient creditClient;
+    private final ShareInvocationLimiter shareInvocationLimiter;
     private final com.apimarketplace.common.storage.url.PublicFileUrlBuilder publicFileUrlBuilder;
 
     public FormDispatchService(TriggerClient triggerClient,
@@ -47,6 +48,7 @@ public class FormDispatchService {
                                ReusableTriggerService triggerService,
                                ProductionRunResolver productionRunResolver,
                                CreditConsumptionClient creditClient,
+                               ShareInvocationLimiter shareInvocationLimiter,
                                com.apimarketplace.common.storage.url.PublicFileUrlBuilder publicFileUrlBuilder) {
         this.triggerClient = triggerClient;
         this.workflowRepository = workflowRepository;
@@ -54,6 +56,7 @@ public class FormDispatchService {
         this.triggerService = triggerService;
         this.productionRunResolver = productionRunResolver;
         this.creditClient = creditClient;
+        this.shareInvocationLimiter = shareInvocationLimiter;
         this.publicFileUrlBuilder = publicFileUrlBuilder;
     }
 
@@ -87,6 +90,14 @@ public class FormDispatchService {
         if (!Boolean.TRUE.equals(endpoint.getIsActive())) {
             triggerClient.logFormSubmission(endpoint.getId(), formData, "inactive", 0, ipAddress);
             throw new IllegalStateException("Form endpoint is not active");
+        }
+
+        // Anti credit-drain: an anonymous public form link spends the OWNER's LLM credits.
+        // Cap invocations per-link and per-owner (workspace) per day. Thrown OUTSIDE the try
+        // below so it reaches the controller's 429 mapping, not the generic 500 catch.
+        if (!shareInvocationLimiter.tryAcquire(token, endpoint.getOrganizationId())) {
+            throw new ShareInvocationLimitExceededException(
+                    "Daily submission limit reached for this form link. Please try again later.");
         }
 
         int triggered = 0;

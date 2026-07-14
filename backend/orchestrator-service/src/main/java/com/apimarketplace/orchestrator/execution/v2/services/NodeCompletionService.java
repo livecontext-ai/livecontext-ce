@@ -183,7 +183,28 @@ public class NodeCompletionService {
             ExecutionContext context,
             Integer explicitIteration) {
         emitNodeComplete(execution, node, result, item, itemIndex, context,
-            explicitIteration, CompletionKind.TERMINAL);
+            explicitIteration, CompletionKind.TERMINAL, false);
+    }
+
+    /**
+     * Per-item terminal completion that suppresses the node-level EpochState mark
+     * (StepCompletionContext.suppressGlobalMark, Phase 2.E). Used by the per-item
+     * continuation walks (approval continuationMode=per_item in a split): each item's
+     * row / NodeCounts / billing / WS event land normally, but the node-level
+     * completedNodeIds/failedNodeIds mark is written ONCE at seal via
+     * {@code StepCompletionOrchestrator.recordSplitAggregateIfMissing} - exactly like
+     * the split-async path.
+     */
+    public void emitNodeCompletePerItem(
+            WorkflowExecution execution,
+            ExecutionNode node,
+            NodeExecutionResult result,
+            TriggerItem item,
+            int itemIndex,
+            ExecutionContext context) {
+        Integer iteration = extractCurrentIteration(context, node, result);
+        emitNodeComplete(execution, node, result, item, itemIndex, context,
+            iteration, CompletionKind.TERMINAL, true);
     }
 
     /**
@@ -214,6 +235,24 @@ public class NodeCompletionService {
             ExecutionContext context,
             Integer explicitIteration,
             CompletionKind kind) {
+        emitNodeComplete(execution, node, result, item, itemIndex, context, explicitIteration, kind, false);
+    }
+
+    /**
+     * Full pipeline with the suppressGlobalMark pass-through (see
+     * {@link #emitNodeCompletePerItem}). suppressGlobalMark only applies to the
+     * TERMINAL disposition - attempts never mutate the snapshot anyway.
+     */
+    public void emitNodeComplete(
+            WorkflowExecution execution,
+            ExecutionNode node,
+            NodeExecutionResult result,
+            TriggerItem item,
+            int itemIndex,
+            ExecutionContext context,
+            Integer explicitIteration,
+            CompletionKind kind,
+            boolean suppressGlobalMark) {
 
         // Early validation - fail fast if required parameters are missing
         if (execution == null || node == null || result == null) {
@@ -268,7 +307,11 @@ public class NodeCompletionService {
             if (context != null && context.triggerId() != null) {
                 stepCompletionOrchestrator.completeStep(
                     execution, nodeId, nodeLabel, stepResultWithMeta,
-                    itemIndex, iteration, context.epoch(), context.triggerId());
+                    itemIndex, iteration, context.epoch(), context.triggerId(), suppressGlobalMark);
+            } else if (suppressGlobalMark) {
+                stepCompletionOrchestrator.completeStep(
+                    execution, nodeId, nodeLabel, stepResultWithMeta,
+                    itemIndex, iteration, context != null ? context.epoch() : 0, null, true);
             } else {
                 stepCompletionOrchestrator.completeStep(
                     execution, nodeId, nodeLabel, stepResultWithMeta,

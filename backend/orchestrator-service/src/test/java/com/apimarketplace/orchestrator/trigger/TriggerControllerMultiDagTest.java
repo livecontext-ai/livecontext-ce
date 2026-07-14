@@ -83,8 +83,13 @@ class TriggerControllerMultiDagTest {
         lenient().when(run.getRunIdPublic()).thenReturn(runId);
         lenient().when(run.getStatus()).thenReturn(status);
         lenient().when(run.getPlan()).thenReturn(plan);
+        // Owner tenant so the TriggerController scope guard (isRunInScope) passes when the
+        // trigger calls below fire as this same tenant (CALLER).
+        lenient().when(run.getTenantId()).thenReturn(CALLER);
         return run;
     }
+
+    private static final String CALLER = "tenant-1";
 
     // ==================== Type-based endpoints with multi-trigger ====================
 
@@ -103,7 +108,7 @@ class TriggerControllerMultiDagTest {
             when(runRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                    controller.triggerManual("run-1", null, null);
+                    controller.triggerManual("run-1", null, null, CALLER, null);
 
             // Manual type not found (webhooks exist but not manual)
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
@@ -122,7 +127,7 @@ class TriggerControllerMultiDagTest {
             when(runRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                    controller.triggerManual("run-1", null, null);
+                    controller.triggerManual("run-1", null, null, CALLER, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
             assertThat(response.getBody()).isNotNull();
@@ -143,7 +148,7 @@ class TriggerControllerMultiDagTest {
             when(runRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                    controller.triggerChat("run-1", Map.of("message", "hello"), null);
+                    controller.triggerChat("run-1", Map.of("message", "hello"), null, CALLER, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
             assertThat(response.getBody()).isNotNull();
@@ -162,7 +167,7 @@ class TriggerControllerMultiDagTest {
             when(runRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                    controller.triggerForm("run-1", Map.of("email", "test@test.com"), null);
+                    controller.triggerForm("run-1", Map.of("email", "test@test.com"), null, CALLER, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
             assertThat(response.getBody()).isNotNull();
@@ -185,7 +190,7 @@ class TriggerControllerMultiDagTest {
                             TriggerType.MANUAL, "OK", Set.of(), 1));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                    controller.triggerManual("run-1", null, null);
+                    controller.triggerManual("run-1", null, null, CALLER, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
             assertThat(response.getBody()).isNotNull();
@@ -215,7 +220,7 @@ class TriggerControllerMultiDagTest {
                     .thenReturn(TriggerExecutionResult.accepted("run-1", "trigger:webhook_b", TriggerType.WEBHOOK));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                    controller.triggerSpecific("run-1", "webhook", "trigger:webhook_b", Map.of(), null);
+                    controller.triggerSpecific("run-1", "webhook", "trigger:webhook_b", Map.of(), null, CALLER, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
             assertThat(response.getBody()).isNotNull();
@@ -233,7 +238,7 @@ class TriggerControllerMultiDagTest {
             when(runRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                    controller.triggerSpecific("run-1", "webhook", "trigger:nonexistent", null, null);
+                    controller.triggerSpecific("run-1", "webhook", "trigger:nonexistent", null, null, CALLER, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
             assertThat(response.getBody()).isNotNull();
@@ -256,7 +261,7 @@ class TriggerControllerMultiDagTest {
                     .thenReturn(TriggerExecutionResult.accepted("run-1", "trigger:start_process_a", TriggerType.MANUAL));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                    controller.triggerSpecific("run-1", "manual", "trigger:start_process_a", Map.of(), null);
+                    controller.triggerSpecific("run-1", "manual", "trigger:start_process_a", Map.of(), null, CALLER, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
             verify(triggerService).executeTriggerAsync(any(), eq("trigger:start_process_a"), eq(TriggerType.MANUAL), any());
@@ -279,7 +284,7 @@ class TriggerControllerMultiDagTest {
 
             ResponseEntity<TriggerController.TriggerResponse> response =
                     controller.triggerSpecific("run-1", "chat", "trigger:sales_chat",
-                            Map.of("message", "I want to buy"), null);
+                            Map.of("message", "I want to buy"), null, CALLER, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
         }
@@ -301,7 +306,7 @@ class TriggerControllerMultiDagTest {
 
             ResponseEntity<TriggerController.TriggerResponse> response =
                     controller.triggerSpecific("run-1", "form", "trigger:feedback_form",
-                            Map.of("rating", 5, "comment", "Great!"), null);
+                            Map.of("rating", 5, "comment", "Great!"), null, CALLER, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
         }
@@ -324,7 +329,7 @@ class TriggerControllerMultiDagTest {
             WorkflowRunEntity run = mockRun("run-1", RunStatus.WAITING_TRIGGER, plan);
             when(runRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
 
-            ResponseEntity<List<TriggerInfo>> response = controller.getAvailableTriggers("run-1");
+            ResponseEntity<List<TriggerInfo>> response = controller.getAvailableTriggers("run-1", CALLER, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(response.getBody()).isNotNull();
@@ -344,7 +349,7 @@ class TriggerControllerMultiDagTest {
             WorkflowRunEntity run = mockRun("run-1", RunStatus.WAITING_TRIGGER, plan);
             when(runRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
 
-            ResponseEntity<List<TriggerInfo>> response = controller.getAvailableTriggers("run-1");
+            ResponseEntity<List<TriggerInfo>> response = controller.getAvailableTriggers("run-1", CALLER, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(response.getBody()).hasSize(2);
@@ -366,7 +371,7 @@ class TriggerControllerMultiDagTest {
             WorkflowRunEntity run = mockRun("run-1", RunStatus.WAITING_TRIGGER, plan);
             when(runRepository.findByRunIdPublic("run-1")).thenReturn(Optional.of(run));
 
-            ResponseEntity<List<TriggerInfo>> response = controller.getAvailableTriggers("run-1");
+            ResponseEntity<List<TriggerInfo>> response = controller.getAvailableTriggers("run-1", CALLER, null);
 
             assertThat(response.getBody()).hasSize(4);
             List<String> types = response.getBody().stream().map(TriggerInfo::type).toList();
@@ -396,7 +401,7 @@ class TriggerControllerMultiDagTest {
 
             // Manual endpoint should find the single manual trigger
             ResponseEntity<TriggerController.TriggerResponse> response =
-                    controller.triggerManual("run-1", null, null);
+                    controller.triggerManual("run-1", null, null, CALLER, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
         }
@@ -417,7 +422,7 @@ class TriggerControllerMultiDagTest {
                             TriggerType.FORM, "OK", Set.of(), 1));
 
             ResponseEntity<TriggerController.TriggerResponse> response =
-                    controller.triggerForm("run-1", Map.of("email", "test@test.com"), null);
+                    controller.triggerForm("run-1", Map.of("email", "test@test.com"), null, CALLER, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
             assertThat(response.getBody().triggerId()).isEqualTo("trigger:contact_form");
@@ -435,7 +440,7 @@ class TriggerControllerMultiDagTest {
 
             // Try chat endpoint - no chat trigger exists
             ResponseEntity<TriggerController.TriggerResponse> response =
-                    controller.triggerChat("run-1", Map.of("message", "hello"), null);
+                    controller.triggerChat("run-1", Map.of("message", "hello"), null, CALLER, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
             assertThat(response.getBody().message()).contains("No chat trigger found");

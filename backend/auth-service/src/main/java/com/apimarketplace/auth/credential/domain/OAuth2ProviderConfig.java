@@ -39,7 +39,8 @@ public record OAuth2ProviderConfig(
         RefreshConfig refresh,
         String grantType,
         String clientIdParam,
-        TokenExchangeConfig tokenExchange
+        TokenExchangeConfig tokenExchange,
+        AccessTokenGrant longLivedExchange
 ) {
 
     /** How client credentials are transmitted on the token endpoint. */
@@ -90,18 +91,69 @@ public record OAuth2ProviderConfig(
             boolean rotatesRefreshToken,
             Integer refreshTokenTtlDays,
             String unsupportedReason,
-            RefreshQuirks quirks
+            RefreshQuirks quirks,
+            AccessTokenGrant accessTokenGrant
     ) {
         /** Plain RFC-6749 provider - refresh works, no rotation, no hard TTL, no quirks. */
         public static final RefreshConfig STANDARD =
-                new RefreshConfig(true, false, null, null, RefreshQuirks.NONE);
+                new RefreshConfig(true, false, null, null, RefreshQuirks.NONE, null);
 
         public RefreshConfig {
             quirks = quirks == null ? RefreshQuirks.NONE : quirks;
         }
 
+        /** Pre-{@code accessTokenGrant} signature kept so existing call sites compile unchanged. */
+        public RefreshConfig(boolean supported, boolean rotatesRefreshToken, Integer refreshTokenTtlDays,
+                             String unsupportedReason, RefreshQuirks quirks) {
+            this(supported, rotatesRefreshToken, refreshTokenTtlDays, unsupportedReason, quirks, null);
+        }
+
         public static RefreshConfig unsupported(String reason) {
-            return new RefreshConfig(false, false, null, reason, RefreshQuirks.NONE);
+            return new RefreshConfig(false, false, null, reason, RefreshQuirks.NONE, null);
+        }
+    }
+
+    /**
+     * A non-RFC "token grant" call: GET on a provider URL whose query carries a
+     * {@code grant_type} plus the CURRENT access token (there is no refresh_token involved).
+     * Meta is the canonical family:
+     *
+     * <ul>
+     *   <li>Instagram Login short→long exchange: {@code GET graph.instagram.com/access_token
+     *       ?grant_type=ig_exchange_token&client_secret=…&access_token=<short-lived>}</li>
+     *   <li>Instagram long-lived renewal: {@code GET graph.instagram.com/refresh_access_token
+     *       ?grant_type=ig_refresh_token&access_token=<long-lived>}</li>
+     *   <li>Facebook short→long exchange AND renewal: {@code GET graph.facebook.com/vXX.0/oauth/access_token
+     *       ?grant_type=fb_exchange_token&client_id=…&client_secret=…&fb_exchange_token=<token>}</li>
+     * </ul>
+     *
+     * Used in two places, same shape: {@code oauth2Config.longLivedExchange} (run once right
+     * after the code exchange in the connect callback) and {@code oauth2Config.refresh.accessTokenGrant}
+     * (run by the refresh scheduler / lazy-401 path instead of the RFC refresh_token grant).
+     * The response is a standard token JSON ({@code access_token} + {@code expires_in}).
+     *
+     * @param url              absolute endpoint URL
+     * @param grantType        value of the {@code grant_type} query param
+     * @param tokenParam       query param name carrying the current access token
+     *                         (IG: {@code access_token}; FB: {@code fb_exchange_token})
+     * @param sendClientId     include {@code client_id} in the query (FB: yes, IG: no)
+     * @param sendClientSecret include {@code client_secret} in the query
+     *                         (IG renewal: no; both exchanges: yes)
+     */
+    public record AccessTokenGrant(
+            String url,
+            String grantType,
+            String tokenParam,
+            boolean sendClientId,
+            boolean sendClientSecret
+    ) {
+        public AccessTokenGrant {
+            tokenParam = tokenParam == null || tokenParam.isBlank() ? "access_token" : tokenParam;
+        }
+
+        /** Valid only when both the endpoint and the grant_type are declared. */
+        public boolean isValid() {
+            return url != null && !url.isBlank() && grantType != null && !grantType.isBlank();
         }
     }
 
@@ -199,7 +251,7 @@ public record OAuth2ProviderConfig(
     ) {
         this(authorizationUrl, tokenUrl, refreshUrl, scopes, scopeDelimiter, tokenAuthMethod,
                 TokenParamsLocation.FORM, pkceEnabled, authorizeExtraParams, refresh,
-                "authorizationCode", "client_id", TokenExchangeConfig.STANDARD);
+                "authorizationCode", "client_id", TokenExchangeConfig.STANDARD, null);
     }
 
     /**
@@ -222,7 +274,7 @@ public record OAuth2ProviderConfig(
     ) {
         this(authorizationUrl, tokenUrl, refreshUrl, scopes, scopeDelimiter, tokenAuthMethod,
                 tokenParamsLocation, pkceEnabled, authorizeExtraParams, refresh, grantType,
-                "client_id", TokenExchangeConfig.STANDARD);
+                "client_id", TokenExchangeConfig.STANDARD, null);
     }
 
     /** Joined scope string using the configured delimiter. Empty string if no scopes. */
@@ -243,7 +295,7 @@ public record OAuth2ProviderConfig(
         return new OAuth2ProviderConfig(
                 authorizationUrl, tokenUrl, refreshUrl, newScopes, scopeDelimiter,
                 tokenAuthMethod, tokenParamsLocation, pkceEnabled, authorizeExtraParams, refresh,
-                grantType, clientIdParam, tokenExchange);
+                grantType, clientIdParam, tokenExchange, longLivedExchange);
     }
 
     /**
@@ -262,7 +314,7 @@ public record OAuth2ProviderConfig(
                 newTokenUrl != null ? newTokenUrl : tokenUrl,
                 refreshUrl, scopes, scopeDelimiter,
                 tokenAuthMethod, tokenParamsLocation, pkceEnabled, authorizeExtraParams, refresh,
-                grantType, clientIdParam, tokenExchange);
+                grantType, clientIdParam, tokenExchange, longLivedExchange);
     }
 
     /** Token endpoint falls back to {@code tokenUrl} when {@code refreshUrl} is not set. */
@@ -302,7 +354,8 @@ public record OAuth2ProviderConfig(
                 parseRefresh(oauth2Config.path("refresh")),
                 grantType,
                 textOrNull(oauth2Config, "clientIdParam"),
-                parseTokenExchange(oauth2Config)
+                parseTokenExchange(oauth2Config),
+                parseAccessTokenGrant(oauth2Config.path("longLivedExchange"))
         );
     }
 
@@ -408,7 +461,27 @@ public record OAuth2ProviderConfig(
         Integer ttlDays = refreshNode.has("refreshTokenTtlDays") && refreshNode.path("refreshTokenTtlDays").isNumber()
                 ? refreshNode.path("refreshTokenTtlDays").asInt()
                 : null;
-        return new RefreshConfig(true, rotates, ttlDays, null, parseQuirks(refreshNode.path("quirks")));
+        return new RefreshConfig(true, rotates, ttlDays, null, parseQuirks(refreshNode.path("quirks")),
+                parseAccessTokenGrant(refreshNode.path("accessTokenGrant")));
+    }
+
+    /**
+     * Parse an {@code accessTokenGrant} / {@code longLivedExchange} block. Returns {@code null}
+     * when the block is absent OR incomplete (missing url/grantType) - an invalid block must
+     * degrade to "feature off", never to a broken half-configured grant call.
+     */
+    private static AccessTokenGrant parseAccessTokenGrant(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull() || !node.isObject()) {
+            return null;
+        }
+        AccessTokenGrant grant = new AccessTokenGrant(
+                textOrNull(node, "url"),
+                textOrNull(node, "grantType"),
+                textOrNull(node, "tokenParam"),
+                node.path("sendClientId").asBoolean(false),
+                node.path("sendClientSecret").asBoolean(false)
+        );
+        return grant.isValid() ? grant : null;
     }
 
     private static RefreshQuirks parseQuirks(JsonNode quirksNode) {

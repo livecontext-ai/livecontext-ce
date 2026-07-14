@@ -677,6 +677,80 @@ class StepCompletionOrchestratorTest {
     }
 
     // =========================================================================
+    // completeStep() - suppressGlobalMark overload (Phase 2.E / per-item continuation)
+    // =========================================================================
+
+    @Nested
+    @DisplayName("completeStep() - suppressGlobalMark overload")
+    class CompleteStepSuppressGlobalMarkTests {
+
+        @Test
+        @DisplayName("suppressGlobalMark=true takes the incrementNodeCountsOnly path (no EpochState node-level mark)")
+        void suppressGlobalMarkTrueIncrementsCountsOnly() {
+            StepExecutionResult result = StepExecutionResult.success(NODE_ID, Map.of("data", "v"), 100);
+
+            when(execution.getWorkflowRunId()).thenReturn(UUID.randomUUID());
+            when(persistenceService.recordStep(any(), any(), any(), any(), any(), anyInt(), any()))
+                    .thenReturn(StepPersistenceResult.success(UUID.randomUUID()));
+            when(stateSnapshotService.incrementNodeCountsOnly(RUN_ID, NODE_ID, "COMPLETED", 1))
+                    .thenReturn(ONE_COMPLETED);
+
+            boolean persisted = orchestrator.completeStep(
+                    execution, NODE_ID, NODE_LABEL, result, 0, null, 3, "trigger:start", true);
+
+            assertThat(persisted).isTrue();
+            // Per-item NodeCounts still increment (frontend statusCounts stay live) ...
+            verify(stateSnapshotService).incrementNodeCountsOnly(RUN_ID, NODE_ID, "COMPLETED", 1);
+            // ... but the node-level EpochState mark is deferred to the seal
+            // (recordSplitAggregateIfMissing) - never written here.
+            verify(stateSnapshotService, never()).recordNodeCompletionAndGetCounts(
+                    any(), any(), any(), any(), anyInt(), anyLong());
+            verify(stateSnapshotService, never()).recordNodeCompletionAndGetCounts(
+                    any(), any(), any(), any(), anyInt());
+            // The additive per-epoch counter row is still recorded under the real DAG key.
+            verify(workflowEpochService).recordNodeCount(RUN_ID, 3, NODE_ID, "COMPLETED", "trigger:start");
+        }
+
+        @Test
+        @DisplayName("REGRESSION: suppressGlobalMark=false keeps the recordNodeCompletionAndGetCounts path (pre-feature behavior)")
+        void suppressGlobalMarkFalseKeepsNodeCompletionPath() {
+            StepExecutionResult result = StepExecutionResult.success(NODE_ID, Map.of("data", "v"), 100);
+
+            when(persistenceService.recordStep(any(), any(), any(), any(), any(), anyInt(), any()))
+                    .thenReturn(StepPersistenceResult.success(UUID.randomUUID()));
+            when(stateSnapshotService.recordNodeCompletionAndGetCounts(
+                    RUN_ID, NODE_ID, "COMPLETED", "trigger:start", 3, 100L))
+                    .thenReturn(ONE_COMPLETED);
+
+            boolean persisted = orchestrator.completeStep(
+                    execution, NODE_ID, NODE_LABEL, result, 0, null, 3, "trigger:start", false);
+
+            assertThat(persisted).isTrue();
+            verify(stateSnapshotService).recordNodeCompletionAndGetCounts(
+                    RUN_ID, NODE_ID, "COMPLETED", "trigger:start", 3, 100L);
+            verify(stateSnapshotService, never()).incrementNodeCountsOnly(any(), any(), any(), anyInt());
+        }
+
+        @Test
+        @DisplayName("the pre-existing 8-arg overload delegates with suppressGlobalMark=false (no behavior change for legacy callers)")
+        void eightArgOverloadDelegatesWithSuppressFalse() {
+            StepExecutionResult result = StepExecutionResult.success(NODE_ID, Map.of(), 100);
+
+            when(persistenceService.recordStep(any(), any(), any(), any(), any(), anyInt(), any()))
+                    .thenReturn(StepPersistenceResult.success(UUID.randomUUID()));
+            when(stateSnapshotService.recordNodeCompletionAndGetCounts(
+                    RUN_ID, NODE_ID, "COMPLETED", "trigger:start", 3, 100L))
+                    .thenReturn(ONE_COMPLETED);
+
+            boolean persisted = orchestrator.completeStep(
+                    execution, NODE_ID, NODE_LABEL, result, 0, null, 3, "trigger:start");
+
+            assertThat(persisted).isTrue();
+            verify(stateSnapshotService, never()).incrementNodeCountsOnly(any(), any(), any(), anyInt());
+        }
+    }
+
+    // =========================================================================
     // completeSkippedStep() - Legacy Method
     // =========================================================================
 

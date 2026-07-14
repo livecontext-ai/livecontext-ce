@@ -240,6 +240,205 @@
   resolved "https://registry.npmjs.org/@dagrejs/graphlib/-/graphlib-2.2.4.tgz"
   integrity sha512-mepCf/e9+SKYy1d02/UkvSy6+6MoyXhVxP8lLDfA7BPE1X1d4dR0sZznmbM8/XVJ1GPM+Svnx7Xj6ZweByWUkw==
 
+"@dicebear/adventurer-neutral@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/adventurer-neutral/-/adventurer-neutral-9.4.2.tgz"
+  integrity sha512-5xgkG/mNL4j3Q4SJGQLBU/KnU90tng8Ze5ofThD+55wi0oeY/nSAUowg6UFCmHrktjifj/MEx3CQqbpcPWtfIA==
+
+"@dicebear/adventurer@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/adventurer/-/adventurer-9.4.2.tgz"
+  integrity sha512-jqYp834ZmGDA9HBBDQAdgF1O2UTCwHF4vVrktXWa2Dppp1JczPL5HnVOWsjtrLmXNn61Wd6OLmBb2e6rhzp3ig==
+
+"@dicebear/avataaars-neutral@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/avataaars-neutral/-/avataaars-neutral-9.4.2.tgz"
+  integrity sha512-/eNrp0YCNJRwQXqOloLm1+3Ss2C+pMpUQIGkbEnGsP1UK+13Ge80ggDDof1HpdqvG9HAZcKa7hnbG/0HSwyDSw==
+
+"@dicebear/avataaars@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/avataaars/-/avataaars-9.4.2.tgz"
+  integrity sha512-3x9jKFkOkFSPmpTbt9xvhiU2E1GX7beCSsX0tXRUShj8x6+5Ks9yBRT1VlkySbnXrZ/GglADGg7vJ/D2uIx1Yw==
+
+"@dicebear/big-ears-neutral@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/big-ears-neutral/-/big-ears-neutral-9.4.2.tgz"
+  integrity sha512-M8Ozmzza4eY4hpLOYULgJxMYmBA0CsBnrE15/xw6LZkEREXnrX5z0NJsf8hUfdyF6BWZ+RBgzoiav32DAC5zcg==
+
+"@dicebear/big-ears@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/big-ears/-/big-ears-9.4.2.tgz"
+  integrity sha512-mNfz3ppNA7UBq0IO3nXCiV5pFPG7c1DfzRB0foNU2Wo1XXT8FIcSY2BvDlYqorZTOUOz7dHb0vx06hqvG0HP5w==
+
+"@dicebear/big-smile@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/big-smile/-/big-smile-9.4.2.tgz"
+  integrity sha512-hmT5i7rcPPhStjZyg28pbIhdTnnMBzK3RObI0vKCpY30EFrzaPkkdDL6Ck5fAFBdvDIW1EpOJkenyR0XPmhgbQ==
+
+"@dicebear/bottts-neutral@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/bottts-neutral/-/bottts-neutral-9.4.2.tgz"
+  integrity sha512-kFNwWt6j+gzZ5n5Pz7WVwePubREAQOF8ZwWA9ztwVYDVMLnOChWbAofy5FED4j5md2MXFH2EgLCFCMr5K2BmIA==
+
+"@dicebear/bottts@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/bottts/-/bottts-9.4.2.tgz"
+  integrity sha512-tsx+dII7EFUCVA8URj66G1GqORCCVduCAx4dY2prEY2IeFianVpkntXuFsWZ9BBGx1NZFndvDith5oTwKMQPbQ==
+
+"@dicebear/collection@^9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/collection/-/collection-9.4.2.tgz"
+  integrity sha512-KArubv7if8H7j9sIfpDK2hJJqrdNVR5zMPAMOSpIU2JPyXx8TC9o5wsmXb8il5wOHgaS9Q/cla7jUNIiDD7Gsg==
+  dependencies:
+    "@dicebear/adventurer" "9.4.2"
+    "@dicebear/adventurer-neutral" "9.4.2"
+    "@dicebear/avataaars" "9.4.2"
+    "@dicebear/avataaars-neutral" "9.4.2"
+    "@dicebear/big-ears" "9.4.2"
+    "@dicebear/big-ears-neutral" "9.4.2"
+    "@dicebear/big-smile" "9.4.2"
+    "@dicebear/bottts" "9.4.2"
+    "@dicebear/bottts-neutral" "9.4.2"
+    "@dicebear/croodles" "9.4.2"
+    "@dicebear/croodles-neutral" "9.4.2"
+    "@dicebear/dylan" "9.4.2"
+    "@dicebear/fun-emoji" "9.4.2"
+    "@dicebear/glass" "9.4.2"
+    "@dicebear/icons" "9.4.2"
+    "@dicebear/identicon" "9.4.2"
+    "@dicebear/initials" "9.4.2"
+    "@dicebear/lorelei" "9.4.2"
+    "@dicebear/lorelei-neutral" "9.4.2"
+    "@dicebear/micah" "9.4.2"
+    "@dicebear/miniavs" "9.4.2"
+    "@dicebear/notionists" "9.4.2"
+    "@dicebear/notionists-neutral" "9.4.2"
+    "@dicebear/open-peeps" "9.4.2"
+    "@dicebear/personas" "9.4.2"
+    "@dicebear/pixel-art" "9.4.2"
+    "@dicebear/pixel-art-neutral" "9.4.2"
+    "@dicebear/rings" "9.4.2"
+    "@dicebear/shapes" "9.4.2"
+    "@dicebear/thumbs" "9.4.2"
+    "@dicebear/toon-head" "9.4.2"
+
+"@dicebear/core@^9.0.0", "@dicebear/core@^9.4.3":
+  version "9.4.3"
+  resolved "https://registry.npmjs.org/@dicebear/core/-/core-9.4.3.tgz"
+  integrity sha512-9ITrQI57k3p5hKuU8HZJ1d0kPdrmTKEJDOdlKQ8CpaChbtmnD1R+dtWmNz5IesYThXM8F64pJ0ZvJ2rsY8Hciw==
+  dependencies:
+    "@types/json-schema" "^7.0.15"
+
+"@dicebear/croodles-neutral@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/croodles-neutral/-/croodles-neutral-9.4.2.tgz"
+  integrity sha512-oG5IeUdtiYshQ89gkAVcl5w3xAEi5UZX2fTzIyelpBPCG176l7VuuFzlxi2umnB3E6LVHYy06DXvUo/p+rXB2Q==
+
+"@dicebear/croodles@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/croodles/-/croodles-9.4.2.tgz"
+  integrity sha512-6VoO0JviIf7dKKMBTL/SMXxWhnXHaZuzufX90G0nXxS77ELG1YkGNMaZzawizN4C09Gbya2gJkozqrWiJN/aGw==
+
+"@dicebear/dylan@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/dylan/-/dylan-9.4.2.tgz"
+  integrity sha512-1vQvRu9x9DrwFxhFaIU2rf0EUL04yDTbAt7fHyAjM0mEsKzTD4mRNf95tCRuavCoW6W48u7A/OY6jyIub6kxLQ==
+
+"@dicebear/fun-emoji@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/fun-emoji/-/fun-emoji-9.4.2.tgz"
+  integrity sha512-kqB6LPkdYCdEU/mwbyz34xLzoNUKL6ARcoo3fr5ASq9D6ZE07qIKybC3xv5+CPz7VmspJ1Q3c/VVWVMDRP7Twg==
+
+"@dicebear/glass@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/glass/-/glass-9.4.2.tgz"
+  integrity sha512-z5qUogHQ1b6UJ2zCqT848mU2U9DKbVDhiX6GPDjD7tYLisCCJVisH9p6WyNdHvflUd4SHkA6gRqVJIh2v2HnTA==
+
+"@dicebear/icons@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/icons/-/icons-9.4.2.tgz"
+  integrity sha512-QSMMz0NA03ypSGhXC8HQX8FSj8lYT+/5yqH+/N03OH2IjL0q7wwGZ7nqsrtlRp76O5WqMTwGfSbTUUYPjFr+Xw==
+
+"@dicebear/identicon@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/identicon/-/identicon-9.4.2.tgz"
+  integrity sha512-JVDSmZsv11mSWqwAktK5x9Bslht2xY3TFUn8xzu6slAYe1Z7hEXZ76eb+UJ6F4qEzdwZ7xPWzAS6Nb0Y3A0pww==
+
+"@dicebear/initials@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/initials/-/initials-9.4.2.tgz"
+  integrity sha512-yePuIUasmwtl9IrtB6rEzE/zb5fImKP/neW0CdcTC2MwLgMuP1GLHEGRgg1zI8exIh+PMv1YdLGyyUuRTE2Qpw==
+
+"@dicebear/lorelei-neutral@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/lorelei-neutral/-/lorelei-neutral-9.4.2.tgz"
+  integrity sha512-yspanTthA5vh6iCdeLzn6xZ4yYMYRcfcxblcgSvHTF1ut0bjAXtw5SXzZ6aJTrJWiHkzYOQuTOR6GVYiW80Q7w==
+
+"@dicebear/lorelei@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/lorelei/-/lorelei-9.4.2.tgz"
+  integrity sha512-YMv6vnriW6VLFDsreKuOnUFFno6SRe7+7X7R7zPY0rZ+MaHX9V3jcioIG+1PSjIHEDfOLUHpr5vd1JBWv8y7UA==
+
+"@dicebear/micah@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/micah/-/micah-9.4.2.tgz"
+  integrity sha512-e4D3W/OlChSsLo7Llwsy0J18vk0azJqF/uFoY+EKACCNHBc1HGNsqVvu2CTf+OWOA8wTyAK6UkjBN5p01r7D+g==
+
+"@dicebear/miniavs@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/miniavs/-/miniavs-9.4.2.tgz"
+  integrity sha512-wLwyFNNUnDRd3BbhSBhXR0XEpX8sG0/xDA5M/OkDoapLqZnnI48YLUSDd2N5QTAVMmcSEuZOYxkcnj7WW79vlg==
+
+"@dicebear/notionists-neutral@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/notionists-neutral/-/notionists-neutral-9.4.2.tgz"
+  integrity sha512-AyD9kEfVxQUwDGf4Op059gVmYIOAkTKg3dtE9h9mEKP7zl/kMy5B67BFFOo7sB0mXCjzAegZ6ekGU02E8+hIHw==
+
+"@dicebear/notionists@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/notionists/-/notionists-9.4.2.tgz"
+  integrity sha512-ZCySq+nxcD/x4xyYgytcj2N9uY3gxrL+qpnmOdp2BdA221KacVrxlsUPpIgEMqxS2rMmBQXfxg129Pzn4ycIpA==
+
+"@dicebear/open-peeps@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/open-peeps/-/open-peeps-9.4.2.tgz"
+  integrity sha512-i01tLgtp2g937T81sVeAOVlqsCtiTck/Kw20g7hN80+7xrXjOUepz2HPLy3HeiMjwjMGRy5o54kSd0/8Ht4Dqg==
+
+"@dicebear/personas@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/personas/-/personas-9.4.2.tgz"
+  integrity sha512-NJlkvI5F5gugt6t2+7QrYNTwQC7+4IQZS3vG0dYk2BncxOHax0BuLovdSdiAesTL4ZkytFYIydWmKmV2/xcUwg==
+
+"@dicebear/pixel-art-neutral@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/pixel-art-neutral/-/pixel-art-neutral-9.4.2.tgz"
+  integrity sha512-9e9Lz554uQvWaXV2P17ss+hPa6rTyuAKBtB8zk8ECjHiZzIl61N/KcTVLZ4dILVZwj7gYriaLo16QEqvL2GJCg==
+
+"@dicebear/pixel-art@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/pixel-art/-/pixel-art-9.4.2.tgz"
+  integrity sha512-peHf7oKICDgBZ8dUyj+txPnS7VZEWgvKE+xW4mNQqBt6dYZIjmva2shOVHn0b1JU+FDxMx3uIkWVixKdUq4WGg==
+
+"@dicebear/rings@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/rings/-/rings-9.4.2.tgz"
+  integrity sha512-Pc3ymWrRDQPJFNrbbLt7RJrzGvUuuxUiDkrfLhoVE+B6mZWEL1PC78DPbS1yUWYLErJOpJuM2GSwXmTbVjWf+g==
+
+"@dicebear/shapes@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/shapes/-/shapes-9.4.2.tgz"
+  integrity sha512-AFL6jAaiLztvcqyq+ds+lWZu6Vbp3PlGWhJeJRm842jxtiluJpl6r4f6nUXP2fdMz7MNpDzXfLooQK9E04NbUQ==
+
+"@dicebear/thumbs@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/thumbs/-/thumbs-9.4.2.tgz"
+  integrity sha512-ccWvDBqbkWS5uzHbsg5L6uML6vBfX7jT3J3jHCQksvz8haHItxTK02w+6e1UavZUsvza4lG5X/XY3eji3siJ4Q==
+
+"@dicebear/toon-head@9.4.2":
+  version "9.4.2"
+  resolved "https://registry.npmjs.org/@dicebear/toon-head/-/toon-head-9.4.2.tgz"
+  integrity sha512-lwFeSXyAnaKnCfMt9TiJwnD1cXQUGkey/0h6i/+4TVHVMCz5/Ri5u1ynovPNHy1SnBf858QwoXHkxilGLwQX/g==
+
 "@dnd-kit/accessibility@^3.1.1":
   version "3.1.1"
   resolved "https://registry.npmjs.org/@dnd-kit/accessibility/-/accessibility-3.1.1.tgz"

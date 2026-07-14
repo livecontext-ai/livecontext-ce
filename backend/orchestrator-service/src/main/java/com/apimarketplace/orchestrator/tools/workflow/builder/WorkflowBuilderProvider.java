@@ -99,6 +99,9 @@ public class WorkflowBuilderProvider implements ToolsProvider {
     // Early visualization publish (instant side-panel open before blocking fire())
     private final com.apimarketplace.orchestrator.services.agent.ConversationEventPublisher conversationEventPublisher;
 
+    // Mock mode: proposed mock output per node (mock_suggest action)
+    private final MockOutputSuggester mockOutputSuggester;
+
     private final ToolRateLimiter createLimiter = new ToolRateLimiter();
 
     @Value("${workflow.builder.allow-create-without-validation:false}")
@@ -273,6 +276,7 @@ public class WorkflowBuilderProvider implements ToolsProvider {
             case "modify" -> delegateCreator(s -> modifier.executeModifyNode(s, params), params, tenantId, ctx);
             case "remove" -> delegateCreator(s -> modifier.executeRemove(s, params), params, tenantId, ctx);
             case "undo" -> delegateCreator(s -> modifier.executeUndo(s), params, tenantId, ctx);
+            case "mock_suggest" -> delegateCreator(s -> executeMockSuggest(s, params, tenantId), params, tenantId, ctx);
             case "describe" -> {
                 String nodeParam = (String) params.get("node");
                 if (nodeParam == null) nodeParam = (String) params.get("node_id");
@@ -691,6 +695,50 @@ public class WorkflowBuilderProvider implements ToolsProvider {
         }
     }
 
+    /**
+     * mock_suggest: propose a ready-to-edit mock output for a node - the projected
+     * catalog example for mcp catalog tools, a schema-synthesized skeleton for every
+     * other family. Pure read; the agent edits the proposal (or ignores it) and sets
+     * the mock via workflow(action='modify', node=..., mock={output: ...}).
+     */
+    private ToolExecutionResult executeMockSuggest(WorkflowBuilderSession session,
+                                                   Map<String, Object> params, String tenantId) {
+        String nodeRef = (String) params.get("node");
+        if (nodeRef == null) nodeRef = (String) params.get("node_id");
+        if (nodeRef == null || nodeRef.isBlank()) {
+            return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER,
+                "'node' parameter is required: workflow(action='mock_suggest', node='<label>').");
+        }
+        String nodeId = session.resolveNodeReference(nodeRef);
+        Optional<Map<String, Object>> nodeOpt = session.findNode(nodeId);
+        if (nodeOpt.isEmpty()) {
+            return ToolExecutionResult.failure(ToolErrorCode.RESOURCE_NOT_FOUND,
+                "Node not found: " + nodeRef);
+        }
+        if (com.apimarketplace.orchestrator.utils.LabelNormalizer.isTriggerKey(nodeId)
+                || com.apimarketplace.orchestrator.utils.LabelNormalizer.isNoteKey(nodeId)) {
+            return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED,
+                "Mocking is not available on trigger or note nodes. Use data_inputs on execute to fake a "
+                    + "trigger payload, or suggest for a downstream node instead.");
+        }
+
+        MockOutputSuggester.Suggestion suggestion =
+            mockOutputSuggester.suggest(nodeId, nodeOpt.get(), tenantId);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("status", "OK");
+        result.put("node", nodeId);
+        result.put("suggested_output", suggestion.output());
+        result.put("source", suggestion.source());
+        result.put("hint", suggestion.hint());
+        result.put("NEXT", "Edit the suggested_output as needed, then set it: "
+            + "workflow(action='modify', node='" + nodeRef + "', mock={output: {...}}). "
+            + ("catalog_example".equals(suggestion.source())
+                ? "Or skip the copy: workflow(action='modify', node='" + nodeRef + "', mock={source: 'catalog_example'})."
+                : "Full guide: workflow(action='help', topics=['mocking'])."));
+        return ToolExecutionResult.success(result);
+    }
+
     private ToolExecutionResult executeWorkflow(Map<String, Object> params, String tenantId, ToolExecutionContext ctx) {
         String workflowIdStr = resolveWorkflowId(params, tenantId, ctx);
         if (workflowIdStr == null) {
@@ -712,12 +760,22 @@ public class WorkflowBuilderProvider implements ToolsProvider {
                     ? (Map<String, Object>) params.get("data_inputs") : Map.of();
             String triggerIdHint = params.get("trigger_id") instanceof String s ? s : null;
             Object versionParam = params.get("version");
+            String mockMode = params.get("mock_mode") instanceof String s && !s.isBlank() ? s.trim() : null;
 
             VersionSelection selection;
             try {
                 selection = resolveVersionSelection(versionParam, workflow);
             } catch (IllegalArgumentException e) {
                 return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, e.getMessage());
+            }
+
+            // Hard guard: production fires never apply mocks - refuse BEFORE resolving
+            // the pinned run so nothing is touched.
+            if (mockMode != null && selection.mode == SelectionMode.PINNED) {
+                return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED,
+                    "mock_mode is not available with version='pinned'. Production fires always execute the real "
+                        + "pinned plan and never apply mocks. Drop version='pinned' to test with mocks on the "
+                        + "current plan, or drop mock_mode to fire production.");
             }
 
             WorkflowPlan plan;
@@ -729,7 +787,7 @@ public class WorkflowBuilderProvider implements ToolsProvider {
                     if (plan.getTriggers() == null || plan.getTriggers().isEmpty()) {
                         return ToolExecutionResult.failure(ToolErrorCode.WORKFLOW_INVALID, "Workflow has no triggers. Add a trigger node first.");
                     }
-                    run = agentWorkflowFireService.createRun(workflow, plan, dataInputs, tenantId);
+                    run = agentWorkflowFireService.createRun(workflow, plan, dataInputs, tenantId, mockMode);
                 }
                 case REPLAY_VERSION -> {
                     var versionOpt = planVersionService.getVersion(workflowId, selection.version);
@@ -741,7 +799,7 @@ public class WorkflowBuilderProvider implements ToolsProvider {
                         return ToolExecutionResult.failure(ToolErrorCode.WORKFLOW_INVALID, "Version " + selection.version + " has no triggers.");
                     }
                     run = agentWorkflowFireService.createRunForVersion(
-                            workflow, plan, selection.version, dataInputs, tenantId);
+                            workflow, plan, selection.version, dataInputs, tenantId, mockMode);
                 }
                 case PINNED -> {
                     Integer pinned = workflow.getPinnedVersion();

@@ -859,6 +859,7 @@ public class CoreNodeBuilder {
             long timeoutMs = 86400000L; // 24h default
             String contextTemplate = "";
             Core.ApprovalDelegation delegation = null;
+            String continuationMode = Core.ApprovalConfig.CONTINUATION_ALL_ITEMS;
 
             if (coreNode.approvalConfig() != null) {
                 Core.ApprovalConfig config = coreNode.approvalConfig();
@@ -867,6 +868,7 @@ public class CoreNodeBuilder {
                 timeoutMs = config.timeoutMs();
                 contextTemplate = config.contextTemplate();
                 delegation = config.delegation();
+                continuationMode = config.continuationMode();
             }
 
             // Create UserApprovalNode (port targets wired in second pass)
@@ -877,6 +879,7 @@ public class CoreNodeBuilder {
                 .timeoutMs(timeoutMs)
                 .contextTemplate(contextTemplate)
                 .delegation(delegation)
+                .continuationMode(continuationMode)
                 .build();
 
             nodeMap.put(approvalKey, approvalNode);

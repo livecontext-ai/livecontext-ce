@@ -2179,34 +2179,93 @@ class SplitAwareNodeExecutorTest {
         }
 
         @Test
-        @DisplayName("inMemorySlotsComplete: empty cache / null slot / short list -> not warm (load); fully dense -> warm (skip)")
+        @DisplayName("inMemorySlotsComplete: empty cache / null slot / short list -> not warm (load); fully dense with all direct predecessors present -> warm (skip)")
         void inMemorySlotsCompleteBranches() {
             java.util.Set<Integer> routed = java.util.Set.of(0, 1, 2);
+            // A reader whose only in-split predecessor entry we control per case.
+            TestNode reader = new TestNode("mcp:send", NodeType.MCP);
+            reader.setPredecessors(List.of("agent:classify"));
 
             // Empty resultsByNode (post-restore) -> not warm, must allow the durable backfill.
             assertThat(executor.inMemorySlotsComplete(
-                SplitContext.create("core:s:0", List.of("a", "b", "c")), routed)).isFalse();
+                SplitContext.create("core:s:0", List.of("a", "b", "c")), routed, reader)).isFalse();
 
-            // Every present node dense for every routed item -> warm, skip the durable read.
+            // Every present node dense for every routed item AND the reader's direct
+            // predecessor present -> warm, skip the durable read.
             SplitContext dense = SplitContext.create("core:s:0", List.of("a", "b", "c"))
                 .withResults("agent:classify", java.util.Arrays.asList(
                     Map.of("c", "0"), Map.of("c", "1"), Map.of("c", "2")));
-            assertThat(executor.inMemorySlotsComplete(dense, routed)).isTrue();
+            assertThat(executor.inMemorySlotsComplete(dense, routed, reader)).isTrue();
 
             // A null slot for a routed item -> not warm (async-partial gap).
             SplitContext nullSlot = SplitContext.create("core:s:0", List.of("a", "b", "c"))
                 .withResults("agent:classify", java.util.Arrays.asList(
                     Map.of("c", "0"), null, Map.of("c", "2")));
-            assertThat(executor.inMemorySlotsComplete(nullSlot, routed)).isFalse();
+            assertThat(executor.inMemorySlotsComplete(nullSlot, routed, reader)).isFalse();
 
             // A short list (routed item 2 absent) -> not warm.
             SplitContext shortList = SplitContext.create("core:s:0", List.of("a", "b", "c"))
                 .withResults("agent:classify", java.util.Arrays.asList(
                     Map.of("c", "0"), Map.of("c", "1")));
-            assertThat(executor.inMemorySlotsComplete(shortList, routed)).isFalse();
+            assertThat(executor.inMemorySlotsComplete(shortList, routed, reader)).isFalse();
 
             // Null split context -> not warm (defensive).
-            assertThat(executor.inMemorySlotsComplete(null, routed)).isFalse();
+            assertThat(executor.inMemorySlotsComplete(null, routed, reader)).isFalse();
+        }
+
+        @Test
+        @DisplayName("Regression (cross-pod dense-but-incomplete map): a direct non-split predecessor entirely ABSENT from resultsByNode -> not warm, even when every present node is dense")
+        void inMemorySlotsCompleteAbsentDirectPredecessorNotWarm() {
+            java.util.Set<Integer> routed = java.util.Set.of(0, 1, 2);
+            SplitContext denseForOthers = SplitContext.create("core:triage:0", List.of("a", "b", "c"))
+                .withResults("agent:classify", java.util.Arrays.asList(
+                    Map.of("c", "0"), Map.of("c", "1"), Map.of("c", "2")));
+
+            // The reader's direct predecessor (core:prep_draft) ran entirely on ANOTHER pod:
+            // it is ABSENT from the map (not present-with-null). The old 2-arg check read this
+            // dense map as warm and starved the durable backfill - the exact multi-pod blind spot.
+            TestNode reader = new TestNode("core:approve", NodeType.APPROVAL);
+            reader.setPredecessors(List.of("core:prep_draft"));
+            assertThat(executor.inMemorySlotsComplete(denseForOthers, routed, reader))
+                .as("absent direct predecessor -> memory provably cannot serve it -> not warm")
+                .isFalse();
+
+            // Ported predecessor ids normalize before the lookup (core:gate:approved -> core:gate).
+            TestNode portedReader = new TestNode("core:observe", NodeType.TRANSFORM);
+            portedReader.setPredecessors(List.of("core:gate:approved"));
+            assertThat(executor.inMemorySlotsComplete(denseForOthers, routed, portedReader))
+                .as("ported predecessor (core:gate:approved) absent as core:gate -> not warm")
+                .isFalse();
+
+            // FIRST node after the split: its only predecessor IS the split node (exempt) ->
+            // still warm, the hot path stays query-free.
+            TestNode direct = new TestNode("core:tag", NodeType.TRANSFORM);
+            direct.setPredecessors(List.of("core:triage"));
+            assertThat(executor.inMemorySlotsComplete(denseForOthers, routed, direct))
+                .as("split-node predecessor is exempt from the absent-key check")
+                .isTrue();
+
+            // Null node skips the hardening (pre-existing 2-arg semantics, defensive).
+            assertThat(executor.inMemorySlotsComplete(denseForOthers, routed, null)).isTrue();
+        }
+
+        @Test
+        @DisplayName("isSignalYieldingNode: approval/interface/browser-agent -> true; wait/mcp/agent/transform -> false")
+        void isSignalYieldingNodePredicate() {
+            assertThat(executor.isSignalYieldingNode(new TestNode("core:gate", NodeType.APPROVAL))).isTrue();
+            assertThat(executor.isSignalYieldingNode(new TestNode("interface:card", NodeType.INTERFACE))).isTrue();
+            assertThat(executor.isSignalYieldingNode(new TestNode("core:browse", NodeType.BROWSER_AGENT))).isTrue();
+            // The polymorphic predicate is honored too (real UserApprovalNode overrides isApprovalNode).
+            assertThat(executor.isSignalYieldingNode(
+                com.apimarketplace.orchestrator.execution.v2.nodes.UserApprovalNode.builder()
+                    .nodeId("core:real_gate").approverRoles(List.of("manager")).requiredApprovals(1)
+                    .timeoutMs(1000L).build())).isTrue();
+            // WAIT yields a signal but resolves no user templates at yield -> deliberately excluded.
+            assertThat(executor.isSignalYieldingNode(new TestNode("core:wait", NodeType.WAIT))).isFalse();
+            assertThat(executor.isSignalYieldingNode(new TestNode("mcp:x", NodeType.MCP))).isFalse();
+            assertThat(executor.isSignalYieldingNode(new TestNode("agent:a", NodeType.AGENT))).isFalse();
+            assertThat(executor.isSignalYieldingNode(new TestNode("core:t", NodeType.TRANSFORM))).isFalse();
+            assertThat(executor.isSignalYieldingNode(null)).isFalse();
         }
 
         @Test
@@ -2282,7 +2341,7 @@ class SplitAwareNodeExecutorTest {
         }
 
         @Test
-        @DisplayName("read path WARM (plain non-adjacent successor): a dense resultsByNode issues ZERO durable queries (linear B-reads-A chain stays query-free)")
+        @DisplayName("read path WARM (plain non-adjacent successor): a resultsByNode dense for ALL direct predecessors issues ZERO durable queries (linear B-reads-A chain stays query-free)")
         void plainNonAdjacentSuccessorWarmMemorySkipsDurableQuery() {
             WorkflowStepDataRepository repo = org.mockito.Mockito.mock(WorkflowStepDataRepository.class);
             com.apimarketplace.orchestrator.services.StepOutputService svc =
@@ -2292,7 +2351,11 @@ class SplitAwareNodeExecutorTest {
             local.setStepOutputService(svc);
 
             // Plain transform reading a NON-adjacent predecessor (core:tag) - same shape as the cold
-            // test, but here resultsByNode is DENSE for every routed item, the healthy single-pod state.
+            // test, but here resultsByNode is DENSE for every routed item, INCLUDING the node's
+            // direct predecessor (core:gate) - the healthy single-pod state. Before the absent-key
+            // hardening, "warm" ignored the direct predecessor's presence entirely; a warm map must
+            // now cover it to stay query-free (this replaces the old blind-spot pin that asserted
+            // zero queries even with core:gate absent).
             TestNode observe = new TestNode("core:observe", NodeType.TRANSFORM);
             observe.setPredecessors(List.of("core:gate:approved"));
             observe.setDynamicResult(ctx -> NodeExecutionResult.success(
@@ -2300,11 +2363,12 @@ class SplitAwareNodeExecutorTest {
             nodeMap.put("core:observe", observe);
             nodeMap.put("core:gate", new TestNode("core:gate", NodeType.APPROVAL));
 
-            // DENSE resultsByNode for every routed item -> inMemorySlotsComplete == true -> warm skip,
-            // even though this plain node passes readsNonSplitPredecessor.
             SplitContext splitContext = SplitContext.create("core:per_tag", List.of("alpha", "beta", "gamma"))
                 .withResults("core:tag", java.util.Arrays.asList(
-                    Map.of("v", "tag-alpha"), Map.of("v", "tag-beta"), Map.of("v", "tag-gamma")));
+                    Map.of("v", "tag-alpha"), Map.of("v", "tag-beta"), Map.of("v", "tag-gamma")))
+                .withResults("core:gate", java.util.Arrays.asList(
+                    Map.of("resolution", "APPROVED"), Map.of("resolution", "APPROVED"),
+                    Map.of("resolution", "APPROVED")));
             when(contextManager.findActiveContext(eq("run1"), eq("core:observe"), eq(0), any()))
                 .thenReturn(Optional.of(splitContext));
             when(repo.findItemIndicesBySelectedBranchAndEpoch("run1", "core:gate", "approved", 0))
@@ -2318,6 +2382,278 @@ class SplitAwareNodeExecutorTest {
 
             org.mockito.Mockito.verify(svc, org.mockito.Mockito.never())
                 .loadPerItemOutputsByStepKey(anyString(), anyInt(), anyString());
+            local.shutdown();
+        }
+
+        /**
+         * Regression for the multi-pod approval-freeze bug (2 prod replicas, sequential async
+         * bridge agents): the approval fan-out ran on a pod whose in-memory resultsByNode was
+         * DENSE for the nodes that executed locally but had NO entry for an upstream per-item
+         * node that ran on the other pod. The old gate read the dense map as warm, skipped the
+         * durable load, the delegation template resolved empty, and
+         * UnifiedSignalService.registerSignal (first-registration-wins) froze the degraded
+         * message. Signal-yielding nodes now bypass the warm-skip veto entirely.
+         */
+        @Test
+        @DisplayName("Regression (cross-pod approval freeze): approval fan-out on a dense-but-incomplete map ISSUES the durable query and resolves the upstream per-item node at yield")
+        void approvalFanOutOnDenseButIncompleteMapLoadsDurableAndResolvesPerItem() {
+            com.apimarketplace.orchestrator.services.StepOutputService svc =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.StepOutputService.class);
+            SplitAwareNodeExecutor local = new SplitAwareNodeExecutor(
+                contextManager, null, null, null, null, null, Executors.newFixedThreadPool(2));
+            local.setStepOutputService(svc);
+
+            // The approval reads a non-split predecessor (core:prep_draft) whose in-memory slots
+            // are DENSE (it re-ran on this pod during the walk)... but the template ALSO references
+            // agent:classify, which ran entirely on the OTHER pod and is ABSENT from the map. With
+            // every direct predecessor present-dense, inMemorySlotsComplete stays true - ONLY the
+            // signal-yielding bypass triggers the durable load here.
+            TestNode approve = new TestNode("core:approve", NodeType.APPROVAL);
+            approve.setPredecessors(List.of("core:prep_draft"));
+            java.util.Queue<Object> resolvedClassifies = new java.util.concurrent.ConcurrentLinkedQueue<>();
+            approve.setDynamicResult(ctx -> {
+                Object v = aliasOutput(ctx, "agent:classify", "selected_category");
+                if (v != null) {
+                    resolvedClassifies.add(v);
+                }
+                return NodeExecutionResult.success("core:approve", Map.of("ok", true));
+            });
+            nodeMap.put("core:approve", approve);
+            nodeMap.put("core:prep_draft", new TestNode("core:prep_draft", NodeType.CODE));
+
+            SplitContext splitContext = SplitContext.create("core:triage:0", List.of("m0", "m1", "m2"))
+                .withResults("core:prep_draft", java.util.Arrays.asList(
+                    Map.of("draft", "d0"), Map.of("draft", "d1"), Map.of("draft", "d2")));
+            when(contextManager.findActiveContext(eq("run1"), eq("core:approve"), eq(0), any()))
+                .thenReturn(Optional.of(splitContext));
+            when(context.withGlobalData(any(), any())).thenReturn(context);
+            when(context.withItemIndex(anyInt())).thenReturn(context);
+            when(context.runId()).thenReturn("run1");
+            when(context.tenantId()).thenReturn("tenant1");
+            when(svc.loadPerItemOutputsByStepKey("run1", 0, "tenant1")).thenReturn(Map.of(
+                "agent:classify", Map.of(
+                    0, Map.of("selected_category", "billing"),
+                    1, Map.of("selected_category", "bug"),
+                    2, Map.of("selected_category", "refund"))));
+
+            local.execute(approve, context, "run1", nodeMap);
+
+            org.mockito.Mockito.verify(svc, org.mockito.Mockito.times(1))
+                .loadPerItemOutputsByStepKey("run1", 0, "tenant1");
+            assertThat(resolvedClassifies)
+                .as("each item's yield-time context must resolve agent:classify to ITS OWN value, "
+                  + "not collapse to a single item-0 value")
+                .containsExactlyInAnyOrder("billing", "bug", "refund");
+            local.shutdown();
+        }
+
+        @Test
+        @DisplayName("Regression (cross-pod absent direct predecessor): a PLAIN node whose direct non-split predecessor is entirely ABSENT from a dense map issues the durable query and resolves it per item")
+        void plainNodeAbsentDirectPredecessorOnDenseMapLoadsDurable() {
+            com.apimarketplace.orchestrator.services.StepOutputService svc =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.StepOutputService.class);
+            SplitAwareNodeExecutor local = new SplitAwareNodeExecutor(
+                contextManager, null, null, null, null, null, Executors.newFixedThreadPool(2));
+            local.setStepOutputService(svc);
+
+            // mcp:send (NOT signal-yielding, NOT a cross-item consumer) reads core:prep_draft,
+            // which ran entirely on another pod: ABSENT from the map while agent:classify is dense.
+            // The old 2-arg warm check saw "dense" and skipped the load - the absent-key hardening
+            // in inMemorySlotsComplete now detects the missing direct predecessor.
+            TestNode send = new TestNode("mcp:send", NodeType.MCP);
+            send.setPredecessors(List.of("core:prep_draft"));
+            java.util.Queue<Object> resolvedDrafts = new java.util.concurrent.ConcurrentLinkedQueue<>();
+            send.setDynamicResult(ctx -> {
+                Object v = aliasOutput(ctx, "core:prep_draft", "draft");
+                if (v != null) {
+                    resolvedDrafts.add(v);
+                }
+                return NodeExecutionResult.success("mcp:send", Map.of("sent", true));
+            });
+            nodeMap.put("mcp:send", send);
+            nodeMap.put("core:prep_draft", new TestNode("core:prep_draft", NodeType.CODE));
+
+            SplitContext splitContext = SplitContext.create("core:triage:0", List.of("m0", "m1", "m2"))
+                .withResults("agent:classify", java.util.Arrays.asList(
+                    Map.of("c", "0"), Map.of("c", "1"), Map.of("c", "2")));
+            when(contextManager.findActiveContext(eq("run1"), eq("mcp:send"), eq(0), any()))
+                .thenReturn(Optional.of(splitContext));
+            when(context.withGlobalData(any(), any())).thenReturn(context);
+            when(context.withItemIndex(anyInt())).thenReturn(context);
+            when(context.runId()).thenReturn("run1");
+            when(context.tenantId()).thenReturn("tenant1");
+            when(svc.loadPerItemOutputsByStepKey("run1", 0, "tenant1")).thenReturn(Map.of(
+                "core:prep_draft", Map.of(
+                    0, Map.of("draft", "d0"),
+                    1, Map.of("draft", "d1"),
+                    2, Map.of("draft", "d2"))));
+
+            local.execute(send, context, "run1", nodeMap);
+
+            org.mockito.Mockito.verify(svc, org.mockito.Mockito.times(1))
+                .loadPerItemOutputsByStepKey("run1", 0, "tenant1");
+            assertThat(resolvedDrafts)
+                .as("the absent predecessor must resolve per item from the durable store")
+                .containsExactlyInAnyOrder("d0", "d1", "d2");
+            local.shutdown();
+        }
+
+        @Test
+        @DisplayName("Regression (walk mode): a perItemContinuation fan-out loads durable even when resultsByNode is fully dense (continuation walks span pods)")
+        void perItemContinuationWalkLoadsDurableEvenWhenMapIsDense() {
+            com.apimarketplace.orchestrator.services.StepOutputService svc =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.StepOutputService.class);
+            SplitAwareNodeExecutor local = new SplitAwareNodeExecutor(
+                contextManager, null, null, null, null, null, Executors.newFixedThreadPool(2));
+            local.setStepOutputService(svc);
+
+            // Plain transform whose direct predecessor IS dense in memory: pre-fix, the
+            // perItemContinuation trigger sat BEHIND the warm-skip veto, so a dense map suppressed
+            // the durable load a continuation walk depends on (walks span resumes and pods).
+            TestNode observe = new TestNode("core:observe", NodeType.TRANSFORM);
+            observe.setPredecessors(List.of("core:tag"));
+            observe.setDynamicResult(ctx -> NodeExecutionResult.success(
+                "core:observe", Map.of("i", ctx.itemIndex())));
+            nodeMap.put("core:observe", observe);
+            nodeMap.put("core:tag", new TestNode("core:tag", NodeType.TRANSFORM));
+
+            SplitContext splitContext = SplitContext.create("core:per_tag:0", List.of("alpha", "beta", "gamma"))
+                .withResults("core:tag", java.util.Arrays.asList(
+                    Map.of("v", "t0"), Map.of("v", "t1"), Map.of("v", "t2")));
+            when(contextManager.findActiveContext(eq("run1"), eq("core:observe"), eq(0), any()))
+                .thenReturn(Optional.of(splitContext));
+            when(context.withGlobalData(any(), any())).thenReturn(context);
+            when(context.withItemIndex(anyInt())).thenReturn(context);
+            when(context.runId()).thenReturn("run1");
+            when(context.tenantId()).thenReturn("tenant1");
+            when(svc.loadPerItemOutputsByStepKey("run1", 0, "tenant1")).thenReturn(java.util.Map.of());
+
+            local.execute(observe, context, "run1", nodeMap, null, null, 0, null,
+                SplitExecutionOptions.perItemContinuationWalk());
+
+            org.mockito.Mockito.verify(svc, org.mockito.Mockito.times(1))
+                .loadPerItemOutputsByStepKey("run1", 0, "tenant1");
+            local.shutdown();
+        }
+
+        @Test
+        @DisplayName("read path: a signal-yielding node DIRECTLY after the split (only predecessor = split) stays query-free even with an empty map")
+        void signalYieldingDirectSuccessorStaysQueryFree() {
+            com.apimarketplace.orchestrator.services.StepOutputService svc =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.StepOutputService.class);
+            SplitAwareNodeExecutor local = new SplitAwareNodeExecutor(
+                contextManager, null, null, null, null, null, Executors.newFixedThreadPool(2));
+            local.setStepOutputService(svc);
+
+            // Approval placed DIRECTLY after the split: its templates can only reference
+            // {{item}}/current_item, so despite being signal-yielding (veto bypass), the
+            // consumer-shape clause (readsNonSplitPredecessor false) keeps it query-free.
+            TestNode gate = new TestNode("core:gate", NodeType.APPROVAL);
+            gate.setPredecessors(List.of("core:triage"));
+            gate.setExecuteResult(NodeExecutionResult.success("core:gate", Map.of("ok", true)));
+            nodeMap.put("core:gate", gate);
+            nodeMap.put("core:triage", new TestNode("core:triage", NodeType.SPLIT));
+
+            SplitContext splitContext = SplitContext.create("core:triage:0", List.of("m0", "m1", "m2"));
+            when(contextManager.findActiveContext(eq("run1"), eq("core:gate"), eq(0), any()))
+                .thenReturn(Optional.of(splitContext));
+            when(context.withGlobalData(any(), any())).thenReturn(context);
+            when(context.withItemIndex(anyInt())).thenReturn(context);
+
+            local.execute(gate, context, "run1", nodeMap);
+
+            org.mockito.Mockito.verify(svc, org.mockito.Mockito.never())
+                .loadPerItemOutputsByStepKey(anyString(), anyInt(), anyString());
+            local.shutdown();
+        }
+
+        /**
+         * End-to-end regression at the UserApprovalNode level for the frozen-delegation bug:
+         * a REAL approval node with a Telegram delegation whose messageTemplate references TWO
+         * step keys - one warm in memory (mcp:fetch, the node's direct predecessor) and one that
+         * only exists in the durable store (core:prep_draft, ran on the other pod). Pre-fix the
+         * dense in-memory map vetoed the durable load, the draft reference resolved empty, and
+         * the degraded message froze in signal_config (registerSignal is first-registration-wins).
+         */
+        @Test
+        @SuppressWarnings("unchecked")
+        @DisplayName("Regression (frozen delegation message): approval delegation resolves BOTH a memory-served and a durable-only step key per item at yield")
+        void approvalDelegationMessageResolvesDurableOnlyStepKeyPerItemAtYield() {
+            com.apimarketplace.orchestrator.services.StepOutputService svc =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.StepOutputService.class);
+            SplitAwareNodeExecutor local = new SplitAwareNodeExecutor(
+                contextManager, null, null, null, null, null, Executors.newFixedThreadPool(2));
+            local.setStepOutputService(svc);
+
+            // Real template stack (same engine prod uses) so the delegation message truly resolves.
+            com.apimarketplace.orchestrator.services.template.SpelEvaluator spel =
+                new com.apimarketplace.orchestrator.services.template.SpelEvaluator();
+            spel.init();
+            com.apimarketplace.orchestrator.services.template.PathNavigator nav =
+                new com.apimarketplace.orchestrator.services.template.PathNavigator();
+            com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter realAdapter =
+                new com.apimarketplace.orchestrator.execution.v2.template.V2TemplateAdapter(
+                    new com.apimarketplace.orchestrator.services.TemplateEngine(
+                        new com.apimarketplace.orchestrator.services.TypeCastingService(),
+                        new com.apimarketplace.orchestrator.services.template.NamespaceResolver(nav),
+                        nav, spel));
+
+            com.apimarketplace.orchestrator.execution.v2.services.UnifiedSignalService signalService =
+                org.mockito.Mockito.mock(
+                    com.apimarketplace.orchestrator.execution.v2.services.UnifiedSignalService.class);
+            com.apimarketplace.orchestrator.execution.v2.nodes.UserApprovalNode gate =
+                com.apimarketplace.orchestrator.execution.v2.nodes.UserApprovalNode.builder()
+                    .nodeId("core:gate")
+                    .approverRoles(List.of("manager"))
+                    .requiredApprovals(1)
+                    .timeoutMs(60000L)
+                    .delegation(new com.apimarketplace.orchestrator.domain.workflow.Core.ApprovalDelegation(
+                        "telegram", 42L, "123456",
+                        "Subject: {{mcp:fetch.output.subject}} / Draft: {{core:prep_draft.output.draft}}",
+                        "", List.of(), null, null))
+                    .build();
+            // Direct predecessor is WARM in memory -> pre-fix the veto read this as "complete";
+            // ONLY the signal-yielding bypass makes the durable load fire here.
+            gate.setPredecessors(List.of("mcp:fetch"));
+            gate.setSignalService(signalService);
+            gate.setTemplateAdapter(realAdapter);
+            nodeMap.put("core:gate", gate);
+            nodeMap.put("mcp:fetch", new TestNode("mcp:fetch", NodeType.MCP));
+
+            SplitContext splitContext = SplitContext.create("core:triage:0", List.of("m0", "m1", "m2"))
+                .withResults("mcp:fetch", java.util.Arrays.asList(
+                    Map.of("subject", "s0"), Map.of("subject", "s1"), Map.of("subject", "s2")));
+            ExecutionContext realContext = ExecutionContext.create(
+                "run1", "wfr1", "tenant1", "0", 0, new HashMap<>(), null);
+            when(contextManager.findActiveContext(eq("run1"), eq("core:gate"), eq(0), any()))
+                .thenReturn(Optional.of(splitContext));
+            when(svc.loadPerItemOutputsByStepKey("run1", 0, "tenant1")).thenReturn(Map.of(
+                "core:prep_draft", Map.of(
+                    0, Map.of("draft", "d0"),
+                    1, Map.of("draft", "d1"),
+                    2, Map.of("draft", "d2"))));
+
+            NodeExecutionResult summary = local.execute(gate, realContext, "run1", nodeMap);
+
+            assertThat(summary.status()).isEqualTo(NodeStatus.AWAITING_SIGNAL);
+            org.mockito.ArgumentCaptor<Map<String, Object>> configCaptor =
+                org.mockito.ArgumentCaptor.forClass((Class) Map.class);
+            verify(signalService, times(3)).registerSignal(
+                eq("run1"), any(), eq("core:gate"), any(), anyInt(),
+                eq(com.apimarketplace.orchestrator.domain.execution.SignalType.USER_APPROVAL),
+                configCaptor.capture(), any(), any());
+            List<String> messages = configCaptor.getAllValues().stream()
+                .map(cfg -> (Map<String, Object>) cfg.get("delegation"))
+                .map(d -> (String) d.get("message"))
+                .toList();
+            assertThat(messages)
+                .as("each per-item FROZEN delegation message must carry ITS item's values for "
+                  + "both the memory-served (mcp:fetch) and the durable-only (core:prep_draft) "
+                  + "step keys - the durable one with the non-item-0 value")
+                .containsExactlyInAnyOrder(
+                    "Subject: s0 / Draft: d0",
+                    "Subject: s1 / Draft: d1",
+                    "Subject: s2 / Draft: d2");
             local.shutdown();
         }
 

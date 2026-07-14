@@ -33,7 +33,7 @@ import { NodeSettingsSection } from './NodeSettingsSection';
 import { nodeSupportsPolicy } from '../../utils/nodePolicy';
 import { ResolvedParamsView } from './outputs/ResolvedParamsView';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
-import type { ApprovalDelegation, BuilderNodeData, ConditionRow, SwitchCaseRow, OptionChoice, ApprovalOutput } from '../../types';
+import type { ApprovalContinuationMode, ApprovalDelegation, BuilderNodeData, ConditionRow, SwitchCaseRow, OptionChoice, ApprovalOutput } from '../../types';
 
 interface ParameterColumnProps {
   // Core node props
@@ -117,12 +117,14 @@ interface ParameterColumnProps {
   currentApprovalOutputs?: ApprovalOutput[];
   approvalTimeoutMs?: number;
   approvalContextTemplate?: string;
+  approvalContinuationMode?: ApprovalContinuationMode;
   approvalDelegation?: ApprovalDelegation;
   handleAddApprovalOutput?: () => void;
   handleDeleteApprovalOutput?: (id: string) => void;
   handleRenameApprovalOutput?: (id: string, label: string) => void;
   handleApprovalTimeoutChange?: (timeoutMs: number | undefined) => void;
   handleApprovalContextTemplateChange?: (template: string | undefined) => void;
+  handleApprovalContinuationModeChange?: (mode: ApprovalContinuationMode | undefined) => void;
   handleApprovalDelegationChange?: (delegation: ApprovalDelegation | undefined) => void;
 
   // Parameter expressions
@@ -202,11 +204,13 @@ export const ParameterColumn = (props: ParameterColumnProps) => {
     currentApprovalOutputs,
     approvalTimeoutMs,
     approvalContextTemplate,
+    approvalContinuationMode,
     approvalDelegation,
     handleAddApprovalOutput, handleDeleteApprovalOutput,
     handleRenameApprovalOutput,
     handleApprovalTimeoutChange,
     handleApprovalContextTemplateChange,
+    handleApprovalContinuationModeChange,
     handleApprovalDelegationChange,
     // Params
     getParamExpression, handleParamExpressionChange,
@@ -560,6 +564,8 @@ export const ParameterColumn = (props: ParameterColumnProps) => {
               handleTimeoutChange={handleApprovalTimeoutChange!}
               approvalContextTemplate={approvalContextTemplate}
               handleContextTemplateChange={handleApprovalContextTemplateChange!}
+              approvalContinuationMode={approvalContinuationMode}
+              handleContinuationModeChange={handleApprovalContinuationModeChange!}
               approvalDelegation={approvalDelegation}
               handleDelegationChange={handleApprovalDelegationChange!}
             />
@@ -668,8 +674,9 @@ export const ParameterColumn = (props: ParameterColumnProps) => {
                 isLoadingColumns={isLoadingColumns}
               />
 
-              {/* Generic per-node execution policy (nodePolicy) - every executable
-                  node type; triggers and notes are excluded (parser ignores them) */}
+              {/* Generic per-node execution policy (nodePolicy) + mock output -
+                  every executable node type; triggers and notes are excluded
+                  (parser ignores them). The mock block lives inside Settings. */}
               {nodeSupportsPolicy(node) ? (
                 <NodeSettingsSection
                   node={node}

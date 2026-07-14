@@ -16,6 +16,15 @@ export type NodeExecutionStatus =
 
 export type TriggerButtonVariant = 'play' | 'lightning' | 'message' | 'form' | 'webhook' | 'schedule' | 'workflow' | 'table' | 'error';
 
+/**
+ * Unified "runnable now" shimmer color. A subtle blue scan on every
+ * ready-to-run play button - triggers in run mode and every ready node in
+ * step-by-step mode - so one colour carries one meaning: a blue shimmering
+ * button means "you can run this now". Replaces the former per-trigger palette
+ * and the green step-by-step play shimmer.
+ */
+const RUNNABLE_SHIMMER = 'rgba(59, 130, 246, 0.35)';
+
 interface NodePlayButtonProps {
   nodeId: string;
   status: NodeExecutionStatus;
@@ -214,47 +223,18 @@ export function NodePlayButton({
     const iconSize = isBottom ? 'h-3 w-3' : 'h-3.5 w-3.5';
 
     // Trigger simulate buttons - unified Play icon under every trigger node.
-    // Behavior differs by variant: schedule/workflow fire immediately via
-    // onExecute; webhook/chat/form open the right-side TriggerPanel tab.
-    // Distinct shimmer color per trigger type - see Tailwind palette.
+    // Behavior differs by variant: webhook/chat/form open the right-side
+    // TriggerPanel tab; every other trigger (manual, schedule, workflow, table,
+    // error) fires immediately via onExecute. All share the single blue
+    // "runnable" shimmer (RUNNABLE_SHIMMER) applied at the render site below.
     const triggerSimulate = (() => {
-      if (variant === 'lightning') {
-        // Manual - amber
-        return { color: 'rgba(245, 158, 11, 0.35)', onClick: handleClick };
-      }
-      if (variant === 'schedule') {
-        // Schedule - cyan
-        return { color: 'rgba(6, 182, 212, 0.35)', onClick: handleClick };
-      }
-      if (variant === 'workflow') {
-        // Workflow trigger - emerald
-        return { color: 'rgba(16, 185, 129, 0.35)', onClick: handleClick };
-      }
-      if (variant === 'webhook') {
-        // Webhook - indigo
-        return { color: 'rgba(99, 102, 241, 0.35)', tab: 'webhook' as const };
-      }
-      if (variant === 'message') {
-        // Chat - blue
-        return { color: 'rgba(59, 130, 246, 0.35)', tab: 'chat' as const };
-      }
-      if (variant === 'form') {
-        // Form - fuchsia
-        return { color: 'rgba(217, 70, 239, 0.35)', tab: 'form' as const };
-      }
-      if (variant === 'table') {
-        // Table (datasource) - orange. Fires immediately like schedule -
-        // simulates a row event for editor testing. Production firing is
-        // handled by trigger-service on real row events.
-        return { color: 'rgba(249, 115, 22, 0.35)', onClick: handleClick };
-      }
-      if (variant === 'error') {
-        // Error trigger - red. Click fires the bootstrap run (the dispatcher
-        // reuses it on real parent failures). Cannot simulate an actual
-        // failure event from the editor; users must trigger one in the watched
-        // workflow to exercise the dispatch path.
-        return { color: 'rgba(239, 68, 68, 0.35)', onClick: handleClick };
-      }
+      if (variant === 'webhook') return { tab: 'webhook' as const };
+      if (variant === 'message') return { tab: 'chat' as const };
+      if (variant === 'form') return { tab: 'form' as const };
+      // Manual (amber-icon), schedule, workflow, table and error triggers fire
+      // their run immediately; the error trigger reuses this path as the manual
+      // bootstrap of the failure-handling run.
+      if (isTriggerVariant) return { onClick: handleClick };
       return null;
     })();
 
@@ -274,7 +254,7 @@ export function NodePlayButton({
             style={bottomBaseStyle}
             title={buttonTitle}
           >
-            {shimmerOverlay(triggerSimulate.color)}
+            {shimmerOverlay(RUNNABLE_SHIMMER)}
             <span className="relative z-10">{playIcon}</span>
           </button>
         );
@@ -285,7 +265,7 @@ export function NodePlayButton({
           className={cn(positionCls, 'w-8 h-8 rounded-full flex items-center justify-center cursor-pointer bg-white border-2 border-slate-200 shadow-lg overflow-hidden hover:scale-110 transition-transform duration-200', className)}
           title={buttonTitle}
         >
-          {shimmerOverlay(triggerSimulate.color)}
+          {shimmerOverlay(RUNNABLE_SHIMMER)}
           <span className="relative z-10 text-slate-700">{playIcon}</span>
         </button>
       );
@@ -294,7 +274,6 @@ export function NodePlayButton({
     // Play variant (step-by-step non-trigger) - clickable action button.
     // Lightning/manual is now handled by the unified triggerSimulate block above.
     if (isBottom) {
-      const shimmerColor = 'rgba(34, 197, 94, 0.3)';
       return (
         <button
           onClick={handleClick}
@@ -302,7 +281,7 @@ export function NodePlayButton({
           style={bottomBaseStyle}
           title={buttonTitle}
         >
-          {shimmerOverlay(shimmerColor)}
+          {shimmerOverlay(RUNNABLE_SHIMMER)}
           <span className="relative z-10">
             <Play className={iconSize} strokeWidth={2} fill="currentColor" />
           </span>

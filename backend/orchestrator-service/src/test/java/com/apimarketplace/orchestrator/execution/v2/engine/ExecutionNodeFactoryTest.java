@@ -100,6 +100,57 @@ class ExecutionNodeFactoryTest {
             // sanity: unrelated screenshot toggle stays off
             assertFalse(iface.isGenerateScreenshot());
         }
+
+        @Test
+        @DisplayName("generateVideo + videoPreset + videoMaxDurationSeconds from the plan reach the InterfaceNode")
+        void interfaceDefVideoFieldsReachTheNode() {
+            InterfaceDef def = new InterfaceDef(
+                "11111111-2222-3333-4444-555555555555", "Clip Card",
+                Map.of(), Map.of(), true, Map.of(),
+                /* isEntryInterface */ false, /* generateScreenshot */ false,
+                /* exposeRenderedSource */ false, /* generatePdf */ false,
+                /* pdfFormat */ null, /* pdfLandscape */ false,
+                /* generateVideo */ true, /* videoPreset */ "square",
+                /* videoMaxDurationSeconds */ 45);
+
+            WorkflowPlan plan = org.mockito.Mockito.mock(WorkflowPlan.class);
+            when(plan.getInterfaces()).thenReturn(List.of(def));
+            Map<String, ExecutionNode> nodeMap = new HashMap<>();
+
+            factory.createInterfaceNodes(nodeMap, plan);
+
+            ExecutionNode node = nodeMap.get("interface:clip_card");
+            assertNotNull(node, "interface node must be registered under its normalized key");
+            assertInstanceOf(InterfaceNode.class, node);
+            InterfaceNode iface = (InterfaceNode) node;
+            assertTrue(iface.isGenerateVideo(), "generateVideo must be threaded from InterfaceDef to the node");
+            assertEquals("square", iface.getVideoPreset());
+            assertEquals(45, iface.getVideoMaxDurationSeconds());
+            // sanity: unrelated toggles stay off
+            assertFalse(iface.isGenerateScreenshot());
+            assertFalse(iface.isGeneratePdf());
+        }
+
+        @Test
+        @DisplayName("12-arg InterfaceDef (pre-video plans) leaves video OFF on the node (back-compat)")
+        void preVideoInterfaceDefDefaultsVideoOff() {
+            InterfaceDef def = new InterfaceDef(
+                "11111111-2222-3333-4444-555555555555", "Legacy Form",
+                Map.of(), Map.of(), true, Map.of(),
+                false, false, false, false, null, false);
+
+            WorkflowPlan plan = org.mockito.Mockito.mock(WorkflowPlan.class);
+            when(plan.getInterfaces()).thenReturn(List.of(def));
+            Map<String, ExecutionNode> nodeMap = new HashMap<>();
+
+            factory.createInterfaceNodes(nodeMap, plan);
+
+            InterfaceNode iface = (InterfaceNode) nodeMap.get("interface:legacy_form");
+            assertNotNull(iface);
+            assertFalse(iface.isGenerateVideo());
+            assertNull(iface.getVideoPreset());
+            assertNull(iface.getVideoMaxDurationSeconds());
+        }
     }
 
     @Nested

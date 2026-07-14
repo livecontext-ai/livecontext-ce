@@ -525,4 +525,146 @@ class EditorRunResolverTest {
             verify(executionService, never()).createExecution(any(), any(), anyInt());
         }
     }
+
+    @Nested
+    @DisplayName("Mock-mode reconciliation (__mockMode__ run metadata)")
+    class MockModeReconciliationTests {
+
+        @Mock private WorkflowEntity workflow;
+        @Mock private WorkflowPlan plan;
+
+        @BeforeEach
+        void initWorkflow() {
+            lenient().when(workflow.getId()).thenReturn(WORKFLOW_ID);
+            lenient().when(plan.getOriginalPlan()).thenReturn(Map.of("name", "test"));
+        }
+
+        private WorkflowRunEntity stubNewRunCreation() {
+            WorkflowExecution execution = mock(WorkflowExecution.class);
+            when(execution.getRunId()).thenReturn(RUN_ID);
+            when(executionService.createExecution(eq(plan), any(), anyInt())).thenReturn(execution);
+            WorkflowRunEntity newRun = mock(WorkflowRunEntity.class);
+            when(newRun.getMetadata()).thenReturn(null);
+            when(runRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(newRun));
+            return newRun;
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> capturedMetadata(WorkflowRunEntity run) {
+            org.mockito.ArgumentCaptor<Map<String, Object>> captor =
+                    org.mockito.ArgumentCaptor.forClass(Map.class);
+            verify(run, atLeastOnce()).setMetadata(captor.capture());
+            return captor.getValue();
+        }
+
+        @Test
+        @DisplayName("mockMode='off' is stamped as __mockMode__ on a NEW run (alongside __editorRun__)")
+        void offModeStampedOnCreate() {
+            when(versionService.resolveContentVersionForExecution(eq(WORKFLOW_ID), any(), eq(TENANT_ID))).thenReturn(5);
+            when(runRepository.findFirstByWorkflowIdAndPlanVersionAndExecutionModeAndStatusInOrderByStartedAtDesc(
+                    eq(WORKFLOW_ID), eq(5), eq(ExecutionMode.AUTOMATIC), eq(REUSABLE_STATUSES)))
+                    .thenReturn(Optional.empty());
+            WorkflowRunEntity newRun = stubNewRunCreation();
+
+            resolver.findOrCreateRun(workflow, plan, Map.of(), TENANT_ID, ExecutionMode.AUTOMATIC, "off");
+
+            Map<String, Object> metadata = capturedMetadata(newRun);
+            assertThat(metadata).containsEntry("__editorRun__", true)
+                    .containsEntry("__mockMode__", "off");
+        }
+
+        @Test
+        @DisplayName("default fire (no mockMode) leaves __mockMode__ ABSENT on a new run")
+        void defaultFireHasNoMockModeKey() {
+            when(versionService.resolveContentVersionForExecution(eq(WORKFLOW_ID), any(), eq(TENANT_ID))).thenReturn(5);
+            when(runRepository.findFirstByWorkflowIdAndPlanVersionAndExecutionModeAndStatusInOrderByStartedAtDesc(
+                    eq(WORKFLOW_ID), eq(5), eq(ExecutionMode.AUTOMATIC), eq(REUSABLE_STATUSES)))
+                    .thenReturn(Optional.empty());
+            WorkflowRunEntity newRun = stubNewRunCreation();
+
+            resolver.findOrCreateRun(workflow, plan, Map.of(), TENANT_ID, ExecutionMode.AUTOMATIC);
+
+            Map<String, Object> metadata = capturedMetadata(newRun);
+            assertThat(metadata).containsEntry("__editorRun__", true)
+                    .doesNotContainKey("__mockMode__");
+        }
+
+        @Test
+        @DisplayName("RECONCILE on reuse: the fire request decides - a refire without mockMode REMOVES a stale __mockMode__")
+        void refireWithoutModeRemovesStaleFlag() {
+            when(versionService.resolveContentVersionForExecution(eq(WORKFLOW_ID), any(), eq(TENANT_ID))).thenReturn(5);
+            WorkflowRunEntity existing = mock(WorkflowRunEntity.class);
+            when(existing.getRunIdPublic()).thenReturn("run-existing");
+            when(existing.getMetadata()).thenReturn(Map.of("__editorRun__", true, "__mockMode__", "all_mcp"));
+            when(runRepository.findFirstByWorkflowIdAndPlanVersionAndExecutionModeAndStatusInOrderByStartedAtDesc(
+                    WORKFLOW_ID, 5, ExecutionMode.AUTOMATIC, REUSABLE_STATUSES))
+                    .thenReturn(Optional.of(existing));
+
+            EditorRunResolver.Resolution result = resolver.findOrCreateRun(
+                    workflow, plan, Map.of(), TENANT_ID, ExecutionMode.AUTOMATIC);
+
+            assertThat(result.reused()).isTrue();
+            Map<String, Object> metadata = capturedMetadata(existing);
+            assertThat(metadata).doesNotContainKey("__mockMode__");
+            verify(runRepository).save(existing);
+        }
+
+        @Test
+        @DisplayName("RECONCILE on reuse: refire with mockMode='all_mcp' SETS the flag on the reused run")
+        void refireWithModeSetsFlag() {
+            when(versionService.resolveContentVersionForExecution(eq(WORKFLOW_ID), any(), eq(TENANT_ID))).thenReturn(5);
+            WorkflowRunEntity existing = mock(WorkflowRunEntity.class);
+            when(existing.getRunIdPublic()).thenReturn("run-existing");
+            when(existing.getMetadata()).thenReturn(Map.of("__editorRun__", true));
+            when(runRepository.findFirstByWorkflowIdAndPlanVersionAndExecutionModeAndStatusInOrderByStartedAtDesc(
+                    WORKFLOW_ID, 5, ExecutionMode.AUTOMATIC, REUSABLE_STATUSES))
+                    .thenReturn(Optional.of(existing));
+
+            resolver.findOrCreateRun(workflow, plan, Map.of(), TENANT_ID, ExecutionMode.AUTOMATIC, "all_mcp");
+
+            Map<String, Object> metadata = capturedMetadata(existing);
+            assertThat(metadata).containsEntry("__mockMode__", "all_mcp");
+        }
+
+        @Test
+        @DisplayName("reuse with an UNCHANGED mock state saves nothing (no gratuitous writes)")
+        void unchangedStateSavesNothing() {
+            when(versionService.resolveContentVersionForExecution(eq(WORKFLOW_ID), any(), eq(TENANT_ID))).thenReturn(5);
+            WorkflowRunEntity existing = mock(WorkflowRunEntity.class);
+            when(existing.getRunIdPublic()).thenReturn("run-existing");
+            when(existing.getMetadata()).thenReturn(Map.of("__editorRun__", true, "__mockMode__", "off"));
+            when(runRepository.findFirstByWorkflowIdAndPlanVersionAndExecutionModeAndStatusInOrderByStartedAtDesc(
+                    WORKFLOW_ID, 5, ExecutionMode.AUTOMATIC, REUSABLE_STATUSES))
+                    .thenReturn(Optional.of(existing));
+
+            resolver.findOrCreateRun(workflow, plan, Map.of(), TENANT_ID, ExecutionMode.AUTOMATIC, "off");
+
+            verify(existing, never()).setMetadata(any());
+            verify(runRepository, never()).save(existing);
+        }
+
+        @Test
+        @DisplayName("invalid mockMode fails fast with a clear message listing the valid values")
+        void invalidModeRejected() {
+            assertThatThrownBy(() -> resolver.findOrCreateRun(
+                    workflow, plan, Map.of(), TENANT_ID, ExecutionMode.AUTOMATIC, "yolo"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("yolo")
+                    .hasMessageContaining("all_mcp");
+        }
+
+        @Test
+        @DisplayName("'default' and blank normalize to no-override (key absent)")
+        void defaultAndBlankNormalize() {
+            when(versionService.resolveContentVersionForExecution(eq(WORKFLOW_ID), any(), eq(TENANT_ID))).thenReturn(5);
+            when(runRepository.findFirstByWorkflowIdAndPlanVersionAndExecutionModeAndStatusInOrderByStartedAtDesc(
+                    eq(WORKFLOW_ID), eq(5), eq(ExecutionMode.AUTOMATIC), eq(REUSABLE_STATUSES)))
+                    .thenReturn(Optional.empty());
+            WorkflowRunEntity newRun = stubNewRunCreation();
+
+            resolver.findOrCreateRun(workflow, plan, Map.of(), TENANT_ID, ExecutionMode.AUTOMATIC, "Default");
+
+            assertThat(capturedMetadata(newRun)).doesNotContainKey("__mockMode__");
+        }
+    }
 }

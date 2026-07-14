@@ -208,13 +208,34 @@ public class CeConversationStubController {
 
     @PostMapping("/api/v3/streams/{streamId}/stop")
     public ResponseEntity<Void> stopStream(@PathVariable String streamId) {
-        log.info("[CE] Stream stop acknowledged for stream: {}", streamId);
+        // Actually cancel the run, don't just ack: setCancelKey writes agent:cancel:{streamId}
+        // which the agent loop polls to halt (ConversationRedisStreamingCallback.shouldStop).
+        // Previously this only logged, so pressing Stop in CE never stopped the agent.
+        try {
+            streamStateService.stop(streamId).block();
+            streamStateService.setCancelKey(streamId).block();
+            log.info("[CE] Stream stop applied for stream: {}", streamId);
+        } catch (Exception e) {
+            log.warn("[CE] Stream stop failed for stream {}: {}", streamId, e.getMessage());
+        }
         return ResponseEntity.ok().build();
     }
 
     @PostMapping("/api/v3/streams/by-conversation/{conversationId}/stop")
     public ResponseEntity<Void> stopStreamByConversation(@PathVariable String conversationId) {
-        log.info("[CE] Stream stop acknowledged for conversation: {}", conversationId);
+        try {
+            var metadata = streamStateService.getByConversationId(conversationId).block();
+            if (metadata != null && metadata.state().isActive()) {
+                String streamId = metadata.streamId();
+                streamStateService.stop(streamId).block();
+                streamStateService.setCancelKey(streamId).block();
+                log.info("[CE] Stream stop applied for conversation {} (stream {})", conversationId, streamId);
+            } else {
+                log.info("[CE] No active stream to stop for conversation: {}", conversationId);
+            }
+        } catch (Exception e) {
+            log.warn("[CE] Stream stop failed for conversation {}: {}", conversationId, e.getMessage());
+        }
         return ResponseEntity.ok().build();
     }
 

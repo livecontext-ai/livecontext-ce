@@ -162,6 +162,15 @@ public class SignalResumeService {
     @Autowired(required = false)
     private ErrorTriggerDispatchService errorTriggerDispatchService;
 
+    /**
+     * Per-item continuation walks/seal for split-context approvals with
+     * {@code continuationMode=per_item}. Optional so narrow Spring tests boot
+     * without it; absent bean = all_items barrier semantics (pre-feature).
+     */
+    @Autowired(required = false)
+    @Lazy
+    private PerItemContinuationService perItemContinuationService;
+
     // Lazy to avoid circular dependencies
     @Autowired
     @Lazy
@@ -568,6 +577,16 @@ public class SignalResumeService {
                 || signalType == SignalType.WAIT_TIMER;
         if (itemId != null && canBeSplitSignal
                 && signalService.isSplitContextNode(runId, nodeId, signalEpoch)) {
+            // Per-item continuation (approval continuationMode=per_item): walk THIS
+            // resolved item through its downstream chain immediately - before the
+            // sibling accounting below decides whether to defer or seal. The walk is
+            // durable-idempotent (row-based item exclusion), so re-deliveries and
+            // resolve-all bursts are safe. all_items signals skip this entirely.
+            boolean perItemContinuation = perItemContinuationService != null
+                && perItemContinuationService.isPerItemContinuation(resolvedSignal);
+            if (perItemContinuation) {
+                perItemContinuationService.walkResolvedItem(resolvedSignal);
+            }
             boolean hasRemaining = signalService.getActiveSignals(runId, signalEpoch).stream()
                 .anyMatch(signal -> nodeId.equals(signal.getNodeId()));
             boolean allSignalOutputsPersisted = !hasRemaining
@@ -577,6 +596,17 @@ public class SignalResumeService {
                 allSignalOutputsPersisted = areAllSplitSignalOutputsPersisted(runId, nodeId, signalEpoch);
             }
             if (!hasRemaining && allSignalOutputsPersisted) {
+                // Per-item continuation: seal the walked region BEFORE deriving the
+                // all-resolved successors - the seal (a) runs a final walk pass so a
+                // resolve-all burst's not-yet-walked items execute from their durable
+                // approval rows, and (b) writes the node-level EpochState marks, so the
+                // derivation below sees walked nodes as terminal (filtered) and only
+                // drives the untouched frontier/zero-row nodes.
+                if (perItemContinuation) {
+                    perItemContinuationService.sealRegion(resolvedSignal,
+                        resolveSplitItemCountForSeal(resolvedSignal));
+                    invalidateReadinessCache(runId, "per-item-continuation-seal");
+                }
                 splitSignalsAllResolved = true;
                 // If ReadyNodeCalculator returned empty (items 1..N-1), find successors directly.
                 // Re-derivation site #3 - apply the concurrent-sibling guard here too: a split
@@ -827,6 +857,23 @@ public class SignalResumeService {
 
     private boolean shouldMarkSignalCompletedInEpoch(SignalWaitEntity resolvedSignal) {
         return resolvedSignal == null || resolvedSignal.getResolution() != SignalResolution.CANCELLED;
+    }
+
+    /**
+     * Total split item count for the per-item continuation seal's skip-record parity
+     * (persistSealSkipRecords iterates 0..count-1). Prefer the items list persisted in
+     * splitItemData at yield (the full split size, including items an upstream branch
+     * routed away from the approval); fall back to the per-item signal count.
+     */
+    private int resolveSplitItemCountForSeal(SignalWaitEntity resolvedSignal) {
+        Map<String, Object> splitItemData = resolvedSignal.getSplitItemData();
+        if (splitItemData != null && splitItemData.get("items") instanceof java.util.List<?> items
+                && !items.isEmpty()) {
+            return items.size();
+        }
+        long signalCount = signalService.getSignalCountForNodeEpoch(
+            resolvedSignal.getRunId(), resolvedSignal.getNodeId(), resolvedSignal.getEpoch());
+        return (int) Math.max(signalCount, 0);
     }
 
     private void clearSignalResumePending(SignalWaitEntity resolvedSignal) {

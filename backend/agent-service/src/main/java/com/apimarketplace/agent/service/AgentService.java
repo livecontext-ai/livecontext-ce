@@ -1565,8 +1565,44 @@ public class AgentService {
         "preset:charcoal", "preset:forest", "preset:bubblegum", "preset:arctic", "preset:sunshine"
     };
 
+    private static final java.util.Set<String> AVATAR_PRESET_IDS = java.util.Set.of(AVATAR_PRESETS);
+
     private static String randomAvatarPreset() {
         return AVATAR_PRESETS[ThreadLocalRandom.current().nextInt(AVATAR_PRESETS.length)];
+    }
+
+    /** The known avatar preset ids (e.g. "preset:blue"), for validating a supplied avatar. */
+    public static java.util.List<String> avatarPresetIds() {
+        return java.util.List.of(AVATAR_PRESETS);
+    }
+
+    /** True when {@code presetId} (the part before any "?c1=..") is a known avatar preset. */
+    public static boolean isKnownAvatarPreset(String presetId) {
+        return AVATAR_PRESET_IDS.contains(presetId);
+    }
+
+    /** Must match AVATAR_TOOLS in frontend/components/agents/avatarTools.ts */
+    private static final String[] AVATAR_TOOLS = {
+        "wrench", "hammer", "code", "terminal", "cpu", "database", "cloud", "bug", "git-branch",
+        "key", "lock", "shield", "search", "chart", "calculator", "flask", "microscope",
+        "compass", "lightbulb", "headset", "megaphone", "mail", "phone", "globe", "languages",
+        "briefcase", "calendar", "dollar", "scale", "newspaper", "mic", "paintbrush", "palette",
+        "camera", "music", "film", "pen", "book", "graduation-cap", "rocket", "coffee",
+        "gamepad", "wand", "heart", "star", "leaf", "plane", "map", "stethoscope", "utensils",
+        "dumbbell", "truck", "shopping-cart", "bot", "crown", "trophy", "medal", "award", "gem",
+        "target", "zap", "flame", "handshake", "glasses", "swords", "brain"
+    };
+
+    private static final java.util.Set<String> AVATAR_TOOL_IDS = java.util.Set.of(AVATAR_TOOLS);
+
+    /** The known avatar tool-badge ids (e.g. "wrench"), for validating a supplied avatar. */
+    public static java.util.List<String> avatarToolIds() {
+        return java.util.List.of(AVATAR_TOOLS);
+    }
+
+    /** True when {@code toolId} (the "?tool=.." value) is a known avatar tool badge. */
+    public static boolean isKnownAvatarTool(String toolId) {
+        return AVATAR_TOOL_IDS.contains(toolId);
     }
 
     // ==================== Validation ====================

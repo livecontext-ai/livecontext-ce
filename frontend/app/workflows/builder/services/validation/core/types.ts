@@ -165,6 +165,7 @@ export type ValidationRuleName =
   | 'GraphStructure'
   | 'LabelValidation'
   | 'NodeConfiguration'
+  | 'MockConfiguration'
   | 'CrudValidation'
   | 'CredentialValidation'
   | 'InterfaceValidation'

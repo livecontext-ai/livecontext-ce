@@ -82,7 +82,20 @@ public final class BridgeAllowlist {
             ),
 
             // https://developers.openai.com/codex/models
+            // CURATED-ONLY (no discovery pattern - see DISCOVERY_PATTERNS note).
+            // OpenAI ships the 5.6 generation as three codenamed tiers, NOT a
+            // bare "gpt-5.6": sol=frontier, terra=balanced/everyday, luna=fast &
+            // affordable (analogous to normal/mini/nano). A bare "gpt-5.6" is a
+            // real openai *API* id but is NOT routable via Codex with a ChatGPT
+            // account (the CLI returns a typed 400 "not supported when using
+            // Codex with a ChatGPT account"), so it must never be exposed here.
+            // This is the exact set the Codex CLI model list returns for a
+            // ChatGPT Plus account, verified out of band.
             "codex",        Set.of(
+                    "gpt-5.6-sol",
+                    "gpt-5.6-terra",
+                    "gpt-5.6-luna",
+                    "gpt-5.5",
                     "gpt-5.4",
                     "gpt-5.4-mini",
                     "gpt-5.3-codex",
@@ -159,6 +172,17 @@ public final class BridgeAllowlist {
      * {@code devstral-latest}). A new mistral generation cannot be discovered
      * from the feed without a new {@link #LITELLM_LOOKUP_ALIAS} entry, so
      * mistral-vibe stays on the explicit {@link #MODELS} list.
+     *
+     * <p><b>codex is also deliberately absent</b> (removed 2026-07): OpenAI's
+     * Codex-routable set is NOT derivable from the openai feed. The feed carries
+     * many bare {@code gpt-5.x} ids the Codex CLI cannot route (a bare
+     * {@code gpt-5.6} returns a typed 400 with a ChatGPT account) and names the
+     * 5.6 tiers with codenames ({@code -sol}/{@code -terra}/{@code -luna}) that
+     * a numeric pattern cannot tell apart from the unroutable bare ids. A
+     * pattern here fabricated a phantom {@code codex/gpt-5.6} that failed at
+     * runtime, so codex now stays fully curated (like mistral-vibe): new codex
+     * models ship via a {@link #MODELS} entry + a bridge_catalog_sync migration,
+     * verified against the Codex CLI model list out of band.
      */
     public static final Map<String, List<Pattern>> DISCOVERY_PATTERNS = Map.of(
             // claude-code → anthropic. The Claude Code CLI routes every Anthropic
@@ -175,10 +199,10 @@ public final class BridgeAllowlist {
             // subscription cannot run it.
             "claude-code", List.of(Pattern.compile("^claude-(opus|sonnet|haiku|fable)-\\d+(-\\d{1,2})?$")),
 
-            // codex → openai. Tight to the GPT-5.x reasoning family codex routes.
-            // Matches "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2";
-            // rejects "gpt-5.3-chat-latest", "gpt-4o", embeddings, etc.
-            "codex", List.of(Pattern.compile("^gpt-5\\.\\d+(-mini|-codex)?$")),
+            // codex has NO discovery pattern (curated-only) - see the docblock
+            // above. OpenAI's Codex-routable set is irregular (codenamed 5.6
+            // tiers + unroutable bare gpt-5.x in the feed), so it ships fully
+            // via MODELS + migration, never auto-discovered.
 
             // gemini-cli → google. Matches "gemini-2.5-pro", "gemini-3-flash-preview",
             // "gemini-3.1-pro-preview"; rejects "gemini-1.5-flash-8b", embeddings.

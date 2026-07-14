@@ -14,6 +14,7 @@ import com.apimarketplace.publication.service.LandingInterfaceSnapshotter;
 import com.apimarketplace.publication.service.OnboardingCategoryMapper;
 import com.apimarketplace.publication.service.PublicationListQueryService;
 import com.apimarketplace.publication.service.PublicationPendingReviewException;
+import com.apimarketplace.publication.service.PublicationValidationException;
 import com.apimarketplace.publication.service.PublicationReviewService;
 import com.apimarketplace.publication.service.ResourcePublicationService;
 import com.apimarketplace.publication.service.ShowcaseFileRefRewriter;
@@ -1662,6 +1663,11 @@ public class WorkflowPublicationController {
         } catch (IllegalArgumentException e) {
             logger.warn("Bad request publishing agent: {}", e.getMessage());
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (PublicationValidationException e) {
+            // Structured publish refusal (grant=all / snapshot too large): 422 with the
+            // machine-readable body so the modal and MCP tool render actionable detail.
+            logger.warn("Agent publish refused ({}): {}", e.getErrorCode(), e.getMessage());
+            return ResponseEntity.unprocessableEntity().body(e.toBody());
         } catch (PublicationPendingReviewException e) {
             // Pending-review guard (re-publish blocked). 409 conflict, not 500.
             logger.warn("Agent publish rejected (conflict): {}", e.getMessage());

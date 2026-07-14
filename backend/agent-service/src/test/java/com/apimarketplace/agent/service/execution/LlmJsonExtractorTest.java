@@ -467,4 +467,13 @@ class LlmJsonExtractorTest {
         // What must always be true: the result is not null and contains the key/value.
         assertThat(result).isNotNull().contains("\"k\"");
     }
+
+    @Test
+    @DisplayName("a stray unmatched '}' in the preamble does not poison extraction of a later object")
+    void strayClosingBraceInPreambleDoesNotPoisonScan() {
+        // Regression: pre-fix the lone '}' drove the brace depth to -1 and never recovered,
+        // so the well-formed object that follows was never extracted (whole string returned).
+        assertThat(LlmJsonExtractor.extractJson("} {\"x\":1}")).isEqualTo("{\"x\":1}");
+        assertThat(LlmJsonExtractor.extractJson("oops }} then {\"a\":\"b\"}")).isEqualTo("{\"a\":\"b\"}");
+    }
 }

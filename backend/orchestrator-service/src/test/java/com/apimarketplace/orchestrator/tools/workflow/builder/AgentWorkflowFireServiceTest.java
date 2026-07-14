@@ -2,15 +2,19 @@ package com.apimarketplace.orchestrator.tools.workflow.builder;
 
 import com.apimarketplace.orchestrator.domain.WorkflowEntity;
 import com.apimarketplace.orchestrator.domain.WorkflowRunEntity;
+import com.apimarketplace.orchestrator.domain.WorkflowStepDataEntity;
 import com.apimarketplace.orchestrator.domain.workflow.*;
+import com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys;
 import com.apimarketplace.orchestrator.persistence.WorkflowStepDataRepository;
 import com.apimarketplace.orchestrator.repository.SignalWaitRepository;
+import com.apimarketplace.orchestrator.repository.WorkflowEpochRepository.EpochHeaderRow;
 import com.apimarketplace.orchestrator.repository.WorkflowRunRepository;
 import com.apimarketplace.orchestrator.services.EditorRunResolver;
 import com.apimarketplace.orchestrator.services.StepOutputService;
 import com.apimarketplace.orchestrator.services.WorkflowExecutionService;
 import com.apimarketplace.orchestrator.services.epoch.WorkflowEpochService;
 import com.apimarketplace.orchestrator.trigger.ReusableTriggerService;
+import com.apimarketplace.orchestrator.trigger.TriggerExecutionResult;
 import com.apimarketplace.orchestrator.trigger.TriggerType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.*;
@@ -79,19 +83,19 @@ class AgentWorkflowFireServiceTest {
         @Test
         @DisplayName("Delegates to EditorRunResolver and returns the resolved run")
         void delegatesToResolver() {
-            when(editorRunResolver.findOrCreateRun(eq(workflow), eq(plan), any(), eq(TENANT_ID), eq(ExecutionMode.AUTOMATIC)))
+            when(editorRunResolver.findOrCreateRun(eq(workflow), eq(plan), any(), eq(TENANT_ID), eq(ExecutionMode.AUTOMATIC), isNull()))
                     .thenReturn(new EditorRunResolver.Resolution(resolvedRun, null, 7, false));
 
             WorkflowRunEntity result = service.createRun(workflow, plan, Map.of(), TENANT_ID);
 
             assertThat(result).isSameAs(resolvedRun);
-            verify(editorRunResolver).findOrCreateRun(eq(workflow), eq(plan), any(), eq(TENANT_ID), eq(ExecutionMode.AUTOMATIC));
+            verify(editorRunResolver).findOrCreateRun(eq(workflow), eq(plan), any(), eq(TENANT_ID), eq(ExecutionMode.AUTOMATIC), isNull());
         }
 
         @Test
         @DisplayName("Returns reused run when resolver finds WAITING_TRIGGER run")
         void returnsReusedRun() {
-            when(editorRunResolver.findOrCreateRun(eq(workflow), eq(plan), any(), eq(TENANT_ID), eq(ExecutionMode.AUTOMATIC)))
+            when(editorRunResolver.findOrCreateRun(eq(workflow), eq(plan), any(), eq(TENANT_ID), eq(ExecutionMode.AUTOMATIC), isNull()))
                     .thenReturn(new EditorRunResolver.Resolution(resolvedRun, null, 7, true));
 
             WorkflowRunEntity result = service.createRun(workflow, plan, Map.of(), TENANT_ID);
@@ -103,12 +107,12 @@ class AgentWorkflowFireServiceTest {
         @DisplayName("Passes dataInputs to resolver")
         void passesDataInputs() {
             Map<String, Object> dataInputs = Map.of("key", "value");
-            when(editorRunResolver.findOrCreateRun(eq(workflow), eq(plan), eq(dataInputs), eq(TENANT_ID), eq(ExecutionMode.AUTOMATIC)))
+            when(editorRunResolver.findOrCreateRun(eq(workflow), eq(plan), eq(dataInputs), eq(TENANT_ID), eq(ExecutionMode.AUTOMATIC), isNull()))
                     .thenReturn(new EditorRunResolver.Resolution(resolvedRun, null, 1, false));
 
             service.createRun(workflow, plan, dataInputs, TENANT_ID);
 
-            verify(editorRunResolver).findOrCreateRun(eq(workflow), eq(plan), eq(dataInputs), eq(TENANT_ID), eq(ExecutionMode.AUTOMATIC));
+            verify(editorRunResolver).findOrCreateRun(eq(workflow), eq(plan), eq(dataInputs), eq(TENANT_ID), eq(ExecutionMode.AUTOMATIC), isNull());
         }
     }
 
@@ -1279,6 +1283,247 @@ class AgentWorkflowFireServiceTest {
                     "mcps", List.of(),
                     "edges", List.of()
             ), "wf-test", "tenant-test");
+        }
+    }
+
+    // ==================== buildResult - mock-mode visibility (addMockInfo) ====================
+
+    @Nested
+    @DisplayName("buildResult - mock-mode visibility (addMockInfo)")
+    class BuildResultMockInfoTests {
+
+        private static final String RUN_ID = "run-mock-1";
+
+        @Mock private WorkflowEntity workflow;
+        @Mock private WorkflowPlan plan;
+        @Mock private WorkflowRunEntity run;
+
+        @BeforeEach
+        void stubRunAndPlan() {
+            lenient().when(run.getRunIdPublic()).thenReturn(RUN_ID);
+            lenient().when(run.getStatus()).thenReturn(RunStatus.COMPLETED);
+            lenient().when(run.getPlanVersion()).thenReturn(3);
+            lenient().when(run.getStateSnapshot()).thenReturn(null);
+            // Re-fetch misses -> buildResult falls back to the passed-in entity.
+            lenient().when(runRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.empty());
+            lenient().when(workflow.getPinnedVersion()).thenReturn(null);
+            lenient().when(plan.getMcps()).thenReturn(List.of());
+            lenient().when(plan.getAgents()).thenReturn(List.of());
+            lenient().when(plan.getCores()).thenReturn(List.of());
+            lenient().when(plan.getTables()).thenReturn(List.of());
+            lenient().when(plan.getInterfaces()).thenReturn(List.of());
+            lenient().when(plan.getEdges()).thenReturn(List.of());
+            lenient().when(plan.getNodeMocks()).thenReturn(Map.of());
+        }
+
+        private TriggerExecutionResult okFire() {
+            return TriggerExecutionResult.success(RUN_ID, "trigger:start", TriggerType.MANUAL, Set.of(), 0);
+        }
+
+        private Map<String, Object> editorMetadata(String mockMode) {
+            Map<String, Object> meta = new HashMap<>();
+            meta.put("__editorRun__", true);
+            if (mockMode != null) {
+                meta.put(com.apimarketplace.orchestrator.execution.v2.engine.MockRunGate.MOCK_MODE_METADATA_KEY,
+                        mockMode);
+            }
+            return meta;
+        }
+
+        private NodeMock enabledStaticMock() {
+            return new NodeMock(true, NodeMock.SOURCE_STATIC, Map.of("x", 1), null, null);
+        }
+
+        @Test
+        @DisplayName("Production run (no __editorRun__ marker) omits all mock keys even with enabled mocks in the plan")
+        void productionRun_omitsMockKeys() {
+            lenient().when(run.getMetadata()).thenReturn(Map.of());
+            lenient().when(plan.getNodeMocks()).thenReturn(Map.of("mcp:fetch", enabledStaticMock()));
+
+            Map<String, Object> result = service.buildResult(run, okFire(), workflow, plan, TENANT_ID);
+
+            assertThat(result).doesNotContainKeys("mock_mode", "mocked_nodes", "mock_note");
+        }
+
+        @Test
+        @DisplayName("Editor run with no configured mocks (default mode) stays byte-identical: no mock keys")
+        void editorRun_noMocks_defaultMode_omitsMockKeys() {
+            when(run.getMetadata()).thenReturn(editorMetadata(null));
+
+            Map<String, Object> result = service.buildResult(run, okFire(), workflow, plan, TENANT_ID);
+
+            assertThat(result).doesNotContainKeys("mock_mode", "mocked_nodes", "mock_note");
+        }
+
+        @Test
+        @DisplayName("Editor run, default mode: enabled mocks surface as mock_mode='default' + SORTED mocked_nodes + mock_note")
+        void editorRun_enabledMocks_defaultMode_surfaced() {
+            when(run.getMetadata()).thenReturn(editorMetadata(null));
+            Map<String, NodeMock> mocks = new LinkedHashMap<>();
+            mocks.put("mcp:z_last", enabledStaticMock());
+            mocks.put("core:a_first", enabledStaticMock());
+            when(plan.getNodeMocks()).thenReturn(mocks);
+
+            Map<String, Object> result = service.buildResult(run, okFire(), workflow, plan, TENANT_ID);
+
+            assertThat(result.get("mock_mode")).isEqualTo("default");
+            assertThat(result.get("mocked_nodes")).isEqualTo(List.of("core:a_first", "mcp:z_last"));
+            assertThat((String) result.get("mock_note")).contains("CONFIGURED MOCKS").contains("mock_mode='off'");
+        }
+
+        @Test
+        @DisplayName("Editor run, default mode: a DISABLED mock is excluded from mocked_nodes (and alone produces no keys)")
+        void editorRun_disabledMock_excluded() {
+            when(run.getMetadata()).thenReturn(editorMetadata(null));
+            when(plan.getNodeMocks()).thenReturn(Map.of(
+                    "mcp:parked", new NodeMock(false, NodeMock.SOURCE_STATIC, Map.of(), null, null)));
+
+            Map<String, Object> result = service.buildResult(run, okFire(), workflow, plan, TENANT_ID);
+
+            assertThat(result).doesNotContainKeys("mock_mode", "mocked_nodes", "mock_note");
+        }
+
+        @Test
+        @DisplayName("Editor run, mock_mode='off' with enabled mocks: reports mock_mode='off' + ignored note, NO mocked_nodes")
+        void editorRun_offMode_withMocks_reportsIgnored() {
+            when(run.getMetadata()).thenReturn(editorMetadata("off"));
+            when(plan.getNodeMocks()).thenReturn(Map.of("mcp:fetch", enabledStaticMock()));
+
+            Map<String, Object> result = service.buildResult(run, okFire(), workflow, plan, TENANT_ID);
+
+            assertThat(result.get("mock_mode")).isEqualTo("off");
+            assertThat((String) result.get("mock_note")).contains("IGNORED").contains("1");
+            assertThat(result).doesNotContainKey("mocked_nodes");
+        }
+
+        @Test
+        @DisplayName("Editor run, mock_mode='off' with NO configured mocks: nothing to report, no keys")
+        void editorRun_offMode_noMocks_omitsKeys() {
+            when(run.getMetadata()).thenReturn(editorMetadata("off"));
+
+            Map<String, Object> result = service.buildResult(run, okFire(), workflow, plan, TENANT_ID);
+
+            assertThat(result).doesNotContainKeys("mock_mode", "mocked_nodes", "mock_note");
+        }
+
+        @Test
+        @DisplayName("Editor run, mock_mode='all_mcp': mocked_nodes = explicit mocks + catalog-tool mcps (no crud, no bare slugs), sorted, deduped")
+        void editorRun_allMcpMode_expandsCatalogMcps() {
+            when(run.getMetadata()).thenReturn(editorMetadata("all_mcp"));
+            when(plan.getNodeMocks()).thenReturn(Map.of("core:format", enabledStaticMock()));
+
+            Step catalogStep = mock(Step.class);
+            lenient().when(catalogStep.getNormalizedKey()).thenReturn("mcp:fetch_emails");
+            lenient().when(catalogStep.isCrudStep()).thenReturn(false);
+            lenient().when(catalogStep.id()).thenReturn("gmail/gmail-list-messages");
+
+            Step crudStep = mock(Step.class);
+            lenient().when(crudStep.getNormalizedKey()).thenReturn("mcp:save_row");
+            lenient().when(crudStep.isCrudStep()).thenReturn(true);
+            lenient().when(crudStep.id()).thenReturn("crud/insert_row");
+
+            Step bareSlugStep = mock(Step.class);
+            lenient().when(bareSlugStep.getNormalizedKey()).thenReturn("mcp:test_tool");
+            lenient().when(bareSlugStep.isCrudStep()).thenReturn(false);
+            lenient().when(bareSlugStep.id()).thenReturn("not_a_catalog_id");
+
+            when(plan.getMcps()).thenReturn(List.of(catalogStep, crudStep, bareSlugStep));
+
+            Map<String, Object> result = service.buildResult(run, okFire(), workflow, plan, TENANT_ID);
+
+            assertThat(result.get("mock_mode")).isEqualTo("all_mcp");
+            assertThat(result.get("mocked_nodes")).isEqualTo(List.of("core:format", "mcp:fetch_emails"));
+            assertThat((String) result.get("mock_note")).contains("CONFIGURED MOCKS");
+        }
+
+        @Test
+        @DisplayName("Editor run, mock_mode='all_mcp': an mcp already carrying an explicit mock is not listed twice")
+        void editorRun_allMcpMode_dedupesExplicitMcpMock() {
+            when(run.getMetadata()).thenReturn(editorMetadata("all_mcp"));
+            when(plan.getNodeMocks()).thenReturn(Map.of("mcp:fetch_emails", enabledStaticMock()));
+
+            Step catalogStep = mock(Step.class);
+            lenient().when(catalogStep.getNormalizedKey()).thenReturn("mcp:fetch_emails");
+            lenient().when(catalogStep.isCrudStep()).thenReturn(false);
+            lenient().when(catalogStep.id()).thenReturn("gmail/gmail-list-messages");
+            when(plan.getMcps()).thenReturn(List.of(catalogStep));
+
+            Map<String, Object> result = service.buildResult(run, okFire(), workflow, plan, TENANT_ID);
+
+            assertThat(result.get("mocked_nodes")).isEqualTo(List.of("mcp:fetch_emails"));
+        }
+    }
+
+    // ==================== buildNodeOutputReport - mocked badge (get_node_output) ====================
+
+    @Nested
+    @DisplayName("buildNodeOutputReport - mocked badge from persisted __mocked__ markers")
+    class NodeOutputMockedBadgeTests {
+
+        private static final String RUN_ID = "run-badge-1";
+        private static final String NODE_ID = "mcp:fetch_emails";
+        private static final UUID STORAGE_ID = UUID.fromString("22222222-2222-2222-2222-222222222222");
+
+        @Mock private WorkflowPlan plan;
+        @Mock private WorkflowRunEntity run;
+        @Mock private WorkflowStepDataEntity step;
+
+        @BeforeEach
+        void stubSingleCompletedRow() {
+            lenient().when(run.getRunIdPublic()).thenReturn(RUN_ID);
+            lenient().when(plan.getMcps()).thenReturn(List.of());
+            lenient().when(plan.getAgents()).thenReturn(List.of());
+            lenient().when(plan.getCores()).thenReturn(List.of());
+            lenient().when(plan.getTables()).thenReturn(List.of());
+            lenient().when(plan.getInterfaces()).thenReturn(List.of());
+            lenient().when(epochService.getEpochHeader(RUN_ID, 0)).thenReturn(new EpochHeaderRow(
+                    "{\"completedNodeIds\":[\"" + NODE_ID + "\"]}", false, null, null, "trigger:start", null));
+            lenient().when(stepDataRepository.findByRunIdAndNormalizedKeyOrderByEpochDesc(RUN_ID, NODE_ID))
+                    .thenReturn(List.of(step));
+            lenient().when(step.getEpoch()).thenReturn(0);
+            lenient().when(step.getOutputStorageId()).thenReturn(STORAGE_ID);
+        }
+
+        @Test
+        @DisplayName("A row whose stored output carries __mocked__/__mock_source__ surfaces mocked=true + mock_source")
+        void mockedRow_surfacesBadgeAndSource() {
+            Map<String, Object> rawOutput = new LinkedHashMap<>();
+            rawOutput.put("messages", List.of());
+            rawOutput.put(ExecutionMetadataKeys.MOCKED, true);
+            rawOutput.put(ExecutionMetadataKeys.MOCK_SOURCE, "catalog_example");
+            when(stepOutputService.loadRawOutput(STORAGE_ID, TENANT_ID)).thenReturn(rawOutput);
+
+            Map<String, Object> result = service.buildNodeOutputReport(run, plan, 0, NODE_ID, TENANT_ID);
+
+            assertThat(result.get("mocked")).isEqualTo(true);
+            assertThat(result.get("mock_source")).isEqualTo("catalog_example");
+            assertThat(result).containsKey("output");
+        }
+
+        @Test
+        @DisplayName("A mocked row without a stored __mock_source__ still gets mocked=true but no mock_source key")
+        void mockedRow_withoutSource_badgeOnly() {
+            Map<String, Object> rawOutput = new LinkedHashMap<>();
+            rawOutput.put(ExecutionMetadataKeys.MOCKED, true);
+            when(stepOutputService.loadRawOutput(STORAGE_ID, TENANT_ID)).thenReturn(rawOutput);
+
+            Map<String, Object> result = service.buildNodeOutputReport(run, plan, 0, NODE_ID, TENANT_ID);
+
+            assertThat(result.get("mocked")).isEqualTo(true);
+            assertThat(result).doesNotContainKey("mock_source");
+        }
+
+        @Test
+        @DisplayName("A real (non-mocked) row carries NEITHER mocked NOR mock_source keys")
+        void realRow_noBadgeKeys() {
+            Map<String, Object> rawOutput = new LinkedHashMap<>();
+            rawOutput.put("messages", List.of(Map.of("id", "m-1")));
+            when(stepOutputService.loadRawOutput(STORAGE_ID, TENANT_ID)).thenReturn(rawOutput);
+
+            Map<String, Object> result = service.buildNodeOutputReport(run, plan, 0, NODE_ID, TENANT_ID);
+
+            assertThat(result).doesNotContainKeys("mocked", "mock_source");
+            assertThat(result).containsKey("output");
         }
     }
 }

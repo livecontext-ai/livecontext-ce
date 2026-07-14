@@ -471,9 +471,31 @@ public class StepCompletionOrchestrator {
             Integer iteration,
             int epoch,
             String triggerId) {
+        return completeStep(execution, nodeId, nodeLabel, result, itemIndex, iteration, epoch, triggerId, false);
+    }
+
+    /**
+     * Complete a step execution with the Phase 2.E suppressGlobalMark disposition:
+     * per-item NodeCounts / row / billing / WS land normally, the node-level
+     * EpochState mark is deferred to {@link #recordSplitAggregateIfMissing} (seal).
+     * Used by split-async per-item deliveries and per-item continuation walks.
+     */
+    public boolean completeStep(
+            WorkflowExecution execution,
+            String nodeId,
+            String nodeLabel,
+            StepExecutionResult result,
+            Integer itemIndex,
+            Integer iteration,
+            int epoch,
+            String triggerId,
+            boolean suppressGlobalMark) {
 
         StepCompletionContext ctx = StepCompletionContext.of(
             execution, nodeId, nodeLabel, result, itemIndex, iteration, epoch);
+        if (suppressGlobalMark) {
+            ctx = ctx.withSuppressGlobalMark(true);
+        }
         return complete(ctx, triggerId).persisted();
     }
 

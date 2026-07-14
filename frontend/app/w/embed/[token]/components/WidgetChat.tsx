@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { WidgetApiService, type WidgetConfig, type WidgetMessage } from '@/lib/api/widget-api';
+import { AvatarDisplay } from '@/components/agents/AvatarPicker';
 import { useTranslations } from 'next-intl';
 
 interface WidgetChatProps {
@@ -170,11 +171,13 @@ export default function WidgetChat({ token }: WidgetChatProps) {
       >
         {config?.showAvatar && config?.agentAvatarUrl && (
           <div className="h-8 w-8 rounded-full bg-white/20 overflow-hidden shrink-0">
-            <img
-              src={config.agentAvatarUrl}
-              alt={config.agentName || t('widget.agent')}
-              className="h-full w-full object-cover"
-              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+            {/* AvatarDisplay resolves preset: values (incl. custom colors) and
+                falls back to a preset on a broken URL - a raw <img> renders
+                nothing for preset avatars in this anonymous embed. */}
+            <AvatarDisplay
+              avatarUrl={config.agentAvatarUrl}
+              name={config.agentName || t('widget.agent')}
+              size="sm"
             />
           </div>
         )}

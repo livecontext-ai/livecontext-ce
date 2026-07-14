@@ -323,6 +323,47 @@ public class FileController {
     }
 
     /**
+     * Anonymous avatar serve. Agent avatars must render for viewers who are NOT the
+     * uploader - marketplace cards, shared applications, widget embeds - where a plain
+     * {@code <img>} can carry no bearer token. Only rows eligible per
+     * {@code StorageService.getPublicAvatarEntity} resolve (generic {@code avatar}
+     * category + image mime); anything else 404s, so this cannot be used as a generic
+     * cross-tenant file oracle. The opaque row UUID is the only handle.
+     *
+     * <p>SVG avatars are user- or AI-supplied markup served from the app origin, so the
+     * response pins a no-script CSP + nosniff: even opened as a top-level document the
+     * SVG cannot execute script. Cache is public - a re-upload mints a new id, so the
+     * bytes behind one id never change.
+     */
+    @GetMapping("/avatar/{id}")
+    public ResponseEntity<StreamingResponseBody> avatarById(@PathVariable UUID id) {
+        if (storageIndex == null) {
+            return ResponseEntity.notFound().build();
+        }
+        StorageEntity entity = storageIndex.getPublicAvatarEntity(id).orElse(null);
+        if (entity == null || entity.getFileName() == null || entity.getS3Key() == null) {
+            return ResponseEntity.notFound().build();
+        }
+        String mimeType = entity.getMimeType();
+        String contentDisposition = ContentDispositions.of("inline", entity.getFileName());
+        return fileStorageService.openStream(entity.getS3Key())
+            .map(ds -> {
+                final long len = ds.contentLength();
+                ResponseEntity.BodyBuilder b = ResponseEntity.ok()
+                    .header(HttpHeaders.CONTENT_DISPOSITION, contentDisposition)
+                    .header(HttpHeaders.CONTENT_TYPE, mimeType)
+                    .header(HttpHeaders.CACHE_CONTROL, "public, max-age=86400")
+                    .header("X-Content-Type-Options", "nosniff")
+                    .header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'");
+                if (len >= 0) {
+                    b.header(HttpHeaders.CONTENT_LENGTH, String.valueOf(len));
+                }
+                return b.body(streamingBody(ds));
+            })
+            .orElse(ResponseEntity.notFound().build());
+    }
+
+    /**
      * Streaming body for an S3 object: streams end-to-end, closes the {@link DownloadStream}
      * (returns the connection to the pool) on success/disconnect, and records metrics. Shared by
      * {@link #rawById} and the HMAC-signed showcase endpoint.

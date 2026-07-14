@@ -1,6 +1,7 @@
 package com.apimarketplace.orchestrator.tools.workflow.builder;
 
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
+import com.apimarketplace.orchestrator.domain.workflow.NodeMock;
 import com.apimarketplace.orchestrator.tools.workflow.builder.creators.CreatorBase;
 import com.apimarketplace.orchestrator.utils.LabelNormalizer;
 import lombok.RequiredArgsConstructor;
@@ -203,9 +204,10 @@ public class WorkflowBuilderModifier {
         } else if (changesObj != null) {
             rawChanges = new LinkedHashMap<>((Map<String, Object>) changesObj);
         } else {
-            // Allow modify with only connect_after (no params needed)
+            // Allow modify with only connect_after or only mock (no params needed)
             String topLevelConnectAfter = (String) parameters.get("connect_after");
-            if (topLevelConnectAfter != null && !topLevelConnectAfter.isBlank()) {
+            if ((topLevelConnectAfter != null && !topLevelConnectAfter.isBlank())
+                    || parameters.get("mock") != null) {
                 rawChanges = new LinkedHashMap<>();
             } else {
                 return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "'params' is required. Use same syntax as ADD:\n\n" +
@@ -229,7 +231,17 @@ public class WorkflowBuilderModifier {
             rawChanges.remove("connect_after"); // Remove from changes if also present
         }
 
-        if (rawChanges.isEmpty() && (connectAfterRef == null || connectAfterRef.isBlank())) {
+        // Resolve mock: top-level (canonical, like connect_after) with a rescue for
+        // the LLM nesting it inside params - node.params.mock would otherwise be
+        // sent to the real API as a tool argument (same trap as tool_id).
+        Object mockObj = parameters.get("mock");
+        if (mockObj == null && rawChanges.containsKey("mock")) {
+            mockObj = rawChanges.remove("mock");
+        } else if (mockObj != null) {
+            rawChanges.remove("mock");
+        }
+
+        if (rawChanges.isEmpty() && (connectAfterRef == null || connectAfterRef.isBlank()) && mockObj == null) {
             return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "'params' object cannot be empty.");
         }
 
@@ -265,10 +277,48 @@ public class WorkflowBuilderModifier {
             }
         }
 
+        // Apply the mock block BEFORE the generic merge so its old value rides the
+        // same undo payload. The block is validated against the node's real type
+        // and ports (single source of truth: WorkflowPlanParser) and REPLACED
+        // whole - deep-merging an old mock output into a new one would resurrect
+        // stale keys. mock={} (empty object) removes the mock.
+        boolean mockChanged = false;
+        Object oldMockValue = node.get(NodeMock.JSON_KEY);
+        String mockKind = null;
+        if (mockObj != null) {
+            if (LabelNormalizer.isTriggerKey(nodeId) || LabelNormalizer.isNoteKey(nodeId)) {
+                return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED,
+                    "Mocking is not available on trigger or note nodes. A mock replaces an executed step's "
+                        + "output, and triggers/notes are not executed steps. Use data_inputs on execute to fake "
+                        + "a trigger payload, or set the mock on a downstream node instead.");
+            }
+            if (!(mockObj instanceof Map)) {
+                return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
+                    "'mock' must be an object: {output: {...}} | {source: 'catalog_example'} | "
+                        + "{error: {message: '...'}} | {port: '...'} - or {} to remove the mock. "
+                        + "See workflow(action='help', topics=['mocking']).");
+            }
+            Map<String, Object> mockMap = (Map<String, Object>) mockObj;
+            if (mockMap.isEmpty()) {
+                mockChanged = node.remove(NodeMock.JSON_KEY) != null || oldMockValue != null;
+            } else {
+                String validationError = validateMockAgainstNode(session, nodeId, node, mockMap);
+                if (validationError != null) {
+                    return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE, validationError);
+                }
+                node.put(NodeMock.JSON_KEY, new LinkedHashMap<>(mockMap));
+                mockChanged = true;
+                mockKind = describeMockKind(mockMap);
+            }
+        }
+
         // Store old values for undo
         Map<String, Object> oldValues = new LinkedHashMap<>();
         for (String key : changes.keySet()) {
             oldValues.put(key, node.get(key));
+        }
+        if (mockChanged) {
+            oldValues.put(NodeMock.JSON_KEY, oldMockValue);
         }
 
         // Check if label is changing - we need to update logical mappings
@@ -355,6 +405,20 @@ public class WorkflowBuilderModifier {
         Set<String> modifiedFields = new LinkedHashSet<>(changes.keySet());
         if (newConnectAfterNodeId != null) {
             modifiedFields.add("connect_after");
+        }
+        if (mockChanged) {
+            modifiedFields.add(NodeMock.JSON_KEY);
+            boolean configured = node.containsKey(NodeMock.JSON_KEY);
+            Map<String, Object> mockReport = new LinkedHashMap<>();
+            mockReport.put("configured", configured);
+            if (configured && mockKind != null) {
+                mockReport.put("kind", mockKind);
+            }
+            result.put("mock", mockReport);
+            result.put("mock_hint", configured
+                ? "Applies to editor runs of this workflow (execute without version='pinned'). Pass "
+                    + "mock_mode='off' on execute to run everything real once; production/pinned fires always ignore mocks."
+                : "Mock removed - the node executes for real again.");
         }
         result.put("modified_fields", modifiedFields);
 
@@ -681,6 +745,53 @@ public class WorkflowBuilderModifier {
 
     private Map<String, Object> findNodeById(WorkflowBuilderSession session, String nodeId) {
         return session.findNode(nodeId).orElse(null);
+    }
+
+    /**
+     * Validates a mock block against the node's REAL type and ports by parsing a
+     * single-node mini plan through {@link com.apimarketplace.orchestrator.domain.workflow.WorkflowPlanParser}
+     * - the exact validator the engine uses at run time, so modify-time acceptance
+     * and execution-time parsing can never disagree.
+     *
+     * @return a caller-facing error message, or null when the block is valid
+     */
+    private String validateMockAgainstNode(WorkflowBuilderSession session, String nodeId,
+                                            Map<String, Object> node, Map<String, Object> mockMap) {
+        String section;
+        if (LabelNormalizer.isMcpKey(nodeId)) {
+            section = "mcps";
+        } else if (LabelNormalizer.isAgentKey(nodeId)) {
+            section = "agents";
+        } else if (LabelNormalizer.isCoreKey(nodeId)) {
+            section = "cores";
+        } else if (LabelNormalizer.isTableKey(nodeId)) {
+            section = "tables";
+        } else if (LabelNormalizer.isInterfaceKey(nodeId)) {
+            section = "interfaces";
+        } else {
+            return "Mocking is not available on this node kind (" + nodeId + ").";
+        }
+        Map<String, Object> nodeCopy = new LinkedHashMap<>(node);
+        nodeCopy.put(com.apimarketplace.orchestrator.domain.workflow.NodeMock.JSON_KEY, mockMap);
+        Map<String, Object> miniPlan = new LinkedHashMap<>();
+        miniPlan.put(section, List.of(nodeCopy));
+        try {
+            com.apimarketplace.orchestrator.domain.workflow.WorkflowPlanParser
+                    .parse(miniPlan, session.getTenantId());
+            return null;
+        } catch (IllegalArgumentException e) {
+            return e.getMessage() + " See workflow(action='help', topics=['mocking']).";
+        }
+    }
+
+    /** One-word mock kind for the modify report: output | catalog_example | error | port. */
+    private static String describeMockKind(Map<String, Object> mockMap) {
+        Object source = mockMap.get("source");
+        if ("catalog_example".equals(source)) return "catalog_example";
+        if ("error".equals(source) || mockMap.containsKey("error")) return "error";
+        if (mockMap.containsKey("output")) return "output";
+        if (mockMap.containsKey("port")) return "port";
+        return "output";
     }
 
     private void restoreNode(WorkflowBuilderSession session, String nodeId, Map<String, Object> nodeData) {

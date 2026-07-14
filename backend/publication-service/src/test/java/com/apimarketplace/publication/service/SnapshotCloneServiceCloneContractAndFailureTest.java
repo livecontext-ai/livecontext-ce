@@ -149,14 +149,24 @@ class SnapshotCloneServiceCloneContractAndFailureTest {
         httpCore.put("httpRequest", httpRequest);
 
         Map<String, Object> emailCore = new LinkedHashMap<>();
-        emailCore.put("sendEmail", new LinkedHashMap<>(Map.of("credentialId", 77)));
+        emailCore.put("sendEmail", new LinkedHashMap<>(Map.of("credentialId", 77, "smtpPassword", "raw-smtp-pw")));
+
+        // SSH / SFTP / Database carry an inline password / privateKey RAW fallback that must
+        // also be stripped from the acquired clone (they were a strip-gap: the publisher's raw
+        // secret would otherwise survive into the acquirer's plan).
+        Map<String, Object> sshCore = new LinkedHashMap<>();
+        sshCore.put("ssh", new LinkedHashMap<>(Map.of("host", "h", "password", "sshpw", "privateKey", "sshpk")));
+        Map<String, Object> sftpCore = new LinkedHashMap<>();
+        sftpCore.put("sftp", new LinkedHashMap<>(Map.of("host", "h2", "password", "sftppw", "privateKey", "sftppk")));
+        Map<String, Object> dbCore = new LinkedHashMap<>();
+        dbCore.put("database", new LinkedHashMap<>(Map.of("host", "h3", "password", "dbpw")));
 
         Map<String, Object> mcpStep = new LinkedHashMap<>();
         mcpStep.put("id", "mcp:tool");
         mcpStep.put("selectedCredentialId", 88);
 
         Map<String, Object> plan = new LinkedHashMap<>();
-        plan.put("cores", new ArrayList<>(List.of(httpCore, emailCore)));
+        plan.put("cores", new ArrayList<>(List.of(httpCore, emailCore, sshCore, sftpCore, dbCore)));
         plan.put("mcps", new ArrayList<>(List.of(mcpStep)));
 
         when(orchestratorClient.createApplicationWorkflow(any(), anyString()))
@@ -175,8 +185,15 @@ class SnapshotCloneServiceCloneContractAndFailureTest {
             assertThat(sentHttp)
                     .as("HTTP authConfig must be stripped before the orchestrator sees the %s", planKey)
                     .doesNotContainKey("authConfig");
-            assertThat(sentEmail).doesNotContainKey("credentialId");
+            assertThat(sentEmail).doesNotContainKeys("credentialId", "smtpPassword");
             assertThat(mcps.get(0)).doesNotContainKey("selectedCredentialId");
+
+            Map<String, Object> sentSsh = (Map<String, Object>) cores.get(2).get("ssh");
+            Map<String, Object> sentSftp = (Map<String, Object>) cores.get(3).get("sftp");
+            Map<String, Object> sentDb = (Map<String, Object>) cores.get(4).get("database");
+            assertThat(sentSsh).as("ssh inline secrets stripped in %s", planKey).doesNotContainKeys("password", "privateKey");
+            assertThat(sentSftp).as("sftp inline secrets stripped in %s", planKey).doesNotContainKeys("password", "privateKey");
+            assertThat(sentDb).as("database inline password stripped in %s", planKey).doesNotContainKey("password");
         }
     }
 

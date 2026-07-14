@@ -26,6 +26,11 @@ import java.util.stream.Collectors;
  * - generate_pdf / generatePdf: boolean - emit `pdf` FileRef output (PDF of the rendered interface)
  * - pdf_format / pdfFormat: string - page size for the PDF (A4, Letter, Legal); default A4
  * - pdf_landscape / pdfLandscape: boolean - landscape orientation for the PDF; default false
+ * - generate_video / generateVideo: boolean - emit `video` FileRef output (MP4 recording of the interface)
+ * - video_preset / videoPreset: string - capture format (vertical, horizontal, square); default vertical
+ * - video_max_duration_seconds / videoMaxDurationSeconds: integer - recording ceiling in seconds (5-120); default 30
+ * - video_mode / videoMode: string - smooth (offline frame-by-frame, fluid, default) or live (real-time fallback)
+ * - video_fps / videoFps: integer - output frame rate (10-60); default 30
  */
 public record InterfaceNodeConfig(
     String interfaceId,
@@ -36,7 +41,12 @@ public record InterfaceNodeConfig(
     Boolean exposeRenderedSource,
     Boolean generatePdf,
     String pdfFormat,
-    Boolean pdfLandscape
+    Boolean pdfLandscape,
+    Boolean generateVideo,
+    String videoPreset,
+    Integer videoMaxDurationSeconds,
+    String videoMode,
+    Integer videoFps
 ) {
 
     // ==================== Known Parameter Keys ====================
@@ -49,8 +59,57 @@ public record InterfaceNodeConfig(
         "expose_rendered_source", "exposeRenderedSource",
         "generate_pdf", "generatePdf",
         "pdf_format", "pdfFormat",
-        "pdf_landscape", "pdfLandscape"
+        "pdf_landscape", "pdfLandscape",
+        "generate_video", "generateVideo",
+        "video_preset", "videoPreset",
+        "video_max_duration_seconds", "videoMaxDurationSeconds",
+        "video_mode", "videoMode",
+        "video_fps", "videoFps"
     );
+
+    /**
+     * Backward-compatible constructor without video mode/fps: both default to null (= omitted
+     * from the plan; the render falls back to smooth / 30fps).
+     */
+    public InterfaceNodeConfig(
+        String interfaceId,
+        Map<String, String> variableMapping,
+        Map<String, String> actionMapping,
+        Boolean isEntryInterface,
+        Boolean generateScreenshot,
+        Boolean exposeRenderedSource,
+        Boolean generatePdf,
+        String pdfFormat,
+        Boolean pdfLandscape,
+        Boolean generateVideo,
+        String videoPreset,
+        Integer videoMaxDurationSeconds
+    ) {
+        this(interfaceId, variableMapping, actionMapping, isEntryInterface,
+            generateScreenshot, exposeRenderedSource, generatePdf, pdfFormat, pdfLandscape,
+            generateVideo, videoPreset, videoMaxDurationSeconds, null, null);
+    }
+
+    /**
+     * Backward-compatible constructor without video options: {@code generateVideo} /
+     * {@code videoPreset} / {@code videoMaxDurationSeconds} default to null (= omitted from
+     * the plan, so no video output).
+     */
+    public InterfaceNodeConfig(
+        String interfaceId,
+        Map<String, String> variableMapping,
+        Map<String, String> actionMapping,
+        Boolean isEntryInterface,
+        Boolean generateScreenshot,
+        Boolean exposeRenderedSource,
+        Boolean generatePdf,
+        String pdfFormat,
+        Boolean pdfLandscape
+    ) {
+        this(interfaceId, variableMapping, actionMapping, isEntryInterface,
+            generateScreenshot, exposeRenderedSource, generatePdf, pdfFormat, pdfLandscape,
+            null, null, null);
+    }
 
     /**
      * Backward-compatible constructor without PDF options: {@code generatePdf} / {@code pdfFormat}
@@ -106,14 +165,39 @@ public record InterfaceNodeConfig(
         String pdfFormat = normalizePdfFormat(getFirstString(params, "pdf_format", "pdfFormat"));
         Boolean pdfLandscape = getFirstBoolean(params, "pdf_landscape", "pdfLandscape");
 
+        // Extract generateVideo toggle (snake_case + camelCase). Default null → omitted, parser
+        // defaults to false. Setting true emits a `video` FileRef output (MP4 of the interface).
+        Boolean generateVideo = getFirstBoolean(params, "generate_video", "generateVideo");
+
+        // Extract video options. videoPreset is normalised to a supported capture format
+        // (vertical default); videoMaxDurationSeconds is clamped to 5-120 (30 default). Both are
+        // only meaningful when generateVideo=true.
+        String videoPreset = normalizeVideoPreset(getFirstString(params, "video_preset", "videoPreset"));
+        Integer videoMaxDurationSeconds = normalizeVideoDuration(
+            getFirstInteger(params, "video_max_duration_seconds", "videoMaxDurationSeconds"));
+
+        // Extract video mode + fps. Mode is normalised to smooth|live (unknown → null → smooth
+        // default at render); fps is clamped to 10-60 (null → 30 default at render).
+        String videoMode = normalizeVideoMode(getFirstString(params, "video_mode", "videoMode"));
+        Integer videoFps = normalizeVideoFps(getFirstInteger(params, "video_fps", "videoFps"));
+
         return new InterfaceNodeConfig(interfaceId, variableMapping, actionMapping,
             isEntryInterface, generateScreenshot, exposeRenderedSource,
-            generatePdf, pdfFormat, pdfLandscape);
+            generatePdf, pdfFormat, pdfLandscape,
+            generateVideo, videoPreset, videoMaxDurationSeconds, videoMode, videoFps);
     }
 
     /** Supported PDF page sizes (matched case-insensitively). */
     public static final java.util.Set<String> SUPPORTED_PDF_FORMATS =
         java.util.Set.of("A4", "Letter", "Legal");
+
+    /** Supported video capture presets (matched case-insensitively, stored lowercase). */
+    public static final java.util.Set<String> SUPPORTED_VIDEO_PRESETS =
+        java.util.Set.of("vertical", "horizontal", "square");
+
+    /** Bounds for the video recording ceiling, mirroring the renderer's clamps. */
+    public static final int MIN_VIDEO_DURATION_SECONDS = 5;
+    public static final int MAX_VIDEO_DURATION_SECONDS = 120;
 
     /**
      * Normalise a caller-supplied PDF page size to one of {@link #SUPPORTED_PDF_FORMATS}.
@@ -126,6 +210,54 @@ public record InterfaceNodeConfig(
             if (supported.equalsIgnoreCase(raw.trim())) return supported;
         }
         return null;
+    }
+
+    /**
+     * Normalise a caller-supplied video preset to one of {@link #SUPPORTED_VIDEO_PRESETS}
+     * (lowercase). Blank / unknown values return null so the node falls back to its vertical
+     * default rather than forwarding a preset the renderer would reject.
+     */
+    static String normalizeVideoPreset(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        String candidate = raw.trim().toLowerCase(java.util.Locale.ROOT);
+        return SUPPORTED_VIDEO_PRESETS.contains(candidate) ? candidate : null;
+    }
+
+    /**
+     * Clamp a caller-supplied recording ceiling to [{@link #MIN_VIDEO_DURATION_SECONDS},
+     * {@link #MAX_VIDEO_DURATION_SECONDS}]. Null / non-positive values return null so the node
+     * falls back to its 30s default.
+     */
+    static Integer normalizeVideoDuration(Integer raw) {
+        if (raw == null || raw <= 0) return null;
+        return Math.max(MIN_VIDEO_DURATION_SECONDS, Math.min(raw, MAX_VIDEO_DURATION_SECONDS));
+    }
+
+    /** Supported video render modes (matched case-insensitively, stored lowercase). */
+    public static final java.util.Set<String> SUPPORTED_VIDEO_MODES =
+        java.util.Set.of("smooth", "live");
+
+    /** Bounds for the output frame rate, mirroring the renderer's clamps. */
+    public static final int MIN_VIDEO_FPS = 10;
+    public static final int MAX_VIDEO_FPS = 60;
+
+    /**
+     * Normalise a caller-supplied render mode to smooth|live (lowercase). Blank / unknown
+     * values return null so the render falls back to its smooth default.
+     */
+    static String normalizeVideoMode(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        String candidate = raw.trim().toLowerCase(java.util.Locale.ROOT);
+        return SUPPORTED_VIDEO_MODES.contains(candidate) ? candidate : null;
+    }
+
+    /**
+     * Clamp a caller-supplied frame rate to [{@link #MIN_VIDEO_FPS}, {@link #MAX_VIDEO_FPS}].
+     * Null / non-positive values return null so the render falls back to its 30fps default.
+     */
+    static Integer normalizeVideoFps(Integer raw) {
+        if (raw == null || raw <= 0) return null;
+        return Math.max(MIN_VIDEO_FPS, Math.min(raw, MAX_VIDEO_FPS));
     }
 
     // ==================== Conversion ====================
@@ -156,6 +288,21 @@ public record InterfaceNodeConfig(
         }
         if (pdfLandscape != null) {
             node.put("pdfLandscape", pdfLandscape);
+        }
+        if (generateVideo != null) {
+            node.put("generateVideo", generateVideo);
+        }
+        if (videoPreset != null) {
+            node.put("videoPreset", videoPreset);
+        }
+        if (videoMaxDurationSeconds != null) {
+            node.put("videoMaxDurationSeconds", videoMaxDurationSeconds);
+        }
+        if (videoMode != null) {
+            node.put("videoMode", videoMode);
+        }
+        if (videoFps != null) {
+            node.put("videoFps", videoFps);
         }
         if (variableMapping != null && !variableMapping.isEmpty()) {
             node.put("variableMapping", variableMapping);
@@ -191,6 +338,21 @@ public record InterfaceNodeConfig(
         if (pdfLandscape != null) {
             params.put("pdf_landscape", pdfLandscape);
         }
+        if (generateVideo != null) {
+            params.put("generate_video", generateVideo);
+        }
+        if (videoPreset != null) {
+            params.put("video_preset", videoPreset);
+        }
+        if (videoMaxDurationSeconds != null) {
+            params.put("video_max_duration_seconds", videoMaxDurationSeconds);
+        }
+        if (videoMode != null) {
+            params.put("video_mode", videoMode);
+        }
+        if (videoFps != null) {
+            params.put("video_fps", videoFps);
+        }
         if (variableMapping != null && !variableMapping.isEmpty()) {
             params.put("variable_mapping", variableMapping);
         }
@@ -224,6 +386,21 @@ public record InterfaceNodeConfig(
         if (pdfLandscape != null) {
             extras.put("pdf_landscape", pdfLandscape);
         }
+        if (generateVideo != null) {
+            extras.put("generate_video", generateVideo);
+        }
+        if (videoPreset != null) {
+            extras.put("video_preset", videoPreset);
+        }
+        if (videoMaxDurationSeconds != null) {
+            extras.put("video_max_duration_seconds", videoMaxDurationSeconds);
+        }
+        if (videoMode != null) {
+            extras.put("video_mode", videoMode);
+        }
+        if (videoFps != null) {
+            extras.put("video_fps", videoFps);
+        }
         if (variableMapping != null && !variableMapping.isEmpty()) {
             extras.put("variable_mapping", variableMapping);
         }
@@ -248,6 +425,21 @@ public record InterfaceNodeConfig(
             Object value = params.get(key);
             if (value instanceof Boolean b) return b;
             if (value instanceof String s && !s.isBlank()) return Boolean.parseBoolean(s);
+        }
+        return null;
+    }
+
+    private static Integer getFirstInteger(Map<String, Object> params, String... keys) {
+        for (String key : keys) {
+            Object value = params.get(key);
+            if (value instanceof Number n) return n.intValue();
+            if (value instanceof String s && !s.isBlank()) {
+                try {
+                    return Integer.parseInt(s.trim());
+                } catch (NumberFormatException ignored) {
+                    // fall through to the next alias / null
+                }
+            }
         }
         return null;
     }

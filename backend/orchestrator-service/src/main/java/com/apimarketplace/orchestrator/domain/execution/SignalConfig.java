@@ -61,7 +61,8 @@ public final class SignalConfig {
      * Create config for a user approval signal that is ALSO delegated to an
      * external channel (v1: Telegram inline buttons). The delegation map is the
      * node's delegation block with templates ALREADY resolved at yield time
-     * (keys: channel, credentialId, chatId, message, allowedUserIds). Persisting
+     * (keys: channel, credentialId, chatId, message, image, allowedUserIds,
+     * approveLabel, rejectLabel). Persisting
      * it in signal_config makes the outbound sender stateless and restart-safe:
      * everything the channel notifier needs rides with the signal row.
      *

@@ -274,6 +274,23 @@ public class OptionNode extends BaseNode {
     }
 
     /**
+     * Inverse of {@link #getSelectedPort} for the mock mode: maps "choice_N" back
+     * to {@code {selected_choice_index: N}}. Unknown port falls back to the default
+     * {@code selected_port} form (no choice selected).
+     */
+    @Override
+    public Map<String, Object> portSelectionOutput(String port) {
+        for (int i = 0; i < choices.size(); i++) {
+            if (("choice_" + i).equals(port)) {
+                Map<String, Object> out = new HashMap<>();
+                out.put("selected_choice_index", i);
+                return out;
+            }
+        }
+        return super.portSelectionOutput(port);
+    }
+
+    /**
      * OptionNode is an option node.
      */
     @Override

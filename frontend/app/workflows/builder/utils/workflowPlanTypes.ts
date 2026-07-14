@@ -1,5 +1,5 @@
 import type { Node, Edge } from 'reactflow';
-import type { BuilderNodeData, NodePolicy } from '../types';
+import type { BuilderNodeData, NodeMock, NodePolicy } from '../types';
 
 /**
  * V2 Edge format - Pure graph model.
@@ -57,6 +57,7 @@ export interface WorkflowPlan {
     credentialSource?: 'user' | 'platform';
     platformCredentialId?: number; // Platform credential pinned when credentialSource=platform
     nodePolicy?: NodePolicy; // Per-node execution policy (retry/backoff/continue-on-fail/timeout/execute-once)
+    mock?: NodeMock; // Per-node mock (editor runs serve it instead of executing the node)
   }>;
   agents?: Array<{
     id: string;
@@ -92,6 +93,7 @@ export interface WorkflowPlan {
     }>;
     guardrailParams?: string;
     nodePolicy?: NodePolicy; // Per-node execution policy (retry/backoff/continue-on-fail/timeout/execute-once)
+    mock?: NodeMock; // Per-node mock (editor runs serve it instead of executing the node)
   }>;
   tables?: Array<{
     id?: string;
@@ -113,6 +115,7 @@ export interface WorkflowPlan {
     maxItems?: number;
     splitStrategy?: string;
     nodePolicy?: NodePolicy; // Per-node execution policy (retry/backoff/continue-on-fail/timeout/execute-once)
+    mock?: NodeMock; // Per-node mock (editor runs serve it instead of executing the node)
   }>;
   cores?: Array<{
     id: string;
@@ -223,6 +226,11 @@ export interface WorkflowPlan {
       timeoutMs?: number;
       approverRoles?: string[];
       requiredApprovals?: number;
+      contextTemplate?: string;
+      // Split-context continuation: all_items (default) = downstream starts once after
+      // every per-item approval is decided; per_item = each decided item continues
+      // immediately (merge still waits for all items). No effect outside a split.
+      continuationMode?: 'all_items' | 'per_item';
     };
     message?: string;
     approvalOutputs?: Array<{
@@ -383,6 +391,8 @@ export interface WorkflowPlan {
     // Backend rejects continueOnFailure on decision/switch/option and
     // executeOnce on split/aggregate/merge/loop (see WorkflowPlanParser).
     nodePolicy?: NodePolicy;
+    // Per-node mock. Backend rejects it on split/merge/aggregate/loop/fork cores.
+    mock?: NodeMock;
   }>;
   notes?: Array<{
     id: string;
@@ -406,6 +416,7 @@ export interface WorkflowPlan {
     variableMapping?: Record<string, string>;
     actionMapping?: Record<string, string>;
     nodePolicy?: NodePolicy; // Per-node execution policy (retry/backoff/continue-on-fail/timeout/execute-once)
+    mock?: NodeMock; // Per-node mock (editor runs serve it instead of executing the node)
   }>;
   edges: EdgeV2[];
 }

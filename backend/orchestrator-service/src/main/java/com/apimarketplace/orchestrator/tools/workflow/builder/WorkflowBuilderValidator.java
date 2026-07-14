@@ -39,6 +39,7 @@ public class WorkflowBuilderValidator {
     private final ReferenceValidator referenceValidator;
     private final NodeStructureValidator nodeStructureValidator;
     private final OptionalComponentValidator optionalComponentValidator;
+    private final com.apimarketplace.orchestrator.tools.workflow.builder.validation.MockConfigValidator mockConfigValidator;
     private final WorkflowErrorChecker workflowErrorChecker;
 
     /**
@@ -96,6 +97,7 @@ public class WorkflowBuilderValidator {
         referenceValidator.validate(session, result);
         nodeStructureValidator.validate(session, result);
         optionalComponentValidator.validate(session, result);
+        mockConfigValidator.validate(session, result);
 
         WorkflowErrorChecker.CheckResult legacy = workflowErrorChecker.checkForErrors(session);
         mergeLegacy(result, legacy);

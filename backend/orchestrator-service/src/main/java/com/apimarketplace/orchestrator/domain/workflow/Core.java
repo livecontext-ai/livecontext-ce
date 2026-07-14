@@ -279,12 +279,30 @@ public record Core(
         int requiredApprovals,       // Threshold for multi-level (default 1)
         long timeoutMs,              // Timeout in ms (e.g., 86400000 = 24h)
         String contextTemplate,      // Template (literal + {{...}}) shown to the human approver
-        ApprovalDelegation delegation // Optional external-channel delegation (null = in-app only)
+        ApprovalDelegation delegation, // Optional external-channel delegation (null = in-app only)
+        // Split-context continuation: "all_items" (default) = successors run once after
+        // EVERY per-item approval resolves; "per_item" = each resolved item continues its
+        // own downstream chain immediately (the barrier moves to the first cross-item
+        // consumer, e.g. the split merge). Ignored outside a split.
+        String continuationMode
     ) {
+        public static final String CONTINUATION_ALL_ITEMS = "all_items";
+        public static final String CONTINUATION_PER_ITEM = "per_item";
+
         public ApprovalConfig {
             approverRoles = approverRoles == null ? List.of() : List.copyOf(approverRoles);
             requiredApprovals = Math.max(1, requiredApprovals);
             contextTemplate = contextTemplate == null ? "" : contextTemplate;
+            continuationMode = normalizeContinuationMode(continuationMode);
+        }
+
+        /** Unknown/blank values fall back to the safe default (all_items). */
+        public static String normalizeContinuationMode(String raw) {
+            if (raw == null) {
+                return CONTINUATION_ALL_ITEMS;
+            }
+            String v = raw.trim().toLowerCase(java.util.Locale.ROOT);
+            return CONTINUATION_PER_ITEM.equals(v) ? CONTINUATION_PER_ITEM : CONTINUATION_ALL_ITEMS;
         }
     }
 
@@ -292,8 +310,9 @@ public record Core(
      * External-channel delegation for a user approval node: the pending approval is
      * pushed to the channel (v1: a Telegram message with inline approve/reject
      * buttons) and the button click resolves the signal, in addition to the in-app
-     * resolution paths. {@code chatId} and {@code messageTemplate} are
-     * template-capable ({{...}}), resolved at yield time like {@code contextTemplate}.
+     * resolution paths. {@code chatId}, {@code messageTemplate} and
+     * {@code imageTemplate} are template-capable ({{...}}), resolved at yield time
+     * like {@code contextTemplate}.
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record ApprovalDelegation(
@@ -301,13 +320,26 @@ public record Core(
         Long credentialId,           // User credential id of the channel bot (BYOK)
         String chatId,               // Destination chat id (template-capable)
         String messageTemplate,      // Optional message body; blank = resolved approval context
-        List<String> allowedUserIds  // Optional allowlist of channel user ids; empty = anyone in chat
+        // Optional image (template-capable, canonical JSON key "image"): typically a
+        // whole-string {{...}} expression resolving to a FileRef (e.g. an interface
+        // node's screenshot output) or an HTTP image URL. Non-blank = the channel
+        // message is sent as a photo with the message text as caption.
+        @JsonProperty("image") String imageTemplate,
+        List<String> allowedUserIds,  // Optional allowlist of channel user ids; empty = anyone in chat
+        // Optional custom inline-button labels (template-capable): blank = channel
+        // default ("✅ Approve" / "❌ Reject"). Only the displayed button text changes;
+        // the approve/reject callback semantics are unaffected.
+        String approveLabel,
+        String rejectLabel
     ) {
         public ApprovalDelegation {
             channel = channel == null ? "" : channel.trim().toLowerCase(java.util.Locale.ROOT);
             chatId = chatId == null ? "" : chatId;
             messageTemplate = messageTemplate == null ? "" : messageTemplate;
+            imageTemplate = imageTemplate == null ? "" : imageTemplate;
             allowedUserIds = allowedUserIds == null ? List.of() : List.copyOf(allowedUserIds);
+            approveLabel = approveLabel == null ? "" : approveLabel;
+            rejectLabel = rejectLabel == null ? "" : rejectLabel;
         }
 
         /** True when the author actually selected a channel (the section is optional). */

@@ -42,16 +42,21 @@ public class InMemoryTimer implements DistributedTimer, AutoCloseable {
         // Cancel any existing timer with the same ID
         cancel(timerId);
 
+        // Self-reference so the callback removes ONLY its own mapping. An unconditional
+        // remove(timerId) would evict a NEWER future if a reschedule replaced this timer
+        // while its old callback was still running, leaving the new timer un-cancellable.
+        final ScheduledFuture<?>[] self = new ScheduledFuture<?>[1];
         ScheduledFuture<?> future = scheduler.schedule(() -> {
             try {
                 callback.run();
             } catch (Exception e) {
                 log.error("Timer '{}' callback failed: {}", timerId, e.getMessage(), e);
             } finally {
-                timers.remove(timerId);
+                timers.remove(timerId, self[0]);
             }
         }, delay.toMillis(), TimeUnit.MILLISECONDS);
 
+        self[0] = future;
         timers.put(timerId, future);
         log.debug("Scheduled timer '{}' with delay {}ms", timerId, delay.toMillis());
     }

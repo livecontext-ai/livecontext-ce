@@ -114,9 +114,9 @@ export class NodeConfigurationRule extends BaseValidationRule {
 
     if (isInterfaceNode(node) && !caps.screenshotRenderer) {
       const iface = d?.interfaceData ?? {};
-      if (iface.generateScreenshot === true || iface.generatePdf === true) {
+      if (iface.generateScreenshot === true || iface.generatePdf === true || iface.generateVideo === true) {
         issues.push(this.createWarning(elementKey, 'interface',
-          'Screenshot/PDF generation is enabled but the optional renderer component is not running on this installation - the screenshot/pdf outputs will be absent. An administrator can enable the renderer component.',
+          'Screenshot/PDF/video generation is enabled but the optional renderer component is not running on this installation - the screenshot/pdf/video outputs will be absent. An administrator can enable the renderer component.',
           { rule: 'interface_renderer_unavailable', nodeId: node.id }));
       }
     }

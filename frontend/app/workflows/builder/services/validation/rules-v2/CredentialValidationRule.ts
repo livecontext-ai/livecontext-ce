@@ -10,7 +10,10 @@ import { BaseValidationRule } from './BaseValidationRule';
 import { normalizeLabel } from '../../../utils/labelNormalizer';
 import { getNodeType, isNoteNode } from '../core/nodeUtils';
 import { nodeRegistry } from '../../../registry/nodeRegistry';
-import { matchUserCredentialsForTool } from '@/lib/credentials/credentialMatching';
+import {
+  matchUserCredentialsForTool,
+  hasExactIntegrationMatch,
+} from '@/lib/credentials/credentialMatching';
 
 const REDACTED = '[redacted]';
 /**
@@ -38,38 +41,25 @@ export class CredentialValidationRule extends BaseValidationRule {
       if (isNoteNode(node)) continue;
 
       // Core nodes with dedicated credentials (not under toolData.credentials).
-      if (nodeRegistry.isSendEmailNode(node)) {
-        const data = node.data as any;
-        if (!isPresent(data?.smtpCredentialId)) {
-          issues.push(this.buildMissingCredentialIssue(node, 'SMTP'));
-        }
-        continue;
-      }
-      if (nodeRegistry.isEmailInboxNode(node)) {
-        const data = node.data as any;
-        if (!isPresent(data?.imapCredentialId)) {
-          issues.push(this.buildMissingCredentialIssue(node, 'IMAP'));
-        }
-        continue;
-      }
-      if (nodeRegistry.isSshNode(node)) {
-        const data = node.data as any;
-        if (!isPresent(data?.sshCredentialId)) {
-          issues.push(this.buildMissingCredentialIssue(node, 'SSH'));
-        }
-        continue;
-      }
-      if (nodeRegistry.isSftpNode(node)) {
-        const data = node.data as any;
-        if (!isPresent(data?.sftpCredentialId)) {
-          issues.push(this.buildMissingCredentialIssue(node, 'SFTP'));
-        }
-        continue;
-      }
-      if (nodeRegistry.isDatabaseNode(node)) {
-        const data = node.data as any;
-        if (!isPresent(data?.dbCredentialId)) {
-          issues.push(this.buildMissingCredentialIssue(node, 'Database'));
+      //
+      // A node-level credential id is OPTIONAL for these nodes: the inspector
+      // auto-picks the user's matching credential on mount (CredentialSection),
+      // and the backend node falls back to the user's default credential for
+      // the integration at runtime (e.g. EmailInboxNode ->
+      // getDefaultCredential(tenantId, "imap")). So only warn when the id is
+      // absent AND the user has no credential for that integration - the same
+      // suppression `extractMissingCredentialsFromPlan` applies on the
+      // application setup gate. Without it, every email_inbox/send_email/...
+      // node warned "not connected" for users whose default IMAP/SMTP
+      // credential made the workflow run perfectly.
+      const coreCredentialCheck = this.resolveCoreCredentialCheck(node);
+      if (coreCredentialCheck) {
+        const { savedId, integrationSlug, displayName } = coreCredentialCheck;
+        if (
+          !isPresent(savedId) &&
+          !hasExactIntegrationMatch(userCredentials, integrationSlug)
+        ) {
+          issues.push(this.buildMissingCredentialIssue(node, displayName));
         }
         continue;
       }
@@ -114,6 +104,34 @@ export class CredentialValidationRule extends BaseValidationRule {
     }
 
     return this.buildResult(issues);
+  }
+
+  /**
+   * Map a core node with a dedicated credential to its saved id field, its
+   * integration slug (MUST match the backend node's default-credential
+   * fallback slug, e.g. {@code EmailInboxNode.IMAP_INTEGRATION = "imap"}),
+   * and the display name used in the warning message.
+   */
+  private resolveCoreCredentialCheck(
+    node: any
+  ): { savedId: unknown; integrationSlug: string; displayName: string } | null {
+    const data = node.data as any;
+    if (nodeRegistry.isSendEmailNode(node)) {
+      return { savedId: data?.smtpCredentialId, integrationSlug: 'smtp', displayName: 'SMTP' };
+    }
+    if (nodeRegistry.isEmailInboxNode(node)) {
+      return { savedId: data?.imapCredentialId, integrationSlug: 'imap', displayName: 'IMAP' };
+    }
+    if (nodeRegistry.isSshNode(node)) {
+      return { savedId: data?.sshCredentialId, integrationSlug: 'ssh', displayName: 'SSH' };
+    }
+    if (nodeRegistry.isSftpNode(node)) {
+      return { savedId: data?.sftpCredentialId, integrationSlug: 'sftp', displayName: 'SFTP' };
+    }
+    if (nodeRegistry.isDatabaseNode(node)) {
+      return { savedId: data?.dbCredentialId, integrationSlug: 'database', displayName: 'Database' };
+    }
+    return null;
   }
 
   private buildMissingCredentialIssue(node: any, integration: string): ValidationIssue {

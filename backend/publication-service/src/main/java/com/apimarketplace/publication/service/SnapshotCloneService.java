@@ -42,6 +42,13 @@ public class SnapshotCloneService {
     private final ObjectMapper objectMapper;
     private final DataSourceFileCloneService fileCloneService;
 
+    /**
+     * Acquire-time avatar file copy (snapshot autonomy). Field-injected to spare the
+     * many test constructions; null (unit tests) falls back to the publishable pass-through.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    AvatarFileCloneService avatarFileCloneService;
+
     public SnapshotCloneService(OrchestratorInternalClient orchestratorClient,
                                  AgentClient agentClient,
                                  InterfaceClient interfaceClient,
@@ -600,12 +607,13 @@ public class SnapshotCloneService {
             // M3: per-agent reasoning-effort override.
             cloneRequest.put("reasoningEffort", agentNode.get("_snapshot_agent_reasoningEffort"));
 
+            // Avatar: copy an uploaded/AI file into the ACQUIRER's storage so the clone
+            // survives the publisher deleting theirs (presets/http pass through).
             String avatarUrl = agentNode.get("_snapshot_agent_avatarUrl") != null
                     ? agentNode.get("_snapshot_agent_avatarUrl").toString() : null;
-            if (avatarUrl != null && !avatarUrl.startsWith("preset:") && !avatarUrl.startsWith("http")) {
-                avatarUrl = null;
-            }
-            cloneRequest.put("avatarUrl", avatarUrl);
+            cloneRequest.put("avatarUrl", avatarFileCloneService != null
+                    ? avatarFileCloneService.cloneForTenant(avatarUrl, tenantId, organizationId)
+                    : com.apimarketplace.publication.utils.AvatarUrlPolicy.publishable(avatarUrl));
 
             Object dsIdRaw = agentNode.get("_snapshot_agent_dataSourceId");
             if (dsIdRaw instanceof Number n && n.longValue() > 0) {
@@ -957,6 +965,9 @@ public class SnapshotCloneService {
                 Object sendEmail = coreMap.get("sendEmail");
                 if (sendEmail instanceof Map<?, ?> emailMap) {
                     ((Map<String, Object>) emailMap).remove("credentialId");
+                    // Inline SMTP password RAW fallback - strip so the publisher's secret
+                    // does not survive the acquire-time clone into the acquirer's plan.
+                    ((Map<String, Object>) emailMap).remove("smtpPassword");
                 }
                 Object emailInbox = coreMap.get("emailInbox");
                 if (emailInbox instanceof Map<?, ?> inboxMap) {
@@ -967,6 +978,25 @@ public class SnapshotCloneService {
                     ((Map<String, Object>) cryptoMap).remove("key");
                     ((Map<String, Object>) cryptoMap).remove("secret");
                     ((Map<String, Object>) cryptoMap).remove("token");
+                }
+                // SSH / SFTP / Database carry an inline password / privateKey RAW fallback
+                // (alongside the credentialId reference). Without stripping these, the
+                // publisher's raw secret survives the acquire-time clone into the acquirer's
+                // plan (and any share read of it). Remove the raw fallbacks; the credentialId
+                // reference resolves against the acquirer's own credentials at execution time.
+                Object ssh = coreMap.get("ssh");
+                if (ssh instanceof Map<?, ?> sshMap) {
+                    ((Map<String, Object>) sshMap).remove("password");
+                    ((Map<String, Object>) sshMap).remove("privateKey");
+                }
+                Object sftp = coreMap.get("sftp");
+                if (sftp instanceof Map<?, ?> sftpMap) {
+                    ((Map<String, Object>) sftpMap).remove("password");
+                    ((Map<String, Object>) sftpMap).remove("privateKey");
+                }
+                Object database = coreMap.get("database");
+                if (database instanceof Map<?, ?> databaseMap) {
+                    ((Map<String, Object>) databaseMap).remove("password");
                 }
             }
         }

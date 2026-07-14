@@ -167,12 +167,12 @@ export function DataTableModals({ controller }: DataTableModalsProps) {
 
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-theme-primary mb-1">Name *</label>
+                <label className="block text-sm font-medium text-theme-primary mb-1">{t('nameLabel')}</label>
                 <Input value={newDataSourceName} onChange={(e) => setNewDataSourceName(e.target.value)} placeholder={t('enterTableName')} className="w-full" />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-theme-primary mb-1">Description</label>
+                <label className="block text-sm font-medium text-theme-primary mb-1">{t('descriptionLabel')}</label>
                 <Input
                   value={newDataSourceDescription}
                   onChange={(e) => setNewDataSourceDescription(e.target.value)}

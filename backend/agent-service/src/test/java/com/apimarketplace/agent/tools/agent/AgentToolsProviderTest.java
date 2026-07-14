@@ -184,6 +184,24 @@ class AgentToolsProviderTest {
         }
 
         @Test
+        @DisplayName("avatar description advertises the tool-badge syntax and EXACTLY the known tool ids")
+        void avatarDescriptionAdvertisesAllTools() {
+            // The agent can only discover valid '?tool=' ids through this description (no help
+            // action lists them), and validateAvatarParam rejects unknown ids - so a drifted
+            // description silently strands new ids (or advertises removed ones). Parse the
+            // '(tools: ...)' block and compare it EXACTLY (order included) with
+            // AgentService.avatarToolIds() - bare substring checks would let short ids like
+            // 'pen'/'bot'/'mic' hide inside other words.
+            String desc = findParam("avatar").description();
+            assertThat(desc).contains("?tool=");
+            int start = desc.indexOf("(tools: ");
+            assertThat(start).as("description must carry a '(tools: ...)' block").isGreaterThan(-1);
+            String block = desc.substring(start + "(tools: ".length(), desc.indexOf(')', start));
+            assertThat(Arrays.asList(block.split(",\\s*")))
+                    .containsExactlyElementsOf(com.apimarketplace.agent.service.AgentService.avatarToolIds());
+        }
+
+        @Test
         @DisplayName("max_tokens advertises the platform default (16000), matching the runtime default")
         void maxTokensSchemaDefaultMatchesRuntime() {
             // Regression guard: the advertised schema default must track

@@ -22,6 +22,11 @@ interface InterfaceFromPlan {
   generatePdf?: boolean;
   pdfFormat?: string;
   pdfLandscape?: boolean;
+  generateVideo?: boolean;
+  videoPreset?: string;
+  videoMaxDurationSeconds?: number;
+  videoMode?: string;
+  videoFps?: number;
   exposeRenderedSource?: boolean;
   // Enriched snapshot fields (from publication planSnapshot)
   _snapshot_htmlTemplate?: string;
@@ -101,6 +106,11 @@ export function createInterfaceNodes(
           generatePdf: iface.generatePdf,
           pdfFormat: iface.pdfFormat,
           pdfLandscape: iface.pdfLandscape,
+          generateVideo: iface.generateVideo,
+          videoPreset: iface.videoPreset,
+          videoMaxDurationSeconds: iface.videoMaxDurationSeconds,
+          videoMode: iface.videoMode,
+          videoFps: iface.videoFps,
           exposeRenderedSource: iface.exposeRenderedSource,
           // Use snapshot templates from enriched plan (publication preview)
           ...(iface._snapshot_htmlTemplate && { editorExpression: iface._snapshot_htmlTemplate }),

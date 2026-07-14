@@ -252,7 +252,29 @@ test('claude-adapter: buildArgs keeps the core spawn flags', () => {
     assert.ok(args.includes(flag), `core flag ${flag} must still be present`);
   }
   assert.equal(args[args.indexOf('--model') + 1], 'claude-opus-4-8', 'model passed verbatim');
-  assert.equal(stdinPayload, null, 'claude takes the prompt via -p, never stdin');
+  assert.equal(stdinPayload, 'do the thing', 'the prompt is delivered via stdin, never argv (E2BIG guard)');
+});
+
+// Regression (2026-07-13): a large prompt passed as the `-p` positional argv overflows
+// the OS arg-size limit (Linux MAX_ARG_STRLEN, 128 KB) and `spawn` dies with E2BIG,
+// surfacing to callers as "no response from bridge server" for ANY agent whose
+// prompt/context is big (e.g. a workflow agent fed scraped data). The prompt MUST
+// travel via stdin, never as an argument string. codex/gemini/mistral already do this;
+// this test locks claude in.
+test('claude-adapter: buildArgs sends the prompt via stdin, never as an argv (E2BIG guard)', () => {
+  const adapter = new ClaudeAdapter();
+  const bigPrompt = 'X'.repeat(200_000); // > 128 KB: would E2BIG if placed in argv
+  const { args, stdinPayload } = adapter.buildArgs({ ...BASE_BUILD_CONFIG, prompt: bigPrompt });
+  assert.equal(stdinPayload, bigPrompt, 'the full prompt must be the stdin payload');
+  assert.ok(!args.includes(bigPrompt), 'the prompt must NOT appear as a spawn argument');
+  // `-p` is a bare print flag: nothing (least of all the prompt) follows it as a positional.
+  const pIdx = args.indexOf('-p');
+  assert.ok(pIdx >= 0, '-p print flag present');
+  assert.notEqual(args[pIdx + 1], bigPrompt, 'no prompt positional follows -p');
+  // Belt-and-suspenders: no single argv is anywhere near the E2BIG ceiling.
+  for (const a of args) {
+    assert.ok(typeof a !== 'string' || a.length < 100_000, 'no argv may approach the 128 KB arg-size limit');
+  }
 });
 
 test('claude-adapter: native Read is always enabled and no longer image-gated', () => {

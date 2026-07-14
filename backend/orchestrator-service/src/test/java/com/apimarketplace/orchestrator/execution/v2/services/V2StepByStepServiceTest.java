@@ -384,7 +384,7 @@ class V2StepByStepServiceTest {
             when(mockRunningNodeTracker.getRunningCountsAcrossEpochs(runId))
                     .thenReturn(Map.of(nodeId, 1));
 
-            StepByStepExecutionResult result = service.executeNode(runId, nodeId, "0", epoch, triggerId, null);
+            StepByStepExecutionResult result = service.executeNode(runId, nodeId, "0", epoch, triggerId, (ExecutionCacheManager.LoadedExecution) null);
 
             // Idempotent-skip: result has no execution, just a benign success marker.
             assertNotNull(result.nodeResult());
@@ -413,7 +413,7 @@ class V2StepByStepServiceTest {
             // The fast-path returns false → slow-path begins → ensureInitialized throws
             // (no execution loaded). That confirms we did NOT short-circuit on the fast-path.
             assertThrows(IllegalStateException.class,
-                    () -> service.executeNode(runId, nodeId, "0", epoch, triggerId, null));
+                    () -> service.executeNode(runId, nodeId, "0", epoch, triggerId, (ExecutionCacheManager.LoadedExecution) null));
 
             verify(mockRunningNodeTracker).getRunningCountsAcrossEpochs(runId);
         }
@@ -435,7 +435,7 @@ class V2StepByStepServiceTest {
             when(mockCacheManager.loadTreeAndExecution(runId)).thenReturn(null);
 
             assertThrows(IllegalStateException.class,
-                    () -> service.executeNode(runId, nodeId, "0", epoch, triggerId, null));
+                    () -> service.executeNode(runId, nodeId, "0", epoch, triggerId, (ExecutionCacheManager.LoadedExecution) null));
         }
     }
 
@@ -1137,6 +1137,144 @@ class V2StepByStepServiceTest {
             verify(mockStateSnapshotService).updateReadyNodes("run-1", Set.of("trigger:start"));
             // Must NOT call the 4-arg DAG-scoped version
             verify(mockStateSnapshotService, never()).updateReadyNodes(eq("run-1"), anyString(), anyInt(), anySet());
+        }
+    }
+
+    // =========================================================================
+    // Per-item continuation walk disposition (approval continuationMode=per_item)
+    // =========================================================================
+
+    @Nested
+    @DisplayName("executeNode with SplitExecutionOptions (per-item continuation walk)")
+    class PerItemContinuationWalkDisposition {
+
+        private static final String RUN = "run-1";
+        private static final String NODE = "mcp:step1";
+        private static final String TRIGGER = "trigger:start";
+        private static final int EPOCH = 1;
+
+        private com.apimarketplace.orchestrator.execution.v2.split.SplitExecutionOptions walkOptions() {
+            return com.apimarketplace.orchestrator.execution.v2.split.SplitExecutionOptions.perItemContinuationWalk();
+        }
+
+        /** Snapshot whose (trigger, epoch) EpochState already has NODE in completedNodeIds (non-split-aware). */
+        private com.apimarketplace.orchestrator.domain.execution.StateSnapshot snapshotWithCompletedNode() {
+            com.apimarketplace.orchestrator.domain.execution.EpochState es =
+                    new com.apimarketplace.orchestrator.domain.execution.EpochState(
+                            Set.of(NODE), Set.of(), Set.of(),
+                            Set.of(), Set.of(), Set.of(),
+                            Map.of(), Map.of(), Map.of(), Instant.now());
+            Map<Integer, com.apimarketplace.orchestrator.domain.execution.EpochState> epochs = new HashMap<>();
+            epochs.put(EPOCH, es);
+            com.apimarketplace.orchestrator.domain.execution.DagState dag =
+                    new com.apimarketplace.orchestrator.domain.execution.DagState(
+                            EPOCH, 0, 1, epochs, Set.of(EPOCH));
+            return com.apimarketplace.orchestrator.domain.execution.StateSnapshot.empty()
+                    .withDagState(TRIGGER, dag);
+        }
+
+        /** Wires load/context/engine mocks for the walk (options) path and returns the engine result. */
+        private StepByStepExecutionResult setupWalkMocks(Set<String> engineReadyNodes) {
+            when(mockCacheManager.loadTreeAndExecution(RUN)).thenReturn(validLoadedExecution());
+            when(mockContextManager.getOrCreateContextWithTriggerData(
+                eq(RUN + ":0"), eq(mockTree), eq("0"), eq(0), eq(NODE), eq(EPOCH), eq(TRIGGER)
+            )).thenReturn(mockContext);
+            lenient().when(mockContext.triggerData()).thenReturn(Map.of());
+            lenient().when(mockContext.triggerId()).thenReturn(TRIGGER);
+            lenient().when(mockContext.epoch()).thenReturn(EPOCH);
+            lenient().when(mockContext.getGlobalDataKeys()).thenReturn(Set.of());
+
+            NodeExecutionResult nodeResult = NodeExecutionResult.success(NODE, Map.of("ok", true));
+            StepByStepExecutionResult engineResult = new StepByStepExecutionResult(
+                mockContext, nodeResult, engineReadyNodes, false);
+            when(mockEngine.executeSingleNode(
+                eq(NODE), eq(mockTree), eq(mockContext),
+                eq(mockExecution), eq(mockEventService), any(), eq(walkOptions())
+            )).thenReturn(engineResult);
+            return engineResult;
+        }
+
+        @Test
+        @DisplayName("FIX 3: walk returns the engine result IMMEDIATELY - no ready-node merge, no snapshot post-processing")
+        void walkSkipsReadyNodeMergeAndSnapshotPostProcessing() {
+            // Post-processing would pollute the snapshot ready set mid-barrier: region
+            // nodes read COMPLETED in the walk's in-memory context, so their successors
+            // (including the frontier merge) would be merged into readyNodeIds while
+            // sibling signals are still pending.
+            StepByStepExecutionResult engineResult = setupWalkMocks(Set.of("core:join"));
+
+            StepByStepExecutionResult result = service.executeNode(
+                RUN, NODE, "0", EPOCH, TRIGGER, walkOptions());
+
+            assertSame(engineResult, result);
+            verify(mockStateSnapshotService, never()).mergeReadyNodesAfterExecution(
+                anyString(), anyString(), anyInt(), anyString(), anySet());
+            verify(mockStateSnapshotService, never()).mergeReadyNodesAfterExecution(
+                anyString(), anyString(), anySet());
+            verify(mockStateSnapshotService, never()).getReadyNodeIds(anyString());
+            verify(mockEventService, never()).emitStepByStepReady(any(), anySet(), anyString(), anyBoolean());
+        }
+
+        @Test
+        @DisplayName("CONTROL: the same execution WITHOUT options still merges ready nodes into the snapshot (pre-feature behavior)")
+        void controlWithoutOptionsStillMergesReadyNodes() {
+            when(mockStateSnapshotService.getSnapshot(RUN)).thenReturn(null); // guard falls through
+            when(mockCacheManager.loadTreeAndExecution(RUN)).thenReturn(validLoadedExecution());
+            when(mockContextManager.getOrCreateContextWithTriggerData(
+                eq(RUN + ":0"), eq(mockTree), eq("0"), eq(0), eq(NODE), eq(EPOCH), eq(TRIGGER)
+            )).thenReturn(mockContext);
+            lenient().when(mockContext.triggerData()).thenReturn(Map.of());
+            when(mockContext.triggerId()).thenReturn(TRIGGER);
+            when(mockContext.epoch()).thenReturn(EPOCH);
+            when(mockContext.getGlobalDataKeys()).thenReturn(Set.of());
+            NodeExecutionResult nodeResult = NodeExecutionResult.success(NODE, Map.of());
+            StepByStepExecutionResult engineResult = new StepByStepExecutionResult(
+                mockContext, nodeResult, Set.of("core:join"), false);
+            when(mockEngine.executeSingleNode(
+                eq(NODE), eq(mockTree), eq(mockContext),
+                eq(mockExecution), eq(mockEventService), any()
+            )).thenReturn(engineResult);
+            when(mockStateSnapshotService.getReadyNodeIds(RUN)).thenReturn(Set.of());
+
+            service.executeNode(RUN, NODE, "0", EPOCH, TRIGGER);
+
+            verify(mockStateSnapshotService).mergeReadyNodesAfterExecution(
+                RUN, TRIGGER, EPOCH, NODE, Set.of("core:join"));
+        }
+
+        @Test
+        @DisplayName("guard bypass (b.i): node already COMPLETED in EpochState + walk options -> the idempotency guard does NOT short-circuit, the engine executes")
+        void walkBypassesNodeLevelIdempotencyGuard() {
+            // A mid-walk chain node is legitimately running/partial between walks - the
+            // node-level guard reads EpochState (node-level marks), which the walk
+            // deliberately leaves untouched until the seal. Row-based per-item exclusion
+            // inside SplitAwareNodeExecutor IS this mode's idempotency.
+            lenient().when(mockStateSnapshotService.getSnapshot(RUN)).thenReturn(snapshotWithCompletedNode());
+            setupWalkMocks(Set.of());
+
+            StepByStepExecutionResult result = service.executeNode(
+                RUN, NODE, "0", EPOCH, TRIGGER, walkOptions());
+
+            verify(mockEngine).executeSingleNode(
+                eq(NODE), eq(mockTree), eq(mockContext),
+                eq(mockExecution), eq(mockEventService), any(), eq(walkOptions()));
+            assertNotNull(result.nodeResult());
+            assertFalse(result.nodeResult().output().containsKey("idempotent_skip"),
+                "the walk must never be answered with the guard's idempotent-skip marker");
+        }
+
+        @Test
+        @DisplayName("CONTROL: the same completed-node snapshot WITHOUT options short-circuits as an idempotent skip")
+        void controlWithoutOptionsShortCircuitsOnCompletedNode() {
+            when(mockStateSnapshotService.getSnapshot(RUN)).thenReturn(snapshotWithCompletedNode());
+
+            StepByStepExecutionResult result = service.executeNode(RUN, NODE, "0", EPOCH, TRIGGER);
+
+            assertNotNull(result.nodeResult());
+            assertTrue((Boolean) result.nodeResult().output().get("idempotent_skip"));
+            verify(mockEngine, never()).executeSingleNode(
+                anyString(), any(), any(), any(), any(), any());
+            verify(mockCacheManager, never()).loadTreeAndExecution(anyString());
         }
     }
 

@@ -11,7 +11,7 @@ import { getNodeVisual } from '../../data/nodeVisuals';
 import type { BuilderNodeData, ApprovalOutput, DerivedNodeStatus, NodeStatus } from '../../types';
 import { createDefaultApprovalOutputs } from '../../types';
 import { useValidation } from '../../contexts/ValidationContext';
-import { NodeActionButtons, NodeHeader, useHoverVisibility, getIconSlug, getStatusBorderColor, ReadyShimmerOverlay } from './shared';
+import { NodeActionButtons, NodeHeader, useHoverVisibility, getIconSlug, getStatusBorderColor } from './shared';
 import { findNodeClassById } from '../../nodes/nodeClasses';
 import { NodeStatusBadge } from '../NodeStatusBadge';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
@@ -109,7 +109,7 @@ export function UserApprovalNode({ data, selected, id }: NodeProps<BuilderNodeDa
     return data.status;
   }, [viewingEpoch, executionStatus, data.status, isAwaitingSignalDetected]);
 
-  const statusBorderColor = getStatusBorderColor(effectiveStatus, hasError, isRunMode || viewingEpoch != null);
+  const statusBorderColor = getStatusBorderColor(effectiveStatus, hasError, isRunMode || viewingEpoch != null, data.statusCounts);
   const borderColor = statusBorderColor;
   const isSkipped = !executionStatus.isStepByStepMode && effectiveStatus === 'skipped';
   const isAwaitingSignal = effectiveStatus === 'awaiting_signal';
@@ -205,9 +205,6 @@ export function UserApprovalNode({ data, selected, id }: NodeProps<BuilderNodeDa
             animation: 'shimmer-scan 2.5s ease-in-out infinite',
           }}
         />
-      )}
-      {executionStatus.isStepByStepMode && effectiveStatus === 'ready' && (
-        <ReadyShimmerOverlay className="absolute inset-0 pointer-events-none rounded-[26px]" />
       )}
       {/* Shimmer scan effect for awaiting approval (amber) */}
       {effectiveStatus === 'awaiting_signal' && (

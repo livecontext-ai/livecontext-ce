@@ -35,4 +35,7 @@ public final class StorageSourceTypes {
 
     /** A PDF rendering of an interface, produced by an interface node (generatePdf=true). */
     public static final String INTERFACE_PDF = "INTERFACE_PDF";
+
+    /** An MP4 recording of a rendered interface's animation, produced by an interface node (generateVideo=true). */
+    public static final String INTERFACE_VIDEO = "INTERFACE_VIDEO";
 }

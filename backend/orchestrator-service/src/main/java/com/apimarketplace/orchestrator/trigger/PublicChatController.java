@@ -62,6 +62,8 @@ public class PublicChatController {
             return ResponseEntity.ok(result);
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(401).body(Map.of("error", e.getMessage()));
+        } catch (ShareInvocationLimitExceededException e) {
+            return ResponseEntity.status(429).body(Map.of("error", e.getMessage()));
         } catch (Exception e) {
             logger.error("Error sending message for token {}: {}", token, e.getMessage());
             return ResponseEntity.status(500).body(Map.of("error", "Failed to send message"));

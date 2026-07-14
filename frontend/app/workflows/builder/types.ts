@@ -107,16 +107,33 @@ export interface ApprovalOutput {
  * Optional external-channel delegation for a user approval node (plan `approval.delegation`).
  * v1 supports Telegram only: the pending approval is pushed to the chat as a message with
  * inline approve/reject buttons; a tap resolves the approval in addition to the in-app paths.
- * chatId and messageTemplate are template-capable ({{...}}); a blank messageTemplate falls
- * back to the resolved contextTemplate. Empty allowedUserIds = anyone in the chat can decide.
+ * chatId, messageTemplate and image are template-capable ({{...}}); a blank messageTemplate
+ * falls back to the resolved contextTemplate. A non-blank image (e.g. an interface node's
+ * screenshot output, or an HTTP image URL) turns the message into a single photo with the
+ * message text as caption and the same buttons. Empty allowedUserIds = anyone in the chat
+ * can decide. approveLabel/rejectLabel are optional custom button texts (template-capable);
+ * blank = the channel defaults ("✅ Approve" / "❌ Reject"). Only the button text changes;
+ * the approve/reject outcome is unaffected.
  */
 export interface ApprovalDelegation {
   channel?: 'telegram';
   credentialId?: number;
   chatId?: string;
   messageTemplate?: string;
+  image?: string;
   allowedUserIds?: string[];
+  approveLabel?: string;
+  rejectLabel?: string;
 }
+
+/**
+ * Split-context continuation of a user approval node (plan `approval.continuationMode`).
+ * all_items (default): downstream steps start once after every per-item approval is decided.
+ * per_item: each decided item continues its own downstream chain immediately; the first
+ * cross-item consumer (merge, aggregate, loop, fork, nested split) still waits for all items.
+ * No effect outside a split.
+ */
+export type ApprovalContinuationMode = 'all_items' | 'per_item';
 
 // Classify node types - AI-powered classification with N outputs
 export interface ClassifyCategory {
@@ -199,6 +216,35 @@ export interface NodePolicy {
   executeOnce?: boolean;
 }
 
+/**
+ * Per-node mock block (plan-level `mock`, sibling of `nodePolicy`) - can attach
+ * to every executable entry (mcps / tables / agents / cores / interfaces).
+ * Triggers, notes and split/merge/aggregate/loop/fork cores never carry one
+ * (the backend parser rejects it there). The BACKEND is the single validator;
+ * the UI only mirrors its gating (see `utils/nodeMock.ts`).
+ *
+ * Exactly one source is meaningful per mock:
+ *  - static output (`output`, and/or `port` on port-selecting nodes),
+ *  - `source: 'catalog_example'` (mcp catalog tools only, no output),
+ *  - `error` (simulated failure, no port).
+ * An empty block = no mock: it is OMITTED entirely so plans stay byte-identical.
+ */
+export interface NodeMock {
+  /** Default true. false = the mock is configured but parked (not applied). */
+  enabled?: boolean;
+  /** Where the mocked output comes from. Default 'static'. */
+  source?: 'static' | 'catalog_example' | 'error';
+  /** Static output object served instead of executing the node. */
+  output?: Record<string, unknown>;
+  /** Branch to take - only on decision/switch/option/approval cores + classify agents. */
+  port?: string;
+  /** Simulated failure (message required). Mutually exclusive with port. */
+  error?: {
+    message: string;
+    output?: Record<string, unknown>;
+  };
+}
+
 export interface LoopChildDescriptor {
   id: string;
   label: string;
@@ -262,6 +308,7 @@ export interface BuilderNodeData {
   approvalTimeoutMs?: number; // Timeout duration in milliseconds
   approvalContextTemplate?: string; // Template (literal + {{...}}) resolved at pause time and shown to the approver
   approvalDelegation?: ApprovalDelegation; // Optional external-channel delegation (v1: telegram); undefined = in-app only
+  approvalContinuationMode?: ApprovalContinuationMode; // Split-context continuation; undefined = all_items (default)
   // Branch selection (set by streaming batch-update for decision/switch/approval nodes)
   selectedBranch?: string; // The selected port (e.g., "if", "else", "approved", "rejected")
   onDeleteNode?: (nodeId: string) => void;
@@ -275,6 +322,9 @@ export interface BuilderNodeData {
   // Per-node execution policy (retry / backoff / continue-on-fail / timeout / execute-once).
   // Only present when non-default; round-tripped as the plan-level `nodePolicy` block.
   nodePolicy?: NodePolicy;
+  // Per-node mock block (editor runs serve it instead of executing the node).
+  // Only present when configured; round-tripped as the plan-level `mock` block.
+  mock?: NodeMock;
   noteColor?: string;
   noteBorderColor?: string;
   noteTextColor?: string;
@@ -424,6 +474,11 @@ export interface BuilderNodeData {
     generatePdf?: boolean; // When true, render the interface to a PDF and expose it as the `pdf` FileRef output
     pdfFormat?: string; // Page size for generatePdf: 'A4' | 'Letter' | 'Legal' (default A4)
     pdfLandscape?: boolean; // When true, render the generatePdf output in landscape orientation
+    generateVideo?: boolean; // When true, record the interface's animation to an MP4 and expose it as the `video` FileRef output
+    videoPreset?: string; // Capture format for generateVideo: 'vertical' (1080x1920) | 'horizontal' (1920x1080) | 'square' (1080x1080)
+    videoMaxDurationSeconds?: number; // Recording ceiling in seconds for generateVideo (5-120, default 30)
+    videoMode?: string; // Render mode for generateVideo: 'smooth' (offline frame-by-frame, fluid, default) | 'live' (real-time fallback)
+    videoFps?: number; // Output frame rate for generateVideo (10-60, default 30)
     exposeRenderedSource?: boolean; // When true, expose `rendered_html`, `rendered_css`, `rendered_js` string outputs (resolved interface templates)
     templateVariables?: string[]; // Template variables from the interface DB entity
   };

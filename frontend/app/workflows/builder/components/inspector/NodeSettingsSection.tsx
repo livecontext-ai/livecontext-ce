@@ -20,6 +20,8 @@ import {
   isExecuteOnceBlocked,
   sanitizeNodePolicy,
 } from '../../utils/nodePolicy';
+import { nodeSupportsMock, sanitizeNodeMock } from '../../utils/nodeMock';
+import { MockOutputSection } from './MockOutputSection';
 
 interface NodeSettingsSectionProps {
   node: Node<BuilderNodeData>;
@@ -40,6 +42,10 @@ interface NodeSettingsSectionProps {
  * clean. The BACKEND is the single validator; the gating here (continue-on-
  * fail on branching nodes, execute-once on split coordinators) only mirrors
  * its parse-time rules.
+ *
+ * Also hosts the Mock output block (`MockOutputSection`) for mock-capable
+ * nodes, so every per-node execution knob lives under the one Settings
+ * section.
  */
 export function NodeSettingsSection({
   node,
@@ -53,7 +59,13 @@ export function NodeSettingsSection({
     () => sanitizeNodePolicy(data.nodePolicy) ?? {},
     [data.nodePolicy]
   );
-  const activeCount = Object.keys(policy).length;
+  const supportsMock = nodeSupportsMock(node);
+  const mockActive = React.useMemo(() => {
+    if (!supportsMock) return false;
+    const mock = sanitizeNodeMock(data.mock);
+    return !!mock && mock.enabled !== false;
+  }, [supportsMock, data.mock]);
+  const activeCount = Object.keys(policy).length + (mockActive ? 1 : 0);
   const [isOpen, setIsOpen] = React.useState(activeCount > 0);
 
   const continueBlocked = isContinueOnFailureBlocked(node);
@@ -201,6 +213,18 @@ export function NodeSettingsSection({
             blockedReason={executeOnceBlocked ? t('executeOnceBlockedTooltip') : undefined}
             testId="node-settings-execute-once"
           />
+
+          {/* Mock output - editor runs serve it instead of executing the
+              node; split/merge/aggregate/loop/fork cores are excluded
+              (backend rejects a mock there) */}
+          {supportsMock ? (
+            <MockOutputSection
+              node={node}
+              data={data}
+              onUpdate={onUpdate}
+              isRunMode={isRunMode}
+            />
+          ) : null}
         </div>
       ) : null}
     </div>

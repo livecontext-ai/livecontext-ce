@@ -153,7 +153,10 @@ class WorkflowPlanParserTest {
                 "credentialId", 42,
                 "chatId", "{{trigger:start.output.chat_id}}",
                 "messageTemplate", "Please approve {{amount}}",
-                "allowedUserIds", List.of("777", "888")));
+                "image", "{{interface:card.output.screenshot}}",
+                "allowedUserIds", List.of("777", "888"),
+                "approveLabel", "👍 Ship it",
+                "rejectLabel", "👎 Hold"));
 
             WorkflowPlan plan = parseApprovalPlan(approvalData);
 
@@ -165,7 +168,27 @@ class WorkflowPlanParserTest {
             assertEquals(42L, delegation.credentialId());
             assertEquals("{{trigger:start.output.chat_id}}", delegation.chatId());
             assertEquals("Please approve {{amount}}", delegation.messageTemplate());
+            assertEquals("{{interface:card.output.screenshot}}", delegation.imageTemplate());
             assertEquals(List.of("777", "888"), delegation.allowedUserIds());
+            assertEquals("👍 Ship it", delegation.approveLabel());
+            assertEquals("👎 Hold", delegation.rejectLabel());
+        }
+
+        @Test
+        @DisplayName("regression: delegation without custom button labels keeps blank labels (channel defaults apply downstream)")
+        void delegationWithoutLabelsKeepsBlank() {
+            Map<String, Object> approvalData = new HashMap<>();
+            approvalData.put("contextTemplate", "Approve?");
+            approvalData.put("delegation", Map.of(
+                "channel", "telegram",
+                "chatId", "123456"));
+
+            WorkflowPlan plan = parseApprovalPlan(approvalData);
+
+            Core.ApprovalDelegation delegation = plan.getCores().get(0).approvalConfig().delegation();
+            assertNotNull(delegation);
+            assertEquals("", delegation.approveLabel());
+            assertEquals("", delegation.rejectLabel());
         }
 
         @Test
@@ -212,6 +235,8 @@ class WorkflowPlanParserTest {
             assertNull(delegation.credentialId());
             assertEquals("", delegation.chatId());
             assertEquals("", delegation.messageTemplate());
+            // regression: pre-image plans keep parsing with a blank imageTemplate (back-compat)
+            assertEquals("", delegation.imageTemplate());
             assertTrue(delegation.allowedUserIds().isEmpty());
         }
 
@@ -1369,6 +1394,61 @@ class WorkflowPlanParserTest {
             assertFalse(result.get(0).generatePdf());
             assertNull(result.get(0).pdfFormat());
             assertFalse(result.get(0).pdfLandscape());
+        }
+
+        @Test
+        @DisplayName("Should parse generateVideo toggle + videoPreset/videoMaxDurationSeconds options")
+        void shouldParseVideoFieldsFromPlan() {
+            Map<String, Object> ifaceData = new HashMap<>();
+            ifaceData.put("id", "uuid-video");
+            ifaceData.put("label", "Form With Video");
+            ifaceData.put("generateVideo", true);
+            ifaceData.put("videoPreset", "square");
+            ifaceData.put("videoMaxDurationSeconds", 45);
+
+            List<InterfaceDef> result = WorkflowPlanParser.parseInterfaces(List.of(ifaceData));
+
+            assertEquals(1, result.size());
+            assertTrue(result.get(0).generateVideo());
+            assertEquals("square", result.get(0).videoPreset());
+            assertEquals(45, result.get(0).videoMaxDurationSeconds());
+        }
+
+        @Test
+        @DisplayName("Should parse videoMode + videoFps and default them to null when missing")
+        void shouldParseVideoModeAndFps() {
+            Map<String, Object> ifaceData = new HashMap<>();
+            ifaceData.put("id", "uuid-mode");
+            ifaceData.put("label", "Smooth Form");
+            ifaceData.put("generateVideo", true);
+            ifaceData.put("videoMode", "live");
+            ifaceData.put("videoFps", 60);
+
+            List<InterfaceDef> result = WorkflowPlanParser.parseInterfaces(List.of(ifaceData));
+            assertEquals("live", result.get(0).videoMode());
+            assertEquals(60, result.get(0).videoFps());
+
+            Map<String, Object> bare = new HashMap<>();
+            bare.put("id", "uuid-bare");
+            bare.put("label", "Bare");
+            List<InterfaceDef> defaults = WorkflowPlanParser.parseInterfaces(List.of(bare));
+            assertNull(defaults.get(0).videoMode());
+            assertNull(defaults.get(0).videoFps());
+        }
+
+        @Test
+        @DisplayName("Should default video fields when missing (back-compat: generateVideo=false, preset=null, duration=null)")
+        void shouldDefaultVideoFieldsWhenMissing() {
+            Map<String, Object> ifaceData = new HashMap<>();
+            ifaceData.put("id", "uuid-novideo");
+            ifaceData.put("label", "Pre-Video Form");
+
+            List<InterfaceDef> result = WorkflowPlanParser.parseInterfaces(List.of(ifaceData));
+
+            assertEquals(1, result.size());
+            assertFalse(result.get(0).generateVideo());
+            assertNull(result.get(0).videoPreset());
+            assertNull(result.get(0).videoMaxDurationSeconds());
         }
 
         @Test

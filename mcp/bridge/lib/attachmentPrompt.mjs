@@ -30,7 +30,7 @@
  * an `extractedText` that itself carries NULs), so the prompt is always safe.
  */
 
-import { resolve } from 'path';
+import { resolve, basename } from 'path';
 import { writeFileSync } from 'fs';
 
 // Non-`text/*` MIME types we still treat as inline-able UTF-8 text.
@@ -101,6 +101,24 @@ function diskTextName(fileName) {
 }
 
 /**
+ * Reduce a user-controlled attachment name to a safe, single-segment file name
+ * confined to attachDir. `att.fileName` is attacker-controlled, so joining it raw
+ * with resolve() let a crafted "../../etc/x" or an absolute "/etc/cron.d/x" escape
+ * attachDir and write an arbitrary file on the bridge host. basename() strips every
+ * directory component; backslashes are normalised first because the bridge host is
+ * Linux (POSIX basename would otherwise keep "..\\..\\x" intact), and "", ".", ".."
+ * are rejected as non-files.
+ */
+function safeAttachmentName(fileName, fallbackIndex) {
+  const raw = String(fileName == null ? '' : fileName).replace(/\\/g, '/');
+  const base = basename(raw).replace(/\0/g, '');
+  if (!base || base === '.' || base === '..') {
+    return `attachment_${fallbackIndex}`;
+  }
+  return base;
+}
+
+/**
  * Build the final agent prompt from the base prompt plus attachments.
  *
  * Each attachment is either inlined (genuine text) or written to `attachDir`
@@ -130,6 +148,9 @@ export function buildAttachmentPrompt(prompt, attachments, opts = {}) {
   let inlinedBytes = 0;
   for (const att of attachments) {
     const fileName = att.fileName || `attachment_${readableFilePaths.length + inlinedTexts.length}`;
+    // On-disk name is sanitized to a single path segment; the original fileName is
+    // still used for display/relabeling (attachmentPathToName value, inlined text).
+    const diskName = safeAttachmentName(fileName, readableFilePaths.length + inlinedTexts.length);
     const mimeType = att.mimeType || '';
 
     const inlineText = resolveInlineText(att);
@@ -143,14 +164,14 @@ export function buildAttachmentPrompt(prompt, attachments, opts = {}) {
         // Too large to inline without risking execve's per-argument byte limit: write the
         // extracted text to disk as .txt for the agent to Read (smaller and faster than
         // re-parsing the original binary, and the document content is still fully available).
-        const textPath = resolve(attachDir, diskTextName(fileName));
+        const textPath = resolve(attachDir, diskTextName(diskName));
         writeFile(textPath, Buffer.from(inlineText, 'utf-8'));
         readableFilePaths.push(textPath);
         attachmentPathToName.set(textPath, fileName);
         log(`[BRIDGE] Extracted text too large to inline (${textBytes} bytes); wrote to disk for Read: ${fileName}`);
       }
     } else if (typeof att.data === 'string' && att.data) {
-      const filePath = resolve(attachDir, fileName);
+      const filePath = resolve(attachDir, diskName);
       writeFile(filePath, Buffer.from(att.data, 'base64'));
       readableFilePaths.push(filePath);
       attachmentPathToName.set(filePath, fileName);

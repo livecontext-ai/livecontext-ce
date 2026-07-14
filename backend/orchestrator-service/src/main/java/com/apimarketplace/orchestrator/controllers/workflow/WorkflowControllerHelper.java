@@ -114,13 +114,32 @@ public class WorkflowControllerHelper {
             return true; // authenticated, non-share request - unchanged
         }
         if (!"APPLICATION".equalsIgnoreCase(req.getHeader("X-Share-Resource-Type"))) {
-            return true; // only application shares read runs; other share types unchanged
+            // Only APPLICATION shares legitimately read runs. A non-APPLICATION
+            // share context reaching here means a CHAT/FORM/CONVERSATION token was
+            // used for owner-impersonation - the gateway/monolith filter now rejects
+            // those outright, so this is defense-in-depth: deny. Do NOT fall back to
+            // the permissive strict-scope-only path, which let a CONVERSATION token
+            // read EVERY owner run.
+            return false;
         }
         String resourceToken = req.getHeader("X-Share-Resource-Token");
         return run != null
                 && run.getPublicationId() != null
                 && resourceToken != null
                 && run.getPublicationId().equals(resourceToken);
+    }
+
+    /**
+     * True when the current request is a share-token (owner-impersonation) context,
+     * i.e. the gateway/monolith filter injected {@code X-Share-Context: true}. Used to
+     * withhold owner secrets (e.g. webhook tokens) from responses served to an
+     * anonymous share-link visitor. Internal (non-servlet) calls return false.
+     */
+    public static boolean isShareContext() {
+        if (!(RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attrs)) {
+            return false;
+        }
+        return "true".equalsIgnoreCase(attrs.getRequest().getHeader("X-Share-Context"));
     }
 
     /**
@@ -239,7 +258,10 @@ public class WorkflowControllerHelper {
         response.put("timestamp", Instant.now());
         response.put("readySteps", readySteps);
 
-        if (triggerTypeDetector.hasWebhookTrigger(plan)) {
+        // Webhook tokens are owner secrets - never expose them to an anonymous share
+        // visitor. This response is reached under the allow-listed bootstrap POST
+        // (/api/v2/workflows/dag/execute), which an APPLICATION share holder may call.
+        if (!isShareContext() && triggerTypeDetector.hasWebhookTrigger(plan)) {
             try {
                 UUID wfId = UUID.fromString(execution.getPlan().getId());
                 Map<String, String> tokens = triggerClient.getTokensForWorkflow(wfId);
@@ -285,7 +307,10 @@ public class WorkflowControllerHelper {
         response.put("reused", true);
         response.put("readySteps", readySteps);
 
-        if (triggerTypeDetector.hasWebhookTrigger(plan)) {
+        // Webhook tokens are owner secrets - never expose them to an anonymous share
+        // visitor. This reused-run response is reached under the allow-listed bootstrap
+        // POST (/api/v2/workflows/dag/execute), which an APPLICATION share holder may call.
+        if (!isShareContext() && triggerTypeDetector.hasWebhookTrigger(plan)) {
             try {
                 UUID wfId = UUID.fromString(plan.getId());
                 Map<String, String> tokens = triggerClient.getTokensForWorkflow(wfId);
@@ -313,16 +338,33 @@ public class WorkflowControllerHelper {
         response.put("createdAt", workflow.getCreatedAt());
         response.put("updatedAt", workflow.getUpdatedAt());
         response.put("lastExecutedAt", workflow.getLastExecutedAt());
-        response.put("plan", workflow.getPlan());
+        // The /s/{token} viewer needs the plan to render, but a plan can carry RAW inline
+        // secrets (httpRequest.authConfig, cryptoJwt.{key,secret,token}, ssh/sftp/database
+        // password/privateKey). In a share context (anonymous owner-impersonation) scrub them
+        // from a DEEP COPY so the persisted entity's plan (Hibernate-managed) is never mutated.
+        Map<String, Object> planForResponse = workflow.getPlan();
+        if (planForResponse != null && isShareContext()) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> planCopy = objectMapper.convertValue(planForResponse, Map.class);
+            PlanSecretRedactor.redact(planCopy);
+            planForResponse = planCopy;
+        }
+        response.put("plan", planForResponse);
         // Lazy-compute nodeIcons for workflows saved before the feature was deployed
         var nodeIcons = workflow.getNodeIcons();
         if (nodeIcons == null && workflow.getPlan() != null) {
             nodeIcons = WorkflowIconExtractor.extractNodeIcons(workflow.getPlan());
         }
         response.put("nodeIcons", nodeIcons);
-        Map<String, String> tokens = triggerClient.getTokensForWorkflow(workflow.getId());
-        if (!tokens.isEmpty()) {
-            response.put("webhookTokens", tokens);
+        // Webhook tokens are owner secrets (they let anyone trigger the workflow via
+        // its webhook URL). Never expose them to an anonymous share-link visitor - the
+        // /s/{token} application viewer can read the shared workflow definition but has
+        // no legitimate use for its webhook tokens.
+        if (!isShareContext()) {
+            Map<String, String> tokens = triggerClient.getTokensForWorkflow(workflow.getId());
+            if (!tokens.isEmpty()) {
+                response.put("webhookTokens", tokens);
+            }
         }
         // readOnly removed - applications use snapshot model now
         if (workflow.getSourcePublicationId() != null) {

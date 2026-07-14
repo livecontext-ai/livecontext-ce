@@ -1043,6 +1043,23 @@ public class UnifiedExecutionEngine {
             WorkflowExecution execution,
             V2ExecutionEventService eventService,
             TriggerItem item) {
+        return executeSingleNode(nodeId, tree, context, execution, eventService, item,
+            com.apimarketplace.orchestrator.execution.v2.split.SplitExecutionOptions.NONE);
+    }
+
+    /**
+     * Options-aware variant: {@code options.perItemContinuation()} flips the split
+     * fan-out into the per-item continuation walk disposition (see
+     * {@link com.apimarketplace.orchestrator.execution.v2.split.SplitExecutionOptions}).
+     */
+    public StepByStepExecutionResult executeSingleNode(
+            String nodeId,
+            ExecutionTree tree,
+            ExecutionContext context,
+            WorkflowExecution execution,
+            V2ExecutionEventService eventService,
+            TriggerItem item,
+            com.apimarketplace.orchestrator.execution.v2.split.SplitExecutionOptions options) {
 
         logger.info("[V2StepByStep] Executing single node: nodeId={}, runId={}, workflowRunId={}, itemIndex={}, itemId={}",
             nodeId, tree.getRunId(), tree.getWorkflowRunId(), context.itemIndex(), context.itemId());
@@ -1056,8 +1073,15 @@ public class UnifiedExecutionEngine {
         int itemIndex = context.itemIndex();
         String runId = tree.getRunId();
 
-        // Handle skipped node
-        if (!node.canExecute(context)) {
+        // Handle skipped node. Per-item continuation walks BYPASS this node-level guard:
+        // their upstream chain nodes deliberately have no node-level completion mark yet
+        // (suppressGlobalMark until the seal), so canExecute - which reads node-level
+        // completion - would wrongly SKIP-cascade a mid-region node. Reachability in a
+        // walk is decided PER ITEM by the fan-out's row-derived routing instead: a node
+        // whose predecessor rows route nothing to it no-ops with a benign deferred
+        // result, never a skip.
+        boolean perItemContinuationWalk = options != null && options.perItemContinuation();
+        if (!perItemContinuationWalk && !node.canExecute(context)) {
             logger.info("[V2StepByStep] Node cannot execute, handling as skipped: nodeId={}, type={}, predecessors={}, completedInContext={}",
                 nodeId, node.getType(), node.getPredecessorIds(),
                 node.getPredecessorIds().stream().filter(context::isCompleted).toList());
@@ -1128,7 +1152,12 @@ public class UnifiedExecutionEngine {
             // Each item result is persisted individually with its own item_index
             // In step-by-step mode, successors are handled via calculateReadyNodes, so pass null
             logger.info("[V2StepByStep] Executing node (split-aware): nodeId={}", nodeId);
-            result = splitAwareExecutor.execute(node, contextWithStart, runId, nodeMap, execution, item, itemIndex, null);
+            // Default disposition keeps the LEGACY call shape (zero change for pre-feature
+            // callers and test doubles); only a per-item continuation walk threads options.
+            result = perItemContinuationWalk
+                ? splitAwareExecutor.execute(node, contextWithStart, runId, nodeMap, execution, item, itemIndex, null,
+                    options)
+                : splitAwareExecutor.execute(node, contextWithStart, runId, nodeMap, execution, item, itemIndex, null);
         }
 
         // Override duration with engine-measured wall-clock time for non-yielding nodes.

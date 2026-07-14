@@ -396,6 +396,24 @@ public class SwitchNode extends BaseNode {
     }
 
     /**
+     * Inverse of {@link #getSelectedPort} for the mock mode: maps "case_N" /
+     * "default" back to {@code {selected_case_index: N}}. Unknown port falls back
+     * to the default {@code selected_port} form (no case selected).
+     */
+    @Override
+    public Map<String, Object> portSelectionOutput(String port) {
+        for (int i = 0; i < cases.size(); i++) {
+            String candidate = cases.get(i).isDefault() ? "default" : "case_" + i;
+            if (candidate.equals(port)) {
+                Map<String, Object> out = new HashMap<>();
+                out.put("selected_case_index", i);
+                return out;
+            }
+        }
+        return super.portSelectionOutput(port);
+    }
+
+    /**
      * SwitchNode skips split handling - it manages its own control flow.
      */
     @Override

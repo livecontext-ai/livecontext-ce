@@ -454,31 +454,50 @@ public class S3FileStorageService implements FileStorageService {
         String prefix = String.format("%s/%s/%s/", tenantId, workflowId, runId);
 
         try {
-            ListObjectsV2Request listRequest = ListObjectsV2Request.builder()
-                .bucket(bucket)
-                .prefix(prefix)
-                .build();
+            int deleted = 0;
+            String continuationToken = null;
 
-            ListObjectsV2Response listResponse = s3Client.listObjectsV2(listRequest);
-            List<S3Object> objects = listResponse.contents();
+            // A single listObjectsV2 returns at most 1000 keys. Follow the continuation
+            // token so a run with more than 1000 files (e.g. a Split/Loop fan-out) is
+            // fully deleted; previously the tail beyond 1000 was orphaned forever.
+            do {
+                ListObjectsV2Request.Builder listBuilder = ListObjectsV2Request.builder()
+                    .bucket(bucket)
+                    .prefix(prefix);
+                if (continuationToken != null) {
+                    listBuilder.continuationToken(continuationToken);
+                }
 
-            if (objects.isEmpty()) {
+                ListObjectsV2Response listResponse = s3Client.listObjectsV2(listBuilder.build());
+                List<S3Object> objects = listResponse.contents();
+
+                if (!objects.isEmpty()) {
+                    List<ObjectIdentifier> toDelete = objects.stream()
+                        .map(obj -> ObjectIdentifier.builder().key(obj.key()).build())
+                        .toList();
+
+                    // deleteObjects also caps at 1000 keys, and one list page is already
+                    // <=1000, so each page maps cleanly to one delete batch.
+                    DeleteObjectsRequest deleteRequest = DeleteObjectsRequest.builder()
+                        .bucket(bucket)
+                        .delete(Delete.builder().objects(toDelete).build())
+                        .build();
+
+                    s3Client.deleteObjects(deleteRequest);
+                    deleted += objects.size();
+                }
+
+                continuationToken = Boolean.TRUE.equals(listResponse.isTruncated())
+                    ? listResponse.nextContinuationToken()
+                    : null;
+            } while (continuationToken != null);
+
+            if (deleted == 0) {
                 logger.debug("No files found for prefix: {}", prefix);
-                return 0;
+            } else {
+                logger.info("Deleted {} files for run: {}/{}/{}", deleted, tenantId, workflowId, runId);
             }
-
-            List<ObjectIdentifier> toDelete = objects.stream()
-                .map(obj -> ObjectIdentifier.builder().key(obj.key()).build())
-                .toList();
-
-            DeleteObjectsRequest deleteRequest = DeleteObjectsRequest.builder()
-                .bucket(bucket)
-                .delete(Delete.builder().objects(toDelete).build())
-                .build();
-
-            s3Client.deleteObjects(deleteRequest);
-            logger.info("Deleted {} files for run: {}/{}/{}", objects.size(), tenantId, workflowId, runId);
-            return objects.size();
+            return deleted;
 
         } catch (Exception e) {
             logger.error("Failed to delete run files: prefix={}", prefix, e);

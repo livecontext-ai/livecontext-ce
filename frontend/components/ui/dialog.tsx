@@ -39,7 +39,11 @@ const DialogContent = React.forwardRef<
         // Default bounds so NO dialog can grow off-screen: capped at the viewport
         // (with a gutter) in both axes and vertically scrollable. Callers that own
         // their own scroll (flex-col + inner overflow) override via twMerge.
-        "fixed left-[50%] top-[50%] z-[9999] grid w-full max-w-lg max-h-[90vh] overflow-y-auto translate-x-[-50%] translate-y-[-50%] gap-4 border border-theme bg-theme-primary p-6 shadow-[0_16px_48px_rgba(0,0,0,0.16)] rounded-2xl animate-in fade-in-0 zoom-in-95 duration-200 sm:max-w-lg",
+        // The width default must stay UNPREFIXED (max-w-lg): a variant-prefixed
+        // cap (sm:max-w-lg) is a different twMerge group, so a caller's plain
+        // max-w-* would not replace it and every wide dialog would clamp to lg
+        // on desktop (regression shipped 2026-07-11, fixed here).
+        "fixed left-[50%] top-[50%] z-[9999] grid w-full max-w-lg max-h-[90vh] overflow-y-auto translate-x-[-50%] translate-y-[-50%] gap-4 border border-theme bg-theme-primary p-6 shadow-[0_16px_48px_rgba(0,0,0,0.16)] rounded-2xl animate-in fade-in-0 zoom-in-95 duration-200",
         "max-[480px]:max-w-[calc(100vw-1.5rem)]",
         className
       )}

@@ -24,6 +24,7 @@ import {
 import { createDefaultDecisionConditions, createDefaultSwitchCases, createDefaultOptionChoices, createDefaultApprovalOutputs } from '../../types';
 import { nodeRegistry } from '../../registry/nodeRegistry';
 import { sanitizeNodePolicy } from '../../utils/nodePolicy';
+import { sanitizeNodeMock } from '../../utils/nodeMock';
 
 export interface NodeCreationResult {
   nodes: Node<BuilderNodeData>[];
@@ -942,6 +943,11 @@ export class NodeCreationService {
           && approvalCfg.contextTemplate.trim() !== ''
           ? approvalCfg.contextTemplate
           : undefined;
+        // Split-context continuation - mirrors the exporter in edgeProcessor.ts so
+        // approval.continuationMode round-trips losslessly (absent = all_items default).
+        const continuationMode = approvalCfg.continuationMode === 'per_item' || approvalCfg.continuationMode === 'all_items'
+          ? approvalCfg.continuationMode
+          : undefined;
 
         // Optional external-channel delegation (v1: telegram) - mirrors the exporter
         // in edgeProcessor.ts so the approval.delegation block round-trips losslessly.
@@ -967,10 +973,22 @@ export class NodeCreationService {
           if (typeof rawDelegation.messageTemplate === 'string' && rawDelegation.messageTemplate.trim() !== '') {
             approvalDelegation.messageTemplate = rawDelegation.messageTemplate;
           }
+          // Optional image template (plan key `image`) - mirrors the exporter.
+          if (typeof rawDelegation.image === 'string' && rawDelegation.image.trim() !== '') {
+            approvalDelegation.image = rawDelegation.image;
+          }
           const allowedUserIds = Array.isArray(rawDelegation.allowedUserIds)
             ? rawDelegation.allowedUserIds.filter((id: unknown): id is string => typeof id === 'string' && id.trim() !== '')
             : [];
           if (allowedUserIds.length > 0) approvalDelegation.allowedUserIds = allowedUserIds;
+          // Optional custom button labels (plan keys `approveLabel`/`rejectLabel`) - mirrors
+          // the exporter; blank/absent = the channel defaults ("✅ Approve" / "❌ Reject").
+          if (typeof rawDelegation.approveLabel === 'string' && rawDelegation.approveLabel.trim() !== '') {
+            approvalDelegation.approveLabel = rawDelegation.approveLabel;
+          }
+          if (typeof rawDelegation.rejectLabel === 'string' && rawDelegation.rejectLabel.trim() !== '') {
+            approvalDelegation.rejectLabel = rawDelegation.rejectLabel;
+          }
         }
 
         nodes.push({
@@ -987,6 +1005,7 @@ export class NodeCreationService {
             ...(approverRoles && approverRoles.length > 0 ? { approverRoles } : {}),
             ...(requiredApprovals !== undefined ? { requiredApprovals } : {}),
             ...(contextTemplate !== undefined ? { approvalContextTemplate: contextTemplate } : {}),
+            ...(continuationMode !== undefined ? { approvalContinuationMode: continuationMode } : {}),
             ...(approvalDelegation !== undefined ? { approvalDelegation } : {}),
             paramExpressions: inputToParamExpressions((cn as any).params),
           } as any,
@@ -1820,7 +1839,7 @@ export class NodeCreationService {
       }
     }
 
-    // 11. Hydrate per-node execution policies (nodePolicy) back onto builder node data
+    // 11. Hydrate per-node execution policies (nodePolicy) + mocks (mock) back onto builder node data
     this.hydrateNodePolicies(plan, nodes, labelToNodeIdMap, interfaceIdToNodeIdMap, interfaceLabelToNodeIdMap);
 
     return {
@@ -1833,10 +1852,10 @@ export class NodeCreationService {
   }
 
   /**
-   * Reads the optional `nodePolicy` block of every executable plan entry
-   * (mcps / tables / agents / cores / interfaces) back into the created
-   * builder node's data, so the inspector Settings section shows it and the
-   * generator round-trips it. Triggers and notes never carry one.
+   * Reads the optional `nodePolicy` and `mock` blocks of every executable
+   * plan entry (mcps / tables / agents / cores / interfaces) back into the
+   * created builder node's data, so the inspector shows them and the
+   * generator round-trips them. Triggers and notes never carry one.
    *
    * Resolution order mirrors how entries reference their builder node:
    * `graphNodeId` (round-tripped by the generator) → label map (raw +
@@ -1861,19 +1880,28 @@ export class NodeCreationService {
       return viaNormalized ? nodesById.get(viaNormalized) : undefined;
     };
 
+    const applyBlocks = (entry: Record<string, any>, node: Node<BuilderNodeData>) => {
+      const policy = sanitizeNodePolicy(entry.nodePolicy);
+      if (policy) {
+        node.data.nodePolicy = policy;
+      }
+      const mock = sanitizeNodeMock(entry.mock);
+      if (mock) {
+        node.data.mock = mock;
+      }
+    };
+
     const hydrate = (entries?: Array<Record<string, any>>) => {
       if (!Array.isArray(entries)) return;
       for (const entry of entries) {
-        if (!entry?.nodePolicy) continue;
-        const policy = sanitizeNodePolicy(entry.nodePolicy);
-        if (!policy) continue;
+        if (!entry?.nodePolicy && !entry?.mock) continue;
         const node =
           (entry.graphNodeId && nodesById.get(entry.graphNodeId)) ||
           byLabel(entry.label) ||
           (entry.id && nodesById.get(entry.id)) ||
           undefined;
         if (node) {
-          node.data.nodePolicy = policy;
+          applyBlocks(entry, node);
         }
       }
     };
@@ -1887,9 +1915,7 @@ export class NodeCreationService {
     const interfaces = (plan as any).interfaces as Array<Record<string, any>> | undefined;
     if (Array.isArray(interfaces)) {
       for (const entry of interfaces) {
-        if (!entry?.nodePolicy) continue;
-        const policy = sanitizeNodePolicy(entry.nodePolicy);
-        if (!policy) continue;
+        if (!entry?.nodePolicy && !entry?.mock) continue;
         const normalized = entry.label ? normalizeLabel(entry.label) : '';
         const nodeId =
           (entry.id && interfaceIdToNodeIdMap.get(entry.id)) ||
@@ -1897,7 +1923,7 @@ export class NodeCreationService {
           undefined;
         const node = nodeId ? nodesById.get(nodeId) : undefined;
         if (node) {
-          node.data.nodePolicy = policy;
+          applyBlocks(entry, node);
         }
       }
     }

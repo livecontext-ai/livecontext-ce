@@ -169,6 +169,47 @@ final class SignalContextResolver {
     }
 
     /**
+     * Resolve a template to its RAW value (same soft semantics as
+     * {@link #resolveApprovalContext}, but WITHOUT stringifying the result). Used for
+     * the delegation image: a whole-string template like
+     * {@code {{interface:card.output.screenshot}}} resolves to the FileRef Map the
+     * interface node persisted ({@code {_type:'file', path, name, ...}}), and that
+     * Map must survive as-is so the channel notifier can hand it to a catalog tool
+     * (the catalog's multipart encoder recognises the FileRef shape and uploads the
+     * bytes). A template mixed with literal text resolves to a String (e.g. an HTTP
+     * URL), which is equally valid downstream.
+     *
+     * <p>Returns {@code null} (the caller simply omits the value) when the template is
+     * blank, the adapter/context is unavailable, the result is null or a blank string,
+     * or resolution throws. String results are capped at
+     * {@link #MAX_ITEM_CONTEXT_JSON_CHARS} chars like the approval context.
+     */
+    static Object resolveApprovalValue(String template, ExecutionContext context, V2TemplateAdapter adapter) {
+        if (template == null || template.isBlank() || adapter == null || context == null) {
+            return null;
+        }
+        try {
+            Object resolved = adapter.evaluateTemplate(template, context);
+            if (resolved == null) {
+                return null;
+            }
+            if (resolved instanceof String text) {
+                if (text.isBlank()) {
+                    return null;
+                }
+                return text.length() > MAX_ITEM_CONTEXT_JSON_CHARS
+                    ? text.substring(0, MAX_ITEM_CONTEXT_JSON_CHARS)
+                    : text;
+            }
+            return resolved;
+        } catch (Exception e) {
+            logger.warn("Approval delegation value resolution failed (value will be omitted): {}",
+                e.getMessage());
+            return null;
+        }
+    }
+
+    /**
      * Parse the workflow item index from a scoped split context key
      * ({@code "<splitNodeId>:<workflowItemIndex>"} or {@code ".../sN"}). Returns 0 for a
      * null/malformed key, matching {@link SplitContextManager#buildContextKey}'s default.

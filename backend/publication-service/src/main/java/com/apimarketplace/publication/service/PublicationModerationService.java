@@ -770,12 +770,9 @@ public class PublicationModerationService {
     }
 
     @SuppressWarnings("unchecked")
-    /** Mirror the snapshot's avatar URL filtering: only keep preset: and http URLs */
+    /** Mirror the snapshot's avatar URL filtering - single rule in {@code AvatarUrlPolicy}. */
     private String filterAvatarUrl(String avatarUrl) {
-        if (avatarUrl != null && !avatarUrl.startsWith("preset:") && !avatarUrl.startsWith("http")) {
-            return null;
-        }
-        return avatarUrl;
+        return com.apimarketplace.publication.utils.AvatarUrlPolicy.publishable(avatarUrl);
     }
 
     private void normalizeDataInputPathsInWorkflows(Map<String, Object> data) {

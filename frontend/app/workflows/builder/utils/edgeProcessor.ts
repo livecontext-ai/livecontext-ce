@@ -323,6 +323,12 @@ function registerUserApprovalNode(
     && data.approvalContextTemplate.trim() !== ''
     ? data.approvalContextTemplate
     : undefined;
+  // Split-context continuation (plan key approval.continuationMode). Only the two
+  // known values are emitted; absent = backend default all_items.
+  const continuationMode: string | undefined =
+    data.approvalContinuationMode === 'per_item' || data.approvalContinuationMode === 'all_items'
+      ? data.approvalContinuationMode
+      : undefined;
 
   // Optional external-channel delegation (v1: telegram). Emitted only when the
   // author actually selected a channel; a toggled-off section leaves node data
@@ -347,10 +353,23 @@ function registerUserApprovalNode(
     if (typeof rawDelegation.messageTemplate === 'string' && rawDelegation.messageTemplate.trim() !== '') {
       delegation.messageTemplate = rawDelegation.messageTemplate;
     }
+    // Optional image template (plan key `image`): non-blank = the Telegram message is
+    // sent as a photo (image + caption + buttons). Blank stays omitted (text message).
+    if (typeof rawDelegation.image === 'string' && rawDelegation.image.trim() !== '') {
+      delegation.image = rawDelegation.image;
+    }
     const allowedUserIds = Array.isArray(rawDelegation.allowedUserIds)
       ? rawDelegation.allowedUserIds.filter((id: unknown): id is string => typeof id === 'string' && id.trim() !== '')
       : [];
     if (allowedUserIds.length > 0) delegation.allowedUserIds = allowedUserIds;
+    // Optional custom button labels (plan keys `approveLabel`/`rejectLabel`): non-blank =
+    // custom text on the inline buttons. Blank stays omitted (channel defaults apply).
+    if (typeof rawDelegation.approveLabel === 'string' && rawDelegation.approveLabel.trim() !== '') {
+      delegation.approveLabel = rawDelegation.approveLabel;
+    }
+    if (typeof rawDelegation.rejectLabel === 'string' && rawDelegation.rejectLabel.trim() !== '') {
+      delegation.rejectLabel = rawDelegation.rejectLabel;
+    }
   }
 
   const approvalBlock: Record<string, unknown> = {};
@@ -358,6 +377,7 @@ function registerUserApprovalNode(
   if (requiredApprovals !== undefined) approvalBlock.requiredApprovals = requiredApprovals;
   if (timeoutMs !== undefined) approvalBlock.timeoutMs = timeoutMs;
   if (contextTemplate !== undefined) approvalBlock.contextTemplate = contextTemplate;
+  if (continuationMode !== undefined) approvalBlock.continuationMode = continuationMode;
   if (delegation !== undefined) approvalBlock.delegation = delegation;
 
   upsertControlNode(

@@ -70,13 +70,15 @@ class AgentPublicationServiceWorkflowSnapshotTest {
     @Mock private AuthClient authClient;
 
     // ====================================================================
-    // Lead's regression fix: persisted toolsConfig preserves the *Grant keys
+    // Policy (2026-07): a publication never carries a grant of "all".
+    // publishAgent refuses up-front with the AGGREGATED violation list; the
+    // snapshot builder never enumerates the publisher's tenant.
     // ====================================================================
 
     @Test
-    @DisplayName("persisted snapshot toolsConfig preserves the per-family *Grant keys verbatim (regression: was stripped to {mode:'all'})")
+    @DisplayName("publish REFUSES an all-granted builder agent with the aggregated violation list (all 5 families) and persists nothing")
     @SuppressWarnings("unchecked")
-    void persistedSnapshotPreservesGrantKeysVerbatim() {
+    void publishRefusesAllGrantedBuilderAgentWithAggregatedViolations() {
         UUID landingInterfaceId = UUID.fromString("33333333-3333-4333-8333-333333333333");
 
         // An all-granted builder agent: every family granted "all", catalogue mode "all".
@@ -97,34 +99,31 @@ class AgentPublicationServiceWorkflowSnapshotTest {
         when(publicationRepository.findByAgentConfigId(AGENT_ID)).thenReturn(Optional.empty());
         when(authClient.getPublisherProfile(TENANT_ID))
                 .thenReturn(new PublisherProfileDto(TENANT_ID, "Publisher", "publisher@example.test", null));
-        when(agentClient.getSkillsForAgent(AGENT_ID, TENANT_ID, ORG_ID)).thenReturn(List.of());
-        when(orchestratorClient.getWorkflowIdsByTenant(TENANT_ID, ORG_ID)).thenReturn(List.of());
-        when(interfaceClient.listInterfaces(TENANT_ID, ORG_ID, null)).thenReturn(List.of());
-        when(dataSourceClient.getDataSources(TENANT_ID, ORG_ID, null)).thenReturn(List.of());
-        when(agentClient.getAgents(TENANT_ID, ORG_ID, null)).thenReturn(List.of());
-        when(landingInterfaceSnapshotter.buildSnapshot(landingInterfaceId, TENANT_ID, ORG_ID))
-                .thenReturn(Map.of("interfaceId", landingInterfaceId.toString()));
-        when(publicationRepository.save(any(WorkflowPublicationEntity.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
 
         AgentPublicationService service = newService();
-        WorkflowPublicationEntity[] published = new WorkflowPublicationEntity[1];
-        TenantResolver.runWithOrgScope(ORG_ID, () -> published[0] = service.publishAgent(
-                publishAgentRequest(landingInterfaceId), TENANT_ID, ORG_ID));
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(() ->
+                TenantResolver.runWithOrgScope(ORG_ID, () ->
+                        service.publishAgent(publishAgentRequest(landingInterfaceId), TENANT_ID, ORG_ID)));
 
-        Map<String, Object> snapshot = published[0].getAgentSnapshot();
-        Map<String, Object> agentData = (Map<String, Object>) snapshot.get("agent");
-        Map<String, Object> persisted = (Map<String, Object>) agentData.get("toolsConfig");
+        PublicationValidationException refusal = unwrapValidation(thrown);
+        assertThat(refusal.getErrorCode())
+                .isEqualTo(PublicationValidationException.AGENT_ALL_ACCESS_NOT_PUBLISHABLE);
+        List<Map<String, Object>> violations =
+                (List<Map<String, Object>>) refusal.getDetails().get("violations");
+        assertThat(violations).hasSize(1);
+        Map<String, Object> violation = violations.get(0);
+        assertThat(violation).containsEntry("agentId", AGENT_ID.toString());
+        assertThat(violation).containsEntry("agentName", "Agent");
+        assertThat(violation).containsEntry("root", true);
+        assertThat((List<String>) violation.get("families"))
+                .containsExactly("workflows", "tables", "interfaces", "agents", "applications");
 
-        // The old coercion replaced this whole blob with {mode:'all'} (+ a few accessMode keys),
-        // DROPPING the *Grant keys → the clone read every family as "none" and lost all access.
-        assertThat(persisted).containsEntry("workflowsGrant", "all");
-        assertThat(persisted).containsEntry("tablesGrant", "all");
-        assertThat(persisted).containsEntry("interfacesGrant", "all");
-        assertThat(persisted).containsEntry("agentsGrant", "all");
-        assertThat(persisted).containsEntry("applicationsGrant", "all");
-        assertThat(persisted).containsEntry("mode", "all");
-        assertThat(persisted).containsEntry("webSearch", true);
+        // Refusal is a pure validation: nothing enumerated, nothing persisted.
+        verify(orchestratorClient, never()).getWorkflowIdsByTenant(any(), any());
+        verify(interfaceClient, never()).listInterfaces(any(), any(), any());
+        verify(dataSourceClient, never()).getDataSources(any(), any(), any());
+        verify(agentClient, never()).getAgents(any(), any(), any());
+        verify(publicationRepository, never()).save(any());
     }
 
     @Test
@@ -151,20 +150,18 @@ class AgentPublicationServiceWorkflowSnapshotTest {
     // ====================================================================
 
     @Test
-    @DisplayName("workflowsGrant=all snapshots ALL tenant workflows via getWorkflowIdsByTenant")
-    @SuppressWarnings("unchecked")
-    void workflowsGrantAllSnapshotsAllTenantWorkflows() {
+    @DisplayName("workflowsGrant=all is REFUSED by the snapshot builder and never enumerates tenant workflows (fail-closed defense-in-depth)")
+    void workflowsGrantAllIsRefusedAndNeverEnumerates() {
         Map<String, Object> toolsConfig = Map.of("workflowsGrant", "all");
-        stubWorkflow(WORKFLOW_ID);
-        when(orchestratorClient.getWorkflowIdsByTenant(TENANT_ID, ORG_ID))
-                .thenReturn(List.of(WORKFLOW_ID.toString()));
 
-        Map<String, Object> snapshot = buildSnapshot(toolsConfig, null);
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(() -> buildSnapshot(toolsConfig, null));
 
-        verify(orchestratorClient).getWorkflowIdsByTenant(TENANT_ID, ORG_ID);
-        verify(orchestratorClient).getWorkflowForPublication(WORKFLOW_ID, TENANT_ID, ORG_ID);
-        Map<String, Object> workflows = (Map<String, Object>) snapshot.get("workflows");
-        assertThat(workflows).containsKey(WORKFLOW_ID.toString());
+        PublicationValidationException refusal = unwrapValidation(thrown);
+        assertThat(refusal.getErrorCode())
+                .isEqualTo(PublicationValidationException.AGENT_ALL_ACCESS_NOT_PUBLISHABLE);
+        assertThat(refusal.getMessage()).contains("workflows");
+        verify(orchestratorClient, never()).getWorkflowIdsByTenant(any(), any());
+        verify(orchestratorClient, never()).getWorkflowForPublication(any(), any(), any());
     }
 
     @Test
@@ -212,23 +209,19 @@ class AgentPublicationServiceWorkflowSnapshotTest {
     }
 
     @Test
-    @DisplayName("MIXED config: catalogue mode=custom but workflowsGrant=all still snapshots ALL workflows (grant-driven, not mode-driven)")
-    @SuppressWarnings("unchecked")
-    void mixedModeCustomButGrantAllSnapshotsAllWorkflows() {
-        // Pre-fix mode-based code: mode='custom' ⇒ isUnrestricted=false ⇒ would respect the
-        // (empty) explicit list ⇒ NO workflows. Post-fix: workflowsGrant='all' ⇒ ALL workflows.
+    @DisplayName("MIXED config: catalogue mode=custom but workflowsGrant=all is still REFUSED (grant-driven, not mode-driven)")
+    void mixedModeCustomButGrantAllIsRefused() {
+        // The catalogue `mode` axis never influences the internal families: the refusal
+        // keys on the grant alone, whatever the mode says.
         Map<String, Object> toolsConfig = Map.of(
                 "mode", "custom",
                 "workflowsGrant", "all");
-        stubWorkflow(WORKFLOW_ID);
-        when(orchestratorClient.getWorkflowIdsByTenant(TENANT_ID, ORG_ID))
-                .thenReturn(List.of(WORKFLOW_ID.toString()));
 
-        Map<String, Object> snapshot = buildSnapshot(toolsConfig, null);
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(() -> buildSnapshot(toolsConfig, null));
 
-        verify(orchestratorClient).getWorkflowIdsByTenant(TENANT_ID, ORG_ID);
-        Map<String, Object> workflows = (Map<String, Object>) snapshot.get("workflows");
-        assertThat(workflows).containsKey(WORKFLOW_ID.toString());
+        assertThat(unwrapValidation(thrown).getErrorCode())
+                .isEqualTo(PublicationValidationException.AGENT_ALL_ACCESS_NOT_PUBLISHABLE);
+        verify(orchestratorClient, never()).getWorkflowIdsByTenant(any(), any());
     }
 
     @Test
@@ -280,18 +273,18 @@ class AgentPublicationServiceWorkflowSnapshotTest {
     }
 
     @Test
-    @DisplayName("applicationsGrant=all is a no-op (preserves prior behavior: unrestricted never enumerated applications)")
-    void applicationsGrantAllIsNoOp() {
+    @DisplayName("applicationsGrant=all is REFUSED (the verbatim-persisted toolsConfig must never ship an 'all' grant)")
+    void applicationsGrantAllIsRefused() {
         Map<String, Object> toolsConfig = Map.of(
                 "applicationsGrant", "all",
                 "applications", List.of(UUID.randomUUID().toString()));
 
-        Map<String, Object> snapshot = buildSnapshot(toolsConfig, null);
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(() -> buildSnapshot(toolsConfig, null));
 
-        // No publication resolution and no workflow snapshot from the applications path.
+        assertThat(unwrapValidation(thrown).getErrorCode())
+                .isEqualTo(PublicationValidationException.AGENT_ALL_ACCESS_NOT_PUBLISHABLE);
         verify(publicationRepository, never()).findById(any());
         verify(orchestratorClient, never()).getWorkflowForPublication(any(), any(), any());
-        assertThat(snapshot).doesNotContainKey("workflows");
     }
 
     @Test
@@ -312,14 +305,15 @@ class AgentPublicationServiceWorkflowSnapshotTest {
     // ====================================================================
 
     @Test
-    @DisplayName("interfacesGrant=all lists all tenant interfaces")
-    void interfacesGrantAllListsTenantInterfaces() {
+    @DisplayName("interfacesGrant=all is REFUSED and never lists tenant interfaces")
+    void interfacesGrantAllIsRefused() {
         Map<String, Object> toolsConfig = Map.of("interfacesGrant", "all");
-        when(interfaceClient.listInterfaces(TENANT_ID, ORG_ID, null)).thenReturn(List.of());
 
-        buildSnapshot(toolsConfig, null);
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(() -> buildSnapshot(toolsConfig, null));
 
-        verify(interfaceClient).listInterfaces(TENANT_ID, ORG_ID, null);
+        assertThat(unwrapValidation(thrown).getErrorCode())
+                .isEqualTo(PublicationValidationException.AGENT_ALL_ACCESS_NOT_PUBLISHABLE);
+        verify(interfaceClient, never()).listInterfaces(any(), any(), any());
     }
 
     @Test
@@ -347,14 +341,15 @@ class AgentPublicationServiceWorkflowSnapshotTest {
     // ====================================================================
 
     @Test
-    @DisplayName("tablesGrant=all lists all tenant datasources")
-    void tablesGrantAllListsTenantDatasources() {
+    @DisplayName("tablesGrant=all is REFUSED and never lists tenant datasources")
+    void tablesGrantAllIsRefused() {
         Map<String, Object> toolsConfig = Map.of("tablesGrant", "all");
-        when(dataSourceClient.getDataSources(TENANT_ID, ORG_ID, null)).thenReturn(List.of());
 
-        buildSnapshot(toolsConfig, null);
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(() -> buildSnapshot(toolsConfig, null));
 
-        verify(dataSourceClient).getDataSources(TENANT_ID, ORG_ID, null);
+        assertThat(unwrapValidation(thrown).getErrorCode())
+                .isEqualTo(PublicationValidationException.AGENT_ALL_ACCESS_NOT_PUBLISHABLE);
+        verify(dataSourceClient, never()).getDataSources(any(), any(), any());
     }
 
     @Test
@@ -382,14 +377,15 @@ class AgentPublicationServiceWorkflowSnapshotTest {
     // ====================================================================
 
     @Test
-    @DisplayName("agentsGrant=all lists all tenant agents (minus self)")
-    void agentsGrantAllListsTenantAgents() {
+    @DisplayName("agentsGrant=all is REFUSED and never lists tenant agents")
+    void agentsGrantAllIsRefused() {
         Map<String, Object> toolsConfig = Map.of("agentsGrant", "all");
-        when(agentClient.getAgents(TENANT_ID, ORG_ID, null)).thenReturn(List.of());
 
-        buildSnapshot(toolsConfig, null);
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(() -> buildSnapshot(toolsConfig, null));
 
-        verify(agentClient).getAgents(TENANT_ID, ORG_ID, null);
+        assertThat(unwrapValidation(thrown).getErrorCode())
+                .isEqualTo(PublicationValidationException.AGENT_ALL_ACCESS_NOT_PUBLISHABLE);
+        verify(agentClient, never()).getAgents(any(), any(), any());
     }
 
     @Test
@@ -623,29 +619,27 @@ class AgentPublicationServiceWorkflowSnapshotTest {
     // ====================================================================
 
     @Test
-    @DisplayName("MIXED grants on one agent: workflowsGrant=all + tablesGrant=custom + interfacesGrant=none all resolve independently in the same snapshot")
+    @DisplayName("MIXED grants on one agent: workflowsGrant=custom + tablesGrant=custom + interfacesGrant=none all resolve independently in the same snapshot")
     @SuppressWarnings("unchecked")
     void mixedPerFamilyGrantsResolveIndependentlyInSameSnapshot() {
         long tableId = 909L;
         Map<String, Object> toolsConfig = Map.of(
-                "workflowsGrant", "all",
+                "workflowsGrant", "custom",
+                "workflows", List.of(WORKFLOW_ID.toString()),
                 "tablesGrant", "custom",
                 "tables", List.of(Long.toString(tableId)),
                 "interfacesGrant", "none");
 
-        // workflows=all → enumerate ALL tenant workflows
-        when(orchestratorClient.getWorkflowIdsByTenant(TENANT_ID, ORG_ID))
-                .thenReturn(List.of(WORKFLOW_ID.toString()));
         stubWorkflow(WORKFLOW_ID);
         // tables=custom → only the listed datasource
         stubDataSource(tableId);
 
         Map<String, Object> snapshot = buildSnapshot(toolsConfig, null);
 
-        // Workflows: all-tenant enumeration happened, listed workflow present.
-        verify(orchestratorClient).getWorkflowIdsByTenant(TENANT_ID, ORG_ID);
+        // Workflows: explicit list only - never the all-tenant enumeration.
+        verify(orchestratorClient, never()).getWorkflowIdsByTenant(any(), any());
         Map<String, Object> workflows = (Map<String, Object>) snapshot.get("workflows");
-        assertThat(workflows).containsKey(WORKFLOW_ID.toString());
+        assertThat(workflows).containsOnlyKeys(WORKFLOW_ID.toString());
 
         // Tables: custom list only - never the all-tenant fetch.
         verify(dataSourceClient, never()).getDataSources(any(), any(), any());
@@ -664,17 +658,20 @@ class AgentPublicationServiceWorkflowSnapshotTest {
     // ====================================================================
 
     @Test
-    @DisplayName("grant=all snapshot's persisted toolsConfig still reads workflowsGrant=all through the shared AgentModuleResolver grant seam (the clone/runtime read path)")
+    @DisplayName("custom-grant snapshot's persisted toolsConfig still reads workflowsGrant=custom through the shared AgentModuleResolver grant seam (the clone/runtime read path)")
     @SuppressWarnings("unchecked")
-    void grantAllSnapshotIsStillAccessibleThroughSharedGrantSeam() {
+    void customGrantSnapshotIsStillAccessibleThroughSharedGrantSeam() {
         // This is the snapshot→clone grant-fidelity seam: the acquirer/runtime never
         // re-derives access from `mode`; it reads each family's grant via the SHARED
-        // AgentModuleResolver.isResourceAccessible. If the persist step had stripped the
-        // toolsConfig back to {mode:'all'} (the pre-fix coercion), this read would return
-        // false and the clone would silently lose workflow access.
+        // AgentModuleResolver.isResourceAccessible. If the persist step stripped the
+        // toolsConfig (the old coercion), this read would return false and the clone
+        // would silently lose workflow access. grant=all never reaches this seam any
+        // more: it is refused at publish (see the refusal tests above).
         Map<String, Object> toolsConfig = new LinkedHashMap<>();
         toolsConfig.put("mode", "all");
-        toolsConfig.put("workflowsGrant", "all");
+        toolsConfig.put("workflowsGrant", "custom");
+        toolsConfig.put("workflows", List.of(WORKFLOW_ID.toString()));
+        stubWorkflow(WORKFLOW_ID);
 
         Map<String, Object> snapshot = buildSnapshot(toolsConfig, null);
         Map<String, Object> agentData = (Map<String, Object>) snapshot.get("agent");
@@ -731,17 +728,45 @@ class AgentPublicationServiceWorkflowSnapshotTest {
     }
 
     @Test
-    @DisplayName("org agent with workflowsGrant=all snapshots workflows through org-aware orchestrator calls")
+    @DisplayName("agent publishes WITHOUT a landing interface: no snapshot, null showcase id (regression: interfaceId used to be mandatory)")
+    void agentPublishesWithoutLandingInterface() {
+        AgentDto agent = orgAgent(Map.of("mode", "all"));
+
+        when(agentClient.getAgent(AGENT_ID, TENANT_ID, ORG_ID)).thenReturn(agent);
+        when(publicationRepository.findByAgentConfigId(AGENT_ID)).thenReturn(Optional.empty());
+        when(authClient.getPublisherProfile(TENANT_ID))
+                .thenReturn(new PublisherProfileDto(TENANT_ID, "Publisher", "publisher@example.test", null));
+        when(agentClient.getSkillsForAgent(AGENT_ID, TENANT_ID, ORG_ID)).thenReturn(List.of());
+        when(publicationRepository.save(any(WorkflowPublicationEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("agentConfigId", AGENT_ID.toString());
+        request.put("title", "Agent");
+        request.put("visibility", "PUBLIC");
+
+        AgentPublicationService service = newService();
+        WorkflowPublicationEntity[] published = new WorkflowPublicationEntity[1];
+        TenantResolver.runWithOrgScope(ORG_ID, () ->
+                published[0] = service.publishAgent(request, TENANT_ID, ORG_ID));
+
+        assertThat(published[0].getShowcaseInterfaceId()).isNull();
+        assertThat(published[0].getAgentSnapshot()).doesNotContainKey("landingInterface");
+        verify(landingInterfaceSnapshotter, never()).buildSnapshot(any(UUID.class), any(), any());
+    }
+
+    @Test
+    @DisplayName("org agent with workflowsGrant=custom snapshots workflows through org-aware orchestrator calls")
     @SuppressWarnings("unchecked")
     void orgAgentSnapshotsWorkflowsThroughOrgAwareOrchestratorCalls() {
-        Map<String, Object> toolsConfig = Map.of("workflowsGrant", "all");
-        when(orchestratorClient.getWorkflowIdsByTenant(TENANT_ID, ORG_ID))
-                .thenReturn(List.of(WORKFLOW_ID.toString()));
+        Map<String, Object> toolsConfig = Map.of(
+                "workflowsGrant", "custom",
+                "workflows", List.of(WORKFLOW_ID.toString()));
         stubWorkflow(WORKFLOW_ID);
 
         Map<String, Object> snapshot = buildSnapshot(toolsConfig, null);
 
-        verify(orchestratorClient).getWorkflowIdsByTenant(TENANT_ID, ORG_ID);
+        verify(orchestratorClient, never()).getWorkflowIdsByTenant(any(), any());
         verify(orchestratorClient).getWorkflowForPublication(WORKFLOW_ID, TENANT_ID, ORG_ID);
         verify(workflowPublicationService).enrichWorkflowPlan(anyMap(), eq(TENANT_ID), eq(ORG_ID), eq(WORKFLOW_ID));
         Map<String, Object> workflows = (Map<String, Object>) snapshot.get("workflows");
@@ -751,6 +776,22 @@ class AgentPublicationServiceWorkflowSnapshotTest {
     // ====================================================================
     // Helpers
     // ====================================================================
+
+    /**
+     * Unwrap the reflective-call wrapper (RuntimeException → InvocationTargetException)
+     * down to the expected {@link PublicationValidationException}. Fails the test with
+     * the original throwable if none is found in the cause chain.
+     */
+    private static PublicationValidationException unwrapValidation(Throwable thrown) {
+        Throwable cause = thrown;
+        while (cause != null && !(cause instanceof PublicationValidationException)) {
+            cause = cause.getCause();
+        }
+        assertThat(cause)
+                .as("expected a PublicationValidationException in the cause chain of: " + thrown)
+                .isInstanceOf(PublicationValidationException.class);
+        return (PublicationValidationException) cause;
+    }
 
     /**
      * Invoke buildAgentSnapshot reflectively for the given toolsConfig and return the

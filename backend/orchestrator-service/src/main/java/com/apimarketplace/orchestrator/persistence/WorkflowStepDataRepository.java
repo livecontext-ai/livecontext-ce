@@ -324,6 +324,16 @@ public interface WorkflowStepDataRepository extends JpaRepository<WorkflowStepDa
     List<Integer> findCompletedItemIndicesByEpoch(@Param("runId") String runId, @Param("normalizedKey") String normalizedKey, @Param("epoch") int epoch);
 
     /**
+     * Find item indices that already reached ANY terminal status (COMPLETED/FAILED/SKIPPED)
+     * for a node in a given epoch. Used by the per-item continuation mode
+     * (approval continuationMode=per_item) as the durable per-item idempotency source:
+     * a walk re-invocation must never re-execute an item whose row already landed
+     * (rows are the cross-pod / crash-safe record of "this item already ran here").
+     */
+    @Query("SELECT DISTINCT w.itemIndex FROM WorkflowStepDataEntity w WHERE w.runId = :runId AND w.normalizedKey = :normalizedKey AND w.status IN ('COMPLETED', 'FAILED', 'SKIPPED') AND w.epoch = :epoch")
+    List<Integer> findTerminalItemIndicesByEpoch(@Param("runId") String runId, @Param("normalizedKey") String normalizedKey, @Param("epoch") int epoch);
+
+    /**
      * Phase 2.E aggregate query - count COMPLETED vs FAILED rows for a split-aware
      * node within one epoch. Used by {@code recordSplitAggregateIfMissing} to write
      * the global node status ONCE at barrier seal, instead of on every per-item completion

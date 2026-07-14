@@ -33,11 +33,14 @@ class CatalogV1ControllerTest {
     @Mock
     private CatalogV1Service catalogV1Service;
 
+    @Mock
+    private com.apimarketplace.catalog.service.execution.MockToolExecutionService mockToolExecutionService;
+
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
-        CatalogV1Controller controller = new CatalogV1Controller(catalogV1Service);
+        CatalogV1Controller controller = new CatalogV1Controller(catalogV1Service, mockToolExecutionService);
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
     }
 
@@ -270,6 +273,105 @@ class CatalogV1ControllerTest {
             org.junit.jupiter.api.Assertions.assertNull(
                     com.apimarketplace.catalog.service.http.CredentialModeContext.getExplicitSource(),
                     "finally must clear() even on exception path; otherwise the next request on this thread sees a stale 'platform'");
+        }
+    }
+
+    @Nested
+    @DisplayName("POST /catalog/v1/tools/.../execute-mock")
+    class ExecuteMockToolTests {
+
+        @Test
+        @DisplayName("should serve the mock execution response for a single-segment tool id")
+        void executeMockHappyPath() throws Exception {
+            String toolId = UUID.randomUUID().toString();
+            ToolExecutionResponse response = ToolExecutionResponse.builder()
+                    .success(true)
+                    .toolId(toolId)
+                    .build();
+            when(mockToolExecutionService.executeMockTool(eq(toolId), anyString())).thenReturn(response);
+
+            mockMvc.perform(post("/catalog/v1/tools/{toolId}/execute-mock", toolId))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.success").value(true))
+                    .andExpect(jsonPath("$.toolId").value(toolId));
+        }
+
+        @Test
+        @DisplayName("two-segment form resolves the tool id to 'apiSlug/toolSlug' (orchestrator step id format)")
+        void executeMockTwoSegmentSlugForm() throws Exception {
+            ToolExecutionResponse response = ToolExecutionResponse.builder()
+                    .success(true)
+                    .toolId("gmail/gmail-list-messages")
+                    .build();
+            when(mockToolExecutionService.executeMockTool(eq("gmail/gmail-list-messages"), anyString()))
+                    .thenReturn(response);
+
+            mockMvc.perform(post("/catalog/v1/tools/{apiSlug}/{toolSlug}/execute-mock",
+                            "gmail", "gmail-list-messages"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.success").value(true));
+
+            org.mockito.Mockito.verify(mockToolExecutionService)
+                    .executeMockTool(eq("gmail/gmail-list-messages"), anyString());
+        }
+
+        @Test
+        @DisplayName("should forward the X-Request-Id header to the service when provided")
+        void executeMockForwardsRequestId() throws Exception {
+            String toolId = UUID.randomUUID().toString();
+            ToolExecutionResponse response = ToolExecutionResponse.builder()
+                    .success(true)
+                    .requestId("req-mock-9")
+                    .build();
+            when(mockToolExecutionService.executeMockTool(toolId, "req-mock-9")).thenReturn(response);
+
+            mockMvc.perform(post("/catalog/v1/tools/{toolId}/execute-mock", toolId)
+                            .header("X-Request-Id", "req-mock-9"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.requestId").value("req-mock-9"));
+        }
+
+        @Test
+        @DisplayName("ToolNotFoundException translates to 404 with {success:false, message:'Tool not found', toolId} (orchestrator's CatalogMockClient reads this shape)")
+        void executeMockToolNotFoundIs404() throws Exception {
+            when(mockToolExecutionService.executeMockTool(eq("gmail/nope"), anyString()))
+                    .thenThrow(new com.apimarketplace.catalog.service.exception.ToolNotFoundException("gmail/nope"));
+
+            mockMvc.perform(post("/catalog/v1/tools/{apiSlug}/{toolSlug}/execute-mock", "gmail", "nope"))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.success").value(false))
+                    .andExpect(jsonPath("$.message").value("Tool not found"))
+                    .andExpect(jsonPath("$.toolId").value("gmail/nope"));
+        }
+
+        @Test
+        @DisplayName("MockExampleNotFoundException translates to 404 with the exception message as 'message' + toolId")
+        void executeMockExampleNotFoundIs404() throws Exception {
+            String toolId = UUID.randomUUID().toString();
+            when(mockToolExecutionService.executeMockTool(eq(toolId), anyString()))
+                    .thenThrow(new com.apimarketplace.catalog.service.execution.MockToolExecutionService
+                            .MockExampleNotFoundException("No default example response configured for tool " + toolId));
+
+            mockMvc.perform(post("/catalog/v1/tools/{toolId}/execute-mock", toolId))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.success").value(false))
+                    .andExpect(jsonPath("$.message")
+                            .value("No default example response configured for tool " + toolId))
+                    .andExpect(jsonPath("$.toolId").value(toolId));
+        }
+
+        @Test
+        @DisplayName("an unexpected service exception translates to 500 with the error detail")
+        void executeMockUnexpectedErrorIs500() throws Exception {
+            String toolId = UUID.randomUUID().toString();
+            when(mockToolExecutionService.executeMockTool(eq(toolId), anyString()))
+                    .thenThrow(new RuntimeException("projection blew up"));
+
+            mockMvc.perform(post("/catalog/v1/tools/{toolId}/execute-mock", toolId))
+                    .andExpect(status().isInternalServerError())
+                    .andExpect(jsonPath("$.success").value(false))
+                    .andExpect(jsonPath("$.error").value("projection blew up"))
+                    .andExpect(jsonPath("$.toolId").value(toolId));
         }
     }
 

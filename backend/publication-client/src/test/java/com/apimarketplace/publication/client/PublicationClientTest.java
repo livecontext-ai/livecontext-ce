@@ -41,6 +41,80 @@ class PublicationClientTest {
     }
 
     @Nested
+    @DisplayName("publishAgent - structured 422 refusal mapping")
+    class PublishAgentValidationMapping {
+
+        private static final String URL = BASE_URL + "/api/internal/publications/publish-agent";
+
+        private void stub422(String body) {
+            when(restTemplate.exchange(eq(URL), eq(HttpMethod.POST), any(HttpEntity.class),
+                    any(ParameterizedTypeReference.class)))
+                    .thenThrow(org.springframework.web.client.HttpClientErrorException.create(
+                            org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY,
+                            "Unprocessable Entity",
+                            new org.springframework.http.HttpHeaders(),
+                            body.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                            java.nio.charset.StandardCharsets.UTF_8));
+        }
+
+        @Test
+        @DisplayName("422 with the {error, message, violations} body surfaces as a typed PublicationValidationException")
+        void maps422ToTypedException() {
+            stub422("{\"error\":\"AGENT_ALL_ACCESS_NOT_PUBLISHABLE\","
+                    + "\"message\":\"This agent cannot be published because it has 'All' access on some resource types.\","
+                    + "\"violations\":[{\"agentId\":\"a1\",\"agentName\":\"Support Copilot\",\"root\":true,"
+                    + "\"families\":[\"tables\"]}]}");
+
+            Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(() ->
+                    publicationClient.publishAgent(Map.of("agentConfigId", "a1"), TENANT_ID, null));
+
+            assertThat(thrown).isInstanceOf(PublicationValidationException.class);
+            PublicationValidationException e = (PublicationValidationException) thrown;
+            assertThat(e.getErrorCode()).isEqualTo("AGENT_ALL_ACCESS_NOT_PUBLISHABLE");
+            assertThat(e.getMessage()).contains("'All' access");
+            assertThat(e.getBody().get("violations")).isInstanceOf(java.util.List.class);
+            java.util.Map<?, ?> violation = (java.util.Map<?, ?>) ((java.util.List<?>) e.getBody().get("violations")).get(0);
+            assertThat(violation.get("agentName")).isEqualTo("Support Copilot");
+        }
+
+        @Test
+        @DisplayName("422 with a malformed (non-JSON) body degrades to the raw body as message, empty details")
+        void malformed422BodyDegradesGracefully() {
+            stub422("not json at all");
+
+            Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(() ->
+                    publicationClient.publishAgent(Map.of("agentConfigId", "a1"), TENANT_ID, null));
+
+            assertThat(thrown).isInstanceOf(PublicationValidationException.class);
+            PublicationValidationException e = (PublicationValidationException) thrown;
+            assertThat(e.getErrorCode()).isNull();
+            assertThat(e.getMessage()).isEqualTo("not json at all");
+            assertThat(e.getBody()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("a non-422 HTTP error keeps the legacy opaque RuntimeException (only validation refusals are typed)")
+        void non422KeepsLegacyRuntimeException() {
+            when(restTemplate.exchange(eq(URL), eq(HttpMethod.POST), any(HttpEntity.class),
+                    any(ParameterizedTypeReference.class)))
+                    .thenThrow(org.springframework.web.client.HttpClientErrorException.create(
+                            org.springframework.http.HttpStatus.BAD_REQUEST,
+                            "Bad Request",
+                            new org.springframework.http.HttpHeaders(),
+                            "{\"error\":\"agentConfigId is required\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                            java.nio.charset.StandardCharsets.UTF_8));
+
+            Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(() ->
+                    publicationClient.publishAgent(Map.of(), TENANT_ID, null));
+
+            assertThat(thrown)
+                    .isInstanceOf(RuntimeException.class)
+                    .isNotInstanceOf(PublicationValidationException.class)
+                    .hasMessageContaining("Failed to publish agent");
+        }
+    }
+
+    @Nested
     @DisplayName("acquireAgentPublication")
     class AcquireAgentPublication {
 

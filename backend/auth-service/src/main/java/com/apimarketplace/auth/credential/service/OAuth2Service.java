@@ -85,6 +85,13 @@ public class OAuth2Service {
      */
     public static final String REDIS_REFRESH_COOLDOWN_PREFIX = "oauth2:refresh-cooldown:";
     private static final String TEMPLATE_ID_FIELD = "credential_template_id";
+    /**
+     * credential_data marker set at connect time for providers renewed via a non-RFC
+     * access-token grant (Meta family - no refresh_token exists). The refresh scheduler's
+     * SQL predicate selects on this marker since it cannot read the template config.
+     */
+    static final String REFRESH_MODE_FIELD = "refresh_mode";
+    static final String REFRESH_MODE_ACCESS_TOKEN = "access_token";
     private static final String TEMPLATE_KEY_FIELD = "credential_template_key";
     private static final String TEMPLATE_ICON_SLUG_FIELD = "credential_template_icon_slug";
     private static final String TEMPLATE_VARIANT_FIELD = "credential_template_variant";
@@ -629,6 +636,13 @@ public class OAuth2Service {
 
             OAuth2TokenResponse tokens = engine.parseTokenResponse(response.getBody(), providerConfig);
 
+            // Non-RFC long-lived exchange (Meta): swap the short-lived callback token for the
+            // ~60-day one BEFORE persisting, so the credential is born long-lived with a real
+            // expires_at. Best-effort: on failure the short-lived token is kept (connect still
+            // succeeds, degraded to today's behavior).
+            tokens = maybeExchangeLongLived(providerConfig, tokens,
+                    oAuth2State.clientId(), oAuth2State.clientSecret());
+
             // Persist credential.
             Map<String, Object> credentialData = new HashMap<>();
             // Persist the per-instance URL host vars (shop, subdomain, ...) so runtime base-URL
@@ -649,6 +663,12 @@ public class OAuth2Service {
             credentialData.put("token_type", tokens.tokenType() != null ? tokens.tokenType() : "Bearer");
             if (tokens.expiresIn() != null) {
                 credentialData.put("expires_at", Instant.now().plusSeconds(tokens.expiresIn()).toString());
+            }
+            // Providers renewed via an access-token grant (no refresh_token) mark the credential
+            // so the refresh scheduler's SQL predicate can select it - the predicate cannot see
+            // the template config, only credential_data.
+            if (providerConfig.refresh().supported() && providerConfig.refresh().accessTokenGrant() != null) {
+                credentialData.put(REFRESH_MODE_FIELD, REFRESH_MODE_ACCESS_TOKEN);
             }
             // Harvest non-RFC-6749 fields (Salesforce instance_url, Xero tenant_id, …) declared
             // as quirks in the provider JSON. Nothing is harvested when no quirks are declared.
@@ -956,6 +976,13 @@ public class OAuth2Service {
             return refreshClientCredentials(credentialId, userId, credential, data, providerConfig);
         }
 
+        // Non-RFC access-token grant renewal (Meta ig_refresh_token / fb_exchange_token):
+        // there is NO refresh_token on these providers - the current access token IS the
+        // renewal credential. Must branch BEFORE the refresh_token null check below.
+        if (providerConfig.refresh().supported() && providerConfig.refresh().accessTokenGrant() != null) {
+            return refreshViaAccessTokenGrant(credentialId, userId, credential, data, providerConfig);
+        }
+
         if (refreshToken == null || refreshToken.isBlank()) {
             throw new IllegalStateException("No refresh token available");
         }
@@ -1110,6 +1137,160 @@ public class OAuth2Service {
         } catch (Exception e) {
             log.warn("client_credentials token refresh failed for credential {}: {}", credentialId, e.getMessage());
             RuntimeException classified = errorClassifier.classify(e, readRefreshAttempts(data));
+            handleRefreshFailure(credential, data, classified);
+            throw classified;
+        }
+    }
+
+    /**
+     * Exchange the callback's short-lived token for the provider's long-lived one
+     * ({@code oauth2Config.longLivedExchange} - Meta's {@code ig_exchange_token} /
+     * {@code fb_exchange_token}). Returns the original tokens when the provider declares no
+     * exchange. Best-effort: any failure keeps the short-lived token so the connect still
+     * completes (identical to pre-feature behavior), with a loud status-only log line.
+     *
+     * <p>The granted {@code scope} is preserved from the ORIGINAL response - the exchange
+     * response carries only token fields (Meta returns {access_token, token_type, expires_in}).
+     */
+    private OAuth2TokenResponse maybeExchangeLongLived(
+            OAuth2ProviderConfig providerConfig,
+            OAuth2TokenResponse tokens,
+            String clientId,
+            String clientSecret
+    ) {
+        OAuth2ProviderConfig.AccessTokenGrant exchange = providerConfig.longLivedExchange();
+        if (exchange == null) {
+            return tokens;
+        }
+        try {
+            // The URL query carries the token (and possibly the client secret): NEVER log it,
+            // and never log exception messages from this call (RestTemplate embeds the URL).
+            // getForEntity(URI) - the String overload would re-encode the already-encoded
+            // query (%XX -> %25XX), corrupting any token with reserved characters.
+            String url = engine.buildAccessTokenGrantUrl(exchange, tokens.accessToken(), clientId, clientSecret);
+            ResponseEntity<JsonNode> response = restTemplate.getForEntity(java.net.URI.create(url), JsonNode.class);
+            if (!response.getStatusCode().is2xxSuccessful() || response.getBody() == null) {
+                log.warn("Long-lived token exchange ({}) returned status {} - keeping short-lived token",
+                        exchange.grantType(), response.getStatusCode());
+                return tokens;
+            }
+            OAuth2TokenResponse longLived = engine.parseTokenResponse(response.getBody());
+            log.info("Long-lived token exchange ({}) succeeded, expires_in={}s",
+                    exchange.grantType(), longLived.expiresIn());
+            return new OAuth2TokenResponse(
+                    longLived.accessToken(),
+                    longLived.refreshToken(),
+                    longLived.tokenType() != null ? longLived.tokenType() : tokens.tokenType(),
+                    longLived.expiresIn(),
+                    tokens.scope());
+        } catch (HttpClientErrorException | HttpServerErrorException e) {
+            log.warn("Long-lived token exchange ({}) failed: status={} body_safe=[{}] - keeping short-lived token",
+                    exchange.grantType(), e.getStatusCode(), LogSafeBody.scrub(e.getResponseBodyAsString()));
+            return tokens;
+        } catch (Exception e) {
+            log.warn("Long-lived token exchange ({}) failed: {} - keeping short-lived token",
+                    exchange.grantType(), e.getClass().getSimpleName());
+            return tokens;
+        }
+    }
+
+    /**
+     * Renew an access token via the provider's non-RFC access-token grant
+     * ({@code oauth2Config.refresh.accessTokenGrant} - Meta's {@code ig_refresh_token} /
+     * {@code fb_exchange_token} re-exchange). The CURRENT access token is the renewal
+     * credential; there is no refresh_token. Mirrors the RFC refresh path's failure handling
+     * (classifier + cooldown/terminal bookkeeping) so the scheduler treats both modes alike.
+     */
+    private Credential refreshViaAccessTokenGrant(
+            Long credentialId,
+            String userId,
+            Credential credential,
+            Map<String, Object> data,
+            OAuth2ProviderConfig providerConfig
+    ) {
+        OAuth2ProviderConfig.AccessTokenGrant grant = providerConfig.refresh().accessTokenGrant();
+        String encryptedAccessToken = stringValue(data.get("access_token"));
+        if (encryptedAccessToken == null) {
+            throw new IllegalStateException("No access token available for access-token grant refresh");
+        }
+        String accessToken = encryptionService.decrypt(encryptedAccessToken);
+
+        String clientId = stringValue(data.get("client_id"));
+        if (clientId == null) {
+            clientId = stringValue(data.get("oauth_client_id"));
+        }
+        String clientSecret = null;
+        if (grant.sendClientSecret()) {
+            String encryptedClientSecret = stringValue(data.get("oauth_client_secret"));
+            if (encryptedClientSecret == null) {
+                encryptedClientSecret = stringValue(data.get("client_secret"));
+            }
+            if (encryptedClientSecret != null) {
+                clientSecret = encryptionService.decrypt(encryptedClientSecret);
+            } else {
+                // Legacy rows connected before secrets were always persisted: same platform
+                // fallback as the RFC path (V362 - BYOK client resolved in the credential's
+                // workspace).
+                clientSecret = platformCredentialService.getRawCredential(
+                                credential.integration(), userId, credential.organizationId())
+                        .map(pc -> pc.clientSecret())
+                        .orElse(null);
+            }
+        }
+
+        int currentAttempts = readRefreshAttempts(data);
+        try {
+            // URL query carries the current token (and possibly the client secret): never log
+            // the URL or raw exception messages (RestTemplate embeds the URL in them).
+            // getForEntity(URI) - the String overload would re-encode the already-encoded
+            // query (%XX -> %25XX), corrupting any token with reserved characters.
+            String url = engine.buildAccessTokenGrantUrl(grant, accessToken, clientId, clientSecret);
+            ResponseEntity<JsonNode> response = restTemplate.getForEntity(java.net.URI.create(url), JsonNode.class);
+            if (!response.getStatusCode().is2xxSuccessful() || response.getBody() == null) {
+                throw new IllegalStateException("Access-token grant refresh failed: " + response.getStatusCode());
+            }
+
+            OAuth2TokenResponse tokens = engine.parseTokenResponse(response.getBody());
+            Map<String, Object> newData = new HashMap<>(data);
+            newData.put("access_token", encryptionService.encrypt(tokens.accessToken()));
+            if (tokens.expiresIn() != null) {
+                newData.put("expires_at", Instant.now().plusSeconds(tokens.expiresIn()).toString());
+            } else {
+                // Success without expires_in (Meta re-issuing an unchanged token): keep the
+                // STALE expires_at and the sweeper would re-refresh this row every tick
+                // forever (success clears the failure/cooldown fields). Drop expires_at so
+                // the credential falls back to the lazy 401-retry path instead.
+                newData.remove("expires_at");
+            }
+            newData.put(REFRESH_MODE_FIELD, REFRESH_MODE_ACCESS_TOKEN);
+            clearFailureFields(newData);
+            Credential saved = credentialService.updateCredentialData(credentialId, userId, newData);
+            clearRedisCooldown(credentialId);
+            log.info("Access-token grant refresh ({}) succeeded for credential {}, expires_in={}s",
+                    grant.grantType(), credentialId, tokens.expiresIn());
+            return saved;
+        } catch (HttpClientErrorException | HttpServerErrorException e) {
+            log.error("Access-token grant refresh ({}) HTTP error for credential {}: status={} body_safe=[{}]",
+                    grant.grantType(), credentialId, e.getStatusCode(),
+                    LogSafeBody.scrub(e.getResponseBodyAsString()));
+            RuntimeException classified = errorClassifier.classify(e, currentAttempts);
+            handleRefreshFailure(credential, data, classified);
+            throw classified;
+        } catch (ResourceAccessException socketFailure) {
+            log.warn("Access-token grant refresh ({}) socket failure for credential {}: {}",
+                    grant.grantType(), credentialId, socketFailure.getClass().getSimpleName());
+            RuntimeException classified = errorClassifier.classify(socketFailure, currentAttempts);
+            handleRefreshFailure(credential, data, classified);
+            throw classified;
+        } catch (Exception e) {
+            // Same bookkeeping parity as the RFC path's generic catch: without it a 200 with
+            // a garbage body (parseTokenResponse throws) escapes with no cooldown and the
+            // sweeper hammers the provider every tick. Log the exception CLASS only - a
+            // malformed grant URL throws IllegalArgumentException whose message embeds the
+            // full query string (token + client secret).
+            log.warn("Access-token grant refresh ({}) unexpected failure for credential {}: {}",
+                    grant.grantType(), credentialId, e.getClass().getSimpleName());
+            RuntimeException classified = errorClassifier.classify(e, currentAttempts);
             handleRefreshFailure(credential, data, classified);
             throw classified;
         }

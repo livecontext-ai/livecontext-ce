@@ -150,6 +150,17 @@ public class WorkflowBuilderViewer {
             result.put("config", desc.config());
         }
 
+        // Surface the node's mock block (per-node mock mode) - the agent reads it
+        // back here after modify(mock=...), and it explains why an editor run
+        // returns configured data instead of executing this node for real.
+        Object mockBlock = node.get(com.apimarketplace.orchestrator.domain.workflow.NodeMock.JSON_KEY);
+        if (mockBlock instanceof Map<?, ?> mockMap && !mockMap.isEmpty()) {
+            result.put("mock", mockBlock);
+            result.put("mock_hint", "This node returns the configured mock instead of executing in editor runs. "
+                + "Clear: workflow(action='modify', node='" + label + "', mock={}). Ignore for one run: execute "
+                + "with mock_mode='off'. Production fires never apply it.");
+        }
+
         // Expose modifiable fields so LLM knows what can be changed and with which param keys
         if (!desc.modifiableFields().isEmpty()) {
             Map<String, Object> modFields = new LinkedHashMap<>();

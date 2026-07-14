@@ -38,6 +38,7 @@ class FormDispatchServiceTest {
     @Mock private ReusableTriggerService triggerService;
     @Mock private ProductionRunResolver productionRunResolver;
     @Mock private CreditConsumptionClient creditClient;
+    @Mock private ShareInvocationLimiter shareInvocationLimiter;
 
     private FormDispatchService service;
 
@@ -53,9 +54,10 @@ class FormDispatchServiceTest {
     void setUp() {
         service = new FormDispatchService(
                 triggerClient, workflowRepository, runRepository,
-                triggerService, productionRunResolver, creditClient,
+                triggerService, productionRunResolver, creditClient, shareInvocationLimiter,
                 new com.apimarketplace.common.storage.url.PublicFileUrlBuilder("https://livecontext.ai"));
         lenient().when(creditClient.checkCredits(any())).thenReturn(true);
+        lenient().when(shareInvocationLimiter.tryAcquire(any(), any())).thenReturn(true);
 
         // Default: ProductionRunResolver delegates to existing repo stubs so the
         // pre-existing test setup keeps working after the centralized refactor.
@@ -143,6 +145,18 @@ class FormDispatchServiceTest {
     @Nested
     @DisplayName("submitForm - dispatch to workflow")
     class SubmitFormTests {
+
+        @Test
+        @DisplayName("throws ShareInvocationLimitExceededException (->429) when the daily invocation cap is hit, and never fires the agent")
+        void submitFormOverInvocationLimitThrows() {
+            StandaloneFormEndpointDto endpoint = createEndpoint(TRIGGER_ID);
+            when(triggerClient.findFormEndpointByToken(TOKEN)).thenReturn(endpoint);
+            when(shareInvocationLimiter.tryAcquire(eq(TOKEN), any())).thenReturn(false);
+
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.submitForm(TOKEN, FORM_DATA, IP_ADDRESS))
+                    .isInstanceOf(ShareInvocationLimitExceededException.class);
+            verify(triggerService, never()).executeTrigger(any(), any(), any(), any());
+        }
 
         @Test
         @DisplayName("Should dispatch successfully with stored triggerId")

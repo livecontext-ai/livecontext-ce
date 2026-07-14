@@ -235,8 +235,8 @@ public class ItemMergeCollector implements RunScopedCache {
             // publishes the in-place mutations to lock-free readers on other threads.
             mergeStates.put(key, state);
 
-            log.debug("Recorded entry for {} from {} in {} (progress: {:.1f}%)",
-                entry.itemId(), entry.sourceNodeId(), key, state.getProgress() * 100);
+            log.debug("Recorded entry for {} from {} in {} (progress: {}%)",
+                entry.itemId(), entry.sourceNodeId(), key, String.format("%.1f", state.getProgress() * 100));
 
             // Check if merge is complete
             if (state.isComplete()) {

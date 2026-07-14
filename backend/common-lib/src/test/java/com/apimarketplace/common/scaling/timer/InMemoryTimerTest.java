@@ -94,4 +94,29 @@ class InMemoryTimerTest {
         assertFalse(latch1.await(500, TimeUnit.MILLISECONDS),
                 "Original timer should have been cancelled");
     }
+
+    @Test
+    void reschedule_while_old_callback_running_keeps_new_timer_cancellable() throws InterruptedException {
+        // Regression: the old callback's finally did an unconditional timers.remove(id), so a
+        // reschedule that ran while the old callback was still executing had its NEW future's
+        // mapping evicted - leaving it un-cancellable and firing unexpectedly.
+        CountDownLatch oldRunning = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+
+        timer.schedule("t1", Duration.ofMillis(10), () -> {
+            oldRunning.countDown();
+            try { release.await(2, TimeUnit.SECONDS); } catch (InterruptedException ignored) { }
+        });
+        assertTrue(oldRunning.await(2, TimeUnit.SECONDS), "old callback should start");
+
+        // Reschedule while the old callback is still blocked inside its body.
+        timer.schedule("t1", Duration.ofSeconds(30), () -> { });
+
+        // Let the old callback finish; its finally must NOT evict the new future's mapping.
+        release.countDown();
+        Thread.sleep(200);
+
+        assertTrue(timer.isActive("t1"), "rescheduled timer must remain active");
+        assertTrue(timer.cancel("t1"), "rescheduled timer must be cancellable");
+    }
 }

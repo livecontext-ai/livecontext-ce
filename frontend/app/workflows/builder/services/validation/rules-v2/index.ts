@@ -26,6 +26,7 @@ import { BackendErrorRule } from './BackendErrorRule';
 import { GraphStructureRule } from './GraphStructureRule';
 import { LabelValidationRule } from './LabelValidationRule';
 import { NodeConfigurationRule } from './NodeConfigurationRule';
+import { MockConfigurationRule } from './MockConfigurationRule';
 import { CrudValidationRule } from './CrudValidationRule';
 import { CredentialValidationRule } from './CredentialValidationRule';
 import { InterfaceValidationRule } from './InterfaceValidationRule';
@@ -44,6 +45,7 @@ const RULE_INSTANCES: ValidationRule[] = [
   new GraphStructureRule(),
   new LabelValidationRule(),
   new NodeConfigurationRule(),
+  new MockConfigurationRule(),
   new CrudValidationRule(),
   new CredentialValidationRule(),
   new InterfaceValidationRule(),
@@ -80,6 +82,7 @@ export { BackendErrorRule } from './BackendErrorRule';
 export { GraphStructureRule } from './GraphStructureRule';
 export { LabelValidationRule } from './LabelValidationRule';
 export { NodeConfigurationRule } from './NodeConfigurationRule';
+export { MockConfigurationRule } from './MockConfigurationRule';
 export { CrudValidationRule } from './CrudValidationRule';
 export { CredentialValidationRule } from './CredentialValidationRule';
 export { InterfaceValidationRule } from './InterfaceValidationRule';

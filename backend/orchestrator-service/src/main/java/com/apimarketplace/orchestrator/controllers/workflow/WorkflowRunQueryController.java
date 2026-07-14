@@ -155,12 +155,27 @@ public class WorkflowRunQueryController {
      * Returns 404 if the workflow has no pinned version or no run at that version.
      */
     @GetMapping("/{workflowId}/runs/pinned")
-    public ResponseEntity<?> getPinnedRun(@PathVariable("workflowId") UUID workflowId) {
+    public ResponseEntity<?> getPinnedRun(
+            @PathVariable("workflowId") UUID workflowId,
+            @RequestHeader(value = "X-User-ID", required = false) String tenantId,
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
+        // Cross-tenant guard: this endpoint resolved the pinned run purely by workflowId +
+        // version + status with NO tenant filter, so any caller who knew a workflowId read
+        // another tenant's pinned run (plan/metadata/triggerPayload) - an IDOR. Bind it to
+        // the caller's scope below (isRunInScope), mirroring the sibling run reads.
         ProductionRunResolver.Resolution resolution = productionRunResolver.resolve(workflowId, com.apimarketplace.orchestrator.trigger.ProductionRunResolver.RunSelectionPolicy.LATEST_TRUSTED);
         if (!resolution.isFound()) {
             return ResponseEntity.notFound().build();
         }
         WorkflowRunEntity entity = resolution.run().get();
+        // isRunInScope also enforces the share binding (shareContextPermitsRun). The pinned run
+        // is resolved by version/status, not by publicationId, so for an APPLICATION share visitor
+        // it 404s unless that run happens to be publication-tagged; the shared-app viewer tolerates
+        // this (getPinnedWorkflowRun swallows the error and the run it renders comes from
+        // /runs/application). A same-tenant owner/team caller (no share context) is unaffected.
+        if (!WorkflowControllerHelper.isRunInScope(entity, tenantId, orgId)) {
+            return ResponseEntity.notFound().build();
+        }
         return ResponseEntity.ok(mapRunWithEpochLookup(entity));
     }
 
@@ -171,13 +186,21 @@ public class WorkflowRunQueryController {
     @GetMapping("/{workflowId}/runs/application")
     public ResponseEntity<?> getApplicationRun(
             @PathVariable("workflowId") UUID workflowId,
-            @RequestParam("publicationId") String publicationId) {
+            @RequestParam("publicationId") String publicationId,
+            @RequestHeader(value = "X-User-ID", required = false) String tenantId,
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
 
+        // Cross-tenant guard: the publicationId filter is a functional selector, not a security
+        // boundary (it is the marketplace/share resource token, not a secret), so without a tenant
+        // check any caller who knew a workflowId + publicationId read that run - an IDOR. Bind it
+        // to the caller's scope below (isRunInScope). The APPLICATION share viewer is unaffected: the
+        // returned run always carries publicationId == the queried token == X-Share-Resource-Token,
+        // so shareContextPermitsRun passes.
         Optional<WorkflowRunEntity> runOpt = workflowRunRepository
             .findFirstByWorkflowIdAndSourceAndPublicationIdOrderByStartedAtDesc(
                 workflowId, "application", publicationId);
 
-        if (runOpt.isEmpty()) {
+        if (runOpt.isEmpty() || !WorkflowControllerHelper.isRunInScope(runOpt.get(), tenantId, orgId)) {
             return ResponseEntity.notFound().build();
         }
 

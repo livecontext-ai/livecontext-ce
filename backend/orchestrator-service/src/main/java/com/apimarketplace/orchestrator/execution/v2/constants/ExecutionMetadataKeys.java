@@ -281,6 +281,39 @@ public final class ExecutionMetadataKeys {
     public static final String POLICY_TIMEOUT = "policy_timeout";
 
     // ========================================================================
+    // MOCK KEYS - Keys stamped by MockNodeResultFactory (per-node mock mode)
+    // ========================================================================
+
+    /**
+     * Flag set on every result produced by the per-node mock mode instead of a
+     * real execution. Dual-written into output AND metadata (the
+     * {@link #POLICY_ATTEMPT} pattern: output is what persists for COMPLETED
+     * results, metadata is the in-flight engine/WS signal), and re-injected after
+     * schema transformation by {@code StepPayloadService} so the badge survives
+     * {@code transformToDbSchema}. Surfaces "this output was configured, not
+     * produced" to the inspector and the agent's {@code get_node_output}.
+     * Value: Boolean (true)
+     */
+    public static final String MOCKED = "__mocked__";
+
+    /**
+     * The mock's source ({@code static} / {@code catalog_example} / {@code error}),
+     * paired with {@link #MOCKED}. Same dual-write + persistence rules.
+     * Value: String
+     */
+    public static final String MOCK_SOURCE = "__mock_source__";
+
+    /**
+     * Check if a result output or metadata map carries the mock marker.
+     *
+     * @param map output or metadata map (may be null)
+     * @return true when the result was produced by the mock mode
+     */
+    public static boolean isMocked(java.util.Map<String, Object> map) {
+        return map != null && Boolean.TRUE.equals(map.get(MOCKED));
+    }
+
+    // ========================================================================
     // CONTEXT DATA KEYS - Keys used in ExecutionContext global data
     // ========================================================================
 

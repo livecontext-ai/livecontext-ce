@@ -413,6 +413,51 @@ export function makeSendEmailNode(
   });
 }
 
+/** Creates an email-inbox node with optional IMAP credential id. */
+export function makeEmailInboxNode(
+  label: string,
+  opts?: { id?: string; imapCredentialId?: number | null }
+): Node<BuilderNodeData> {
+  const nodeId = opts?.id || nextId('email-inbox');
+  return makeNode({
+    id: nodeId,
+    type: 'flowNode',
+    data: {
+      id: 'email_inbox',
+      label,
+      kind: 'email_inbox' as any,
+      badge: 'Step',
+      imapCredentialId: opts?.imapCredentialId ?? null,
+    } as any,
+  });
+}
+
+/**
+ * Creates an ssh / sftp / database node with its dedicated credential id
+ * field (sshCredentialId / sftpCredentialId / dbCredentialId). These nodes
+ * are detected purely by `data.kind` (see nodeRegistry.isSshNode etc.).
+ */
+export function makeCoreCredentialNode(
+  kind: 'ssh' | 'sftp' | 'database',
+  label: string,
+  opts?: { id?: string; credentialId?: number | null }
+): Node<BuilderNodeData> {
+  const nodeId = opts?.id || nextId(kind);
+  const credField =
+    kind === 'ssh' ? 'sshCredentialId' : kind === 'sftp' ? 'sftpCredentialId' : 'dbCredentialId';
+  return makeNode({
+    id: nodeId,
+    type: 'flowNode',
+    data: {
+      id: kind,
+      label,
+      kind: kind as any,
+      badge: 'Step',
+      [credField]: opts?.credentialId ?? null,
+    } as any,
+  });
+}
+
 /** Creates a transform node. */
 export function makeTransformNode(
   label: string,

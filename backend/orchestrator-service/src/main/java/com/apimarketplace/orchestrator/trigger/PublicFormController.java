@@ -66,6 +66,8 @@ public class PublicFormController {
             return ResponseEntity.ok(result);
         } catch (IllegalArgumentException e) {
             return ResponseEntity.notFound().build();
+        } catch (ShareInvocationLimitExceededException e) {
+            return ResponseEntity.status(429).body(Map.of("error", e.getMessage()));
         } catch (IllegalStateException e) {
             return ResponseEntity.status(409).body(Map.of("error", e.getMessage()));
         } catch (Exception e) {

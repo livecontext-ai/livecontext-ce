@@ -198,4 +198,33 @@ class WorkflowRunQueryControllerTenantGuardTest {
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         }
     }
+
+    @Nested
+    @DisplayName("getPinnedRun / getApplicationRun - IDOR guard (previously NO scope check)")
+    class PinnedAndApplicationRunGuard {
+
+        @Test
+        @DisplayName("getPinnedRun 404s for a cross-tenant caller - the run was resolved by workflowId with no tenant filter")
+        void pinnedRunNotFoundOnCrossTenant() {
+            com.apimarketplace.orchestrator.trigger.ProductionRunResolver.Resolution resolution =
+                    new com.apimarketplace.orchestrator.trigger.ProductionRunResolver.Resolution(
+                    Optional.of(ownedRun()), com.apimarketplace.orchestrator.trigger.ProductionRunResolver.Outcome.FOUND, "wf");
+            when(productionRunResolver.resolve(eq(WORKFLOW_ID), any())).thenReturn(resolution);
+
+            ResponseEntity<?> response = controller.getPinnedRun(WORKFLOW_ID, INTRUDER, null);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        }
+
+        @Test
+        @DisplayName("getApplicationRun 404s for a cross-tenant caller - publicationId is a selector, not a security boundary")
+        void applicationRunNotFoundOnCrossTenant() {
+            when(workflowRunRepository.findFirstByWorkflowIdAndSourceAndPublicationIdOrderByStartedAtDesc(
+                    WORKFLOW_ID, "application", "pub-1")).thenReturn(Optional.of(ownedRun()));
+
+            ResponseEntity<?> response = controller.getApplicationRun(WORKFLOW_ID, "pub-1", INTRUDER, null);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        }
+    }
 }

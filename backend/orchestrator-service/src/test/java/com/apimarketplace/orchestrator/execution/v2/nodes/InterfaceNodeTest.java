@@ -636,6 +636,193 @@ class InterfaceNodeTest {
     }
 
     @Nested
+    @DisplayName("execute() - generateVideo toggle")
+    class VideoCaptureTests {
+
+        private static final String INTERFACE_UUID = "11111111-2222-3333-4444-555555555555";
+
+        /** 12-arg ctor: only the video toggles vary; screenshot/PDF/rendered-source all off. */
+        private InterfaceNode videoNode(String interfaceId, boolean generateVideo,
+                                        String preset, Integer maxDurationSeconds) {
+            return new InterfaceNode("interface:form", interfaceId, Map.of(), false,
+                false, false, false, null, false,
+                generateVideo, preset, maxDurationSeconds);
+        }
+
+        @Test
+        @DisplayName("Toggle off → no video field emitted; captureVideo not invoked")
+        void toggleOffOmitsVideoField() {
+            InterfaceScreenshotService mockScreenshotService = mock(InterfaceScreenshotService.class);
+            InterfaceNode node = videoNode(INTERFACE_UUID, false, "vertical", 30);
+            ServiceRegistry registry = mock(ServiceRegistry.class);
+            when(registry.getSignalService()).thenReturn(mockSignalService);
+            when(registry.getInterfaceScreenshotService()).thenReturn(mockScreenshotService);
+            node.acceptServices(registry);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertFalse(result.output().containsKey("video"), "video must be absent when toggle off");
+            verify(mockScreenshotService, never())
+                .captureVideo(any(), any(), anyInt(), anyInt(), any(), any(), any(), any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("Toggle on + service returns FileRef → video field carries it AND preset/duration are forwarded")
+        void toggleOnWithSuccessfulRecordingEmitsVideoFieldAndForwardsOptions() {
+            FileRef recorded = FileRef.of("tenant-1/wf/run-1/interface:form/form_video_epoch_0_spawn_0.mp4",
+                "form_video_epoch_0_spawn_0.mp4", "video/mp4", 4096L);
+            InterfaceScreenshotService mockScreenshotService = mock(InterfaceScreenshotService.class);
+            when(mockScreenshotService.captureVideo(eq("tenant-1"), eq("run-1"), anyInt(), anyInt(), any(),
+                eq("interface:form"), eq(UUID.fromString(INTERFACE_UUID)), eq("square"), eq(45), isNull(), isNull()))
+                .thenReturn(Optional.of(recorded));
+            InterfaceNode node = videoNode(INTERFACE_UUID, true, "square", 45);
+            ServiceRegistry registry = mock(ServiceRegistry.class);
+            when(registry.getSignalService()).thenReturn(mockSignalService);
+            when(registry.getInterfaceScreenshotService()).thenReturn(mockScreenshotService);
+            node.acceptServices(registry);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertEquals(recorded, result.output().get("video"));
+            // The node MUST forward the configured capture options, not hard-code vertical/30s.
+            verify(mockScreenshotService).captureVideo(eq("tenant-1"), eq("run-1"), anyInt(), anyInt(), any(),
+                eq("interface:form"), eq(UUID.fromString(INTERFACE_UUID)), eq("square"), eq(45), isNull(), isNull());
+        }
+
+        @Test
+        @DisplayName("Toggle on + recording returns empty → video field absent, workflow continues (COMPLETED)")
+        void toggleOnWithRecordingFailureContinuesWithoutVideo() {
+            InterfaceScreenshotService mockScreenshotService = mock(InterfaceScreenshotService.class);
+            when(mockScreenshotService.captureVideo(any(), any(), anyInt(), anyInt(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(Optional.empty());
+            InterfaceNode node = videoNode(INTERFACE_UUID, true, "vertical", 30);
+            ServiceRegistry registry = mock(ServiceRegistry.class);
+            when(registry.getSignalService()).thenReturn(mockSignalService);
+            when(registry.getInterfaceScreenshotService()).thenReturn(mockScreenshotService);
+            node.acceptServices(registry);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertFalse(result.output().containsKey("video"));
+            assertEquals(NodeStatus.COMPLETED, result.status(), "recording failure must NOT fail the node");
+        }
+
+        @Test
+        @DisplayName("Toggle on + captureVideo throws → video absent, workflow continues (continue-on-failure guard)")
+        void toggleOnWithRecordingExceptionContinuesWithoutVideo() {
+            InterfaceScreenshotService mockScreenshotService = mock(InterfaceScreenshotService.class);
+            when(mockScreenshotService.captureVideo(any(), any(), anyInt(), anyInt(), any(), any(), any(), any(), any(), any(), any()))
+                .thenThrow(new RuntimeException("sidecar exploded"));
+            InterfaceNode node = videoNode(INTERFACE_UUID, true, "vertical", 30);
+            ServiceRegistry registry = mock(ServiceRegistry.class);
+            when(registry.getSignalService()).thenReturn(mockSignalService);
+            when(registry.getInterfaceScreenshotService()).thenReturn(mockScreenshotService);
+            node.acceptServices(registry);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertFalse(result.output().containsKey("video"));
+            assertEquals(NodeStatus.COMPLETED, result.status());
+        }
+
+        @Test
+        @DisplayName("Toggle on + interfaceId is not a UUID → captureVideo is not called (defensive parse)")
+        void toggleOnWithInvalidInterfaceIdSkipsRecording() {
+            InterfaceScreenshotService mockScreenshotService = mock(InterfaceScreenshotService.class);
+            InterfaceNode node = videoNode("not-a-uuid", true, "vertical", 30);
+            ServiceRegistry registry = mock(ServiceRegistry.class);
+            when(registry.getSignalService()).thenReturn(mockSignalService);
+            when(registry.getInterfaceScreenshotService()).thenReturn(mockScreenshotService);
+            node.acceptServices(registry);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertFalse(result.output().containsKey("video"));
+            verify(mockScreenshotService, never())
+                .captureVideo(any(), any(), anyInt(), anyInt(), any(), any(), any(), any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("Toggle on + screenshot service not wired (null) → no NPE, no video field")
+        void toggleOnWithNullServiceDoesNotThrow() {
+            InterfaceNode node = videoNode(INTERFACE_UUID, true, "vertical", 30);
+            ServiceRegistry registry = mock(ServiceRegistry.class);
+            when(registry.getSignalService()).thenReturn(mockSignalService);
+            when(registry.getInterfaceScreenshotService()).thenReturn(null);
+            node.acceptServices(registry);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertFalse(result.output().containsKey("video"));
+            assertEquals(NodeStatus.COMPLETED, result.status());
+        }
+
+        @Test
+        @DisplayName("resolved_params surfaces generateVideo + videoPreset + videoMaxDurationSeconds (inspector visibility)")
+        @SuppressWarnings("unchecked")
+        void resolvedParamsSurfacesVideoConfig() {
+            InterfaceScreenshotService mockScreenshotService = mock(InterfaceScreenshotService.class);
+            when(mockScreenshotService.captureVideo(any(), any(), anyInt(), anyInt(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(Optional.empty());
+            InterfaceNode node = videoNode(INTERFACE_UUID, true, "horizontal", 60);
+            ServiceRegistry registry = mock(ServiceRegistry.class);
+            when(registry.getSignalService()).thenReturn(mockSignalService);
+            when(registry.getInterfaceScreenshotService()).thenReturn(mockScreenshotService);
+            node.acceptServices(registry);
+
+            NodeExecutionResult result = node.execute(context);
+
+            Map<String, Object> resolved = (Map<String, Object>) result.output().get("resolved_params");
+            assertNotNull(resolved, "resolved_params must be present for the inspector panel");
+            assertEquals(true, resolved.get("generateVideo"));
+            assertEquals("horizontal", resolved.get("videoPreset"));
+            assertEquals(60, resolved.get("videoMaxDurationSeconds"));
+        }
+
+        @Test
+        @DisplayName("videoMode + videoFps from the 14-arg constructor are forwarded to the capture service")
+        void videoModeAndFpsForwarded() {
+            InterfaceScreenshotService mockScreenshotService = mock(InterfaceScreenshotService.class);
+            when(mockScreenshotService.captureVideo(any(), any(), anyInt(), anyInt(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(Optional.empty());
+            InterfaceNode node = new InterfaceNode("interface:form", INTERFACE_UUID, Map.of(), false,
+                false, false, false, null, false,
+                true, "vertical", 20, "live", 60);
+            ServiceRegistry registry = mock(ServiceRegistry.class);
+            when(registry.getSignalService()).thenReturn(mockSignalService);
+            when(registry.getInterfaceScreenshotService()).thenReturn(mockScreenshotService);
+            node.acceptServices(registry);
+
+            node.execute(context);
+
+            verify(mockScreenshotService).captureVideo(any(), any(), anyInt(), anyInt(), any(),
+                eq("interface:form"), eq(UUID.fromString(INTERFACE_UUID)),
+                eq("vertical"), eq(20), eq("live"), eq(60));
+            assertEquals("live", node.getVideoMode());
+            assertEquals(60, node.getVideoFps());
+        }
+
+        @Test
+        @DisplayName("Back-compat 9-arg constructor leaves video OFF (no video field, no capture call)")
+        void nineArgConstructorDefaultsVideoOff() {
+            InterfaceScreenshotService mockScreenshotService = mock(InterfaceScreenshotService.class);
+            InterfaceNode node = new InterfaceNode("interface:form", INTERFACE_UUID, Map.of(), false,
+                false, false, false, null, false);
+            ServiceRegistry registry = mock(ServiceRegistry.class);
+            when(registry.getSignalService()).thenReturn(mockSignalService);
+            when(registry.getInterfaceScreenshotService()).thenReturn(mockScreenshotService);
+            node.acceptServices(registry);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertFalse(node.isGenerateVideo());
+            assertFalse(result.output().containsKey("video"));
+            verify(mockScreenshotService, never())
+                .captureVideo(any(), any(), anyInt(), anyInt(), any(), any(), any(), any(), any(), any(), any());
+        }
+    }
+
+    @Nested
     @DisplayName("execute() - exposeRenderedSource toggle")
     class RenderedSourceExposureTests {
 

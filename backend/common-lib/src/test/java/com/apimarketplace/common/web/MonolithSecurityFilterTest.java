@@ -480,16 +480,16 @@ class MonolithSecurityFilterTest {
         // Cloud parity with AuthenticationFilter.isAllowedShareTokenReadOnlyPost: this batch endpoint
         // resolves tool metadata for the whole plan in one read. A prior guard that blocked all
         // non-GET 403'd it, forcing the builder into a slow per-tool N+1 fallback in a shared
-        // context. CE must allow it so a CE share link behaves like a cloud one. Resource type is
-        // intentionally WORKFLOW (not APPLICATION) - the carve-out is path+method only, independent
-        // of the application-bootstrap exception. Fails on the pre-fix filter (which 403'd it).
+        // context. CE must allow it so a CE share link behaves like a cloud one. Owner-impersonation
+        // is now APPLICATION-only, so the token type is APPLICATION (only APPLICATION shares reach
+        // the method allow-list at all).
         MonolithSecurityFilter filter = new MonolithSecurityFilter(
                 () -> null,
                 List.of(),
                 token -> new MonolithSecurityFilter.ShareTokenContext(
                         "42",
                         "org-789",
-                        "WORKFLOW",
+                        "APPLICATION",
                         "pub-123",
                         "workflow-456"));
         MockHttpServletRequest request = externalRequest("/api/workflow-inspector/tools/batch");
@@ -533,6 +533,286 @@ class MonolithSecurityFilterTest {
         assertThat(forwarded.getHeader("X-Share-Resource-Type")).isEqualTo("APPLICATION");
         assertThat(forwarded.getHeader("X-Share-Resource-Token")).isEqualTo("pub-123");
         assertThat(forwarded.getHeader("X-Share-Resource-Id")).isEqualTo("workflow-456");
+    }
+
+    @Test
+    @DisplayName("APPLICATION share token may fire an interface action / __continue on its run "
+            + "(POST interface-actions/{nodeId}/fire) - CE parity so interactive shared apps are operable")
+    void applicationShareTokenMayFireInterfaceAction() throws Exception {
+        MonolithSecurityFilter filter = new MonolithSecurityFilter(
+                () -> null,
+                List.of(),
+                token -> new MonolithSecurityFilter.ShareTokenContext(
+                        "42", "org-789", "APPLICATION", "pub-123", "workflow-456"));
+        MockHttpServletRequest request = externalRequest(
+                "/api/v2/workflows/dag/runs/run_42/interface-actions/interface:form/fire");
+        request.setMethod("POST");
+        request.addHeader("Authorization", "Bearer ShareToken sl_scope");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+        filter.doFilter(request, response, capturingChain(captured));
+
+        assertThat(response.getStatus()).isNotEqualTo(403);
+        assertThat(captured.get()).isNotNull();
+        var forwarded = (jakarta.servlet.http.HttpServletRequest) captured.get();
+        assertThat(forwarded.getHeader("X-Share-Context")).isEqualTo("true");
+        assertThat(forwarded.getHeader("X-Share-Resource-Type")).isEqualTo("APPLICATION");
+    }
+
+    @Test
+    @DisplayName("APPLICATION share token may resolve a user-approval signal on its run "
+            + "(POST signals/{nodeId}/resolve and resolve-all) - CE parity")
+    void applicationShareTokenMayResolveSignal() throws Exception {
+        for (String path : new String[]{
+                "/api/v2/workflows/dag/runs/run_42/signals/core:approval/resolve",
+                "/api/v2/workflows/dag/runs/run_42/signals/core:approval/resolve-all"}) {
+            MonolithSecurityFilter filter = new MonolithSecurityFilter(
+                    () -> null,
+                    List.of(),
+                    token -> new MonolithSecurityFilter.ShareTokenContext(
+                            "42", "org-789", "APPLICATION", "pub-123", "workflow-456"));
+            MockHttpServletRequest request = externalRequest(path);
+            request.setMethod("POST");
+            request.addHeader("Authorization", "Bearer ShareToken sl_scope");
+            MockHttpServletResponse response = new MockHttpServletResponse();
+            AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+            filter.doFilter(request, response, capturingChain(captured));
+
+            assertThat(response.getStatus())
+                    .as("resolve endpoint %s must be forwarded, not 403", path)
+                    .isNotEqualTo(403);
+            assertThat(captured.get()).as("forwarded for %s", path).isNotNull();
+        }
+    }
+
+    @Test
+    @DisplayName("run-interaction POST stays blocked for a NON-APPLICATION share token (CONVERSATION) - "
+            + "only APPLICATION shares bind the run to a publication")
+    void nonApplicationShareTokenRunInteractionIsBlocked() throws Exception {
+        MonolithSecurityFilter filter = new MonolithSecurityFilter(
+                () -> null,
+                List.of(),
+                token -> new MonolithSecurityFilter.ShareTokenContext(
+                        "42", "org-789", "CONVERSATION", "cs_123", "conv-1"));
+        MockHttpServletRequest request = externalRequest(
+                "/api/v2/workflows/dag/runs/run_42/interface-actions/interface:form/fire");
+        request.setMethod("POST");
+        request.addHeader("Authorization", "Bearer ShareToken sl_conv");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+        filter.doFilter(request, response, capturingChain(captured));
+
+        assertThat(response.getStatus()).isEqualTo(403);
+        assertThat(captured.get()).isNull();
+    }
+
+    @Test
+    @DisplayName("a near-miss run POST (cancel / resolve-nope / list) stays blocked - the interactive "
+            + "allow-list is anchored and must not widen")
+    void nearMissRunPostIsBlockedForApplicationShareToken() throws Exception {
+        for (String path : new String[]{
+                "/api/v2/workflows/dag/runs/run_42/cancel",
+                "/api/v2/workflows/dag/runs/run_42/signals/core:approval/resolve-nope",
+                "/api/v2/workflows/dag/runs/run_42/interface-actions/interface:form/list"}) {
+            MonolithSecurityFilter filter = new MonolithSecurityFilter(
+                    () -> null,
+                    List.of(),
+                    token -> new MonolithSecurityFilter.ShareTokenContext(
+                            "42", "org-789", "APPLICATION", "pub-123", "workflow-456"));
+            MockHttpServletRequest request = externalRequest(path);
+            request.setMethod("POST");
+            request.addHeader("Authorization", "Bearer ShareToken sl_scope");
+            MockHttpServletResponse response = new MockHttpServletResponse();
+            AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+            filter.doFilter(request, response, capturingChain(captured));
+
+            assertThat(response.getStatus()).as("near-miss %s must be 403", path).isEqualTo(403);
+            assertThat(captured.get()).as("not forwarded for %s", path).isNull();
+        }
+    }
+
+    @Test
+    @DisplayName("APPLICATION share token may fire trigger buttons + submit a form-upload (trigger/* and /api/files/upload forwarded) - CE parity")
+    void applicationShareTokenTriggerAndUploadForwarded() throws Exception {
+        for (String path : new String[]{
+                "/api/v2/workflows/runs/run_42/trigger/manual",
+                "/api/v2/workflows/runs/run_42/trigger/chat",
+                "/api/v2/workflows/runs/run_42/trigger/form",
+                "/api/v2/workflows/runs/run_42/trigger/webhook/trigger:my_webhook",
+                "/api/files/upload"}) {
+            MonolithSecurityFilter filter = new MonolithSecurityFilter(
+                    () -> null,
+                    List.of(),
+                    token -> new MonolithSecurityFilter.ShareTokenContext(
+                            "42", "org-789", "APPLICATION", "pub-123", "workflow-456"));
+            MockHttpServletRequest request = externalRequest(path);
+            request.setMethod("POST");
+            request.addHeader("Authorization", "Bearer ShareToken sl_scope");
+            MockHttpServletResponse response = new MockHttpServletResponse();
+            AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+            filter.doFilter(request, response, capturingChain(captured));
+
+            assertThat(response.getStatus()).as("interactive POST %s must be forwarded, not 403", path).isNotEqualTo(403);
+            assertThat(captured.get()).as("forwarded for %s", path).isNotNull();
+        }
+    }
+
+    @Test
+    @DisplayName("Near-miss interactive POSTs stay blocked (trigger without segments, a non-upload files path) - CE parity")
+    void interactiveNearMissBlockedForApplicationShareToken() throws Exception {
+        for (String path : new String[]{
+                "/api/v2/workflows/runs/run_42/trigger",
+                "/api/files/upload/extra",
+                "/api/files/delete"}) {
+            MonolithSecurityFilter filter = new MonolithSecurityFilter(
+                    () -> null,
+                    List.of(),
+                    token -> new MonolithSecurityFilter.ShareTokenContext(
+                            "42", "org-789", "APPLICATION", "pub-123", "workflow-456"));
+            MockHttpServletRequest request = externalRequest(path);
+            request.setMethod("POST");
+            request.addHeader("Authorization", "Bearer ShareToken sl_scope");
+            MockHttpServletResponse response = new MockHttpServletResponse();
+            AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+            filter.doFilter(request, response, capturingChain(captured));
+
+            assertThat(response.getStatus()).as("near-miss %s must be 403", path).isEqualTo(403);
+            assertThat(captured.get()).as("not forwarded for %s", path).isNull();
+        }
+    }
+
+    @Test
+    @DisplayName("Every non-APPLICATION share token (CHAT / FORM / CONVERSATION) is rejected (403) on an "
+            + "owner-scoped GET - only APPLICATION shares may impersonate the owner; the others are served "
+            + "by public per-token endpoints and must not read the owner's workspace")
+    void chatOrFormShareTokenIsRejectedForOwnerImpersonation() throws Exception {
+        for (String resourceType : new String[]{"CHAT", "FORM", "CONVERSATION"}) {
+            MonolithSecurityFilter filter = new MonolithSecurityFilter(
+                    () -> null,
+                    List.of(),
+                    token -> new MonolithSecurityFilter.ShareTokenContext(
+                            "42", "org-789", resourceType, "res_123", null));
+            MockHttpServletRequest request = externalRequest("/api/workflows");
+            request.setMethod("GET");
+            request.addHeader("Authorization", "Bearer ShareToken sl_leak");
+            MockHttpServletResponse response = new MockHttpServletResponse();
+            AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+            filter.doFilter(request, response, capturingChain(captured));
+
+            assertThat(response.getStatus()).as("%s share token must 403", resourceType).isEqualTo(403);
+            assertThat(captured.get()).as("%s share token must not be forwarded", resourceType).isNull();
+        }
+    }
+
+    @Test
+    @DisplayName("CHAT share token is rejected even on an APPLICATION-allow-listed interaction path - the "
+            + "owner-impersonation guard runs BEFORE the method/path allow-list (CE parity)")
+    void chatShareTokenIsRejectedEvenOnAllowlistedInteractionPath() throws Exception {
+        MonolithSecurityFilter filter = new MonolithSecurityFilter(
+                () -> null,
+                List.of(),
+                token -> new MonolithSecurityFilter.ShareTokenContext(
+                        "42", "org-789", "CHAT", "ch_123", null));
+        MockHttpServletRequest request = externalRequest(
+                "/api/v2/workflows/dag/runs/run_42/interface-actions/interface:form/fire");
+        request.setMethod("POST");
+        request.addHeader("Authorization", "Bearer ShareToken sl_chat");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+        filter.doFilter(request, response, capturingChain(captured));
+
+        assertThat(response.getStatus()).isEqualTo(403);
+        assertThat(captured.get()).isNull();
+    }
+
+    @Test
+    @DisplayName("APPLICATION share token: the exact GET endpoints the shared-app viewer needs are forwarded "
+            + "(positive allow-list, CE parity with the cloud AuthenticationFilter)")
+    void applicationShareTokenAllowlistedReadsAreForwarded() throws Exception {
+        String pub = "11111111-1111-1111-1111-111111111111";
+        String wf = "22222222-2222-2222-2222-222222222222";
+        String iface = "33333333-3333-3333-3333-333333333333";
+        for (String path : new String[]{
+                "/api/publications/acquired",
+                "/api/publications/" + pub,
+                "/api/publications/" + pub + "/application-workflow",
+                "/api/publications/" + pub + "/reviews",
+                "/api/publications/" + pub + "/reviews/comments-count",
+                "/api/publications/" + pub + "/reviews/mine",
+                "/api/publications/" + pub + "/reviews/44444444-4444-4444-4444-444444444444/replies",
+                "/api/workflows/" + wf,
+                "/api/workflows/" + wf + "/runs/application",
+                "/api/workflows/" + wf + "/runs/pinned",
+                "/api/v2/workflows/dag/" + wf + "/versions",
+                "/api/v2/workflows/dag/runs/run_42/state",
+                "/api/v2/workflows/dag/runs/run_42/signals",
+                "/api/interfaces/" + iface,
+                "/api/interfaces/" + iface + "/render",
+                "/api/files/by-id/55555555-5555-5555-5555-555555555555/raw",
+                "/api/users/42/avatar"}) {
+            MonolithSecurityFilter filter = new MonolithSecurityFilter(
+                    () -> null,
+                    List.of(),
+                    token -> new MonolithSecurityFilter.ShareTokenContext(
+                            "42", "org-789", "APPLICATION", "pub-123", "workflow-456"));
+            MockHttpServletRequest request = externalRequest(path);
+            request.addHeader("Authorization", "Bearer ShareToken sl_scope");
+            MockHttpServletResponse response = new MockHttpServletResponse();
+            AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+            filter.doFilter(request, response, capturingChain(captured));
+
+            assertThat(response.getStatus()).as("allow-listed read %s must be forwarded, not 403", path).isNotEqualTo(403);
+            assertThat(captured.get()).as("forwarded for %s", path).isNotNull();
+            var forwarded = (jakarta.servlet.http.HttpServletRequest) captured.get();
+            assertThat(forwarded.getHeader("X-Share-Context")).isEqualTo("true");
+        }
+    }
+
+    @Test
+    @DisplayName("APPLICATION share token: owner-wide / secret-bearing GET endpoints are blocked (403) with the "
+            + "read-not-allowed body - closes the datasource DB-password, agent webhook-token, file-store, "
+            + "share-link-list and bare workflow/plan exfiltration a blanket GET-allow used to permit (CE parity)")
+    void applicationShareTokenSensitiveReadsAreBlocked() throws Exception {
+        String id = "66666666-6666-6666-6666-666666666666";
+        for (String path : new String[]{
+                "/api/data-sources",
+                "/api/data-sources/" + id,
+                "/api/agents",
+                "/api/agents/triggers",
+                "/api/agents/" + id + "/webhook",
+                "/api/credentials/all",
+                "/api/publications/shared-links",
+                "/api/workflows",
+                "/api/v2/workflows/dag/" + id,
+                "/api/storage/files/" + id + "/download",
+                "/api/conversations"}) {
+            MonolithSecurityFilter filter = new MonolithSecurityFilter(
+                    () -> null,
+                    List.of(),
+                    token -> new MonolithSecurityFilter.ShareTokenContext(
+                            "42", "org-789", "APPLICATION", "pub-123", "workflow-456"));
+            MockHttpServletRequest request = externalRequest(path);
+            request.addHeader("Authorization", "Bearer ShareToken sl_scope");
+            MockHttpServletResponse response = new MockHttpServletResponse();
+            AtomicReference<ServletRequest> captured = new AtomicReference<>();
+
+            filter.doFilter(request, response, capturingChain(captured));
+
+            assertThat(response.getStatus()).as("sensitive read %s must be 403", path).isEqualTo(403);
+            assertThat(captured.get()).as("not forwarded for %s", path).isNull();
+            assertThat(response.getContentAsString())
+                    .as("read-denied body for %s", path)
+                    .contains("not accessible from a shared application link");
+        }
     }
 
     @Test

@@ -16,6 +16,7 @@ import { AvatarDisplay } from '@/components/agents';
 import { useAuthedObjectUrl } from '@/hooks/useAuthedObjectUrl';
 
 import { BTN_CLS } from './NodeBottomBar';
+import { deriveStatusFromCounts } from '../../utils/statusCounts';
 import type { NodeVisuals, BuilderNodeData, LoopChildDescriptor, BuilderNodeKind, DerivedNodeStatus } from '../../types';
 import { resolveNodeIcon, NODE_ICON_REGISTRY } from '../../data/nodeVisuals';
 import { getEffectiveDefaultProvider } from '@/hooks/useModels';
@@ -40,12 +41,26 @@ export type IconComponent = React.ComponentType<{ className?: string; strokeWidt
  * prevents skipped/pending nodes in a run from showing a red border just
  * because the live plan has unresolved references.
  */
-export function getStatusBorderColor(status?: DerivedNodeStatus, hasError?: boolean, isFrozen?: boolean): string {
+export function getStatusBorderColor(status?: DerivedNodeStatus, hasError?: boolean, isFrozen?: boolean, statusCounts?: Record<string, number>): string {
   // Terminal execution states: trust the run result, ignore config warnings.
   if (status === 'completed') return '#10b981'; // emerald-500
   if (status === 'failed') return '#ef4444'; // red-500
   if (status === 'skipped') return '#94a3b8'; // slate-400
   if (status === 'partial_success') return '#f59e0b'; // amber-500
+
+  // A re-runnable node (reset to ready/pending by "rerun from this step") keeps its
+  // ACCUMULATED terminal border, derived from the preserved statusCounts, so a rerun
+  // never blanks the node's colour. A fresh ready/pending node with no counts falls
+  // through to the neutral border (its runnable cue is the blue-shimmer button, not a
+  // green ring). Only fires when the counts carry a displayable terminal result.
+  if ((!status || status === 'pending' || status === 'ready') && statusCounts) {
+    switch (deriveStatusFromCounts(statusCounts)) {
+      case 'completed': return '#10b981'; // emerald-500
+      case 'failed': return '#ef4444'; // red-500
+      case 'partial_success': return '#f59e0b'; // amber-500
+      case 'skipped': return '#94a3b8'; // slate-400
+    }
+  }
 
   // Before/during execution, a config error still colors the border red -
   // but only at builder time. In a frozen run view, the snapshot wins.
@@ -53,8 +68,10 @@ export function getStatusBorderColor(status?: DerivedNodeStatus, hasError?: bool
 
   if (!status || status === 'pending') return 'var(--border-color)';
   switch (status) {
-    case 'ready':
-      return '#22c55e'; // green-500
+    // 'ready' deliberately does NOT override the border: a runnable node now
+    // signals itself through its blue-shimmering run button (see NodeBottomBar /
+    // NodePlayButton), so it keeps the default border instead of a green ring
+    // that read as (and clashed with) the emerald "completed/success" colour.
     case 'running':
       return '#3b82f6'; // blue-500
     case 'awaiting_signal':
@@ -674,26 +691,5 @@ export function NodeHeader({
         <p className="text-sm text-slate-900 dark:text-slate-100 truncate">{label}</p>
       </div>
     </div>
-  );
-}
-
-/**
- * Green "focused and playable" scan overlay for step-by-step READY nodes.
- * Same visual language as the blue running shimmer (shimmer-scan keyframes in
- * globals.css); the green matches the ready border (#22c55e) and the play
- * button's ready shimmer, so the whole node reads as "you can execute this one
- * now". Callers pass the same positioning classes their running shimmer uses.
- */
-export function ReadyShimmerOverlay({ className }: { className: string }) {
-  return (
-    <div
-      data-testid="ready-shimmer"
-      className={className}
-      style={{
-        background: 'linear-gradient(90deg, transparent 0%, rgba(34, 197, 94, 0.15) 50%, transparent 100%)',
-        backgroundSize: '200% 100%',
-        animation: 'shimmer-scan 2.5s ease-in-out infinite',
-      }}
-    />
   );
 }

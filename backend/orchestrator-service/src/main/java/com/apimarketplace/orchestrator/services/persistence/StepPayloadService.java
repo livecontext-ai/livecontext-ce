@@ -327,6 +327,15 @@ public class StepPayloadService {
             // Preserve error info before schema transformation (mappers would strip it)
             String errorMessage = outputClean.get("error") instanceof String s ? s : null;
 
+            // Preserve the mock markers before schema transformation (generic mappers
+            // rebuild the map from declared fields and would drop them) - the persisted
+            // __mocked__/__mock_source__ keys are what the inspector badge and the
+            // agent's get_node_output "mocked" flag read.
+            boolean mocked = com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys
+                    .isMocked(outputClean);
+            Object mockSource = outputClean.get(
+                    com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys.MOCK_SOURCE);
+
             // Transform output to expected DB schema format BEFORE removing redundant fields.
             // Schema mappers select exactly the fields they need from raw output,
             // so removeRedundantFields is not needed for schema-mapped node types.
@@ -340,6 +349,19 @@ public class StepPayloadService {
                 // Remove fields that are already in step_data columns
                 // But for core/agent nodes, preserve their output fields for UI display
                 removeRedundantFields(outputClean, preserveFields);
+            }
+
+            // Re-inject the mock markers after transformation/cleanup (both paths):
+            // the badge must survive for every mocked node type.
+            if (mocked) {
+                outputClean.put(
+                        com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys.MOCKED,
+                        Boolean.TRUE);
+                if (mockSource != null) {
+                    outputClean.put(
+                            com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys.MOCK_SOURCE,
+                            mockSource);
+                }
             }
 
             // Inject standard execution envelope fields

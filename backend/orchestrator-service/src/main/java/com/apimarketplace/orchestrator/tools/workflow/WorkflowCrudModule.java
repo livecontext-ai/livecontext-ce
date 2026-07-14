@@ -775,14 +775,28 @@ public class WorkflowCrudModule implements ToolModule {
 
         try {
             UUID workflowId = UUID.fromString(workflowIdStr);
+
+            // Tenant/org scope check BEFORE reading run history - mirrors executeGet.
+            // Without it, findRunSummariesByWorkflowId is explicitly unscoped, so any
+            // caller passing another tenant's workflow_id received that tenant's run
+            // metadata (cross-tenant IDOR). 404 (not 403) to avoid leaking existence.
+            var workflowOpt = workflowService.getWorkflow(workflowId);
+            if (workflowOpt.isEmpty()) {
+                return ToolExecutionResult.failure(ToolErrorCode.WORKFLOW_NOT_FOUND, "Workflow not found: " + workflowIdStr);
+            }
+            WorkflowEntity workflow = workflowOpt.get();
+            String orgId = context != null ? context.orgId() : null;
+            if (!ScopeGuard.isInStrictScope(tenantId, orgId,
+                    workflow.getTenantId(), workflow.getOrganizationId())) {
+                return ToolExecutionResult.failure(ToolErrorCode.WORKFLOW_NOT_FOUND, "Workflow not found: " + workflowIdStr);
+            }
+
             // Custom Pageable with arbitrary offset support - fixes the silent-snap bug
             // where stock PageRequest.of(offset/limit, limit) rounded offset=33 to 25.
             var page = workflowRunRepository.findRunSummariesByWorkflowId(
                     workflowId, OffsetLimitPageable.of(bounds.offset(), bounds.limit()));
 
-            Integer pinnedVersion = workflowService.getWorkflow(workflowId)
-                    .map(WorkflowEntity::getPinnedVersion)
-                    .orElse(null);
+            Integer pinnedVersion = workflow.getPinnedVersion();
 
             List<Map<String, Object>> runs = page.getContent().stream().map(r -> {
                 Map<String, Object> m = new LinkedHashMap<>();

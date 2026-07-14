@@ -17,9 +17,10 @@ import java.util.Map;
  * <ul>
  *   <li>{@code browser_agent} node while the browser stack is unavailable
  *       (no local engine AND no cloud-link relay) - the node WILL fail at run time.</li>
- *   <li>Interface {@code generateScreenshot}/{@code generatePdf} while the renderer
- *       sidecar is not configured - the {@code screenshot}/{@code pdf} output will
- *       silently be absent (best-effort contract, run still succeeds).</li>
+ *   <li>Interface {@code generateScreenshot}/{@code generatePdf}/{@code generateVideo}
+ *       while the renderer sidecar is not configured - the {@code screenshot}/{@code pdf}
+ *       /{@code video} output will silently be absent (best-effort contract, run still
+ *       succeeds).</li>
  * </ul>
  *
  * WARNINGS only, never errors: the workflow stays saveable and runs correctly on
@@ -71,9 +72,9 @@ public class OptionalComponentValidator implements WorkflowValidator {
                     }
                     result.addWarning("INTERFACE_RENDERER_UNAVAILABLE",
                             nodeRef(iface, "interface"),
-                            "generateScreenshot/generatePdf is enabled but the optional renderer component "
-                            + "is not available on this installation: the screenshot/pdf output field will "
-                            + "be absent at run time (the workflow still succeeds). Only the user or an "
+                            "generateScreenshot/generatePdf/generateVideo is enabled but the optional renderer "
+                            + "component is not available on this installation: the screenshot/pdf/video output "
+                            + "field will be absent at run time (the workflow still succeeds). Only the user or an "
                             + "administrator can enable the component - tell them if they need this output "
                             + "here, or disable the toggle.");
                 }
@@ -90,15 +91,16 @@ public class OptionalComponentValidator implements WorkflowValidator {
     }
 
     /**
-     * True when the interface node asks for a screenshot or a PDF render.
-     * Strict {@code Boolean.TRUE} match, aligned with WorkflowPlanParser: a
+     * True when the interface node asks for a screenshot, a PDF render, or a video
+     * recording. Strict {@code Boolean.TRUE} match, aligned with WorkflowPlanParser: a
      * non-Boolean value (e.g. the string "true") never triggers a render at
      * run time, so warning "renderer unavailable" for it would state the
      * wrong cause for the missing output.
      */
     private static boolean hasRenderToggle(Map<String, Object> iface) {
         return Boolean.TRUE.equals(iface.get("generateScreenshot"))
-                || Boolean.TRUE.equals(iface.get("generatePdf"));
+                || Boolean.TRUE.equals(iface.get("generatePdf"))
+                || Boolean.TRUE.equals(iface.get("generateVideo"));
     }
 
     /**

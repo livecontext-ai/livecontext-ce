@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.trigger;
 
+import com.apimarketplace.orchestrator.controllers.workflow.WorkflowControllerHelper;
 import com.apimarketplace.orchestrator.domain.WorkflowRunEntity;
 import com.apimarketplace.orchestrator.domain.workflow.RunStatus;
 import com.apimarketplace.orchestrator.domain.workflow.Trigger;
@@ -65,11 +66,13 @@ public class TriggerController {
     public ResponseEntity<TriggerResponse> triggerManual(
             @PathVariable("runId") String runId,
             @RequestBody(required = false) Map<String, Object> payload,
-            @RequestHeader(value = "X-User-Plan", required = false) String userPlan) {
+            @RequestHeader(value = "X-User-Plan", required = false) String userPlan,
+            @RequestHeader(value = "X-User-ID", required = false) String userId,
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
 
         logger.info("[TriggerController] Manual trigger request for runId={}", runId);
 
-        return executeTrigger(runId, TriggerType.MANUAL, payload, userPlan);
+        return executeTrigger(runId, TriggerType.MANUAL, payload, userPlan, userId, orgId);
     }
 
     /**
@@ -88,7 +91,9 @@ public class TriggerController {
     public ResponseEntity<TriggerResponse> triggerChat(
             @PathVariable("runId") String runId,
             @RequestBody Map<String, Object> payload,
-            @RequestHeader(value = "X-User-Plan", required = false) String userPlan) {
+            @RequestHeader(value = "X-User-Plan", required = false) String userPlan,
+            @RequestHeader(value = "X-User-ID", required = false) String userId,
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
 
         logger.info("[TriggerController] Chat trigger request for runId={}, message={}",
                    runId, payload != null ? payload.get("message") : null);
@@ -99,7 +104,7 @@ public class TriggerController {
             );
         }
 
-        return executeTrigger(runId, TriggerType.CHAT, payload, userPlan);
+        return executeTrigger(runId, TriggerType.CHAT, payload, userPlan, userId, orgId);
     }
 
     /**
@@ -118,11 +123,13 @@ public class TriggerController {
     public ResponseEntity<TriggerResponse> triggerDatasource(
             @PathVariable("runId") String runId,
             @RequestBody(required = false) Map<String, Object> triggerConfig,
-            @RequestHeader(value = "X-User-Plan", required = false) String userPlan) {
+            @RequestHeader(value = "X-User-Plan", required = false) String userPlan,
+            @RequestHeader(value = "X-User-ID", required = false) String userId,
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
 
         logger.info("[TriggerController] Datasource trigger request for runId={}", runId);
 
-        return executeTrigger(runId, TriggerType.DATASOURCE, triggerConfig, userPlan);
+        return executeTrigger(runId, TriggerType.DATASOURCE, triggerConfig, userPlan, userId, orgId);
     }
 
     /**
@@ -141,12 +148,14 @@ public class TriggerController {
     public ResponseEntity<TriggerResponse> triggerForm(
             @PathVariable("runId") String runId,
             @RequestBody Map<String, Object> formData,
-            @RequestHeader(value = "X-User-Plan", required = false) String userPlan) {
+            @RequestHeader(value = "X-User-Plan", required = false) String userPlan,
+            @RequestHeader(value = "X-User-ID", required = false) String userId,
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
 
         logger.info("[TriggerController] Form trigger request for runId={}, fields={}",
                    runId, formData != null ? formData.keySet() : "null");
 
-        return executeTrigger(runId, TriggerType.FORM, formData, userPlan);
+        return executeTrigger(runId, TriggerType.FORM, formData, userPlan, userId, orgId);
     }
 
     // ========== Multi-DAG Support Endpoints ==========
@@ -164,7 +173,9 @@ public class TriggerController {
      */
     @GetMapping("/{runId}/triggers")
     public ResponseEntity<List<TriggerInfo>> getAvailableTriggers(
-            @PathVariable("runId") String runId) {
+            @PathVariable("runId") String runId,
+            @RequestHeader(value = "X-User-ID", required = false) String userId,
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
 
         logger.info("[TriggerController] Get available triggers for runId={}", runId);
 
@@ -176,6 +187,14 @@ public class TriggerController {
         }
 
         WorkflowRunEntity run = runOpt.get();
+
+        // 1a. Scope guard - the trigger metadata (labels/types) is the run's; a cross-tenant
+        // caller (or a share visitor not bound to this run's publication) must not enumerate it.
+        if (!WorkflowControllerHelper.isRunInScope(run, userId, orgId)) {
+            logger.warn("[TriggerController] Cross-tenant/publication trigger list blocked: runId={} caller={} org={}",
+                    runId, userId, orgId);
+            return ResponseEntity.notFound().build();
+        }
 
         // 2. Don't surface triggers on terminal runs - the fire endpoints reject those
         // statuses, so showing them as fireable in the UI would mislead the user (who
@@ -246,7 +265,9 @@ public class TriggerController {
             @PathVariable("triggerType") String triggerType,
             @PathVariable("triggerId") String triggerId,
             @RequestBody(required = false) Map<String, Object> payload,
-            @RequestHeader(value = "X-User-Plan", required = false) String userPlan) {
+            @RequestHeader(value = "X-User-Plan", required = false) String userPlan,
+            @RequestHeader(value = "X-User-ID", required = false) String userId,
+            @RequestHeader(value = "X-Organization-ID", required = false) String orgId) {
 
         logger.info("[TriggerController] Specific trigger request: runId={}, type={}, triggerId={}",
                    runId, triggerType, triggerId);
@@ -259,6 +280,13 @@ public class TriggerController {
         }
 
         WorkflowRunEntity run = runOpt.get();
+
+        // 1a. Scope guard - the caller (or share visitor) must own this run (or be bound to
+        // the shared application's publication). Closes a cross-tenant trigger-fire IDOR.
+        ResponseEntity<TriggerResponse> scopeError = scopeError(run, runId, userId, orgId);
+        if (scopeError != null) {
+            return scopeError;
+        }
 
         // 1b. Credit check before trigger execution
         if (!creditClient.checkCredits(run.getTenantId())) {
@@ -418,12 +446,36 @@ public class TriggerController {
     }
 
     /**
+     * Run-scope guard for a trigger fire. The gateway/monolith resolves an APPLICATION share
+     * token to the OWNER's identity, so a strict-scope check alone would let a share holder
+     * (or any authenticated caller who knows a runId) fire a trigger on ANY of the owner's runs.
+     * {@link WorkflowControllerHelper#isRunInScope} binds the fire to the caller's tenant/org
+     * AND, for a share context, to the shared application's publication
+     * ({@code run.publicationId == X-Share-Resource-Token}). Returns a 401 (missing caller) or
+     * 404 (out of scope) response to short-circuit with, or {@code null} when the caller may
+     * fire on this run. Mirrors {@code InterfaceActionController.isCallerInRunScope}.
+     */
+    private ResponseEntity<TriggerResponse> scopeError(
+            WorkflowRunEntity run, String runId, String userId, String orgId) {
+        // isRunInScope enforces both the strict tenant/org scope AND the share binding
+        // (shareContextPermitsRun). A cross-tenant caller or an unauthenticated request to a
+        // real (tenant-tagged) run fails it -> 404 (hides existence), mirroring the sibling
+        // run reads in WorkflowRunQueryController.
+        if (!WorkflowControllerHelper.isRunInScope(run, userId, orgId)) {
+            logger.warn("[TriggerController] Cross-tenant/publication trigger fire blocked: runId={} caller={} org={}",
+                    runId, userId, orgId);
+            return ResponseEntity.notFound().build();
+        }
+        return null;
+    }
+
+    /**
      * Execute a trigger of the specified type.
      */
     @SuppressWarnings("unchecked")
     private ResponseEntity<TriggerResponse> executeTrigger(
             String runId, TriggerType triggerType, Map<String, Object> payload,
-            String userPlan) {
+            String userPlan, String userId, String orgId) {
 
         // 1. Find the run
         Optional<WorkflowRunEntity> runOpt = runRepository.findByRunIdPublic(runId);
@@ -433,6 +485,13 @@ public class TriggerController {
         }
 
         WorkflowRunEntity run = runOpt.get();
+
+        // 1a. Scope guard - the caller (or share visitor) must own this run (or be bound to
+        // the shared application's publication). Closes a cross-tenant trigger-fire IDOR.
+        ResponseEntity<TriggerResponse> scopeError = scopeError(run, runId, userId, orgId);
+        if (scopeError != null) {
+            return scopeError;
+        }
 
         // 1b. Credit check before trigger execution
         if (!creditClient.checkCredits(run.getTenantId())) {

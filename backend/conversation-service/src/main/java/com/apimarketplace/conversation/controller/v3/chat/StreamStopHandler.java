@@ -74,8 +74,11 @@ public class StreamStopHandler {
             String partialContent = stateService.getFullContent(streamId).block();
             int savedPartialContent = 0;
             if (partialContent != null && !partialContent.trim().isEmpty()) {
+                // Persist the stream's REAL model, not a hardcoded "gpt-4" - otherwise every
+                // stopped turn is mis-bucketed as gpt-4 for per-model aggregation/observability.
+                String model = metadata.model() != null ? metadata.model() : "unknown";
                 conversationHistoryService.addMessage(
-                        conversationId, "assistant", partialContent, "gpt-4",
+                        conversationId, "assistant", partialContent, model,
                         java.time.Instant.now().toString(), null, userId
                 );
                 savedPartialContent = 1;

@@ -561,6 +561,45 @@ public interface ExecutionNode {
     }
 
     /**
+     * Inverse of {@link #getSelectedPort}: translates a port NAME into the output
+     * entries that make this node's routing select that port. Used by the per-node
+     * mock mode ({@code MockNodeResultFactory}) so a mocked branching node routes
+     * exactly like a real execution - each node owns its routing key.
+     *
+     * <p>Default implementation returns {@code {selected_port: port}} (correct for
+     * {@code UserApprovalNode}). Port-selecting nodes with index-based routing
+     * override it:
+     * <ul>
+     *   <li>DecisionNode: {@code {selected_branch_index: N}}</li>
+     *   <li>SwitchNode: {@code {selected_case_index: N}}</li>
+     *   <li>OptionNode: {@code {selected_choice_index: N}}</li>
+     *   <li>AgentNode (classify): {@code {selected_category_index: N}}</li>
+     * </ul>
+     *
+     * @param port the port name (validated against the node's real ports at plan parse time)
+     * @return mutable map of output entries driving the selection (never null)
+     */
+    default java.util.Map<String, Object> portSelectionOutput(String port) {
+        java.util.Map<String, Object> out = new java.util.HashMap<>();
+        out.put(com.apimarketplace.orchestrator.execution.v2.constants.ExecutionMetadataKeys.SELECTED_PORT, port);
+        return out;
+    }
+
+    /**
+     * Node-type tag written into mock outputs so schema mappers
+     * ({@code OutputSchemaMapper.transformToDbSchema}) and persistence dispatch on
+     * the same {@code node_type} value a real execution would have produced.
+     *
+     * <p>Default: the {@link NodeType} enum name (matches what nodes write today,
+     * e.g. {@code DECISION}, {@code TRANSFORM}). Overridden where the runtime tag
+     * differs from the enum: {@code StepNode} (CRUD steps → {@code INSERT_ROW} etc.)
+     * and {@code AgentNode} ({@code AGENT}/{@code CLASSIFY}/{@code GUARDRAIL}).
+     */
+    default String schemaNodeType() {
+        return getType() != null ? getType().name() : null;
+    }
+
+    /**
      * Adds a target node to a branch at the specified index.
      * Used by DecisionNodeWirer and OptionNodeWirer for index-based branch wiring.
      *

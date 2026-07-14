@@ -36,6 +36,18 @@ public class CatalogExecuteModule implements ToolModule {
 
     private static final Set<String> HANDLED_ACTIONS = Set.of("execute", "call");
 
+    /**
+     * Top-level keys of the {@code catalog} tool call that are control/shaping
+     * parameters, NOT tool inputs. Any OTHER top-level key is treated as a tool
+     * input parameter (chat models often flatten a tool's params to top level
+     * instead of nesting them under {@code params}). Kept in sync with the
+     * {@code catalog} tool schema in {@code CatalogToolsProvider}.
+     */
+    private static final Set<String> RESERVED_EXECUTE_KEYS = Set.of(
+            "action", "tool_id", "params", "parameters", "input", "inputs",
+            "expand", "max_items", "topics", "query", "api", "apis", "limit",
+            "api_definition", "api_id");
+
     public CatalogExecuteModule(ObjectMapper objectMapper, CredentialClient credentialClient) {
         this.restTemplate = new RestTemplate();
         this.objectMapper = objectMapper;
@@ -73,21 +85,35 @@ public class CatalogExecuteModule implements ToolModule {
             return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "tool_id is required");
         }
 
-        Map<String, Object> input = (Map<String, Object>) parameters.get("params");
-        if (input == null) {
-            input = (Map<String, Object>) parameters.get("parameters");
-            if (input != null) {
-                log.debug("catalog_execute: Using 'parameters' as fallback for 'params'");
-            }
+        // Resolve the tool's call parameters. The agent MAY nest them under the
+        // documented `params` key (schema-preferred), under a legacy alias
+        // (`parameters` / `input` / `inputs`), OR - as chat models frequently do
+        // for a plain function-call - pass each tool parameter as a TOP-LEVEL
+        // sibling of `action`/`tool_id` (e.g.
+        // catalog(action='execute', tool_id='x', page_id='123')). The workflow
+        // path (CatalogToolsGateway) always nests the resolved node params under
+        // `parameters`, so it never hit this. The ad-hoc chat path did: a required
+        // location:"path" param like Facebook's {page_id} then never reached
+        // catalog, leaving the URL literal ".../{page_id}/posts" which fails URI
+        // parsing ("Illegal character in path"). Gather ALL of these shapes so a
+        // path/query/body param supplied any legitimate way still reaches catalog.
+        // Unknown keys are harmless: filterParametersByToolDefinition on the
+        // catalog side keeps only names declared in api_tool_parameters.
+        Map<String, Object> input = new LinkedHashMap<>();
+        Map<String, Object> nested = firstMapValue(parameters, "params", "parameters", "input", "inputs");
+        if (nested != null) {
+            input.putAll(nested);
         }
-        if (input == null) {
-            input = (Map<String, Object>) parameters.get("input");
-            if (input != null) {
-                log.debug("catalog_execute: Using 'input' as legacy fallback for 'params'");
+        // Merge stray top-level params (agent flattened them). Reserved control
+        // keys are never treated as tool inputs; an explicit nested value wins
+        // over a top-level stray of the same name.
+        for (Map.Entry<String, Object> entry : parameters.entrySet()) {
+            if (entry.getValue() == null || RESERVED_EXECUTE_KEYS.contains(entry.getKey())) {
+                continue;
             }
-        }
-        if (input == null) {
-            input = Map.of();
+            if (input.putIfAbsent(entry.getKey(), entry.getValue()) == null) {
+                log.debug("catalog_execute: Treating top-level '{}' as a tool input parameter", entry.getKey());
+            }
         }
 
         String tenantId = context != null ? context.tenantId() : null;
@@ -421,6 +447,23 @@ public class CatalogExecuteModule implements ToolModule {
      * {@code ResponseCache.buildKey}. Package-private for unit tests.
      */
     record ShapingParams(List<String> expand, Integer maxItems, Map<String, Object> remainingParams) {}
+
+    /**
+     * Return the value of the first of {@code keys} present in {@code src} whose
+     * value is a {@code Map} (the tool's nested call-params object). Non-map
+     * values (e.g. a stray string) are skipped rather than cast, so a malformed
+     * alias never throws. Returns {@code null} when none match.
+     */
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> firstMapValue(Map<String, Object> src, String... keys) {
+        for (String key : keys) {
+            Object value = src.get(key);
+            if (value instanceof Map) {
+                return (Map<String, Object>) value;
+            }
+        }
+        return null;
+    }
 
     /**
      * Extract {@code expand} and {@code max_items} from either the top-level

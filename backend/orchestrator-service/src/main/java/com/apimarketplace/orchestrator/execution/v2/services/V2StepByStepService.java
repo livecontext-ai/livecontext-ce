@@ -13,6 +13,7 @@ import com.apimarketplace.orchestrator.execution.v2.engine.TriggerItem;
 import com.apimarketplace.orchestrator.execution.v2.engine.UnifiedExecutionEngine;
 import com.apimarketplace.orchestrator.execution.v2.nodes.ExecutionNode;
 import com.apimarketplace.orchestrator.execution.v2.scheduler.V2StepByStepScheduler;
+import com.apimarketplace.orchestrator.execution.v2.split.SplitExecutionOptions;
 import com.apimarketplace.orchestrator.domain.workflow.ExecutionMode;
 import com.apimarketplace.orchestrator.repository.WorkflowRunRepository;
 import com.apimarketplace.orchestrator.services.context.ReadinessContextCache;
@@ -260,6 +261,28 @@ public class V2StepByStepService {
     }
 
     /**
+     * Execute a single node with an explicit split-execution disposition. Used by
+     * {@code PerItemContinuationService} walks (approval continuationMode=per_item):
+     * the options flag flips the split fan-out into the per-item continuation
+     * disposition and disables the node-level idempotency guard (a mid-walk chain
+     * node is legitimately partially persisted - its row-based per-item exclusion
+     * IS this mode's idempotency). See {@link SplitExecutionOptions}.
+     */
+    public StepByStepExecutionResult executeNode(
+            String runId,
+            String nodeId,
+            String itemId,
+            int epoch,
+            String triggerId,
+            SplitExecutionOptions options) {
+
+        log.info("[V2StepByStep] Executing node (options: perItemContinuation={}): runId={}, nodeId={}, itemId={}, epoch={}, triggerId={}",
+                options != null && options.perItemContinuation(), runId, nodeId, itemId, epoch, triggerId);
+        return executeNodeInternal(runId, nodeId, itemId, epoch, triggerId, null,
+            options != null ? options : SplitExecutionOptions.NONE);
+    }
+
+    /**
      * Execute a single node in step-by-step mode with an explicit epoch.
      *
      * Used for parallel epoch execution where the caller knows which epoch
@@ -312,9 +335,22 @@ public class V2StepByStepService {
             int explicitEpoch,
             String explicitTriggerId,
             ExecutionCacheManager.LoadedExecution preloaded) {
+        return executeNodeInternal(runId, nodeId, itemId, explicitEpoch, explicitTriggerId, preloaded,
+            SplitExecutionOptions.NONE);
+    }
 
-        log.info("[V2StepByStep] Executing node: runId={}, nodeId={}, itemId={}, explicitEpoch={}, explicitTriggerId={}",
-                runId, nodeId, itemId, explicitEpoch, explicitTriggerId);
+    private StepByStepExecutionResult executeNodeInternal(
+            String runId,
+            String nodeId,
+            String itemId,
+            int explicitEpoch,
+            String explicitTriggerId,
+            ExecutionCacheManager.LoadedExecution preloaded,
+            SplitExecutionOptions options) {
+
+        boolean perItemContinuation = options != null && options.perItemContinuation();
+        log.info("[V2StepByStep] Executing node: runId={}, nodeId={}, itemId={}, explicitEpoch={}, explicitTriggerId={}, perItemContinuation={}",
+                runId, nodeId, itemId, explicitEpoch, explicitTriggerId, perItemContinuation);
 
         // Phase 1.3 (2026-04-29) - idempotency guard: when this method is called from
         // both AgentAsyncCompletionService.traverseSuccessorsPerItem (Phase 1) AND
@@ -327,7 +363,11 @@ public class V2StepByStepService {
         // For trigger:* and split-aware nodes (per-item subdivisible scope) the guard
         // does NOT apply: triggers may fire multiple times in a single SBS session, and
         // SplitAwareNodeExecutor handles per-item idempotency via getRoutedItemIndices.
-        if (explicitEpoch >= 0 && explicitTriggerId != null && !nodeId.startsWith("trigger:")) {
+        // perItemContinuation walks manage their own idempotency per ITEM (durable row
+        // exclusion in SplitAwareNodeExecutor); the node-level guard below would wrongly
+        // short-circuit a mid-walk chain node that is legitimately running/partial.
+        if (explicitEpoch >= 0 && explicitTriggerId != null && !nodeId.startsWith("trigger:")
+                && !perItemContinuation) {
             try {
                 com.apimarketplace.orchestrator.domain.execution.StateSnapshot snap = stateSnapshotService.getSnapshot(runId);
                 if (snap != null) {
@@ -413,9 +453,14 @@ public class V2StepByStepService {
         // Execute the single node
         StepByStepExecutionResult result;
         try {
-            result = executionEngine.executeSingleNode(
-                nodeId, tree, context, execution, eventService, item
-            );
+            // Default disposition keeps the LEGACY call shape (zero change for every
+            // pre-feature caller and test double); only a per-item continuation walk
+            // threads the options through to the engine.
+            result = perItemContinuation
+                ? executionEngine.executeSingleNode(
+                    nodeId, tree, context, execution, eventService, item, options)
+                : executionEngine.executeSingleNode(
+                    nodeId, tree, context, execution, eventService, item);
         } catch (com.apimarketplace.orchestrator.execution.v2.engine.WorkflowStoppedException stopped) {
             // StopOnError node - entire workflow must stop.
             // The node's output was already persisted by executeNodeCore.
@@ -423,6 +468,16 @@ public class V2StepByStepService {
             log.info("🛑 [V2StepByStep] StopOnError stopped workflow: nodeId={}, errorMessage={}",
                 stopped.getNodeId(), stopped.getErrorMessage());
             return new StepByStepExecutionResult(context, stopped.getResult(), Set.of(), false);
+        }
+
+        // Per-item continuation walks stop here: the walker drives the region itself and
+        // ignores ready nodes, and the post-processing below would pollute the snapshot
+        // ready set mid-barrier (region nodes read COMPLETED in the walk's in-memory
+        // context, so their successors - including the frontier merge - would be merged
+        // into readyNodeIds while sibling signals are still pending). Loops/back-edges
+        // are frontier nodes (never walked), so the back-edge block is not applicable.
+        if (perItemContinuation) {
+            return result;
         }
 
         // Cache globalData from the result context (e.g., BackEdgeState for loop iterations).

@@ -1238,18 +1238,20 @@ export class WorkflowRunManager {
       const resetSet = this.recentlyResetSteps;
       completedStepIds = completedStepIds.filter((id: string) => !resetSet.has(id));
       // Also patch steps data: initializeFromApi re-derives completedStepIds from steps
-      // (ignoring the completedStepIds param). Override reset steps' status to PENDING
-      // with zeroed statusCounts so they won't be re-added as completed.
+      // (ignoring the completedStepIds param). Mark reset steps PENDING so they are not
+      // re-derived as completed (they show a Play button), but PRESERVE their statusCounts
+      // (do NOT zero) - a rerun must not blank the node: the accumulated badge, and via the
+      // counts the accumulated border, stay visible until the step actually re-runs.
       if (steps?.length) {
         steps = steps.map((step: any) => {
           const stepId = step.stepId || step.normalizedStepId || step.id;
           if (stepId && resetSet.has(stepId)) {
-            return { ...step, status: 'PENDING', statusCounts: { ...step.statusCounts, completed: 0, failed: 0 } };
+            return { ...step, status: 'PENDING' };
           }
           return step;
         });
       }
-      streamDebug.log('WorkflowRunManager', 'Filtered recentlyResetSteps from completedStepIds:', Array.from(resetSet));
+      streamDebug.log('WorkflowRunManager', 'Filtered recentlyResetSteps from completedStepIds (counts preserved):', Array.from(resetSet));
     }
 
     this.store.initializeFromApi({

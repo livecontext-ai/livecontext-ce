@@ -51,7 +51,7 @@ class WorkflowBuilderToolDefinitionFactoryTest {
         // Pre-fix, the leading "Action: init, load, ..." enumeration omitted both
         // run-control actions even though their semantics were described below -
         // an agent scanning the list could conclude they don't exist.
-        assertThat(d).contains("unpublish, resolve_approval, continue_interface, help");
+        assertThat(d).contains("unpublish, resolve_approval, continue_interface, mock_suggest, help");
     }
 
     @Test

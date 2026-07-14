@@ -93,4 +93,38 @@ public interface InterfaceScreenshotService {
         String pdfFormat,
         boolean landscape
     );
+
+    /**
+     * Record the interface's animation to an MP4 and persist it, mirroring
+     * {@link #capture(String, String, int, int, Integer, String, UUID)} but producing a video (via
+     * the renderer's {@code /internal/render/video} endpoint). The recording stops as soon as the
+     * page sets {@code window.__DONE__ = true}, or after {@code maxDurationSeconds} otherwise.
+     * Same best-effort contract: any failure logs a warning and returns {@link Optional#empty()}
+     * so the workflow continues without a {@code video} output field.
+     *
+     * @param videoPreset         capture format: {@code vertical} (1080x1920) / {@code horizontal}
+     *                            (1920x1080) / {@code square} (1080x1080); null/blank falls back to
+     *                            vertical
+     * @param maxDurationSeconds  recording ceiling in seconds; null/non-positive falls back to the
+     *                            default (30s), values are clamped to the renderer's hard maximum
+     * @param videoMode           {@code smooth} (offline frame-by-frame render under a virtual
+     *                            clock - fluid regardless of load, the default) or {@code live}
+     *                            (real-time screencast fallback); null/unknown falls back to smooth
+     * @param videoFps            output frame rate for smooth renders (10-60, default 30); also the
+     *                            transcode rate for live renders
+     * @return a {@link FileRef} for the recorded MP4, or empty when the render/upload failed.
+     */
+    Optional<FileRef> captureVideo(
+        String tenantId,
+        String runId,
+        int epoch,
+        int spawn,
+        Integer itemIndex,
+        String nodeId,
+        UUID interfaceId,
+        String videoPreset,
+        Integer maxDurationSeconds,
+        String videoMode,
+        Integer videoFps
+    );
 }

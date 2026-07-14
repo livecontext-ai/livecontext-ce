@@ -90,17 +90,31 @@ function renderSection(overrides: Partial<React.ComponentProps<typeof ApprovalDe
 afterEach(cleanup);
 
 describe('ApprovalDelegationSection - expression editor for template-capable fields', () => {
-  it('renders chatId and messageTemplate through the ExpressionEditor (2 editors), not plain inputs', () => {
+  it('renders chatId, messageTemplate, image, approveLabel and rejectLabel through the ExpressionEditor (5 editors), not plain inputs', () => {
     renderSection();
     const editors = screen.getAllByTestId('expr-editor');
-    expect(editors).toHaveLength(2);
+    expect(editors).toHaveLength(5);
   });
 
-  it('marks the chatId editor required and the messageTemplate editor optional', () => {
+  it('propagates approveLabel and rejectLabel edits from their expression editors to node data', () => {
+    const { handleDelegationChange } = renderSection();
+    const [, , , approveLabel, rejectLabel] = screen.getAllByTestId('expr-editor');
+    fireEvent.change(approveLabel, { target: { value: '👍 Ship it' } });
+    expect(handleDelegationChange).toHaveBeenCalledWith(
+      expect.objectContaining({ approveLabel: '👍 Ship it' })
+    );
+    fireEvent.change(rejectLabel, { target: { value: '👎 Hold' } });
+    expect(handleDelegationChange).toHaveBeenCalledWith(
+      expect.objectContaining({ rejectLabel: '👎 Hold' })
+    );
+  });
+
+  it('marks the chatId editor required and the messageTemplate/image editors optional', () => {
     renderSection();
-    const [chatId, messageTemplate] = screen.getAllByTestId('expr-editor');
+    const [chatId, messageTemplate, image] = screen.getAllByTestId('expr-editor');
     expect(chatId.getAttribute('data-required')).toBe('true');
     expect(messageTemplate.getAttribute('data-required')).toBe('false');
+    expect(image.getAttribute('data-required')).toBe('false');
   });
 
   it('propagates chatId edits from the expression editor to node data', () => {
@@ -120,6 +134,15 @@ describe('ApprovalDelegationSection - expression editor for template-capable fie
       expect.objectContaining({ messageTemplate: 'Approve {{trigger:form.output.amount}}?' })
     );
   });
+
+  it('propagates image edits from the expression editor to node data', () => {
+    const { handleDelegationChange } = renderSection();
+    const [, , image] = screen.getAllByTestId('expr-editor');
+    fireEvent.change(image, { target: { value: '{{interface:card.output.screenshot}}' } });
+    expect(handleDelegationChange).toHaveBeenCalledWith(
+      expect.objectContaining({ image: '{{interface:card.output.screenshot}}' })
+    );
+  });
 });
 
 describe('ApprovalDelegationSection - required/optional presentation', () => {
@@ -129,9 +152,10 @@ describe('ApprovalDelegationSection - required/optional presentation', () => {
     expect(screen.getByText('chatIdLabel').textContent).toContain('*');
   });
 
-  it('leaves messageTemplate and allowedUserIds labels without a required marker', () => {
+  it('leaves messageTemplate, image and allowedUserIds labels without a required marker', () => {
     renderSection();
     expect(screen.getByText('messageLabel').textContent).not.toContain('*');
+    expect(screen.getByText('imageLabel').textContent).not.toContain('*');
     expect(screen.getByText('allowedUserIdsLabel').textContent).not.toContain('*');
   });
 

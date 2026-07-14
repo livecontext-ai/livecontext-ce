@@ -25,6 +25,7 @@ public class WorkflowPlan {
     private final List<Note> notes;
     private final List<InterfaceDef> interfaces;
     private final Map<String, NodePolicy> nodePolicies;
+    private final Map<String, NodeMock> nodeMocks;
     private final Map<String, Object> originalPlan;
 
     // Lazy-loaded caches
@@ -41,13 +42,27 @@ public class WorkflowPlan {
                         List<Step> tables, List<Note> notes, List<InterfaceDef> interfaces,
                         Map<String, Object> originalPlan) {
         this(id, tenantId, triggers, mcps, agents, edges, cores, tables, notes, interfaces,
-                Map.of(), originalPlan);
+                Map.of(), Map.of(), originalPlan);
+    }
+
+    /**
+     * Back-compat constructor (pre-nodeMock call sites) - no per-node mocks; every
+     * node resolves to {@code getNodeMock(...) == null} = exact legacy behavior.
+     */
+    public WorkflowPlan(String id, String tenantId, List<Trigger> triggers, List<Step> mcps,
+                        List<Agent> agents, List<Edge> edges, List<Core> cores,
+                        List<Step> tables, List<Note> notes, List<InterfaceDef> interfaces,
+                        Map<String, NodePolicy> nodePolicies,
+                        Map<String, Object> originalPlan) {
+        this(id, tenantId, triggers, mcps, agents, edges, cores, tables, notes, interfaces,
+                nodePolicies, Map.of(), originalPlan);
     }
 
     public WorkflowPlan(String id, String tenantId, List<Trigger> triggers, List<Step> mcps,
                         List<Agent> agents, List<Edge> edges, List<Core> cores,
                         List<Step> tables, List<Note> notes, List<InterfaceDef> interfaces,
                         Map<String, NodePolicy> nodePolicies,
+                        Map<String, NodeMock> nodeMocks,
                         Map<String, Object> originalPlan) {
         this.id = id;
         this.tenantId = tenantId;
@@ -60,6 +75,7 @@ public class WorkflowPlan {
         this.notes = notes != null ? new ArrayList<>(notes) : new ArrayList<>();
         this.interfaces = interfaces != null ? new ArrayList<>(interfaces) : new ArrayList<>();
         this.nodePolicies = nodePolicies != null ? Map.copyOf(nodePolicies) : Map.of();
+        this.nodeMocks = nodeMocks != null ? Map.copyOf(nodeMocks) : Map.of();
         this.originalPlan = originalPlan != null ? Collections.unmodifiableMap(originalPlan) : Map.of();
     }
 
@@ -121,6 +137,32 @@ public class WorkflowPlan {
             if (byNormalized != null) return byNormalized;
         }
         return NodePolicy.DEFAULT;
+    }
+
+    /** All per-node mocks, keyed by normalized node key. */
+    public Map<String, NodeMock> getNodeMocks() { return nodeMocks; }
+
+    /**
+     * Resolves the mock definition for a node. Accepts the engine's nodeId form
+     * ({@code mcp:label}, {@code core:label}, optionally with a port suffix on
+     * core/agent refs) and returns {@code null} when no mock was declared - unlike
+     * {@link NodePolicy}, there is no meaningful default: absent means "not mocked".
+     */
+    public NodeMock getNodeMock(String nodeId) {
+        if (nodeId == null || nodeMocks.isEmpty()) return null;
+        NodeMock direct = nodeMocks.get(nodeId);
+        if (direct != null) return direct;
+        // Strip a possible port suffix ("core:check:if" → "core:check") and normalize case.
+        String baseKey = EdgeRefParser.getNodeKey(nodeId);
+        if (baseKey != null) {
+            NodeMock byBase = nodeMocks.get(baseKey);
+            if (byBase != null) return byBase;
+        }
+        String normalized = WorkflowPlanParser.normalizeStepId(nodeId);
+        if (normalized != null) {
+            return nodeMocks.get(normalized);
+        }
+        return null;
     }
 
     // ===== FIND METHODS =====

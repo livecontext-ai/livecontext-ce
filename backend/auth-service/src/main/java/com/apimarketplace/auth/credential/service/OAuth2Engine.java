@@ -366,6 +366,35 @@ public class OAuth2Engine {
         return new HttpEntity<>(body, headers);
     }
 
+    /**
+     * Build the full GET URL for a non-RFC access-token grant (Meta's
+     * {@code ig_exchange_token} / {@code ig_refresh_token} / {@code fb_exchange_token} family):
+     * {@code <url>?grant_type=<grantType>[&client_id=…][&client_secret=…]&<tokenParam>=<token>}.
+     *
+     * <p>The returned URL carries the access token (and possibly the client secret) in its
+     * query string - Meta's documented contract for these endpoints. Callers MUST NEVER log
+     * this URL, nor any exception message that embeds it (RestTemplate error messages include
+     * the request URL); log only the HTTP status and a scrubbed response body.
+     */
+    public String buildAccessTokenGrantUrl(
+            OAuth2ProviderConfig.AccessTokenGrant grant,
+            String accessToken,
+            String clientId,
+            String clientSecret
+    ) {
+        StringBuilder url = new StringBuilder(grant.url());
+        url.append(grant.url().contains("?") ? '&' : '?');
+        url.append("grant_type=").append(URLEncoder.encode(grant.grantType(), StandardCharsets.UTF_8));
+        if (grant.sendClientId() && clientId != null && !clientId.isBlank()) {
+            appendParam(url, "client_id", clientId, true);
+        }
+        if (grant.sendClientSecret() && clientSecret != null && !clientSecret.isBlank()) {
+            appendParam(url, "client_secret", clientSecret, true);
+        }
+        appendParam(url, grant.tokenParam(), accessToken, true);
+        return url.toString();
+    }
+
     private static void appendParam(StringBuilder url, String key, String value, boolean withAmpersand) {
         if (withAmpersand) url.append('&');
         url.append(key).append('=')

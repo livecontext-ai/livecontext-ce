@@ -177,7 +177,7 @@ class WorkflowRunQueryControllerLastFireAtTest {
         when(workflowEpochRepository.getLatestEpochStartedAtByRunIds(anyList()))
                 .thenReturn(Map.of(RUN_ID_PUBLIC, lastFire));
 
-        ResponseEntity<?> response = controller.getPinnedRun(WORKFLOW_ID);
+        ResponseEntity<?> response = controller.getPinnedRun(WORKFLOW_ID, OWNER, null);
         WorkflowRunSummary summary = (WorkflowRunSummary) response.getBody();
         assertThat(summary).isNotNull();
         assertThat(summary.startedAt()).isEqualTo(runBirth);
@@ -245,7 +245,7 @@ class WorkflowRunQueryControllerLastFireAtTest {
         when(workflowEpochRepository.getLatestEpochStartedAtByRunIds(anyList()))
                 .thenReturn(Map.of(RUN_ID_PUBLIC, lastFire));
 
-        ResponseEntity<?> response = controller.getApplicationRun(WORKFLOW_ID, publicationId);
+        ResponseEntity<?> response = controller.getApplicationRun(WORKFLOW_ID, publicationId, OWNER, null);
         WorkflowRunSummary summary = (WorkflowRunSummary) response.getBody();
         assertThat(summary).isNotNull();
         assertThat(summary.startedAt()).isEqualTo(runBirth);

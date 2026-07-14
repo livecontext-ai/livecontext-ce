@@ -61,9 +61,10 @@ public final class WorkflowPlanParser {
         List<Note> notes = parseNotes((List<Map<String, Object>>) planData.get("notes"));
         List<InterfaceDef> interfaces = parseInterfaces((List<Map<String, Object>>) planData.get("interfaces"));
         Map<String, NodePolicy> nodePolicies = parseNodePolicies(planData);
+        Map<String, NodeMock> nodeMocks = parseNodeMocks(planData, cores, agents);
 
         return new WorkflowPlan(id, tenantId, triggers, steps, agents, edges, cores, tables, notes, interfaces,
-                nodePolicies, originalPlan);
+                nodePolicies, nodeMocks, originalPlan);
     }
 
     // ===== NODE POLICIES =====
@@ -213,6 +214,248 @@ public final class WorkflowPlanParser {
                     + type + "': " + reason + ". Remove executeOnce from this node "
                     + "(retryCount/retryBackoffMs/timeoutMs remain allowed).");
         }
+    }
+
+    // ===== NODE MOCKS =====
+
+    /**
+     * Core types on which a {@code mock} block is REJECTED at parse time - their
+     * semantics live in engine coordination code that never goes through
+     * {@code ExecutionNode.execute()} substitution:
+     * <ul>
+     *   <li>{@code split} - the fan-out is produced by {@code SplitNodeExecutor};
+     *       mock the node that FEEDS the split (its items list) instead, and the
+     *       split fans out over the mocked items for real.</li>
+     *   <li>{@code merge} / {@code aggregate} - convergence barriers over ALL
+     *       items/branches; substituting one output would break readiness.</li>
+     *   <li>{@code loop} - back-edge driven iteration; mock the nodes inside the
+     *       loop body instead.</li>
+     *   <li>{@code fork} - pure fan-out with no output of its own.</li>
+     * </ul>
+     */
+    private static final Set<String> MOCK_INCOMPATIBLE_CORE_TYPES =
+            Set.of("split", "merge", "aggregate", "loop", "fork");
+
+    /** Core types whose mock drives branch selection via {@code port}. */
+    private static final Set<String> PORT_SELECTING_CORE_TYPES =
+            Set.of("decision", "switch", "option", "approval");
+
+    /**
+     * Parses the optional {@code mock} block on every executable node entry
+     * (mcps / tables / agents / cores / interfaces). Triggers and notes are excluded
+     * by design (a fake trigger payload is the manual fire's {@code trigger_payload}).
+     *
+     * <p>Keyed by normalized node key, exactly like {@link #parseNodePolicies}.
+     * Node-type compatibility is validated here, where the section and the parsed
+     * cores/agents are known:
+     * <ul>
+     *   <li>{@code catalog_example}: mcp catalog-tool entries only (slug-form id,
+     *       not table CRUD).</li>
+     *   <li>{@code port}: required on decision/switch/option/approval cores (non-error
+     *       mocks) and validated against the core's real port names; allowed on
+     *       classify agents ({@code category_N}); forbidden everywhere else.</li>
+     *   <li>{@code static} without {@code port}: {@code output} required (an output-less
+     *       data mock is almost certainly an authoring mistake).</li>
+     *   <li>split / merge / aggregate / loop / fork cores: rejected with guidance.</li>
+     * </ul>
+     *
+     * @throws IllegalArgumentException on any invalid block, naming the node
+     */
+    @SuppressWarnings("unchecked")
+    static Map<String, NodeMock> parseNodeMocks(Map<String, Object> planData, List<Core> cores, List<Agent> agents) {
+        Map<String, Core> coresByKey = cores == null ? Map.of() : cores.stream()
+                .filter(c -> c != null && c.getNormalizedKey() != null)
+                .collect(Collectors.toMap(Core::getNormalizedKey, c -> c, (a, b) -> a));
+        Map<String, Agent> agentsByKey = agents == null ? Map.of() : agents.stream()
+                .filter(a -> a != null && a.getNormalizedKey() != null)
+                .collect(Collectors.toMap(Agent::getNormalizedKey, a -> a, (a, b) -> a));
+
+        Map<String, NodeMock> mocks = new HashMap<>();
+        collectNodeMocks(mocks, (List<Map<String, Object>>) planData.get("mcps"),
+                data -> keyFromLabel("mcp", firstNonBlank(safeString(data.get("label")), safeString(data.get("alias")))),
+                WorkflowPlanParser::validateMcpMock);
+        collectNodeMocks(mocks, (List<Map<String, Object>>) planData.get("tables"),
+                data -> keyFromLabel("table", safeString(data.get("label"))),
+                (data, key, mock) -> validateDataOnlyMock(key, mock, "a table CRUD node"));
+        collectNodeMocks(mocks, (List<Map<String, Object>>) planData.get("agents"),
+                data -> keyFromLabel("agent", safeString(data.get("label"))),
+                (data, key, mock) -> validateAgentMock(key, mock, agentsByKey.get(key)));
+        collectNodeMocks(mocks, (List<Map<String, Object>>) planData.get("cores"),
+                WorkflowPlanParser::coreKeyFromRaw,
+                (data, key, mock) -> validateCoreMock(data, key, mock, coresByKey.get(key)));
+        collectNodeMocks(mocks, (List<Map<String, Object>>) planData.get("interfaces"),
+                data -> keyFromLabel("interface", safeString(data.get("label"))),
+                (data, key, mock) -> validateDataOnlyMock(key, mock, "an interface node"));
+        return mocks;
+    }
+
+    @FunctionalInterface
+    private interface MockValidator {
+        void validate(Map<String, Object> data, String key, NodeMock mock);
+    }
+
+    private static void collectNodeMocks(
+            Map<String, NodeMock> mocks,
+            List<Map<String, Object>> entries,
+            java.util.function.Function<Map<String, Object>, String> keyFn,
+            MockValidator validator) {
+        if (entries == null) return;
+        for (Map<String, Object> data : entries) {
+            if (data == null || !data.containsKey(NodeMock.JSON_KEY)) continue;
+            String key = keyFn.apply(data);
+            if (key == null) {
+                // Entry is dropped by its own parser (missing label/type) - its mock is moot.
+                continue;
+            }
+            NodeMock mock = NodeMock.fromMap(data.get(NodeMock.JSON_KEY), key);
+            if (mock == null) {
+                continue; // empty {} block = cleared mock
+            }
+            if (validator != null) {
+                validator.validate(data, key, mock);
+            }
+            mocks.put(key, mock);
+        }
+    }
+
+    private static void validateMcpMock(Map<String, Object> data, String key, NodeMock mock) {
+        if (mock.port() != null) {
+            throw new IllegalArgumentException(
+                    "Invalid mock for node '" + key + "': port is only valid on branching nodes "
+                            + "(decision/switch/option/approval cores, classify agents) - an mcp tool node has no ports.");
+        }
+        String toolId = firstNonBlank(safeString(data.get("id")), safeString(data.get("tool_id")));
+        if (mock.isCatalogExample() && !isCatalogToolId(toolId)) {
+            throw new IllegalArgumentException(
+                    "Invalid mock for node '" + key + "': source='catalog_example' requires a catalog tool "
+                            + "(slug-form id like 'gmail/gmail-list-messages' or a tool UUID). Use source='static' "
+                            + "with an explicit output for this node.");
+        }
+        requireStaticOutput(key, mock);
+    }
+
+    /**
+     * A catalog tool id is a slug ({@code apiSlug/toolSlug}) or a tool UUID -
+     * never a table CRUD operation ({@code crud/...}) or a bare test slug.
+     * Shared shape check for the {@code catalog_example} mock source (also used
+     * by the engine's ALL_MCP fallback scope).
+     */
+    public static boolean isCatalogToolId(String toolId) {
+        if (toolId == null || toolId.isBlank() || toolId.startsWith("crud/")) {
+            return false;
+        }
+        if (toolId.contains("/")) {
+            return true;
+        }
+        try {
+            UUID.fromString(toolId);
+            return true;
+        } catch (IllegalArgumentException notAUuid) {
+            return false;
+        }
+    }
+
+    /** Sections where only static/error mocks make sense (tables, interfaces). */
+    private static void validateDataOnlyMock(String key, NodeMock mock, String what) {
+        if (mock.port() != null) {
+            throw new IllegalArgumentException(
+                    "Invalid mock for node '" + key + "': port is not valid on " + what + ".");
+        }
+        if (mock.isCatalogExample()) {
+            throw new IllegalArgumentException(
+                    "Invalid mock for node '" + key + "': source='catalog_example' is only valid on mcp catalog-tool "
+                            + "nodes. Use source='static' with an explicit output.");
+        }
+        requireStaticOutput(key, mock);
+    }
+
+    private static void validateAgentMock(String key, NodeMock mock, Agent agent) {
+        if (mock.isCatalogExample()) {
+            throw new IllegalArgumentException(
+                    "Invalid mock for node '" + key + "': source='catalog_example' is only valid on mcp catalog-tool "
+                            + "nodes. Use source='static' with an explicit output.");
+        }
+        boolean classify = agent != null && "classify".equalsIgnoreCase(safeTrim(agent.type()));
+        if (mock.port() != null) {
+            if (!classify) {
+                throw new IllegalArgumentException(
+                        "Invalid mock for node '" + key + "': port is only valid on classify agents "
+                                + "(and decision/switch/option/approval cores). Use source='static' with an output instead.");
+            }
+            int categories = agent.classifyCategories() != null ? agent.classifyCategories().size() : 0;
+            List<String> ports = new ArrayList<>();
+            for (int i = 0; i < categories; i++) ports.add("category_" + i);
+            if (!ports.contains(mock.port())) {
+                throw new IllegalArgumentException(
+                        "Invalid mock for node '" + key + "': unknown port '" + mock.port()
+                                + "'. Valid ports for this classify agent: " + ports + ".");
+            }
+        } else if (classify && mock.isStatic()) {
+            throw new IllegalArgumentException(
+                    "Invalid mock for node '" + key + "': a classify agent mock must select a branch - "
+                            + "add port='category_N' (optionally with an output).");
+        }
+        requireStaticOutput(key, mock);
+    }
+
+    private static void validateCoreMock(Map<String, Object> data, String key, NodeMock mock, Core core) {
+        String type = safeTrim(safeString(data.get("type")));
+        String lowerType = type == null ? "" : type.toLowerCase(Locale.ROOT);
+        if (MOCK_INCOMPATIBLE_CORE_TYPES.contains(lowerType)) {
+            String guidance = switch (lowerType) {
+                case "split" -> "mock the node that FEEDS the split (its items list) instead - the split then fans "
+                        + "out over the mocked items for real";
+                case "merge", "aggregate" -> "it is a convergence barrier over ALL items/branches - mock the nodes "
+                        + "upstream of it instead";
+                case "loop" -> "iteration is back-edge driven - mock the nodes inside the loop body instead";
+                default -> "it is pure fan-out with no output of its own - mock the nodes on its branches instead";
+            };
+            throw new IllegalArgumentException(
+                    "Invalid mock for node '" + key + "': mocking is not supported on core type '" + lowerType
+                            + "': " + guidance + ".");
+        }
+        if (mock.isCatalogExample()) {
+            throw new IllegalArgumentException(
+                    "Invalid mock for node '" + key + "': source='catalog_example' is only valid on mcp catalog-tool "
+                            + "nodes. Use source='static' with an explicit output.");
+        }
+        boolean portSelecting = PORT_SELECTING_CORE_TYPES.contains(lowerType);
+        if (portSelecting) {
+            if (mock.isStatic() && mock.port() == null) {
+                List<String> ports = core != null ? core.getAllPorts() : List.of();
+                String article = lowerType.matches("^[aeiou].*") ? "an " : "a ";
+                throw new IllegalArgumentException(
+                        "Invalid mock for node '" + key + "': " + article + lowerType + " mock must select a branch - "
+                                + "add port=<one of " + ports + "> (optionally with an output).");
+            }
+            if (mock.port() != null) {
+                List<String> ports = core != null ? core.getAllPorts() : List.of();
+                if (!ports.contains(mock.port())) {
+                    throw new IllegalArgumentException(
+                            "Invalid mock for node '" + key + "': unknown port '" + mock.port()
+                                    + "'. Valid ports for this " + lowerType + " node: " + ports + ".");
+                }
+            }
+        } else if (mock.port() != null) {
+            throw new IllegalArgumentException(
+                    "Invalid mock for node '" + key + "': port is only valid on branching nodes "
+                            + "(decision/switch/option/approval cores, classify agents) - core type '"
+                            + lowerType + "' has no ports.");
+        }
+        requireStaticOutput(key, mock);
+    }
+
+    /** A static mock with neither port nor output is almost certainly an authoring mistake. */
+    private static void requireStaticOutput(String key, NodeMock mock) {
+        if (mock.isStatic() && mock.output() == null && mock.port() == null) {
+            throw new IllegalArgumentException(
+                    "Invalid mock for node '" + key + "': a static mock needs an output object "
+                            + "(use output={} for an intentionally empty one).");
+        }
+    }
+
+    private static String safeTrim(String s) {
+        return s == null ? null : s.trim();
     }
 
     /** Mirrors Step/Agent/InterfaceDef.getNormalizedKey(): "prefix:" + normalized label. */
@@ -893,7 +1136,9 @@ public final class WorkflowPlanParser {
             ? ((Number) data.get("timeoutMs")).longValue() : 86400000L; // default 24h
         String contextTemplate = data.get("contextTemplate") instanceof String s ? s : "";
         Core.ApprovalDelegation delegation = parseApprovalDelegation(data.get("delegation"));
-        return new Core.ApprovalConfig(approverRoles, requiredApprovals, timeoutMs, contextTemplate, delegation);
+        String continuationMode = data.get("continuationMode") instanceof String s ? s : null;
+        return new Core.ApprovalConfig(approverRoles, requiredApprovals, timeoutMs, contextTemplate, delegation,
+            continuationMode);
     }
 
     @SuppressWarnings("unchecked")
@@ -907,10 +1152,16 @@ public final class WorkflowPlanParser {
         Long credentialId = parseCredentialId(data.get("credentialId"));
         String chatId = data.get("chatId") instanceof String s ? s : "";
         String messageTemplate = data.get("messageTemplate") instanceof String s ? s : "";
+        // Optional image template (canonical key "image"): blank/absent = plain text message.
+        String imageTemplate = data.get("image") instanceof String s ? s : "";
         List<String> allowedUserIds = data.get("allowedUserIds") instanceof List
             ? ((List<Object>) data.get("allowedUserIds")).stream().map(String::valueOf).collect(Collectors.toList())
             : List.of();
-        return new Core.ApprovalDelegation(channel, credentialId, chatId, messageTemplate, allowedUserIds);
+        // Optional custom inline-button labels (template-capable): blank/absent = channel defaults.
+        String approveLabel = data.get("approveLabel") instanceof String s ? s : "";
+        String rejectLabel = data.get("rejectLabel") instanceof String s ? s : "";
+        return new Core.ApprovalDelegation(channel, credentialId, chatId, messageTemplate, imageTemplate, allowedUserIds,
+            approveLabel, rejectLabel);
     }
 
     private static Long parseCredentialId(Object value) {
@@ -1021,9 +1272,22 @@ public final class WorkflowPlanParser {
                 String pdfFormat = data.get("pdfFormat") instanceof String s && !s.isBlank() ? s : null;
                 Boolean pdfLandscape = data.get("pdfLandscape") instanceof Boolean
                     ? (Boolean) data.get("pdfLandscape") : false;
+                Boolean generateVideo = data.get("generateVideo") instanceof Boolean
+                    ? (Boolean) data.get("generateVideo") : false;
+                // videoPreset is kept raw here (same policy as pdfFormat): the agent/build path
+                // normalises it via InterfaceNodeConfig; the service falls back to vertical when
+                // it is null/blank/unknown.
+                String videoPreset = data.get("videoPreset") instanceof String s2 && !s2.isBlank() ? s2 : null;
+                Integer videoMaxDurationSeconds = data.get("videoMaxDurationSeconds") instanceof Number n
+                    ? n.intValue() : null;
+                // videoMode kept raw (same policy as videoPreset): the service falls back to
+                // smooth when it is null/blank/unknown.
+                String videoMode = data.get("videoMode") instanceof String s3 && !s3.isBlank() ? s3 : null;
+                Integer videoFps = data.get("videoFps") instanceof Number n2 ? n2.intValue() : null;
 
                 return new InterfaceDef(id, label, actionMapping, variableMapping, showPreview, position,
-                    isEntryInterface, generateScreenshot, exposeRenderedSource, generatePdf, pdfFormat, pdfLandscape);
+                    isEntryInterface, generateScreenshot, exposeRenderedSource, generatePdf, pdfFormat, pdfLandscape,
+                    generateVideo, videoPreset, videoMaxDurationSeconds, videoMode, videoFps);
             })
             .filter(Objects::nonNull)
             .collect(Collectors.toList());

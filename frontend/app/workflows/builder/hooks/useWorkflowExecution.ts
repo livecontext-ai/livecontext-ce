@@ -308,6 +308,8 @@ export function useWorkflowExecution(config: UseWorkflowExecutionConfig): UseWor
       // Bottom-of-node Auto launcher passes the clicked trigger; the header run
       // button does not (and keeps its all-root-triggers behavior).
       const startFromNode: string | undefined = event.detail?.startFromNode;
+      // No run-level mock choice from the UI: per-node mocks apply on their
+      // own during editor runs (the node's mock block is the single control).
 
       try {
         const { planJson, plan } = await resolvePlanJson();

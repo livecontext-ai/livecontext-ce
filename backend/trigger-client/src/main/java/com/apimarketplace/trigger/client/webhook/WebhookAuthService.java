@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.Base64;
 
 /**
@@ -55,7 +56,9 @@ public class WebhookAuthService {
             case "basic" -> validateBasicAuth(config, headers);
             case "header" -> validateHeaderAuth(config, headers);
             case "jwt" -> validateJwtAuth(config, headers);
-            default -> WebhookAuthResult.success(); // Unknown type treated as no auth
+            // Fail closed: requiresAuth() already returned true, so an unrecognized
+            // authType is a misconfiguration, never a reason to accept the request.
+            default -> WebhookAuthResult.failure("Unsupported authentication type: " + authType);
         };
     }
 
@@ -92,7 +95,7 @@ public class WebhookAuthService {
                 return WebhookAuthResult.failure("Server configuration error");
             }
 
-            if (username.equals(expectedUsername) && password.equals(expectedPassword)) {
+            if (constantTimeEquals(username, expectedUsername) && constantTimeEquals(password, expectedPassword)) {
                 logger.debug("Basic auth validation successful");
                 return WebhookAuthResult.success();
             }
@@ -131,7 +134,7 @@ public class WebhookAuthService {
             return WebhookAuthResult.failure("Server configuration error");
         }
 
-        if (actualValue.equals(expectedValue)) {
+        if (constantTimeEquals(actualValue, expectedValue)) {
             logger.debug("Header auth validation successful");
             return WebhookAuthResult.success();
         }
@@ -183,6 +186,19 @@ public class WebhookAuthService {
      * Gets the JWT algorithm based on configuration.
      * Supports: HS256, HS384, HS512
      */
+    /**
+     * Constant-time string comparison to avoid leaking secret length/content
+     * through response timing. Returns false if either value is null.
+     */
+    private static boolean constantTimeEquals(String a, String b) {
+        if (a == null || b == null) {
+            return false;
+        }
+        return MessageDigest.isEqual(
+                a.getBytes(StandardCharsets.UTF_8),
+                b.getBytes(StandardCharsets.UTF_8));
+    }
+
     private Algorithm getJwtAlgorithm(String algorithmName, String secret) {
         if (algorithmName == null) {
             algorithmName = "HS256";

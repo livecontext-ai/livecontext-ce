@@ -434,7 +434,7 @@ class CoreTest {
         @DisplayName("Normalizes the channel: trimmed and lowercased")
         void normalizesChannelTrimLowercase() {
             Core.ApprovalDelegation delegation = new Core.ApprovalDelegation(
-                "  Telegram ", 42L, "123", "msg", List.of("777"));
+                "  Telegram ", 42L, "123", "msg", "", List.of("777"), null, null);
 
             assertEquals("telegram", delegation.channel());
         }
@@ -443,26 +443,49 @@ class CoreTest {
         @DisplayName("Null channel becomes empty string (never null)")
         void nullChannelBecomesEmpty() {
             Core.ApprovalDelegation delegation = new Core.ApprovalDelegation(
-                null, null, null, null, null);
+                null, null, null, null, null, null, null, null);
 
             assertEquals("", delegation.channel());
         }
 
         @Test
-        @DisplayName("Null chatId and messageTemplate become empty strings")
+        @DisplayName("Null chatId, messageTemplate, imageTemplate and labels become empty strings")
         void nullChatIdAndMessageTemplateBecomeEmpty() {
             Core.ApprovalDelegation delegation = new Core.ApprovalDelegation(
-                "telegram", null, null, null, null);
+                "telegram", null, null, null, null, null, null, null);
 
             assertEquals("", delegation.chatId());
             assertEquals("", delegation.messageTemplate());
+            assertEquals("", delegation.imageTemplate());
+            assertEquals("", delegation.approveLabel());
+            assertEquals("", delegation.rejectLabel());
+        }
+
+        @Test
+        @DisplayName("Carries custom approveLabel and rejectLabel when provided")
+        void carriesCustomButtonLabels() {
+            Core.ApprovalDelegation delegation = new Core.ApprovalDelegation(
+                "telegram", 42L, "123", "msg", "", List.of(),
+                "👍 Ship it", "👎 Hold");
+
+            assertEquals("👍 Ship it", delegation.approveLabel());
+            assertEquals("👎 Hold", delegation.rejectLabel());
+        }
+
+        @Test
+        @DisplayName("Carries the imageTemplate when provided")
+        void carriesImageTemplate() {
+            Core.ApprovalDelegation delegation = new Core.ApprovalDelegation(
+                "telegram", 42L, "123", "msg", "{{interface:card.output.screenshot}}", List.of(), null, null);
+
+            assertEquals("{{interface:card.output.screenshot}}", delegation.imageTemplate());
         }
 
         @Test
         @DisplayName("Null allowedUserIds becomes an empty list")
         void nullAllowedUserIdsBecomesEmptyList() {
             Core.ApprovalDelegation delegation = new Core.ApprovalDelegation(
-                "telegram", null, "123", "", null);
+                "telegram", null, "123", "", "", null, null, null);
 
             assertNotNull(delegation.allowedUserIds());
             assertTrue(delegation.allowedUserIds().isEmpty());
@@ -472,7 +495,7 @@ class CoreTest {
         @DisplayName("isConfigured() is true when a channel is set")
         void isConfiguredTrueWithChannel() {
             Core.ApprovalDelegation delegation = new Core.ApprovalDelegation(
-                "telegram", null, "", "", null);
+                "telegram", null, "", "", "", null, null, null);
 
             assertTrue(delegation.isConfigured());
         }
@@ -480,15 +503,15 @@ class CoreTest {
         @Test
         @DisplayName("isConfigured() is false for a blank or null channel (section left unconfigured)")
         void isConfiguredFalseWithBlankChannel() {
-            assertFalse(new Core.ApprovalDelegation("   ", 42L, "123", "msg", null).isConfigured());
-            assertFalse(new Core.ApprovalDelegation(null, 42L, "123", "msg", null).isConfigured());
+            assertFalse(new Core.ApprovalDelegation("   ", 42L, "123", "msg", "", null, null, null).isConfigured());
+            assertFalse(new Core.ApprovalDelegation(null, 42L, "123", "msg", "", null, null, null).isConfigured());
         }
 
         @Test
         @DisplayName("ApprovalConfig accepts a null delegation (in-app-only approval, back-compat)")
         void approvalConfigAcceptsNullDelegation() {
             Core.ApprovalConfig config = new Core.ApprovalConfig(
-                List.of("manager"), 1, 86400000L, "Approve?", null);
+                List.of("manager"), 1, 86400000L, "Approve?", null, null);
 
             assertNull(config.delegation());
         }
@@ -497,12 +520,77 @@ class CoreTest {
         @DisplayName("ApprovalConfig carries the delegation when provided")
         void approvalConfigCarriesDelegation() {
             Core.ApprovalDelegation delegation = new Core.ApprovalDelegation(
-                "telegram", 42L, "123", "msg", List.of("777"));
+                "telegram", 42L, "123", "msg", "", List.of("777"), null, null);
 
             Core.ApprovalConfig config = new Core.ApprovalConfig(
-                List.of("manager"), 1, 86400000L, "Approve?", delegation);
+                List.of("manager"), 1, 86400000L, "Approve?", delegation, null);
 
             assertSame(delegation, config.delegation());
+        }
+    }
+
+    @Nested
+    @DisplayName("ApprovalConfig continuationMode")
+    class ApprovalConfigContinuationModeTests {
+
+        private Core.ApprovalConfig configWithContinuationMode(String continuationMode) {
+            return new Core.ApprovalConfig(
+                List.of("manager"), 1, 86400000L, "Approve?", null, continuationMode);
+        }
+
+        @Test
+        @DisplayName("per_item is kept as-is")
+        void perItemIsKept() {
+            assertEquals(Core.ApprovalConfig.CONTINUATION_PER_ITEM,
+                configWithContinuationMode("per_item").continuationMode());
+        }
+
+        @Test
+        @DisplayName("uppercase and surrounding whitespace are normalized to per_item")
+        void uppercaseAndWhitespaceAreNormalized() {
+            assertEquals(Core.ApprovalConfig.CONTINUATION_PER_ITEM,
+                configWithContinuationMode("PER_ITEM").continuationMode());
+            assertEquals(Core.ApprovalConfig.CONTINUATION_PER_ITEM,
+                configWithContinuationMode("  per_item  ").continuationMode());
+        }
+
+        @Test
+        @DisplayName("null falls back to the safe default all_items")
+        void nullFallsBackToAllItems() {
+            assertEquals(Core.ApprovalConfig.CONTINUATION_ALL_ITEMS,
+                configWithContinuationMode(null).continuationMode());
+        }
+
+        @Test
+        @DisplayName("blank falls back to all_items")
+        void blankFallsBackToAllItems() {
+            assertEquals(Core.ApprovalConfig.CONTINUATION_ALL_ITEMS,
+                configWithContinuationMode("   ").continuationMode());
+        }
+
+        @Test
+        @DisplayName("unknown value falls back to all_items (never propagates garbage)")
+        void unknownValueFallsBackToAllItems() {
+            assertEquals(Core.ApprovalConfig.CONTINUATION_ALL_ITEMS,
+                configWithContinuationMode("every_item").continuationMode());
+        }
+
+        @Test
+        @DisplayName("explicit all_items stays all_items")
+        void explicitAllItemsStaysAllItems() {
+            assertEquals(Core.ApprovalConfig.CONTINUATION_ALL_ITEMS,
+                configWithContinuationMode("all_items").continuationMode());
+        }
+
+        @Test
+        @DisplayName("normalizeContinuationMode static helper applies the same rules standalone")
+        void staticHelperAppliesSameRules() {
+            assertEquals(Core.ApprovalConfig.CONTINUATION_PER_ITEM,
+                Core.ApprovalConfig.normalizeContinuationMode(" Per_Item "));
+            assertEquals(Core.ApprovalConfig.CONTINUATION_ALL_ITEMS,
+                Core.ApprovalConfig.normalizeContinuationMode(null));
+            assertEquals(Core.ApprovalConfig.CONTINUATION_ALL_ITEMS,
+                Core.ApprovalConfig.normalizeContinuationMode("bogus"));
         }
     }
 

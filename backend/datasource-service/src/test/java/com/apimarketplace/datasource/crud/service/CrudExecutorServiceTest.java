@@ -159,6 +159,87 @@ class CrudExecutorServiceTest {
             assertThat(result.data().hasMore()).isFalse();
             assertThat(result.data().offset()).isEqualTo(0);
         }
+
+        @Test
+        @DisplayName("limit=0 returns ZERO rows (honors 'use 0 for no rows'), never clamps up to 1")
+        void limitZeroReturnsNoRows() {
+            DataSource ds = createDataSource(1L, "users", "tenant-1");
+            when(dataSourceService.getDataSource(1L)).thenReturn(Optional.of(ds));
+
+            ReadRowRequest request = mock(ReadRowRequest.class);
+            when(request.getDataSourceId()).thenReturn(1L);
+            when(request.getOperation()).thenReturn(CrudOperation.READ_ROW);
+            when(request.getWhere()).thenReturn(null);
+            when(request.getLimit()).thenReturn(0);
+            when(request.getOffset()).thenReturn(null);
+
+            CrudResult result = executorService.execute(request, "tenant-1");
+
+            assertThat(result.success()).isTrue();
+            assertThat(result.data().rows()).isEmpty();
+            assertThat(result.data().hasMore()).isFalse();
+            // Regression: pre-fix Math.max(0,1) clamped to 1 and readRows was queried, returning a row.
+            verify(crudRepository, never()).readRows(anyLong(), anyString(), any(), anyInt(), anyInt());
+        }
+    }
+
+    @Nested
+    @DisplayName("buildWhereClauseForSimilarity (hybrid search WHERE)")
+    class SimilarityWhereTests {
+
+        // Uses a REAL SqlSanitizer so operator/column normalization behaves like production.
+        private CrudExecutorService svcWithRealSanitizer() {
+            return new CrudExecutorService(crudRepository, vectorRepository, dataSourceService, breakdownService,
+                    columnValueCoercer, dataSourceColumnRepository, new SqlSanitizer(), rowEventPublisher,
+                    ceVectorGate(), org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class));
+        }
+
+        @Test
+        @DisplayName("IS NULL binds NO value and emits a valid predicate (pre-fix bound a stray param = invalid SQL)")
+        void isNullEmitsNoValueParam() {
+            var svc = svcWithRealSanitizer();
+            var params = new org.springframework.jdbc.core.namedparam.MapSqlParameterSource();
+            String sql = svc.buildWhereClauseForSimilarity(
+                    new com.apimarketplace.datasource.crud.domain.WhereCondition("status", "IS NULL", null), params);
+
+            assertThat(sql).isEqualTo("jsonb_extract_path_text(i.data, :sim_where_col) IS NULL");
+            assertThat(params.hasValue("sim_where_val")).isFalse(); // no stray value param
+        }
+
+        @Test
+        @DisplayName("IN emits parenthesized list (pre-fix emitted `IN :param` = invalid SQL)")
+        void inEmitsParenthesizedList() {
+            var svc = svcWithRealSanitizer();
+            var params = new org.springframework.jdbc.core.namedparam.MapSqlParameterSource();
+            String sql = svc.buildWhereClauseForSimilarity(
+                    new com.apimarketplace.datasource.crud.domain.WhereCondition("status", "IN", java.util.List.of("a", "b")), params);
+
+            assertThat(sql).isEqualTo("jsonb_extract_path_text(i.data, :sim_where_col) IN (:sim_where_val)");
+            assertThat(params.getValue("sim_where_val")).isEqualTo(java.util.List.of("a", "b"));
+        }
+
+        @Test
+        @DisplayName("column 'id' maps to i.id::text (pre-fix probed a non-existent JSONB key -> matched nothing)")
+        void idMapsToPhysicalPrimaryKey() {
+            var svc = svcWithRealSanitizer();
+            var params = new org.springframework.jdbc.core.namedparam.MapSqlParameterSource();
+            String sql = svc.buildWhereClauseForSimilarity(
+                    new com.apimarketplace.datasource.crud.domain.WhereCondition("id", "=", "5"), params);
+
+            assertThat(sql).isEqualTo("i.id::text = :sim_where_val");
+            assertThat(params.getValue("sim_where_val")).isEqualTo("5");
+        }
+
+        @Test
+        @DisplayName("a 'data.' prefixed column is stripped before JSONB access")
+        void dataPrefixStripped() {
+            var svc = svcWithRealSanitizer();
+            var params = new org.springframework.jdbc.core.namedparam.MapSqlParameterSource();
+            svc.buildWhereClauseForSimilarity(
+                    new com.apimarketplace.datasource.crud.domain.WhereCondition("data.amount", ">", "10"), params);
+
+            assertThat(params.getValue("sim_where_col")).isEqualTo("amount");
+        }
     }
 
     @Nested

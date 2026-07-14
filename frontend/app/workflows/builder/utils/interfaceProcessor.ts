@@ -77,6 +77,25 @@ export function collectInterfaces(ctx: PlanGeneratorContext): void {
       }
     }
 
+    // Serialize generate-video toggle + capture options (emits a `video` FileRef output).
+    // Same save/reload rationale as generatePdf above.
+    if (interfaceData.generateVideo === true) {
+      interfaceEntry.generateVideo = true;
+      if (interfaceData.videoPreset) {
+        interfaceEntry.videoPreset = interfaceData.videoPreset;
+      }
+      if (typeof interfaceData.videoMaxDurationSeconds === 'number'
+          && interfaceData.videoMaxDurationSeconds > 0) {
+        interfaceEntry.videoMaxDurationSeconds = interfaceData.videoMaxDurationSeconds;
+      }
+      if (interfaceData.videoMode) {
+        interfaceEntry.videoMode = interfaceData.videoMode;
+      }
+      if (typeof interfaceData.videoFps === 'number' && interfaceData.videoFps > 0) {
+        interfaceEntry.videoFps = interfaceData.videoFps;
+      }
+    }
+
     // Serialize expose-rendered-source toggle (emits rendered_html / rendered_css / rendered_js)
     if (interfaceData.exposeRenderedSource === true) {
       interfaceEntry.exposeRenderedSource = true;

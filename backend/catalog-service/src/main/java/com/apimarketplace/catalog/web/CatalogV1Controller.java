@@ -6,6 +6,8 @@ import com.apimarketplace.catalog.domain.dto.ToolExecutionResponse;
 import com.apimarketplace.catalog.domain.dto.ToolListResponse;
 import com.apimarketplace.catalog.service.CatalogV1Service;
 import com.apimarketplace.catalog.service.exception.ApiAuthenticationException;
+import com.apimarketplace.catalog.service.exception.ToolNotFoundException;
+import com.apimarketplace.catalog.service.execution.MockToolExecutionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -22,6 +24,7 @@ import java.util.UUID;
 public class CatalogV1Controller {
 
     private final CatalogV1Service catalogV1Service;
+    private final MockToolExecutionService mockToolExecutionService;
 
     @GetMapping("/tools")
     public ResponseEntity<?> getTools(@RequestParam(defaultValue = "20") int limit,
@@ -75,6 +78,52 @@ public class CatalogV1Controller {
         // Combine apiSlug/toolSlug - service handles this format
         String toolId = apiSlug + "/" + toolSlug;
         return executeToolInternal(toolId, request, userId, orgId, requestId);
+    }
+
+    /**
+     * Mock execution: serves the tool's default example response projected through
+     * the same output-schema pipeline as a real execution. Used by the orchestrator's
+     * per-node mock mode. No HTTP call, no credentials, no billing.
+     */
+    @PostMapping("/tools/{toolId}/execute-mock")
+    public ResponseEntity<?> executeMockTool(@PathVariable String toolId,
+                                             @RequestHeader(value = "X-Request-Id", required = false) String requestId) {
+        return executeMockToolInternal(toolId, requestId);
+    }
+
+    /** Mock execution with the {@code apiSlug/toolSlug} id form (orchestrator's step id format). */
+    @PostMapping("/tools/{apiSlug}/{toolSlug}/execute-mock")
+    public ResponseEntity<?> executeMockToolWithApiSlug(@PathVariable String apiSlug,
+                                                        @PathVariable String toolSlug,
+                                                        @RequestHeader(value = "X-Request-Id", required = false) String requestId) {
+        return executeMockToolInternal(apiSlug + "/" + toolSlug, requestId);
+    }
+
+    private ResponseEntity<?> executeMockToolInternal(String toolId, String requestId) {
+        try {
+            String resolvedRequestId = requestId != null && !requestId.isBlank() ? requestId : UUID.randomUUID().toString();
+            return ResponseEntity.ok(mockToolExecutionService.executeMockTool(toolId, resolvedRequestId));
+        } catch (ToolNotFoundException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of(
+                            "success", false,
+                            "message", "Tool not found",
+                            "toolId", toolId));
+        } catch (MockToolExecutionService.MockExampleNotFoundException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of(
+                            "success", false,
+                            "message", e.getMessage(),
+                            "toolId", toolId));
+        } catch (Exception e) {
+            log.error("Error executing mock for tool {}", toolId, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of(
+                            "success", false,
+                            "message", "Unable to execute mock",
+                            "toolId", toolId,
+                            "error", e.getMessage()));
+        }
     }
 
     /**

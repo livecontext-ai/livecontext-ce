@@ -40,19 +40,40 @@ public class WorkflowPlanRequest {
      */
     private final String publicationId;
 
+    /**
+     * Optional run-level mock override for editor runs: absent/null = default
+     * (nodes carrying an enabled {@code mock} block return their mock, others run
+     * real), {@code "off"} = ignore ALL mocks this run (config untouched),
+     * {@code "all_mcp"} = also mock every mcp catalog-tool node without a block
+     * with its catalog example (full dry-run). Ignored on non-editor paths.
+     */
+    private final String mockMode;
+
     @JsonCreator
     public WorkflowPlanRequest(@JsonProperty("planJson") String planJson,
                                @JsonProperty("dataInputs") Map<String, Object> dataInputs,
                                @JsonProperty("workflowId") String workflowId,
                                @JsonProperty("executionMode") String executionMode,
                                @JsonProperty("source") String source,
-                               @JsonProperty("publicationId") String publicationId) {
+                               @JsonProperty("publicationId") String publicationId,
+                               @JsonProperty("mockMode") String mockMode) {
         this.planJson = planJson;
         this.dataInputs = dataInputs != null ? new HashMap<>(dataInputs) : new HashMap<>();
         this.workflowId = workflowId;
         this.executionMode = executionMode;
         this.source = source;
         this.publicationId = publicationId;
+        this.mockMode = mockMode;
+    }
+
+    /** Back-compat constructor (pre-mockMode call sites). */
+    public WorkflowPlanRequest(String planJson,
+                               Map<String, Object> dataInputs,
+                               String workflowId,
+                               String executionMode,
+                               String source,
+                               String publicationId) {
+        this(planJson, dataInputs, workflowId, executionMode, source, publicationId, null);
     }
 
     public String getPlanJson() {
@@ -81,5 +102,9 @@ public class WorkflowPlanRequest {
 
     public String getPublicationId() {
         return publicationId;
+    }
+
+    public String getMockMode() {
+        return mockMode;
     }
 }

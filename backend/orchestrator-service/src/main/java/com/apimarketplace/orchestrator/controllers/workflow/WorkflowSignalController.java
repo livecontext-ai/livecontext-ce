@@ -397,7 +397,10 @@ public class WorkflowSignalController {
         ResponseEntity<Map<String, Object>> scopeBlock = guardRunScope(runId, userId, orgId);
         if (scopeBlock != null) return scopeBlock;
 
-        int cancelled = signalService.cancelByRun(runId);
+        // Cancel ONLY the named node's signal(s), not every pending signal in the run.
+        // cancelByRun would have cancelled sibling approvals and timers too; epoch=-1 targets
+        // this node across all epochs.
+        int cancelled = signalService.cancelForNodes(runId, java.util.Set.of(nodeId), -1);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("status", "cancelled");

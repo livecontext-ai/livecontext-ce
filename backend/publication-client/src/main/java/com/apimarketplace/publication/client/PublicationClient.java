@@ -627,6 +627,16 @@ public class PublicationClient {
             ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
                     url, HttpMethod.POST, entity, new ParameterizedTypeReference<>() {});
             return response.getBody();
+        } catch (org.springframework.web.client.HttpStatusCodeException e) {
+            // 422 = structured publish refusal (grant=all violations, snapshot size cap).
+            // Surface it typed so callers can render the actionable detail instead of
+            // an opaque "Failed to publish agent: 422 ..." string.
+            if (e.getStatusCode().value() == 422) {
+                log.warn("Agent publish refused by publication-service: {}", e.getResponseBodyAsString());
+                throw PublicationValidationException.fromResponseBody(e.getResponseBodyAsString(), e);
+            }
+            log.error("Failed to publish agent: {}", e.getMessage());
+            throw new RuntimeException("Failed to publish agent: " + e.getMessage(), e);
         } catch (Exception e) {
             log.error("Failed to publish agent: {}", e.getMessage());
             throw new RuntimeException("Failed to publish agent: " + e.getMessage(), e);

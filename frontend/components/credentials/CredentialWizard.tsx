@@ -1108,8 +1108,12 @@ export function CredentialWizard({
             required: true,
           }];
         }
+        // Resolve each value with the same `?? prop.default` fallback the render path
+        // uses, so a field left at its displayed default (e.g. Port "587") is neither
+        // wrongly flagged required nor dropped from credential_data.
         for (const prop of properties) {
-          if (prop.required && !customFields[prop.name]?.trim()) {
+          const val = (customFields[prop.name] ?? prop.default ?? "").trim();
+          if (prop.required && !val) {
             setError(t("errors.customFieldRequired", { field: prop.displayName || prop.name }));
             setIsSubmitting(false);
             return;
@@ -1117,8 +1121,9 @@ export function CredentialWizard({
         }
         // Build credential data from custom fields
         for (const prop of properties) {
-          if (customFields[prop.name]) {
-            credentialData[prop.name] = customFields[prop.name].trim();
+          const val = (customFields[prop.name] ?? prop.default ?? "").trim();
+          if (val) {
+            credentialData[prop.name] = val;
           }
         }
         credType = "API Key"; // Custom credentials stored as API Key type

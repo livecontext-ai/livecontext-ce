@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { useTranslations, useLocale } from 'next-intl';
-import { History, Square, StepForward } from 'lucide-react';
+import { FlaskConical, History, Square, StepForward } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import type { WorkflowRun } from '@/lib/api';
 import { getRunDisplayStatus, getStatusClasses, formatDuration, getRunStatusLabel } from '@/lib/utils/runStatusUtils';
@@ -101,6 +101,22 @@ export function RunInfoBadge({
               <div className="flex items-center gap-1.5 px-2 py-0.5 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 rounded-full">
                 <StepForward className="w-3 h-3" />
                 <span className="text-xs font-medium whitespace-nowrap">{t('stepByStep')}</span>
+              </div>
+            </>
+          )}
+
+          {/* Mock run badge - run metadata carries __mockMode__ only when the
+              start override was used; 'all_mcp' is the dry-run (mock) case
+              ('off' explicitly disabled mocks, so no badge there). */}
+          {currentRunInfo.metadata?.__mockMode__ === 'all_mcp' && (
+            <>
+              <span className="text-xs text-gray-400 dark:text-gray-500">·</span>
+              <div
+                data-testid="run-info-mock-pill"
+                className="flex items-center gap-1.5 px-2 py-0.5 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 rounded-full"
+              >
+                <FlaskConical className="w-3 h-3" />
+                <span className="text-xs font-medium whitespace-nowrap">{t('mockRun')}</span>
               </div>
             </>
           )}

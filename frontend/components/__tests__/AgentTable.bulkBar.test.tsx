@@ -21,6 +21,8 @@ const mocks = vi.hoisted(() => ({
   cloneAgent: vi.fn(),
   deleteAgent: vi.fn(),
   clear: vi.fn(),
+  // Mutable so multi-selection scenarios can widen it; reset to ['a1'] in afterEach.
+  selectedIds: new Set<string>(['a1']),
 }));
 
 vi.mock('next/navigation', () => ({
@@ -39,7 +41,11 @@ vi.mock('@/lib/api/orchestrator/publication.service', () => ({
 }));
 vi.mock('@/components/agents', () => ({ AvatarDisplay: () => null }));
 vi.mock('@/components/publications/PublicationStatusIcon', () => ({ PublicationStatusIcon: () => null }));
-vi.mock('@/components/chat/CreateAgentModal', () => ({ CreateAgentModal: () => null }));
+vi.mock('@/components/chat/CreateAgentModal', () => ({
+  // Renders a marker so the bar's Update action can assert "edit modal opened for THAT agent".
+  CreateAgentModal: ({ agent }: { agent?: { name: string } }) =>
+    agent ? <div data-testid="edit-agent-modal">{agent.name}</div> : <div data-testid="create-agent-modal" />,
+}));
 vi.mock('@/components/marketplace/PublishAgentModal', () => ({ default: () => null }));
 vi.mock('@/components/app/AgentPanelContent', () => ({ AgentPanelContent: () => null, AGENT_CONFIGURATION_TAB: 'config' }));
 vi.mock('@/contexts/SidePanelContext', () => ({ useSidePanelSafe: () => null }));
@@ -51,7 +57,7 @@ vi.mock('@/lib/stores/current-org-store', () => ({ useCanMutateInCurrentOrg: () 
 vi.mock('@/lib/hooks/useOrgScopedReset', () => ({ useOrgScopedReset: () => undefined }));
 vi.mock('@/hooks/useSelectableItems', () => ({
   useSelectableItems: () => ({
-    selectedIds: new Set<string>(['a1']),
+    selectedIds: mocks.selectedIds,
     toggle: vi.fn(),
     clear: mocks.clear,
     selectAll: vi.fn(),
@@ -75,6 +81,7 @@ function renderTable() {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  mocks.selectedIds = new Set<string>(['a1']);
 });
 
 // Publication status now ships inline on the page envelope (publicationStatuses), so the bar's
@@ -114,6 +121,36 @@ describe('AgentTable - selection actions float + publish state machine in the ba
 
     const bar = await screen.findByTestId('selection-action-bar');
     expect(await within(bar).findByRole('button', { name: 'Pending Review' })).toBeDisabled();
+  });
+
+  it('a single selection shows Update, and clicking it opens the edit modal for that agent', async () => {
+    oneAgent();
+    renderTable();
+
+    const bar = await screen.findByTestId('selection-action-bar');
+    fireEvent.click(within(bar).getByRole('button', { name: 'Update' }));
+
+    expect(await screen.findByTestId('edit-agent-modal')).toHaveTextContent('Agent One');
+  });
+
+  it('a multi selection hides the single-only actions (Update, Share) but keeps Clone/Delete', async () => {
+    mocks.selectedIds = new Set(['a1', 'a2']);
+    mocks.getAgentsPage.mockResolvedValue({
+      items: [
+        { id: 'a1', name: 'Agent One', isPublic: false, isActive: true },
+        { id: 'a2', name: 'Agent Two', isPublic: false, isActive: true },
+      ],
+      totalCount: 2, page: 0, size: 25, publicationStatuses: {},
+    });
+    mocks.getFleetTriggers.mockResolvedValue([]);
+    renderTable();
+
+    const bar = await screen.findByTestId('selection-action-bar');
+    expect(within(bar).getByText('2 selected')).toBeInTheDocument();
+    expect(within(bar).queryByRole('button', { name: 'Update' })).not.toBeInTheDocument();
+    expect(within(bar).queryByRole('button', { name: 'Share' })).not.toBeInTheDocument();
+    expect(within(bar).getByRole('button', { name: 'Clone (2)' })).toBeInTheDocument();
+    expect(within(bar).getByRole('button', { name: 'Delete (2)' })).toBeInTheDocument();
   });
 
   it('the bar × clears the selection', async () => {

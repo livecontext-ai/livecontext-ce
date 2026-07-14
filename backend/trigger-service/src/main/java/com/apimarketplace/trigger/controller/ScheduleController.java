@@ -187,7 +187,11 @@ public class ScheduleController {
         }
         ScheduledExecutionEntity schedule = results.get(0);
 
-        boolean enabled = body.getOrDefault("enabled", !schedule.isEnabled());
+        // getOrDefault returns the default only for an ABSENT key; a body of {"enabled": null}
+        // returns null and NPEs on unboxing (500). Treat a present-but-null (or absent) value as
+        // a toggle of the current state, mirroring InternalTriggerController's null-safe pattern.
+        Boolean requested = body.get("enabled");
+        boolean enabled = requested != null ? requested : !schedule.isEnabled();
         schedule.setEnabled(enabled);
 
         if (enabled) {

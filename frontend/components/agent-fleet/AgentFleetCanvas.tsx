@@ -77,12 +77,14 @@ const fromConnectionType = (t: ConnectionType): FleetEdgeType => (t === 'bezier'
 const EDGE_CATEGORIES_ALL = ['model', 'tools', 'resources', 'sub-agents', 'skills'] as const;
 const EDGE_CATEGORIES_SINGLE = ['model', 'tools', 'resources', 'sub-agents'] as const;
 type EdgeCategory = (typeof EDGE_CATEGORIES_ALL)[number];
-const EDGE_CATEGORY_LABELS: Record<EdgeCategory, string> = {
-  model: 'Model',
-  tools: 'Tools',
-  resources: 'Resources',
-  'sub-agents': 'Sub-Agents',
-  skills: 'Skills',
+// i18n key (under the 'fleetInspector' namespace) per edge category - translated at render
+// so the chip labels follow the app locale instead of hardcoded English.
+const EDGE_CATEGORY_I18N_KEYS: Record<EdgeCategory, string> = {
+  model: 'connectionTypeModel',
+  tools: 'connectionTypeTools',
+  resources: 'connectionTypeResources',
+  'sub-agents': 'connectionTypeSubAgents',
+  skills: 'connectionTypeSkills',
 };
 
 function readEdgeCategories(key: string, categories: readonly EdgeCategory[]): Set<EdgeCategory> {
@@ -1031,7 +1033,7 @@ export function AgentFleetCanvas({ singleAgentId, snapshot, snapshotMode = false
                         {/* Connection type visibility */}
                         <div className="space-y-2">
                           <span className="text-sm font-medium text-slate-700 dark:text-slate-300 block">
-                            Connection Types
+                            {tEdit('connectionTypes')}
                           </span>
                           <div className="flex flex-wrap gap-1.5">
                             {activeEdgeCategories.map((cat) => (
@@ -1044,7 +1046,7 @@ export function AgentFleetCanvas({ singleAgentId, snapshot, snapshotMode = false
                                     : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600'
                                 }`}
                               >
-                                {EDGE_CATEGORY_LABELS[cat]}
+                                {tEdit(EDGE_CATEGORY_I18N_KEYS[cat])}
                               </button>
                             ))}
                           </div>

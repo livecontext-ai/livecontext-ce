@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { getClientLocale } from '@/lib/utils/locale';
-import { X, History, RefreshCw, XCircle, StepForward, Pin, Calendar } from 'lucide-react';
+import { X, History, RefreshCw, XCircle, StepForward, Pin, Calendar, FlaskConical } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { StatusBadge } from '@/components/ui/StatusBadge';
@@ -279,6 +279,17 @@ export function WorkflowRunsHistoryPanel({
                       {run.executionMode === 'step_by_step' && (
                         <div className="flex items-center justify-center w-5 h-5 rounded-full bg-purple-100 dark:bg-purple-900/30" title={t('runs.stepByStepMode')}>
                           <StepForward className="w-3 h-3 text-purple-700 dark:text-purple-300" />
+                        </div>
+                      )}
+                      {/* Mock-run marker: only the all_mcp dry-run override gets the
+                          flask ('off' means the run explicitly IGNORED all mocks) */}
+                      {run.metadata?.__mockMode__ === 'all_mcp' && (
+                        <div
+                          className="flex items-center justify-center w-5 h-5 rounded-full bg-indigo-100 dark:bg-indigo-900/30"
+                          title={t('workflowBuilder.canvas.mockRun')}
+                          data-testid="run-history-mock-icon"
+                        >
+                          <FlaskConical className="w-3 h-3 text-indigo-700 dark:text-indigo-300" />
                         </div>
                       )}
                       {run.planVersion != null && (

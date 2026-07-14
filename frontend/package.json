@@ -59,6 +59,8 @@
     "zustand": "^5.0.8"
   },
   "devDependencies": {
+    "@dicebear/collection": "^9.4.2",
+    "@dicebear/core": "^9.4.3",
     "@eslint/js": "^9.33.0",
     "@playwright/test": "^1.57.0",
     "@tailwindcss/postcss": "^4.1.12",

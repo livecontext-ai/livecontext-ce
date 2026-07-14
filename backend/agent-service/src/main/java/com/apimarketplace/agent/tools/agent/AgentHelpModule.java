@@ -146,10 +146,11 @@ public class AgentHelpModule implements ToolModule {
         actions.put("create",
             "Insert a new agent. Requires name + system_prompt; any other parameter (webhook, schedule, " +
             "resources, skills, budget) can be set atomically in the same call. Response includes resources, " +
-            "tools_config, budget, and webhook_url + webhook_curl when webhook_enabled.");
+            "a summarized tools_config (grants + list sizes - call get for the raw lists), budget, and " +
+            "webhook_url + webhook_curl when webhook_enabled.");
         actions.put("get",
-            "Fetch a single agent by agent_id. Returns full configuration + resources summary + tools_config + " +
-            "budget object + webhook info when configured.");
+            "Fetch a single agent by agent_id. Returns full configuration + resources summary + RAW tools_config " +
+            "(full id lists) + budget object + webhook info when configured.");
         actions.put("list",
             "Paginated list of agents in your tenant. Returns resources summary only - use get for full details. " +
             "Accepts limit, offset.");
@@ -412,7 +413,7 @@ public class AgentHelpModule implements ToolModule {
             "CREATE: tools_mode defaults to 'all' (every MCP/catalog tool enabled), web_search defaults to true.",
             "UPDATE: merge semantics - only provided fields change, omitted fields are preserved.",
             "UPDATE: resource arrays REPLACE the entire list for their category. To remove all tables: tables=[]. To add a third: tables=[1,2,3] (send the full new list, not a diff).",
-            "RESPONSE: create/get/update return 'resources' (summary with mcp_tools_mode), 'tools_config' (raw config), and 'budget' (unified view). list returns 'resources' only - call get for full details.",
+            "RESPONSE: create/get/update return 'resources' (summary with mcp_tools_mode) and 'budget' (unified view). get returns the RAW 'tools_config' (full id lists); create/update return a SUMMARIZED 'tools_config' (mode, <family>Grant keys, <family>_count sizes for non-empty lists, tools_count, webSearch) - your submitted config WAS applied even though the raw lists are not echoed; call get to read them back. list returns 'resources' only.",
             "RESPONSE: tools_config keys differ from parameter names (mode vs tools_mode, webSearch vs web_search, tableAccessMode vs table_access_mode, …). Always use parameter names on create/update calls.",
 
             // --- Tools & resources ---
@@ -873,13 +874,16 @@ public class AgentHelpModule implements ToolModule {
             "Includes mcp_tools_mode ('all'|'none'|'custom').");
 
         shape.put("tools_config",
-            "object - raw configuration. ALWAYS-PRESENT keys: mode ('all'|'none'|'custom'), " +
-            "workflows[], tables[], interfaces[], agents[], applications[]. The 5 internal lists " +
-            "default to [] (no access) when omitted on create/update - absent === [] (security rule). " +
-            "OPTIONAL keys: tools[] (when mode='custom'), webSearch (boolean, default true), and the " +
+            "object - shape depends on the action. On GET: raw configuration with ALWAYS-PRESENT keys " +
+            "mode ('all'|'none'|'custom'), workflows[], tables[], interfaces[], agents[], applications[] " +
+            "(the 5 internal lists default to [] = no access when omitted - absent === [] security rule), " +
+            "plus OPTIONAL tools[] (when mode='custom'), webSearch (boolean, default true), and the " +
             "*AccessMode strings (table/workflow/interface/agent/application/skill - 'read'|'write', " +
-            "default 'write'). Parameter names differ from response keys (e.g. 'tools_mode' → 'mode', " +
-            "'web_search' → 'webSearch') - always use parameter names in create/update.");
+            "default 'write'). On CREATE/UPDATE: a SUMMARY of the applied config - mode, the <family>Grant " +
+            "keys, <family>_count (size of each non-empty id list), tools_count, webSearch; the raw id " +
+            "lists and *AccessMode keys are NOT echoed (they were applied - read them back with get). " +
+            "Parameter names differ from response keys (e.g. 'tools_mode' → 'mode', 'web_search' → " +
+            "'webSearch') - always use parameter names in create/update.");
 
         shape.put("webhook_url",
             "string - present when webhook_enabled=true. POST endpoint ready to call.");

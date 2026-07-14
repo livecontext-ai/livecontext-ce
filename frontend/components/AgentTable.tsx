@@ -5,7 +5,7 @@ import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Search, Bot, Plus, Trash2, Copy, Loader2, Globe, Clock, Webhook, CalendarClock, ArrowUpDown, Eye } from 'lucide-react';
+import { Search, Bot, Plus, Trash2, Copy, Loader2, Globe, Clock, Webhook, CalendarClock, ArrowUpDown, Eye, Pencil } from 'lucide-react';
 import { PublicationStatusIcon } from '@/components/publications/PublicationStatusIcon';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { favoritesFirst, type ListSortKey, type VisibilityFilter } from '@/lib/utils/listSort';
@@ -431,6 +431,16 @@ export function AgentTable({ className = '' }: AgentTableProps) {
       {/* Contextual actions - floating bottom-center bar (mirrors the task board). */}
       {selectedAgents.size > 0 && (
         <SelectionActionBar count={selectedAgents.size} onClear={clearAgentSelection}>
+          {/* Update (edit) - single selection only, mirrors the applications board. */}
+          {canMutate && selectedAgents.size === 1 && (
+            <BulkBarButton onClick={() => {
+              const agent = agents.find(a => selectedAgents.has(a.id));
+              if (agent) openEditModal(agent);
+            }}>
+              <Pencil className="h-3.5 w-3.5" />
+              {t('common.update')}
+            </BulkBarButton>
+          )}
           {canMutate && (
             <BulkBarButton onClick={cloneSelectedAgents}>
               <Copy className="h-3.5 w-3.5" />
@@ -495,7 +505,7 @@ export function AgentTable({ className = '' }: AgentTableProps) {
       {/* Agent Cards Grid */}
       <div className="space-y-4 w-full overflow-visible">
         {loading ? (
-          <CardSkeletonGrid />
+          <CardSkeletonGrid columnsClassName="grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" />
         ) : filteredAgents.length === 0 ? (
           <EmptyState
             icon={<Bot className="h-8 w-8 text-theme-tertiary" />}
@@ -511,7 +521,7 @@ export function AgentTable({ className = '' }: AgentTableProps) {
             ) : undefined}
           />
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {filteredAgents.map((agent) => {
               const isSelected = selectedAgents.has(agent.id);
 

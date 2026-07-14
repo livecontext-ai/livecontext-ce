@@ -319,7 +319,7 @@ class UserApprovalNodeTest {
             UserApprovalNode node = buildDelegatedNode(
                 new com.apimarketplace.orchestrator.domain.workflow.Core.ApprovalDelegation(
                     "telegram", 42L, "{{trigger:start.output.chat_id}}",
-                    "Approve order {{trigger:start.output.id}}?", List.of("777")));
+                    "Approve order {{trigger:start.output.id}}?", "", List.of("777"), null, null));
             node.setTemplateAdapter(templateAdapter);
 
             when(context.runId()).thenReturn("run-1");
@@ -347,7 +347,7 @@ class UserApprovalNodeTest {
         void outputAdvertisesDelegatedChannel() {
             UserApprovalNode node = buildDelegatedNode(
                 new com.apimarketplace.orchestrator.domain.workflow.Core.ApprovalDelegation(
-                    "telegram", 42L, "123456", "", List.of()));
+                    "telegram", 42L, "123456", "", "", List.of(), null, null));
 
             when(context.runId()).thenReturn("run-1");
             when(context.itemId()).thenReturn("0");
@@ -362,7 +362,7 @@ class UserApprovalNodeTest {
         void chatIdTemplateFailureFallsBackToRawAndStillYields() {
             UserApprovalNode node = buildDelegatedNode(
                 new com.apimarketplace.orchestrator.domain.workflow.Core.ApprovalDelegation(
-                    "telegram", 42L, "{{bad.expr}}", "", List.of()));
+                    "telegram", 42L, "{{bad.expr}}", "", "", List.of(), null, null));
             node.setTemplateAdapter(templateAdapter);
 
             when(context.runId()).thenReturn("run-1");
@@ -379,6 +379,144 @@ class UserApprovalNodeTest {
             assertEquals("{{bad.expr}}", delegation.get("chatId"));
             // blank messageTemplate never resolves: the message key is omitted, not blank
             assertFalse(delegation.containsKey("message"));
+        }
+
+        @Test
+        @DisplayName("image template resolving to a FileRef Map is embedded AS-IS under delegation.image (no stringification)")
+        void imageTemplateResolvingToFileRefMapIsEmbeddedAsIs() {
+            UserApprovalNode node = buildDelegatedNode(
+                new com.apimarketplace.orchestrator.domain.workflow.Core.ApprovalDelegation(
+                    "telegram", 42L, "123456", "",
+                    "{{interface:card.output.screenshot}}", List.of(), null, null));
+            node.setTemplateAdapter(templateAdapter);
+
+            when(context.runId()).thenReturn("run-1");
+            when(context.itemId()).thenReturn("0");
+            Map<String, Object> fileRef = Map.of(
+                "_type", "file",
+                "path", "tenant-1/wf/run/screenshot.png",
+                "name", "screenshot.png",
+                "mimeType", "image/png");
+            when(templateAdapter.evaluateTemplate("{{interface:card.output.screenshot}}", context))
+                .thenReturn(fileRef);
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertTrue(result.isAwaitingSignal());
+            Map<String, Object> config = capturedSignalConfig();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> delegation = (Map<String, Object>) config.get("delegation");
+            // The Map shape must survive verbatim: the catalog's send_photo multipart
+            // encoder detects the FileRef by _type and uploads the bytes.
+            assertSame(fileRef, delegation.get("image"));
+        }
+
+        @Test
+        @DisplayName("image template resolving to a String URL is embedded as that string")
+        void imageTemplateResolvingToStringUrlIsEmbedded() {
+            UserApprovalNode node = buildDelegatedNode(
+                new com.apimarketplace.orchestrator.domain.workflow.Core.ApprovalDelegation(
+                    "telegram", 42L, "123456", "",
+                    "{{mcp:fetch.output.image_url}}", List.of(), null, null));
+            node.setTemplateAdapter(templateAdapter);
+
+            when(context.runId()).thenReturn("run-1");
+            when(context.itemId()).thenReturn("0");
+            when(templateAdapter.evaluateTemplate("{{mcp:fetch.output.image_url}}", context))
+                .thenReturn("https://example.com/img.png");
+
+            node.execute(context);
+
+            Map<String, Object> config = capturedSignalConfig();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> delegation = (Map<String, Object>) config.get("delegation");
+            assertEquals("https://example.com/img.png", delegation.get("image"));
+        }
+
+        @Test
+        @DisplayName("regression: blank imageTemplate -> the delegation block carries NO image key (text-message path unchanged)")
+        void blankImageTemplateOmitsImageKey() {
+            UserApprovalNode node = buildDelegatedNode(
+                new com.apimarketplace.orchestrator.domain.workflow.Core.ApprovalDelegation(
+                    "telegram", 42L, "123456", "", "", List.of(), null, null));
+
+            when(context.runId()).thenReturn("run-1");
+            when(context.itemId()).thenReturn("0");
+
+            node.execute(context);
+
+            Map<String, Object> config = capturedSignalConfig();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> delegation = (Map<String, Object>) config.get("delegation");
+            assertFalse(delegation.containsKey("image"));
+        }
+
+        @Test
+        @DisplayName("SOFT: a failing image template omits the image key and the node still yields")
+        void imageTemplateFailureOmitsImageAndStillYields() {
+            UserApprovalNode node = buildDelegatedNode(
+                new com.apimarketplace.orchestrator.domain.workflow.Core.ApprovalDelegation(
+                    "telegram", 42L, "123456", "", "{{bad.image.expr}}", List.of(), null, null));
+            node.setTemplateAdapter(templateAdapter);
+
+            when(context.runId()).thenReturn("run-1");
+            when(context.itemId()).thenReturn("0");
+            when(templateAdapter.evaluateTemplate("{{bad.image.expr}}", context))
+                .thenThrow(new RuntimeException("bad template"));
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertTrue(result.isAwaitingSignal());
+            Map<String, Object> config = capturedSignalConfig();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> delegation = (Map<String, Object>) config.get("delegation");
+            assertFalse(delegation.containsKey("image"));
+        }
+
+        @Test
+        @DisplayName("custom button labels: approveLabel/rejectLabel are resolved and embedded in the delegation block")
+        void embedsResolvedCustomButtonLabels() {
+            UserApprovalNode node = buildDelegatedNode(
+                new com.apimarketplace.orchestrator.domain.workflow.Core.ApprovalDelegation(
+                    "telegram", 42L, "123456", "", "", List.of(),
+                    "Approve {{trigger:start.output.kind}}", "❌ Reject"));
+            node.setTemplateAdapter(templateAdapter);
+
+            when(context.runId()).thenReturn("run-1");
+            when(context.itemId()).thenReturn("0");
+            // chatId is non-blank so it is resolved through the adapter too (stub it to itself).
+            when(templateAdapter.evaluateTemplate("123456", context)).thenReturn("123456");
+            when(templateAdapter.evaluateTemplate("Approve {{trigger:start.output.kind}}", context))
+                .thenReturn("Approve order");
+            when(templateAdapter.evaluateTemplate("❌ Reject", context))
+                .thenReturn("❌ Reject");
+
+            node.execute(context);
+
+            Map<String, Object> config = capturedSignalConfig();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> delegation = (Map<String, Object>) config.get("delegation");
+            assertEquals("Approve order", delegation.get("approveLabel"));
+            assertEquals("❌ Reject", delegation.get("rejectLabel"));
+        }
+
+        @Test
+        @DisplayName("regression: blank button labels -> the delegation block carries NO approveLabel/rejectLabel keys (defaults preserved)")
+        void blankButtonLabelsOmitKeys() {
+            UserApprovalNode node = buildDelegatedNode(
+                new com.apimarketplace.orchestrator.domain.workflow.Core.ApprovalDelegation(
+                    "telegram", 42L, "123456", "", "", List.of(), "", ""));
+
+            when(context.runId()).thenReturn("run-1");
+            when(context.itemId()).thenReturn("0");
+
+            node.execute(context);
+
+            Map<String, Object> config = capturedSignalConfig();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> delegation = (Map<String, Object>) config.get("delegation");
+            assertFalse(delegation.containsKey("approveLabel"));
+            assertFalse(delegation.containsKey("rejectLabel"));
         }
 
         @Test
@@ -403,7 +541,7 @@ class UserApprovalNodeTest {
         void blankChannelDelegationTreatedAsAbsent() {
             UserApprovalNode node = buildDelegatedNode(
                 new com.apimarketplace.orchestrator.domain.workflow.Core.ApprovalDelegation(
-                    "   ", 42L, "123", "msg", List.of()));
+                    "   ", 42L, "123", "msg", "", List.of(), null, null));
 
             when(context.runId()).thenReturn("run-1");
             when(context.itemId()).thenReturn("0");
@@ -415,6 +553,85 @@ class UserApprovalNodeTest {
             Map<String, Object> config = capturedSignalConfig();
             assertFalse(config.containsKey("delegation"));
             assertFalse(result.output().containsKey("delegated_channel"));
+        }
+    }
+
+    @Nested
+    @DisplayName("execute() - continuationMode in signal config")
+    class ContinuationModeTests {
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> capturedSignalConfig() {
+            org.mockito.ArgumentCaptor<Map<String, Object>> configCaptor =
+                org.mockito.ArgumentCaptor.forClass(Map.class);
+            verify(signalService).registerSignal(
+                any(), any(), any(), isNull(), eq(0),
+                eq(SignalType.USER_APPROVAL), configCaptor.capture(), any(), any());
+            return configCaptor.getValue();
+        }
+
+        private UserApprovalNode buildNode(String continuationMode) {
+            UserApprovalNode node = UserApprovalNode.builder()
+                .nodeId("core:item_approval")
+                .approverRoles(List.of("manager"))
+                .requiredApprovals(1)
+                .timeoutMs(86400000L)
+                .continuationMode(continuationMode)
+                .build();
+            node.setSignalService(signalService);
+            node.setClock(FIXED_CLOCK);
+            return node;
+        }
+
+        @Test
+        @DisplayName("built with continuationMode=per_item: the registered signal config carries continuationMode=per_item")
+        void perItemContinuationModeLandsInSignalConfig() {
+            UserApprovalNode node = buildNode("per_item");
+            when(context.runId()).thenReturn("run-1");
+            when(context.itemId()).thenReturn("0");
+
+            NodeExecutionResult result = node.execute(context);
+
+            assertTrue(result.isAwaitingSignal());
+            assertEquals("per_item", capturedSignalConfig().get("continuationMode"));
+        }
+
+        @Test
+        @DisplayName("default build (no continuationMode): the signal config carries the all_items default")
+        void defaultBuildRegistersAllItemsContinuationMode() {
+            approvalNode.setSignalService(signalService);
+            approvalNode.setClock(FIXED_CLOCK);
+            when(context.runId()).thenReturn("run-1");
+            when(context.itemId()).thenReturn("0");
+
+            approvalNode.execute(context);
+
+            assertEquals("all_items", capturedSignalConfig().get("continuationMode"));
+        }
+
+        @Test
+        @DisplayName("an unnormalized continuationMode value is normalized at construction (\"PER_ITEM\" -> per_item)")
+        void unnormalizedContinuationModeIsNormalizedAtConstruction() {
+            UserApprovalNode node = buildNode("PER_ITEM");
+            when(context.runId()).thenReturn("run-1");
+            when(context.itemId()).thenReturn("0");
+
+            node.execute(context);
+
+            assertEquals("per_item", node.getContinuationMode());
+            assertEquals("per_item", capturedSignalConfig().get("continuationMode"));
+        }
+
+        @Test
+        @DisplayName("an unknown continuationMode falls back to all_items in the signal config")
+        void unknownContinuationModeFallsBackToAllItems() {
+            UserApprovalNode node = buildNode("bogus_mode");
+            when(context.runId()).thenReturn("run-1");
+            when(context.itemId()).thenReturn("0");
+
+            node.execute(context);
+
+            assertEquals("all_items", capturedSignalConfig().get("continuationMode"));
         }
     }
 

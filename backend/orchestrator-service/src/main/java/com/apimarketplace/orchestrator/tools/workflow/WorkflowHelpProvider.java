@@ -75,7 +75,8 @@ public class WorkflowHelpProvider {
         "sftp",          // SFTP node (file operations on remote servers)
         "database",      // Database node (execute SQL queries)
         "runs",          // Inspecting past workflow runs
-        "pin"            // Production version pinning (pin/unpin actions)
+        "pin",           // Production version pinning (pin/unpin actions)
+        "mocking"        // Node mocks: pin a node's output for editor runs (mock/mock_mode/mock_suggest)
     );
 
     // ==================== MAIN ENTRY POINT ====================
@@ -188,9 +189,12 @@ public class WorkflowHelpProvider {
                     "Boolean toggles accept BOTH camelCase (canonical) and snake_case (alias). " +
                     "Pairs: isEntryInterface / is_entry_interface, generateScreenshot / generate_screenshot, " +
                     "exposeRenderedSource / expose_rendered_source, generatePdf / generate_pdf, " +
-                    "pdfLandscape / pdf_landscape (pdfFormat / pdf_format is a string). Pick one convention per call. " +
+                    "pdfLandscape / pdf_landscape, generateVideo / generate_video " +
+                    "(pdfFormat / pdf_format, videoPreset / video_preset and videoMode / video_mode are strings; " +
+                    "videoMaxDurationSeconds / video_max_duration_seconds and videoFps / video_fps are integers). Pick one convention per call. " +
                     "All toggles default to false - only set them when you want the feature on. " +
                     "screenshot output → use generateScreenshot=true; pdf output → use generatePdf=true; " +
+                    "video output → use generateVideo=true; " +
                     "rendered_html / rendered_css / rendered_js outputs → use exposeRenderedSource=true.");
             }
             return formatted;
@@ -244,6 +248,9 @@ public class WorkflowHelpProvider {
 
             // Execute - programmatic workflow execution
             case "execute", "fire", "trigger_workflow" -> getExecuteHelp();
+
+            // Mock mode - pin node outputs for editor runs
+            case "mocking", "mock", "mocks", "mock_mode", "mock_suggest", "dry_run" -> ConceptsHelpProvider.getMockingHelp();
 
             // Plan format - JSON structure for set_plan/get_plan
             case "plan", "set_plan", "get_plan", "plan_format" -> ExamplesHelpProvider.getPlanHelp();
@@ -300,15 +307,20 @@ public class WorkflowHelpProvider {
         result.put("1_concept", "Workflow=backend, interface=frontend. Workflow reaches interface → page shown → user interacts → triggers fire → workflow processes.");
 
         result.put("2_add_node", ordered(
-            "syntax", "workflow(action='add_node', type='interface', label='...', params={interface_id: '<uuid>', variable_mapping: {...}, action_mapping: {...}, isEntryInterface: true|false, generateScreenshot: true|false, generatePdf: true|false, pdfFormat: 'A4', pdfLandscape: true|false, exposeRenderedSource: true|false}, connect_after='...')",
+            "syntax", "workflow(action='add_node', type='interface', label='...', params={interface_id: '<uuid>', variable_mapping: {...}, action_mapping: {...}, isEntryInterface: true|false, generateScreenshot: true|false, generatePdf: true|false, pdfFormat: 'A4', pdfLandscape: true|false, generateVideo: true|false, videoPreset: 'vertical', videoMaxDurationSeconds: 30, videoMode: 'smooth', videoFps: 30, exposeRenderedSource: true|false}, connect_after='...')",
             "interface_id", "REQUIRED. UUID returned by interface(action='create').",
             "isEntryInterface", "OPTIONAL boolean (default false). true = main page shown first in Application Mode. Only ONE interface per app should be marked entry.",
             "generateScreenshot", "OPTIONAL boolean (default false). true → adds a `screenshot` FileRef to output (PNG of the rendered page, 1280x800). To USE it, map the WHOLE FileRef into a file-accepting tool param to upload it: e.g. Telegram send_photo 'photo': '{{interface:<label>.output.screenshot}}', an email attachment, or an agent image input. Pass the object itself, NOT .path or .id. Best-effort: capture failure leaves the field absent, workflow continues. Rendering is an OPTIONAL deployment component: when it is absent, workflow(action='validate') reports an INTERFACE_RENDERER_UNAVAILABLE warning and the field stays absent at run time - only the user/admin can enable the component.",
             "generatePdf", "OPTIONAL boolean (default false). true → adds a `pdf` FileRef to output (a PDF rendering of the same interface). To USE it, map the WHOLE FileRef into a file-accepting tool param: e.g. an email attachment, Telegram send_document 'document': '{{interface:<label>.output.pdf}}', or an agent file input. Pass the object itself, NOT .path or .id. Best-effort: render failure leaves the field absent, workflow continues. Same optional-component caveat as generateScreenshot: an INTERFACE_RENDERER_UNAVAILABLE warning from workflow(action='validate') means the pdf field will be absent on this installation.",
             "pdfFormat", "OPTIONAL string (default 'A4'). Page size for generatePdf: 'A4' | 'Letter' | 'Legal'. Unknown values fall back to A4. Ignored when generatePdf is false.",
             "pdfLandscape", "OPTIONAL boolean (default false). true → the generatePdf output is rendered in landscape orientation. Ignored when generatePdf is false.",
+            "generateVideo", "OPTIONAL boolean (default false). true → adds a `video` FileRef to output (an MP4 recording of the interface's animation). The recording starts when the page loads and stops as soon as the interface's JS sets window.__DONE__ = true, or after videoMaxDurationSeconds otherwise - so an animated interface (typewriter reveal, counters) ends its own clip at exactly the right moment. To USE it, map the WHOLE FileRef into a file-accepting tool param: e.g. Telegram send_video 'video': '{{interface:<label>.output.video}}', a social upload param, or an email attachment. Pass the object itself, NOT .path or .id. Best-effort: recording failure leaves the field absent, workflow continues. Same optional-component caveat as generateScreenshot: an INTERFACE_RENDERER_UNAVAILABLE warning from workflow(action='validate') means the video field will be absent on this installation.",
+            "videoPreset", "OPTIONAL string (default 'vertical'). Capture format for generateVideo: 'vertical' (1080x1920, TikTok/Reels/Shorts) | 'horizontal' (1920x1080) | 'square' (1080x1080). Unknown values fall back to vertical. Ignored when generateVideo is false.",
+            "videoMaxDurationSeconds", "OPTIONAL integer (default 30, clamped to 5-120). Recording ceiling in seconds for generateVideo. The interface ends the clip earlier by setting window.__DONE__ = true in its JS. Ignored when generateVideo is false.",
+            "videoMode", "OPTIONAL string (default 'smooth'). 'smooth' renders the clip OFFLINE frame by frame under a virtual clock: every frame is perfect and the motion is fluid regardless of load (rendering takes roughly 2-4x the clip duration). 'live' records in real time (faster to produce, frames can drop under load). Unknown values fall back to smooth. Ignored when generateVideo is false.",
+            "videoFps", "OPTIONAL integer (default 30, clamped to 10-60). Output frame rate of the generateVideo clip. 60 gives the smoothest motion at roughly double the smooth-mode render time. Ignored when generateVideo is false.",
             "exposeRenderedSource", "OPTIONAL boolean (default false). true → adds 3 string outputs `rendered_html`, `rendered_css`, `rendered_js` (the exact templates the iframe shows, HTML with {{var|default}} substituted via variable_mapping). Downstream consumers: email body, agent text input, debug logs. References: {{interface:<label>.output.rendered_html}}, .rendered_css, .rendered_js. Each capped at 256 KB. Best-effort: render failure leaves the fields absent, workflow continues.",
-            "param_naming", "All boolean params accept BOTH conventions: camelCase (canonical: isEntryInterface, generateScreenshot, generatePdf, pdfLandscape, exposeRenderedSource) and snake_case aliases (is_entry_interface, generate_screenshot, generate_pdf, pdf_landscape, expose_rendered_source). pdfFormat/pdf_format is a string. Pick one and stick to it; the validator accepts either."
+            "param_naming", "All boolean params accept BOTH conventions: camelCase (canonical: isEntryInterface, generateScreenshot, generatePdf, pdfLandscape, generateVideo, exposeRenderedSource) and snake_case aliases (is_entry_interface, generate_screenshot, generate_pdf, pdf_landscape, generate_video, expose_rendered_source). pdfFormat/pdf_format, videoPreset/video_preset and videoMode/video_mode are strings; videoMaxDurationSeconds/video_max_duration_seconds and videoFps/video_fps are integers. Pick one and stick to it; the validator accepts either."
         ));
 
         result.put("3_variable_mapping", ordered(
@@ -404,6 +416,7 @@ public class WorkflowHelpProvider {
             "always_present", "interface_id (string UUID), action_mapping (object), is_entry_interface (boolean).",
             "action_data", "After the user fires a trigger-bound action: output.<action_name>.<field> + output.<action_name>.fired_at (ISO timestamp). <action_name> = normalized trigger label. Absent until the user fires - guard with a SpEL default ({{interface:x.output.submit.email|}}).",
             "screenshot", "OPTIONAL FileRef PNG (1280x800). Present iff generateScreenshot=true AND the rendering component captured successfully. Absent on failure or when the optional rendering component is not enabled on this installation (workflow continues; workflow(action='validate') warns INTERFACE_RENDERER_UNAVAILABLE in that case).",
+            "video", "OPTIONAL FileRef MP4. Present iff generateVideo=true AND the rendering component recorded successfully. Size follows videoPreset (vertical 1080x1920 / horizontal 1920x1080 / square 1080x1080); length is at most videoMaxDurationSeconds, shorter when the page sets window.__DONE__ = true. Same absence/validate-warning semantics as screenshot.",
             "rendered_html", "OPTIONAL string - iframe-equivalent HTML with {{var|default}} substituted from variable_mapping. Present iff exposeRenderedSource=true AND interface has an htmlTemplate. Capped at 256 KB (truncated past). Absent on render failure.",
             "rendered_css", "OPTIONAL string - raw CSS template (NOT var-substituted, matches what the iframe receives). Present iff exposeRenderedSource=true AND interface has cssTemplate. Capped at 256 KB.",
             "rendered_js", "OPTIONAL string - raw JS template (NOT var-substituted; runtime vars are injected via window.__RESOLVED_DATA__ in the iframe). Present iff exposeRenderedSource=true AND interface has jsTemplate. Capped at 256 KB.",
@@ -412,6 +425,7 @@ public class WorkflowHelpProvider {
                 "{{interface:my_form.output.submit.email}}                // form field after a 'submit' trigger fires",
                 "{{interface:my_form.output.submit.fired_at}}             // ISO timestamp of the fire",
                 "{{interface:my_form.output.screenshot}}                  // FileRef PNG (generateScreenshot=true)",
+                "{{interface:my_form.output.video}}                       // FileRef MP4 (generateVideo=true)",
                 "{{interface:my_form.output.rendered_html}}               // resolved HTML (exposeRenderedSource=true)",
                 "{{interface:my_form.output.rendered_css}}                // raw CSS (exposeRenderedSource=true, absent if interface has no CSS)",
                 "{{interface:my_form.output.rendered_js}}                 // raw JS  (exposeRenderedSource=true, absent if interface has no JS)"
@@ -848,6 +862,14 @@ public class WorkflowHelpProvider {
             "creating a new version. Pass the literal 'pinned' to fire the workflow's pinned production " +
             "version - this requires the workflow to be pinned AND to already have a WAITING_TRIGGER run " +
             "(same accumulation pattern as webhook/schedule)."));
+        params.put("mock_mode", Map.of(
+            "type", "string (optional)", "required", false,
+            "description",
+            "Run-level mock override. Omit for the default: every node carrying an enabled mock block returns " +
+            "its configured mock, all other nodes execute for real. 'off' = ignore ALL mocks this run. " +
+            "'all_mcp' = full dry-run: configured mocks plus every mcp catalog-tool node without one serves " +
+            "its catalog example (zero credentials, zero external calls). Refused with version='pinned'. " +
+            "Full guide: workflow(action='help', topics=['mocking'])."));
         help.put("parameters", params);
 
         // Run behavior

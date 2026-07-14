@@ -20,6 +20,9 @@ const CHAT_ID_PLACEHOLDER = '-100123456789 or {{trigger:form.output.chat_id}}';
 /** Syntax example for the allowed user ids (code/syntax token, intentionally not translated). */
 const ALLOWED_USER_IDS_PLACEHOLDER = '123456789, 987654321';
 
+/** Syntax example for the optional image (code/syntax token, intentionally not translated). */
+const IMAGE_PLACEHOLDER = '{{interface:card.output.screenshot}}';
+
 /**
  * Telegram bot credential descriptor passed to CredentialSection (same pattern as SMTP/SSH).
  * OPTIONAL: when no credentialId is configured, the backend falls back to the user's own
@@ -185,6 +188,44 @@ export function ApprovalDelegationSection({
               readOnly={isRunMode}
             />
           </div>
+
+          {/* Image (template-capable, optional; non-blank = photo message with the text as caption) */}
+          <div className="space-y-1">
+            <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('imageLabel')}</span>
+            <ExpressionEditor
+              value={approvalDelegation?.image ?? ''}
+              onChange={(value) => patch({ image: value })}
+              placeholder={IMAGE_PLACEHOLDER}
+              className="w-full"
+              readOnly={isRunMode}
+            />
+            <p className="text-xs text-slate-400 dark:text-slate-500">{t('imageHint')}</p>
+          </div>
+
+          {/* Custom approve/reject button labels (template-capable, optional; blank = channel defaults) */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('approveLabelLabel')}</span>
+              <ExpressionEditor
+                value={approvalDelegation?.approveLabel ?? ''}
+                onChange={(value) => patch({ approveLabel: value })}
+                placeholder={t('approveLabelPlaceholder')}
+                className="w-full"
+                readOnly={isRunMode}
+              />
+            </div>
+            <div className="space-y-1">
+              <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('rejectLabelLabel')}</span>
+              <ExpressionEditor
+                value={approvalDelegation?.rejectLabel ?? ''}
+                onChange={(value) => patch({ rejectLabel: value })}
+                placeholder={t('rejectLabelPlaceholder')}
+                className="w-full"
+                readOnly={isRunMode}
+              />
+            </div>
+          </div>
+          <p className="text-xs text-slate-400 dark:text-slate-500">{t('buttonLabelsHint')}</p>
 
           {/* Allowed user ids (comma-separated; empty = anyone in the chat) */}
           <div className="space-y-1">

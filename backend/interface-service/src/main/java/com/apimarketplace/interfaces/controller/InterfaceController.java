@@ -53,6 +53,18 @@ public class InterfaceController {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
         }
 
+        // Parse wrong-typeable fields up front so a bad type is a clean 400 ResponseEntity
+        // (portable: no dependency on any exception-mapping advice, which in the CE monolith
+        // would otherwise swallow a thrown exception into a generic 500).
+        Long dataSourceId;
+        Boolean isPublic;
+        try {
+            dataSourceId = num(body, "dataSourceId", "data_source_id");
+            isPublic = bool(body, "isPublic", "is_public");
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().build();
+        }
+
         InterfaceEntity created = interfaceService.createInterface(
                 tenantId,
                 (String) body.get("name"),
@@ -62,8 +74,8 @@ public class InterfaceController {
                 str(body, "jsTemplate", "js_template"),
                 null, null,
                 str(body, "targetTable", "target_table"),
-                num(body, "dataSourceId", "data_source_id"),
-                bool(body, "isPublic", "is_public"),
+                dataSourceId,
+                isPublic,
                 null,
                 orgId);
         return ResponseEntity.ok(mapper.toDto(created));
@@ -153,6 +165,19 @@ public class InterfaceController {
         Boolean updateDataSourceId = (body.containsKey("dataSourceId") || body.containsKey("data_source_id"))
                 ? Boolean.TRUE : null;
 
+        // Parse wrong-typeable fields up front -> clean 400 on a bad type (portable, no advice
+        // dependency), kept OUT of the service-call try below so a real "not found" still maps to 404.
+        Long dataSourceId;
+        Boolean isPublic;
+        Boolean isActive;
+        try {
+            dataSourceId = num(body, "dataSourceId", "data_source_id");
+            isPublic = bool(body, "isPublic", "is_public");
+            isActive = bool(body, "isActive", "is_active");
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().build();
+        }
+
         // #150 - scope-aware update: routes the lookup via the strict-isolation
         // finder pair AND threads gateway-validated orgRole into the deny-list
         // check (closes PR-2.f MEMBER-strict gap on the inline gate).
@@ -171,9 +196,9 @@ public class InterfaceController {
                     str(body, "jsTemplate", "js_template"),
                     null, null,
                     str(body, "targetTable", "target_table"),
-                    num(body, "dataSourceId", "data_source_id"),
-                    bool(body, "isPublic", "is_public"),
-                    bool(body, "isActive", "is_active"),
+                    dataSourceId,
+                    isPublic,
+                    isActive,
                     updateDataSourceId);
         } catch (IllegalArgumentException e) {
             // "Interface not found" → cross-scope or genuinely missing - 404
@@ -263,13 +288,36 @@ public class InterfaceController {
 
     private static Boolean bool(Map<String, Object> m, String camel, String snake) {
         Object v = m.get(camel);
-        return (Boolean) (v != null ? v : m.get(snake));
+        if (v == null) v = m.get(snake);
+        if (v == null) return null;
+        if (v instanceof Boolean b) return b;
+        // A wrong-typed JSON value (e.g. "true" as a string) must be a 400, not an
+        // uncaught ClassCastException surfacing as a 500 (interface-service has no
+        // exception-mapping advice). Accept the common string form defensively.
+        if (v instanceof String s) {
+            String t = s.trim();
+            if ("true".equalsIgnoreCase(t)) return Boolean.TRUE;
+            if ("false".equalsIgnoreCase(t)) return Boolean.FALSE;
+        }
+        throw new IllegalArgumentException("Field '" + camel + "' must be a boolean");
     }
 
     private static Long num(Map<String, Object> m, String camel, String snake) {
         Object v = m.get(camel);
         if (v == null) v = m.get(snake);
-        return v != null ? ((Number) v).longValue() : null;
+        if (v == null) return null;
+        if (v instanceof Number n) return n.longValue();
+        // Accept a numeric string (mirrors InternalInterfaceController.createFromSnapshot);
+        // anything else is a 400 (the controller maps this IllegalArgumentException to a
+        // badRequest ResponseEntity), never an uncaught ClassCastException / 500.
+        if (v instanceof String s && !s.isBlank()) {
+            try {
+                return Long.parseLong(s.trim());
+            } catch (NumberFormatException ignored) {
+                // fall through to the exception below
+            }
+        }
+        throw new IllegalArgumentException("Field '" + camel + "' must be a number");
     }
 
     private static boolean isViewerRole(String orgRole) {

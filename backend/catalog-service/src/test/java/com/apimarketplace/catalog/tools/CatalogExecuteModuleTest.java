@@ -209,6 +209,92 @@ class CatalogExecuteModuleTest {
         }
     }
 
+    @Nested
+    @DisplayName("execute - tool inputs supplied outside the `params` wrapper still reach catalog")
+    class ParamShapeForwarding {
+
+        private static final String TOOL_ID = "36885d10-5978-4c93-a1fd-69b6f7cc79a5"; // facebook list_page_posts
+
+        /** Facebook list_page_posts is keyless-style here (authType none) so the pre-flight gate never
+         *  short-circuits and execution actually POSTs to /catalog/v1/tools/{id}/execute. */
+        @SuppressWarnings({"rawtypes", "unchecked"})
+        private HttpEntity captureExecuteBody(Map<String, Object> params) {
+            Map<String, Object> info = new LinkedHashMap<>();
+            info.put("iconSlug", "facebook");
+            info.put("name", "list_page_posts");
+            info.put("authType", "none");
+            stubInfo(TOOL_ID, info);
+            when(restTemplate.exchange(
+                contains("/catalog/v1/tools/" + TOOL_ID + "/execute"),
+                eq(HttpMethod.POST), any(HttpEntity.class), eq(String.class)))
+                .thenReturn(new ResponseEntity<>("{\"success\":true,\"data\":{}}", HttpStatus.OK));
+
+            module.execute("execute", params, "user-1", ToolExecutionContext.of("user-1")).orElseThrow();
+
+            org.mockito.ArgumentCaptor<HttpEntity> captor = org.mockito.ArgumentCaptor.forClass(HttpEntity.class);
+            verify(restTemplate).exchange(
+                contains("/catalog/v1/tools/" + TOOL_ID + "/execute"),
+                eq(HttpMethod.POST), captor.capture(), eq(String.class));
+            return captor.getValue();
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> outboundParameters(HttpEntity<?> entity) {
+            Map<String, Object> body = (Map<String, Object>) entity.getBody();
+            return (Map<String, Object>) body.get("parameters");
+        }
+
+        @Test
+        @DisplayName("params nested under `params` reach catalog (baseline - already worked)")
+        void nestedParamsForwarded() {
+            HttpEntity<?> entity = captureExecuteBody(new LinkedHashMap<>(Map.of(
+                "tool_id", TOOL_ID, "params", new LinkedHashMap<>(Map.of("page_id", "123")))));
+            assertThat(outboundParameters(entity)).containsEntry("page_id", "123");
+        }
+
+        @Test
+        @DisplayName("REGRESSION: a location:path param nested under `inputs` (the reported Facebook page_id bug) reaches catalog")
+        void inputsAliasForwarded() {
+            // Pre-fix: `inputs` was not a recognized alias, so `parameters` went out empty ({}),
+            // catalog left "/{page_id}/posts" literal and URI parsing failed with
+            // "Illegal character in path". Post-fix the page_id survives so catalog substitutes
+            // it into ".../123/posts".
+            HttpEntity<?> entity = captureExecuteBody(new LinkedHashMap<>(Map.of(
+                "tool_id", TOOL_ID, "inputs", new LinkedHashMap<>(Map.of("page_id", "123")))));
+            assertThat(outboundParameters(entity)).containsEntry("page_id", "123");
+        }
+
+        @Test
+        @DisplayName("REGRESSION: a location:path param flattened to the top level reaches catalog")
+        void topLevelParamForwarded() {
+            // Chat models frequently pass each tool parameter as a top-level sibling of
+            // action/tool_id instead of nesting under `params`. Pre-fix these were dropped.
+            HttpEntity<?> entity = captureExecuteBody(new LinkedHashMap<>(Map.of(
+                "tool_id", TOOL_ID, "page_id", "123")));
+            assertThat(outboundParameters(entity)).containsEntry("page_id", "123");
+        }
+
+        @Test
+        @DisplayName("explicit `params` object wins over a same-named top-level stray")
+        void nestedWinsOverStray() {
+            HttpEntity<?> entity = captureExecuteBody(new LinkedHashMap<>(Map.of(
+                "tool_id", TOOL_ID,
+                "params", new LinkedHashMap<>(Map.of("page_id", "nested")),
+                "page_id", "stray")));
+            assertThat(outboundParameters(entity)).containsEntry("page_id", "nested");
+        }
+
+        @Test
+        @DisplayName("control/shaping keys are never forwarded as tool input params")
+        void reservedKeysNotForwarded() {
+            HttpEntity<?> entity = captureExecuteBody(new LinkedHashMap<>(Map.of(
+                "tool_id", TOOL_ID, "page_id", "123", "max_items", 5, "expand", List.of("data"))));
+            Map<String, Object> outbound = outboundParameters(entity);
+            assertThat(outbound).containsEntry("page_id", "123");
+            assertThat(outbound).doesNotContainKeys("tool_id", "max_items", "expand");
+        }
+    }
+
     @Test
     @DisplayName("agent catalog execute forwards organization headers to the internal catalog execution request")
     @SuppressWarnings({"unchecked", "rawtypes"})

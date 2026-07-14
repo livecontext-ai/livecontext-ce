@@ -279,44 +279,11 @@ public class CatalogToolsGateway implements ToolsGateway {
             boolean success = response.isSuccess();
             Integer httpStatus = extractHttpStatusFromResponse(response);
 
-            Map<String, Object> output = new java.util.HashMap<>();
-            output.put("tool_id", tool.toolId());
-            output.put("execution", true);
-
-            // Normalize the tool result into its canonical single-level shape
-            // BEFORE flattening, so {{mcp:label.output.<field>}} resolves the same
-            // way for API typed-execution AND bridge (REMOTE_MCP) tools. Without
-            // this, a redundant `output` wrapper (mis-schematized API tools) or
-            // the MCP JSON-RPC content/structuredContent envelope (bridge) leaks a
-            // double `output.output.<field>` path that downstream nodes mis-read.
-            Object rawResult = response.getResult();
-            Object result = McpResultNormalizer.canonicalize(rawResult);
-            if (result instanceof Map<?, ?> resultMap) {
-                for (Map.Entry<?, ?> entry : resultMap.entrySet()) {
-                    if (entry.getKey() instanceof String key) {
-                        output.put(key, entry.getValue());
-                    }
-                }
-                logger.debug("Flattened {} result keys into output: {}", resultMap.size(), resultMap.keySet());
-                // Back-compat (DEPRECATED): when we unwrapped a redundant single
-                // `output` wrapper, also keep the legacy nested form addressable so
-                // workflows authored against `.output.output.<field>` keep
-                // resolving during the deprecation window. New workflows should use
-                // the canonical `.output.<field>`. Remove this alias after N releases.
-                if (result != rawResult && rawResult instanceof Map<?, ?> rawMap
-                        && rawMap.size() == 1 && rawMap.get("output") instanceof Map<?, ?> legacy) {
-                    output.put("output", legacy);
-                }
-            } else if (result != null) {
-                output.put("result", result);
-            }
-
-            output.put("metadata", response.getMetadata());
-            output.put("message", "Catalog service executed the tool");
-
-            if (httpStatus != null) {
-                output.put("http_status", httpStatus);
-            }
+            // Canonicalization + flattening + envelope shared with the mock path
+            // (CatalogMockClient) - see CatalogResultFlattener for the invariants.
+            Map<String, Object> output = CatalogResultFlattener.flatten(
+                    tool.toolId(), response.getResult(), response.getMetadata(), httpStatus,
+                    "Catalog service executed the tool");
 
             List<Map<String, String>> errors = success
                     ? List.of()

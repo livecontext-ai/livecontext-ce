@@ -177,6 +177,41 @@ class OAuth2ControllerTest {
     }
 
     @Test
+    @DisplayName("refresh scrubs secrets from the response: no oauth_client_secret / refresh_token / access_token leaks, diagnostic keys kept")
+    void refreshToken_stripsSecretsFromResponseBody() {
+        HttpServletRequest req = mock(HttpServletRequest.class);
+        when(tenantResolver.resolve(req)).thenReturn("u1");
+
+        // The refreshed credential carries plaintext-decrypted secrets (this is what
+        // OAuth2Service.refreshToken returns after the RowMapper decrypts on load).
+        Map<String, Object> secretData = new java.util.HashMap<>();
+        secretData.put("oauth_client_secret", "supersecret-app-secret");
+        secretData.put("refresh_token", "1//non-rotating-refresh");
+        secretData.put("access_token", "ya29.enc");
+        secretData.put("expires_at", "2026-01-01T00:00:00Z"); // diagnostic (allowlisted)
+        com.apimarketplace.auth.credential.domain.CredentialModels.Credential withSecrets =
+                new com.apimarketplace.auth.credential.domain.CredentialModels.Credential(
+                        7L, "u1", null, "My Gmail", "gmail",
+                        com.apimarketplace.auth.credential.domain.CredentialModels.CredentialType.OAuth2,
+                        com.apimarketplace.auth.credential.domain.CredentialModels.CredentialEnvironment.Production,
+                        com.apimarketplace.auth.credential.domain.CredentialModels.CredentialStatus.active,
+                        null, secretData, null, null, null, null, false, null, null, null);
+        when(oAuth2Service.refreshToken(7L, "u1")).thenReturn(withSecrets);
+
+        ResponseEntity<?> response = controller.refreshToken(req, 7L);
+
+        assertThat(response.getStatusCode().value()).isEqualTo(200);
+        var body = (com.apimarketplace.auth.credential.domain.CredentialModels.Credential) response.getBody();
+        assertThat(body).isNotNull();
+        assertThat(body.credentialData())
+                .doesNotContainKey("oauth_client_secret")
+                .doesNotContainKey("refresh_token")
+                .doesNotContainKey("access_token")
+                // A narrow diagnostic allowlist is preserved so the UI can explain state.
+                .containsEntry("expires_at", "2026-01-01T00:00:00Z");
+    }
+
+    @Test
     @DisplayName("refresh rejects an invalid/expired/revoked token by surfacing the terminal exception, never masking it as a 200 success")
     void refreshToken_surfacesTerminalException_forInvalidOrExpiredToken() {
         HttpServletRequest req = mock(HttpServletRequest.class);

@@ -5,6 +5,7 @@ import com.apimarketplace.publication.domain.WorkflowPublicationEntity;
 import com.apimarketplace.publication.repository.WorkflowPublicationRepository;
 import com.apimarketplace.publication.service.AgentPublicationService;
 import com.apimarketplace.publication.service.PublicationPendingReviewException;
+import com.apimarketplace.publication.service.PublicationValidationException;
 import com.apimarketplace.publication.service.RemoteMarketplaceService;
 import com.apimarketplace.publication.service.ResourcePublicationService;
 import com.apimarketplace.publication.service.ShowcaseSnapshotBackfillService;
@@ -258,6 +259,12 @@ public class InternalPublicationController {
             return ResponseEntity.ok(Map.of("id", pub.getId().toString(), "title", pub.getTitle()));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (PublicationValidationException e) {
+            // Structured publish refusal (grant=all / snapshot too large): 422 with the
+            // machine-readable body - the MCP publish tool parses it into an
+            // agent-actionable failure message.
+            log.warn("Agent publish refused ({}): {}", e.getErrorCode(), e.getMessage());
+            return ResponseEntity.unprocessableEntity().body(e.toBody());
         } catch (PublicationPendingReviewException e) {
             // Pending-review guard (re-publish blocked) - 409, matching the
             // public controller and the PublisherProfileUnavailableException

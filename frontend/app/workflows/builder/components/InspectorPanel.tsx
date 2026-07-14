@@ -299,9 +299,11 @@ export function InspectorPanel({ node, selectedNodeIds = [], onUpdate, onClose, 
     handleRenameOutput: handleRenameApprovalOutput,
     handleTimeoutChange: handleApprovalTimeoutChange,
     handleContextTemplateChange: handleApprovalContextTemplateChange,
+    handleContinuationModeChange: handleApprovalContinuationModeChange,
     handleDelegationChange: handleApprovalDelegationChange,
     approvalTimeoutMs,
     approvalContextTemplate,
+    approvalContinuationMode,
     approvalDelegation,
   } = useInspectorApprovalOutputs({
     node,
@@ -857,12 +859,14 @@ export function InspectorPanel({ node, selectedNodeIds = [], onUpdate, onClose, 
                 currentApprovalOutputs: approvalOutputs,
                 approvalTimeoutMs,
                 approvalContextTemplate,
+                approvalContinuationMode,
                 approvalDelegation,
                 handleAddApprovalOutput,
                 handleDeleteApprovalOutput,
                 handleRenameApprovalOutput,
                 handleApprovalTimeoutChange,
                 handleApprovalContextTemplateChange,
+                handleApprovalContinuationModeChange,
                 handleApprovalDelegationChange,
                 webhookTokens,
                 showExecutionData,
@@ -974,6 +978,8 @@ export function InspectorPanel({ node, selectedNodeIds = [], onUpdate, onClose, 
               approvalTimeoutMs={approvalTimeoutMs}
               handleApprovalContextTemplateChange={handleApprovalContextTemplateChange}
               approvalContextTemplate={approvalContextTemplate}
+              handleApprovalContinuationModeChange={handleApprovalContinuationModeChange}
+              approvalContinuationMode={approvalContinuationMode}
               handleApprovalDelegationChange={handleApprovalDelegationChange}
               approvalDelegation={approvalDelegation}
               getEditorExpression={getEditorExpression}

@@ -329,6 +329,10 @@ credit:
       - { provider: openai, model: gpt-5,         inputRate: 1.25, outputRate: 10.00 }
       - { provider: openai, model: gpt-5-mini,    inputRate: 0.25, outputRate: 2.00 }
       - { provider: openai, model: gpt-5.3-codex, inputRate: 2.00, outputRate: 12.00 }
+      - { provider: openai, model: gpt-5.5,       inputRate: 5.00, outputRate: 30.00 }
+      - { provider: openai, model: gpt-5.6-sol,   inputRate: 5.00, outputRate: 30.00 }
+      - { provider: openai, model: gpt-5.6-terra, inputRate: 2.50, outputRate: 15.00 }
+      - { provider: openai, model: gpt-5.6-luna,  inputRate: 1.00, outputRate: 6.00 }
       - { provider: openai, model: o4-mini,        inputRate: 1.10, outputRate: 4.40 }
       - { provider: openai, model: gpt-4o,         inputRate: 2.50, outputRate: 10.00 }
       - { provider: openai, model: gpt-4o-mini,    inputRate: 0.15, outputRate: 0.60 }
@@ -591,7 +595,7 @@ ai:
       codex:
         enabled: ${BRIDGE_CODEX_ENABLED:true}
         display-order: 7
-        models: gpt-5.4,gpt-5.4-mini,gpt-5.3-codex,gpt-5.2
+        models: gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna,gpt-5.5,gpt-5.4,gpt-5.4-mini,gpt-5.3-codex,gpt-5.2
       gemini-cli:
         enabled: ${BRIDGE_GEMINI_CLI_ENABLED:true}
         display-order: 8

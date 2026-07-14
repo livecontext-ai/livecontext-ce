@@ -1,8 +1,8 @@
 'use client';
 
-export function CardSkeletonGrid({ count = 6 }: { count?: number }) {
+export function CardSkeletonGrid({ count = 6, columnsClassName }: { count?: number; columnsClassName?: string }) {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+    <div className={`grid ${columnsClassName ?? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'} gap-4`}>
       {Array.from({ length: count }).map((_, i) => (
         <div key={i} className="animate-pulse rounded-[18px] bg-theme-primary border border-theme overflow-hidden">
           <div className="h-[120px] bg-theme-tertiary" />

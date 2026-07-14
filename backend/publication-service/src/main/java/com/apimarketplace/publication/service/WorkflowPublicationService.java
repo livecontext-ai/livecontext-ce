@@ -85,6 +85,13 @@ public class WorkflowPublicationService {
     private final com.apimarketplace.auth.client.entitlement.EntitlementGuard entitlementGuard;
     private final AuthClient authClient;
 
+    /**
+     * Acquire-time avatar file copy (snapshot autonomy). Field-injected to spare the
+     * many test constructions; null (unit tests) falls back to the publishable pass-through.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    AvatarFileCloneService avatarFileCloneService;
+
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private PublicationAcquisitionHelper acquisitionHelper;
 
@@ -3179,13 +3186,28 @@ public class WorkflowPublicationService {
     }
 
     /**
-     * Scope toolsConfig to only include resources present in the plan.
-     * - tables: null/all -> plan table IDs, [ids] -> intersection with plan
-     * - interfaces: same logic
-     * - agents: same logic (sub-agents in plan)
-     * - workflows: always ["__self__"]
-     * - applications: removed
-     * - tools, webSearch: kept as-is
+     * Scope toolsConfig to only include resources present in the plan, driven by the
+     * AUTHORITATIVE per-family grant ({@code <family>Grant} ∈ none|all|custom):
+     *
+     * <ul>
+     *   <li>{@code all} → {@code custom} + ALL plan IDs of that family. The plan IS
+     *       the workflow's dependency set; an "all" authorization never travels to the
+     *       acquirer (a publisher-authored agent must not get blanket access over the
+     *       acquirer's tenant), and it never enumerates the publisher's tenant either.</li>
+     *   <li>{@code custom} → {@code custom} + intersection of the explicit list with plan IDs.</li>
+     *   <li>{@code none} → {@code none} + empty list (a stale list never resurrects access).</li>
+     *   <li>absent/invalid grant (legacy rows) → derived from the LIST as before:
+     *       null/absent list = all → plan IDs; [] → []; [ids] → intersection.</li>
+     * </ul>
+     *
+     * <p>workflows: always {@code ["__self__"]} (custom). applications: always none
+     * (not cloned). tools (MCP catalogue) and webSearch kept as-is; mode forced to
+     * {@code custom}.
+     *
+     * <p>The grants are EMITTED alongside the lists: the acquirer's normalizeToolsConfig
+     * preserves a valid present grant, which fixes the silent all→none collapse
+     * (a grant=all row persists an EMPTY list, which the old list-only logic read as
+     * "explicitly blocked" - the cloned agent lost access even to the plan's resources).
      */
     @SuppressWarnings("unchecked")
     private Map<String, Object> scopeToolsConfig(Map<String, Object> original,
@@ -3201,13 +3223,47 @@ public class WorkflowPublicationService {
         }
 
         scoped.put("mode", "custom");
-        scoped.put("tables", scopeResourceList(original, "tables", planTableIds));
-        scoped.put("interfaces", scopeResourceList(original, "interfaces", planInterfaceIds));
-        scoped.put("agents", scopeResourceList(original, "agents", planAgentConfigIds));
+        scopeFamily(scoped, original, "tables", planTableIds);
+        scopeFamily(scoped, original, "interfaces", planInterfaceIds);
+        scopeFamily(scoped, original, "agents", planAgentConfigIds);
         scoped.put("workflows", List.of("__self__"));
-        // applications: intentionally omitted (not cloned)
+        scoped.put("workflowsGrant", "custom");
+        // applications are never cloned - deny explicitly so the clone cannot
+        // inherit an applications grant from the publisher's config.
+        scoped.put("applications", List.of());
+        scoped.put("applicationsGrant", "none");
 
         return scoped;
+    }
+
+    /**
+     * Resolve one family's scoped id list + emitted grant (see {@link #scopeToolsConfig}).
+     * The emitted grant is re-derived from the RESULT ({@code custom} when non-empty,
+     * {@code none} when empty) so the clone's config is self-consistent - never "custom"
+     * with a meaningless empty payload, and never "all".
+     */
+    private void scopeFamily(Map<String, Object> scoped, Map<String, Object> original,
+                              String key, Set<String> planIds) {
+        Object grantRaw = original != null ? original.get(key + "Grant") : null;
+        String grant = grantRaw != null ? grantRaw.toString() : null;
+        List<String> ids;
+        if ("all".equals(grant)) {
+            // The plan is the dependency set: downscope "all" to every plan resource
+            // of this family (fixes the all→none collapse; see method javadoc).
+            ids = new ArrayList<>(planIds);
+        } else if ("none".equals(grant)) {
+            ids = List.of();
+        } else if ("custom".equals(grant)) {
+            Object value = original.get(key);
+            ids = (value instanceof List<?> list)
+                    ? list.stream().map(Object::toString).filter(planIds::contains).collect(Collectors.toList())
+                    : List.of();
+        } else {
+            // Legacy row without a valid grant: list-derived semantics, unchanged.
+            ids = scopeResourceList(original, key, planIds);
+        }
+        scoped.put(key, ids);
+        scoped.put(key + "Grant", ids.isEmpty() ? "none" : "custom");
     }
 
     /**
@@ -3309,13 +3365,15 @@ public class WorkflowPublicationService {
             cloneRequest.put("inactivityTimeout", agentNode.get("_snapshot_agent_inactivityTimeout"));
             cloneRequest.put("config", agentNode.get("_snapshot_agent_config"));
 
-            // Avatar: keep preset and HTTP URLs, nullify S3 paths (not transferable across tenants)
+            // Avatar: copy an uploaded/AI file into the ACQUIRER's storage so the clone
+            // survives the publisher deleting theirs (presets/http pass through). Org scope
+            // comes from the request-bound context (this path has no explicit org param).
             String avatarUrl = agentNode.get("_snapshot_agent_avatarUrl") != null
                     ? agentNode.get("_snapshot_agent_avatarUrl").toString() : null;
-            if (avatarUrl != null && !avatarUrl.startsWith("preset:") && !avatarUrl.startsWith("http")) {
-                avatarUrl = null;
-            }
-            cloneRequest.put("avatarUrl", avatarUrl);
+            cloneRequest.put("avatarUrl", avatarFileCloneService != null
+                    ? avatarFileCloneService.cloneForTenant(avatarUrl, tenantId,
+                            com.apimarketplace.common.web.TenantResolver.currentRequestOrganizationId())
+                    : com.apimarketplace.publication.utils.AvatarUrlPolicy.publishable(avatarUrl));
 
             // Restore dataSourceId with remapping to the cloned datasource
             Object dsIdRaw = agentNode.get("_snapshot_agent_dataSourceId");
