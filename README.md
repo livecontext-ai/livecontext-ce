@@ -37,24 +37,24 @@ exactly what each one did. The chat (shown above) builds it; here is what it run
 <table>
   <tr>
     <td width="50%" valign="top" align="center">
-      <a href="frontend/public/landing/hero-stack/workflow-app.webp"><img src="frontend/public/landing/hero-stack/workflow-app.webp" alt="Workflow and the app it drives" width="100%" /></a>
+      <a href="frontend/public/landing/hero-stack/workflow-app.webp"><picture><source media="(prefers-color-scheme: dark)" srcset="frontend/public/landing/hero-stack/workflow-app-dark.webp" /><img src="frontend/public/landing/hero-stack/workflow-app.webp" alt="Workflow and the app it drives" width="100%" /></picture></a>
       <br/><b>Workflow + App</b><br/>
       The workflow and the app it drives, in one view. Draw the automation as a readable graph, then wrap it in a real interface: forms, dashboards and live approval screens your team or an agent can act on.
     </td>
     <td width="50%" valign="top" align="center">
-      <a href="frontend/public/landing/hero-stack/agent.webp"><img src="frontend/public/landing/hero-stack/agent.webp" alt="Agents" width="100%" /></a>
+      <a href="frontend/public/landing/hero-stack/agent.webp"><picture><source media="(prefers-color-scheme: dark)" srcset="frontend/public/landing/hero-stack/agent-dark.webp" /><img src="frontend/public/landing/hero-stack/agent.webp" alt="Agents" width="100%" /></picture></a>
       <br/><b>Agents</b><br/>
       A fleet of scoped agents, one per job: each with its own model, tools, files, credit budget and full audit trail. No black box.
     </td>
   </tr>
   <tr>
     <td width="50%" valign="top" align="center">
-      <a href="frontend/public/landing/hero-stack/table.webp"><img src="frontend/public/landing/hero-stack/table.webp" alt="Tables" width="100%" /></a>
+      <a href="frontend/public/landing/hero-stack/table.webp"><picture><source media="(prefers-color-scheme: dark)" srcset="frontend/public/landing/hero-stack/table-dark.webp" /><img src="frontend/public/landing/hero-stack/table.webp" alt="Tables" width="100%" /></picture></a>
       <br/><b>Tables</b><br/>
       Built-in data tables your workflows and agents read, write and enrich. Filter, search and export, with no external database to wire up.
     </td>
     <td width="50%" valign="top" align="center">
-      <a href="frontend/public/landing/hero-stack/data-metrics.webp"><img src="frontend/public/landing/hero-stack/data-metrics.webp" alt="Data &amp; metrics" width="100%" /></a>
+      <a href="frontend/public/landing/hero-stack/data-metrics.webp"><picture><source media="(prefers-color-scheme: dark)" srcset="frontend/public/landing/hero-stack/data-metrics-dark.webp" /><img src="frontend/public/landing/hero-stack/data-metrics.webp" alt="Data &amp; metrics" width="100%" /></picture></a>
       <br/><b>Data &amp; metrics</b><br/>
       Every run charted: calls, tokens, success rate and duration, sliced per agent and per tool. Spot a regression and drill straight into it.
     </td>
