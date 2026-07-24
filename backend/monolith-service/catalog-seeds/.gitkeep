@@ -1,0 +1,4 @@
+# Release-time model seed bundle (catalog-seeds/model-bundle.json) is baked here
+# by CI (publish-ce build-images) before the image build, then COPYd into the
+# image. Empty on local/from-source builds (the app falls back to the classpath
+# model seed). Do not commit a real bundle here.

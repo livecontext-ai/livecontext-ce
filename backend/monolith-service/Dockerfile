@@ -131,6 +131,14 @@ RUN mkdir -p /app/data/keys /app/data/files /app/logs \
 COPY --from=build /app/monolith-service/target/app.jar /app/app.jar
 COPY monolith-service/ce-entrypoint.sh /app/ce-entrypoint.sh
 
+# Release-time model seed bundle, baked by CI (publish-ce build-images) into
+# monolith-service/catalog-seeds/ BEFORE this build. SeedBundleBootstrap reads
+# /app/catalog-seeds/model-bundle.json at first boot so a never-linked install
+# gets the release-day model refresh. The dir always exists (.gitkeep); on
+# local/from-source builds it holds only .gitkeep and the app falls back to the
+# classpath model seed. Owned by root but world-readable (the app only reads it).
+COPY monolith-service/catalog-seeds/ /app/catalog-seeds/
+
 USER livecontext
 
 ENV JAVA_OPTS="-Xms512m -Xmx1024m -XX:+UseZGC -XX:+ZGenerational"
