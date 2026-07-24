@@ -760,9 +760,106 @@ public class WorkflowBuilderPlanExporter {
                     }
                 }
                 break;
+            case "public_link":
+                Object plParams = cn.get("params");
+                if (!(plParams instanceof Map<?, ?> plMap)
+                        || !(plMap.get("file") instanceof String plFile) || plFile.isBlank()) {
+                    errors.add("cores[" + i + "]: 'params.file' is required for public_link. " +
+                        "Format: params: {file: '{{core:dl.output.file}}', ttl_minutes: 240}");
+                }
+                break;
+            case "media":
+                // File params accept a template STRING or a literal FileRef OBJECT (Files picker)
+                Object mediaParams = cn.get("params");
+                if (!(mediaParams instanceof Map<?, ?> mediaMap)) {
+                    errors.add("cores[" + i + "]: 'params' with an 'operation' is required for media. " +
+                        "Format: params: {operation: 'mux_audio', video: '{{interface:card.output.video}}', audio: '{{core:dl.output.file}}'}");
+                    break;
+                }
+                Object mediaOpValue = mediaMap.get("operation");
+                String mediaOp = mediaOpValue instanceof String mediaOpStr ? mediaOpStr.trim().toLowerCase() : null;
+                if (mediaOp == null || mediaOp.isBlank()) {
+                    errors.add("cores[" + i + "]: 'params.operation' is required for media (one of: probe, mux_audio, mix, extract_audio, concat, frame, overlay)");
+                    break;
+                }
+                switch (mediaOp) {
+                    case "probe", "extract_audio", "frame" -> {
+                        if (!isMediaFileParam(mediaMap.get("input"))) {
+                            errors.add("cores[" + i + "]: 'params.input' is required for media " + mediaOp + ". " +
+                                "Format: params: {operation: '" + mediaOp + "', input: '{{core:dl.output.file}}'}");
+                        }
+                    }
+                    case "mux_audio" -> {
+                        if (!isMediaFileParam(mediaMap.get("video"))) {
+                            errors.add("cores[" + i + "]: 'params.video' is required for media mux_audio. " +
+                                "Format: params: {operation: 'mux_audio', video: '{{interface:card.output.video}}', audio: '{{core:dl.output.file}}'}");
+                        }
+                        if (!isMediaFileParam(mediaMap.get("audio"))) {
+                            errors.add("cores[" + i + "]: 'params.audio' is required for media mux_audio. " +
+                                "Format: params: {operation: 'mux_audio', video: '{{interface:card.output.video}}', audio: '{{core:dl.output.file}}'}");
+                        }
+                    }
+                    case "mix" -> {
+                        if (!(mediaMap.get("tracks") instanceof List<?> mediaTracks) || mediaTracks.isEmpty()) {
+                            errors.add("cores[" + i + "]: 'params.tracks' is required for media mix - a non-empty array of 1-8 tracks, each with a 'source'. " +
+                                "Format: params: {operation: 'mix', tracks: [{source: '{{core:voice.output.file}}'}]}");
+                        } else {
+                            if (mediaTracks.size() > 8) {
+                                errors.add("cores[" + i + "]: 'params.tracks' accepts at most 8 tracks (got " + mediaTracks.size() + ")");
+                            }
+                            for (int ti = 0; ti < mediaTracks.size(); ti++) {
+                                if (!(mediaTracks.get(ti) instanceof Map<?, ?> trackMap)
+                                        || !isMediaFileParam(trackMap.get("source"))) {
+                                    errors.add("cores[" + i + "]: 'params.tracks[" + ti + "].source' is required - " +
+                                        "the WHOLE FileRef expression of that track's audio, e.g. '{{core:voice.output.file}}'");
+                                }
+                            }
+                        }
+                    }
+                    case "concat" -> {
+                        if (!(mediaMap.get("inputs") instanceof List<?> mediaInputs) || mediaInputs.isEmpty()) {
+                            errors.add("cores[" + i + "]: 'params.inputs' is required for media concat - a non-empty array of 1-8 clips, each with a 'source'. " +
+                                "Format: params: {operation: 'concat', inputs: [{source: '{{core:clip_a.output.file}}'}, {source: '{{core:clip_b.output.file}}'}]}");
+                        } else {
+                            if (mediaInputs.size() > 8) {
+                                errors.add("cores[" + i + "]: 'params.inputs' accepts at most 8 clips (got " + mediaInputs.size() + ")");
+                            }
+                            for (int ci = 0; ci < mediaInputs.size(); ci++) {
+                                if (!(mediaInputs.get(ci) instanceof Map<?, ?> clipMap)
+                                        || !isMediaFileParam(clipMap.get("source"))) {
+                                    errors.add("cores[" + i + "]: 'params.inputs[" + ci + "].source' is required - " +
+                                        "the WHOLE FileRef expression of that clip, e.g. '{{core:clip_a.output.file}}'");
+                                }
+                            }
+                        }
+                    }
+                    case "overlay" -> {
+                        if (!isMediaFileParam(mediaMap.get("video"))) {
+                            errors.add("cores[" + i + "]: 'params.video' is required for media overlay. " +
+                                "Format: params: {operation: 'overlay', video: '{{core:clip.output.file}}', image: '{{core:logo.output.file}}'}");
+                        }
+                        if (!isMediaFileParam(mediaMap.get("image"))) {
+                            errors.add("cores[" + i + "]: 'params.image' is required for media overlay. " +
+                                "Format: params: {operation: 'overlay', video: '{{core:clip.output.file}}', image: '{{core:logo.output.file}}'}");
+                        }
+                    }
+                    default -> errors.add("cores[" + i + "]: unknown media operation '" + mediaOp + "' (expected: probe, mux_audio, mix, extract_audio, concat, frame, overlay)");
+                }
+                break;
             default:
-                errors.add("cores[" + i + "]: Unknown type '" + type + "' (expected: decision, switch, loop, split, merge, fork, transform, wait, download_file, aggregate, exit, response, option, http_request, filter, sort, limit, remove_duplicates, summarize, date_time, crypto_jwt, approval, data_input, xml, compression, rss, convert_to_file, extract_from_file, compare_datasets, sub_workflow, respond_to_webhook, send_email, email_inbox, code, set, html_extract, task, stop_on_error, ssh, sftp, database)");
+                errors.add("cores[" + i + "]: Unknown type '" + type + "' (expected: decision, switch, loop, split, merge, fork, transform, wait, download_file, public_link, media, aggregate, exit, response, option, http_request, filter, sort, limit, remove_duplicates, summarize, date_time, crypto_jwt, approval, data_input, xml, compression, rss, convert_to_file, extract_from_file, compare_datasets, sub_workflow, respond_to_webhook, send_email, email_inbox, code, set, html_extract, task, stop_on_error, ssh, sftp, database)");
         }
+    }
+
+    /**
+     * A usable media file param: a non-blank expression string ({@code {{...output.file}}})
+     * OR a literal FileRef object (the builder's Files picker stores those) with a path.
+     */
+    private static boolean isMediaFileParam(Object value) {
+        if (value instanceof String s) {
+            return !s.isBlank();
+        }
+        return value instanceof Map<?, ?> map && map.get("path") instanceof String p && !p.isBlank();
     }
 
     @SuppressWarnings("unchecked")

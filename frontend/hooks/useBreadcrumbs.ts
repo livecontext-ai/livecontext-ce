@@ -645,8 +645,12 @@ export function useBreadcrumbs(_options: UseBreadcrumbsOptions = {}): UseBreadcr
           truncate: true,
         });
       } else if (isAgentMarketplacePreview && agentPreviewPublicationId) {
+        // Back to the AGENTS grid, not the marketplace root: an agent preview is
+        // only ever reached from the Agents type filter, and dropping the param
+        // landed the user back on Explore/Applications with the agent they had
+        // just opened nowhere on screen.
         items.push(
-          { label: MARKETPLACE_LABELS['agents'], onClick: () => navigateTo('/app/marketplace') },
+          { label: MARKETPLACE_LABELS['agents'], onClick: () => navigateTo('/app/marketplace?type=agents') },
         );
       } else if (normalizedPathname?.startsWith('/app/marketplace/')) {
         const category = normalizedPathname.replace('/app/marketplace/', '');

@@ -35,9 +35,14 @@ export type { WorkflowPlan, EdgeV2 } from './workflowPlanTypes';
  */
 export function generateWorkflowPlan(
   nodes: Node<BuilderNodeData>[],
-  edges: Edge[]
+  edges: Edge[],
+  layoutDirection?: 'horizontal' | 'vertical',
 ): WorkflowPlan {
   const ctx = createPlanGeneratorContext(nodes, edges);
+  // Stamp the workflow's reading direction into the plan (its DB identity). Only
+  // written when a direction is passed (the builder's active direction on save);
+  // omitted otherwise so callers that don't care never introduce the key.
+  if (layoutDirection) ctx.plan.layoutDirection = layoutDirection;
 
   // 1. Process triggers
   processTriggers(ctx);

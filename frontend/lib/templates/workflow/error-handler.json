@@ -1,0 +1,199 @@
+{
+  "schemaVersion": 1,
+  "kind": "workflow",
+  "meta": {
+    "slug": "error-handler",
+    "kind": "workflow",
+    "order": 60,
+    "difficulty": "advanced",
+    "icon": "AlertTriangle",
+    "runnable": false,
+    "teachesCount": 3,
+    "nodeKinds": [
+      "manual",
+      "error",
+      "transform",
+      "stop_on_error",
+      "transform"
+    ]
+  },
+  "plan": {
+    "triggers": [
+      {
+        "id": "trigger-parent",
+        "type": "manual",
+        "label": "Start the risky work",
+        "position": {
+          "x": 120,
+          "y": 260
+        },
+        "params": {}
+      },
+      {
+        "id": "00000000-0000-0000-0000-000000000000",
+        "type": "error",
+        "label": "On parent failure",
+        "position": {
+          "x": 120,
+          "y": 700
+        },
+        "params": {
+          "workflowName": "templates.workflow.errorHandler.noParentSelected"
+        }
+      }
+    ],
+    "mcps": [],
+    "cores": [
+      {
+        "id": "core-work",
+        "type": "transform",
+        "label": "Do the work",
+        "position": {
+          "x": 500,
+          "y": 260
+        },
+        "transform": {
+          "mappings": [
+            {
+              "label": "attempted",
+              "expression": "templates.workflow.errorHandler.attempted"
+            }
+          ]
+        }
+      },
+      {
+        "id": "core-fail",
+        "type": "stop_on_error",
+        "label": "Fail on purpose",
+        "position": {
+          "x": 880,
+          "y": 260
+        },
+        "stopOnError": {
+          "errorMessage": "templates.workflow.errorHandler.stopMessage",
+          "errorCode": "ERR_DEMO"
+        }
+      },
+      {
+        "id": "core-read",
+        "type": "transform",
+        "label": "Read failure",
+        "position": {
+          "x": 500,
+          "y": 700
+        },
+        "transform": {
+          "mappings": [
+            {
+              "label": "failed_workflow",
+              "expression": "{{trigger:on_parent_failure.output.parentWorkflowId}}"
+            },
+            {
+              "label": "failed_run",
+              "expression": "{{trigger:on_parent_failure.output.parentRunId}}"
+            },
+            {
+              "label": "reason",
+              "expression": "{{trigger:on_parent_failure.output.errorMessage}}"
+            },
+            {
+              "label": "failed_step_count",
+              "expression": "{{trigger:on_parent_failure.output.failedSteps}}"
+            }
+          ]
+        }
+      }
+    ],
+    "notes": [
+      {
+        "id": "note-pick-parent",
+        "type": "note",
+        "label": "templates.workflow.errorHandler.notes.pickParent.label",
+        "text": "templates.workflow.errorHandler.notes.pickParent.text",
+        "color": "#fed7aa",
+        "borderColor": "#f97316",
+        "textColor": "#9a3412",
+        "width": 400,
+        "height": 210,
+        "position": {
+          "x": 120,
+          "y": 430
+        }
+      },
+      {
+        "id": "note-seed-run",
+        "type": "note",
+        "label": "templates.workflow.errorHandler.notes.seedRun.label",
+        "text": "templates.workflow.errorHandler.notes.seedRun.text",
+        "color": "#fce7f3",
+        "borderColor": "#ec4899",
+        "textColor": "#831843",
+        "width": 400,
+        "height": 250,
+        "position": {
+          "x": 900,
+          "y": 700
+        }
+      },
+      {
+        "id": "note-payload",
+        "type": "note",
+        "label": "templates.workflow.errorHandler.notes.payload.label",
+        "text": "templates.workflow.errorHandler.notes.payload.text",
+        "color": "#dbeafe",
+        "borderColor": "#3b82f6",
+        "textColor": "#1e40af",
+        "width": 380,
+        "height": 210,
+        "position": {
+          "x": 900,
+          "y": 430
+        }
+      },
+      {
+        "id": "note-no-loop",
+        "type": "note",
+        "label": "templates.workflow.errorHandler.notes.noLoop.label",
+        "text": "templates.workflow.errorHandler.notes.noLoop.text",
+        "color": "#d1fae5",
+        "borderColor": "#10b981",
+        "textColor": "#065f46",
+        "width": 380,
+        "height": 190,
+        "position": {
+          "x": 120,
+          "y": 1000
+        }
+      },
+      {
+        "id": "note-next-step",
+        "type": "note",
+        "label": "templates.workflow.errorHandler.notes.nextStep.label",
+        "text": "templates.workflow.errorHandler.notes.nextStep.text",
+        "color": "#e9d5ff",
+        "borderColor": "#a855f7",
+        "textColor": "#6b21a8",
+        "width": 380,
+        "height": 170,
+        "position": {
+          "x": 120,
+          "y": 40
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "trigger:start_the_risky_work",
+        "to": "core:do_the_work"
+      },
+      {
+        "from": "core:do_the_work",
+        "to": "core:fail_on_purpose"
+      },
+      {
+        "from": "trigger:on_parent_failure",
+        "to": "core:read_failure"
+      }
+    ]
+  }
+}

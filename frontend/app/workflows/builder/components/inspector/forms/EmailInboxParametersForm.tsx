@@ -37,7 +37,7 @@ const IMAP_CREDENTIAL = [{
   credentialType: 'imap',
 }];
 
-const ACTIONS = ['none', 'list_folders', 'mark_read', 'mark_unread', 'flag', 'unflag', 'move', 'delete'];
+const ACTIONS = ['none', 'list_folders', 'create_folder', 'mark_read', 'mark_unread', 'flag', 'unflag', 'move', 'delete'];
 
 /**
  * Form for the Email Inbox node. IMAP credentials are managed via CredentialSection
@@ -68,6 +68,7 @@ export function EmailInboxParametersForm({
   const action: string = (data as any).emailAction ?? 'none';
   const messageUid: string = (data as any).emailMessageUid ?? '';
   const targetFolder: string = (data as any).emailTargetFolder ?? '';
+  const createTargetIfMissing: string = (data as any).emailCreateTargetIfMissing ?? 'false';
   const fromContains: string = (data as any).emailFromContains ?? '';
   const subjectContains: string = (data as any).emailSubjectContains ?? '';
   const bodyContains: string = (data as any).emailBodyContains ?? '';
@@ -95,7 +96,10 @@ export function EmailInboxParametersForm({
   }, [data, onUpdate]);
 
   const isRead = action === 'none';
-  const isMessageAction = action !== 'none' && action !== 'list_folders';
+  // create_folder is mailbox-level like list_folders: it targets a folder, never a single message.
+  const isCreateFolder = action === 'create_folder';
+  const isMessageAction = action !== 'none' && action !== 'list_folders' && !isCreateFolder;
+  const showTargetFolder = action === 'move' || isCreateFolder;
 
   return (
     <div className="space-y-4 pt-2">
@@ -301,12 +305,13 @@ export function EmailInboxParametersForm({
         </>
       )}
 
-      {isMessageAction && (
+      {(isMessageAction || showTargetFolder) && (
         <>
           {/* Action-mode section */}
           <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('actionSection')}</span>
 
-          {/* Message UID */}
+          {/* Message UID (single-message actions only, never list_folders/create_folder) */}
+          {isMessageAction && (
           <div className="space-y-1">
             <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('messageUid')} <span className="text-red-500">*</span></span>
             <ExpressionEditor
@@ -327,11 +332,14 @@ export function EmailInboxParametersForm({
               readOnly={isRunMode}
             />
           </div>
+          )}
 
-          {/* Target folder (move only) */}
-          {action === 'move' && (
+          {/* Target folder (move = destination, create_folder = folder to create) */}
+          {showTargetFolder && (
             <div className="space-y-1">
-              <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('targetFolder')} <span className="text-red-500">*</span></span>
+              <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">
+                {isCreateFolder ? t('folderToCreate') : t('targetFolder')} <span className="text-red-500">*</span>
+              </span>
               <Input
                 type="text"
                 value={targetFolder}
@@ -340,6 +348,23 @@ export function EmailInboxParametersForm({
                 placeholder={t('targetFolderPlaceholder')}
                 readOnly={isRunMode}
               />
+              <p className="text-sm text-slate-400 dark:text-slate-500">{t('targetFolderHint')}</p>
+            </div>
+          )}
+
+          {/* Create target if missing (move only) */}
+          {action === 'move' && (
+            <div className="space-y-1">
+              <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('createTargetIfMissing')}</span>
+              <Select value={createTargetIfMissing} onValueChange={handleSelectChange('emailCreateTargetIfMissing')} disabled={isRunMode}>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="true">{t('yes')}</SelectItem>
+                  <SelectItem value="false">{t('no')}</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           )}
         </>

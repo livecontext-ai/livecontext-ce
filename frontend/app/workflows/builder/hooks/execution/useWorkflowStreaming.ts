@@ -39,6 +39,9 @@ const INDIVIDUAL_EVENT_TYPES = new Set([
   'mergeEvent',
   'agentToolCall',
   'workflowConfiguration',
+  // Run budget/cost (aligned with backend EVENT_TYPE_WIRE_NAMES).
+  'runCost',
+  'runBudgetBlocked',
 ]);
 
 /**

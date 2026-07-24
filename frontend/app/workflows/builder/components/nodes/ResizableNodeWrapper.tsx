@@ -15,6 +15,8 @@ interface ResizableNodeWrapperProps {
   onResize?: () => void;
   /** Handle line color */
   color?: string;
+  /** Lock the node's current aspect ratio while resizing (interface nodes: the declared format's ratio) */
+  keepAspectRatio?: boolean;
 }
 
 /**
@@ -33,6 +35,7 @@ export function ResizableNodeWrapper({
   onResizeEnd,
   onResize,
   color = '#94a3b8',
+  keepAspectRatio = false,
 }: ResizableNodeWrapperProps) {
   return (
     <NodeResizer
@@ -41,6 +44,7 @@ export function ResizableNodeWrapper({
       maxWidth={maxWidth}
       minHeight={minHeight}
       maxHeight={maxHeight}
+      keepAspectRatio={keepAspectRatio}
       handleClassName="node-resize-handle"
       lineClassName="node-resize-line"
       color={color}

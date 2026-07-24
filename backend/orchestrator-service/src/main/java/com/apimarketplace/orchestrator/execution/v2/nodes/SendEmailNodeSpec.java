@@ -32,8 +32,8 @@ public class SendEmailNodeSpec implements NodeSpec {
                     .build(),
                 OutputFieldDef.builder()
                     .key("recipients")
-                    .type("array")
-                    .description("List of recipient email addresses")
+                    .type("string")
+                    .description("Comma-separated recipient email addresses the mail was sent to")
                     .build(),
                 OutputFieldDef.builder()
                     .key("subject")

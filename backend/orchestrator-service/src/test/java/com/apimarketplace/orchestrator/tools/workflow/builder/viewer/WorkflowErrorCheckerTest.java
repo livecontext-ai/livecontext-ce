@@ -890,6 +890,530 @@ class WorkflowErrorCheckerTest {
         }
     }
 
+    // ==================== MISSING_INPUT check - public_link ====================
+
+    @Nested
+    @DisplayName("MISSING_INPUT check - public_link requires params.file")
+    class PublicLinkFileCheck {
+
+        private void stubSessionWithCores(List<Map<String, Object>> cores) {
+            lenient().when(session.getTriggers()).thenReturn(List.of(Map.of("type", "manual", "label", "Start")));
+            lenient().when(session.getMcps()).thenReturn(List.of());
+            lenient().when(session.getCores()).thenReturn(cores);
+            lenient().when(session.getInterfaces()).thenReturn(List.of());
+            lenient().when(session.getTables()).thenReturn(List.of());
+            lenient().when(session.findOrphanNodes()).thenReturn(List.of());
+            lenient().when(session.findDeadEndNodes()).thenReturn(List.of());
+            lenient().when(toolSchemaFetcher.fetchToolInputSchema(anyString())).thenReturn(Optional.empty());
+        }
+
+        private Map<String, Object> publicLinkCore(Map<String, Object> params) {
+            Map<String, Object> c = new LinkedHashMap<>();
+            c.put("type", "public_link");
+            c.put("label", "Share Video");
+            if (params != null) c.put("params", params);
+            return c;
+        }
+
+        @Test
+        @DisplayName("public_link without params.file -> MISSING_INPUT 'requires a file' error listed")
+        void missingFileFlagged() {
+            stubSessionWithCores(List.of(publicLinkCore(Map.of("ttl_minutes", 60))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(result.errors())
+                    .anyMatch(e -> "MISSING_INPUT".equals(e.get("type"))
+                            && "core:share_video".equals(e.get("node"))
+                            && ((String) e.get("message")).contains("requires a file"));
+            assertThat(result.canCreate()).isFalse();
+        }
+
+        @Test
+        @DisplayName("public_link without any params map at all is flagged the same way")
+        void missingParamsMapFlagged() {
+            stubSessionWithCores(List.of(publicLinkCore(null)));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(result.errors())
+                    .anyMatch(e -> "MISSING_INPUT".equals(e.get("type"))
+                            && ((String) e.get("message")).contains("requires a file"));
+        }
+
+        @Test
+        @DisplayName("public_link with params.file -> no MISSING_INPUT error")
+        void fileProvidedNotFlagged() {
+            stubSessionWithCores(List.of(publicLinkCore(Map.of("file", "{{core:dl.output.file}}"))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(result.errors())
+                    .noneMatch(e -> "MISSING_INPUT".equals(e.get("type")));
+            assertThat(result.canCreate()).isTrue();
+        }
+    }
+
+    // ==================== MISSING_INPUT check - media ====================
+
+    @Nested
+    @DisplayName("MISSING_INPUT check - media requires operation + per-operation file params")
+    class MediaCheck {
+
+        private void stubSessionWithCores(List<Map<String, Object>> cores) {
+            lenient().when(session.getTriggers()).thenReturn(List.of(Map.of("type", "manual", "label", "Start")));
+            lenient().when(session.getMcps()).thenReturn(List.of());
+            lenient().when(session.getCores()).thenReturn(cores);
+            lenient().when(session.getInterfaces()).thenReturn(List.of());
+            lenient().when(session.getTables()).thenReturn(List.of());
+            lenient().when(session.findOrphanNodes()).thenReturn(List.of());
+            lenient().when(session.findDeadEndNodes()).thenReturn(List.of());
+            lenient().when(toolSchemaFetcher.fetchToolInputSchema(anyString())).thenReturn(Optional.empty());
+        }
+
+        private Map<String, Object> mediaCore(Map<String, Object> params) {
+            Map<String, Object> c = new LinkedHashMap<>();
+            c.put("type", "media");
+            c.put("label", "Add Music");
+            if (params != null) c.put("params", params);
+            return c;
+        }
+
+        @Test
+        @DisplayName("media without an operation -> MISSING_INPUT listing the seven operations")
+        void missingOperationFlagged() {
+            stubSessionWithCores(List.of(mediaCore(Map.of("video", "{{x}}"))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(result.errors())
+                    .anyMatch(e -> "MISSING_INPUT".equals(e.get("type"))
+                            && "core:add_music".equals(e.get("node"))
+                            && ((String) e.get("message")).contains("requires an operation"));
+            assertThat(result.canCreate()).isFalse();
+        }
+
+        @Test
+        @DisplayName("media with an unknown operation -> MISSING_INPUT naming it")
+        void unknownOperationFlagged() {
+            stubSessionWithCores(List.of(mediaCore(Map.of("operation", "transcode"))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(result.errors())
+                    .anyMatch(e -> "MISSING_INPUT".equals(e.get("type"))
+                            && ((String) e.get("message")).contains("unknown operation 'transcode'"));
+        }
+
+        @Test
+        @DisplayName("mux_audio missing audio -> MISSING_INPUT for the audio param (video provided is not flagged)")
+        void muxMissingAudioFlagged() {
+            stubSessionWithCores(List.of(mediaCore(Map.of(
+                    "operation", "mux_audio", "video", "{{interface:card.output.video}}"))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(result.errors())
+                    .anyMatch(e -> "MISSING_INPUT".equals(e.get("type"))
+                            && ((String) e.get("message")).contains("requires an audio"));
+            assertThat(result.errors())
+                    .noneMatch(e -> ((String) e.get("message")).contains("requires a video"));
+        }
+
+        @Test
+        @DisplayName("probe without input -> MISSING_INPUT; mix without tracks -> MISSING_INPUT")
+        void probeAndMixRequiredParamsFlagged() {
+            stubSessionWithCores(List.of(mediaCore(Map.of("operation", "probe"))));
+            WorkflowErrorChecker.CheckResult probeResult = checker.checkForErrors(session);
+            assertThat(probeResult.errors())
+                    .anyMatch(e -> ((String) e.get("message")).contains("requires an input"));
+
+            stubSessionWithCores(List.of(mediaCore(Map.of("operation", "mix"))));
+            WorkflowErrorChecker.CheckResult mixResult = checker.checkForErrors(session);
+            assertThat(mixResult.errors())
+                    .anyMatch(e -> ((String) e.get("message")).contains("requires tracks"));
+        }
+
+        @Test
+        @DisplayName("well-formed mux_audio -> no MISSING_INPUT error, workflow creatable")
+        void wellFormedMuxNotFlagged() {
+            stubSessionWithCores(List.of(mediaCore(Map.of(
+                    "operation", "mux_audio",
+                    "video", "{{interface:card.output.video}}",
+                    "audio", "{{core:dl.output.file}}"))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(result.errors())
+                    .noneMatch(e -> "MISSING_INPUT".equals(e.get("type")));
+            assertThat(result.canCreate()).isTrue();
+        }
+
+        // ---- INVALID_CONFIG: loop+trim and the audio-only all-loop anchor ----
+
+        private Map<String, Object> muxParams(Map<String, Object> extra) {
+            Map<String, Object> p = new LinkedHashMap<>();
+            p.put("operation", "mux_audio");
+            p.put("video", "{{interface:card.output.video}}");
+            p.put("audio", "{{core:dl.output.file}}");
+            p.putAll(extra);
+            return p;
+        }
+
+        @Test
+        @DisplayName("mux_audio combining loop:true with a trim -> INVALID_CONFIG error")
+        void muxLoopWithTrimFlagged() {
+            stubSessionWithCores(List.of(mediaCore(muxParams(Map.of(
+                    "loop", true, "trim_start_seconds", 3)))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(result.errors())
+                    .anyMatch(e -> "INVALID_CONFIG".equals(e.get("type"))
+                            && "core:add_music".equals(e.get("node"))
+                            && ((String) e.get("message")).contains("combines loop:true with trim_start_seconds/trim_end_seconds"));
+        }
+
+        @Test
+        @DisplayName("mux_audio with loop:true but NO trim -> no INVALID_CONFIG error")
+        void muxLoopWithoutTrimNotFlagged() {
+            stubSessionWithCores(List.of(mediaCore(muxParams(Map.of("loop", true)))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(result.errors())
+                    .noneMatch(e -> "INVALID_CONFIG".equals(e.get("type")));
+        }
+
+        @Test
+        @DisplayName("mix track combining loop:true with a trim -> INVALID_CONFIG naming 'track N' (1-based)")
+        void mixTrackLoopWithTrimFlaggedWithIndex() {
+            stubSessionWithCores(List.of(mediaCore(Map.of(
+                    "operation", "mix",
+                    "tracks", List.of(Map.of(
+                            "source", "{{core:dl.output.file}}",
+                            "loop", true,
+                            "trim_end_seconds", 10))))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(result.errors())
+                    .anyMatch(e -> "INVALID_CONFIG".equals(e.get("type"))
+                            && ((String) e.get("message")).contains("track 1 combines loop:true"));
+        }
+
+        @Test
+        @DisplayName("mix track with loop:true but NO trim -> no per-track INVALID_CONFIG loop+trim error")
+        void mixTrackLoopWithoutTrimNotFlagged() {
+            stubSessionWithCores(List.of(mediaCore(Map.of(
+                    "operation", "mix",
+                    "tracks", List.of(
+                            Map.of("source", "{{core:bed.output.file}}", "loop", true),
+                            Map.of("source", "{{core:voice.output.file}}"))))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(result.errors())
+                    .noneMatch(e -> "INVALID_CONFIG".equals(e.get("type")));
+        }
+
+        @Test
+        @DisplayName("audio-only mix where EVERY track loops -> INVALID_CONFIG (nothing anchors the output length)")
+        void audioOnlyAllLoopingMixFlagged() {
+            stubSessionWithCores(List.of(mediaCore(Map.of(
+                    "operation", "mix",
+                    "tracks", List.of(
+                            Map.of("source", "{{core:bed.output.file}}", "loop", true),
+                            Map.of("source", "{{core:rain.output.file}}", "loop", true))))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(result.errors())
+                    .anyMatch(e -> "INVALID_CONFIG".equals(e.get("type"))
+                            && ((String) e.get("message")).contains("EVERY track loops"));
+        }
+
+        @Test
+        @DisplayName("all-looping tracks WITH a non-blank video param -> the anchor check is suppressed")
+        void allLoopingMixWithVideoNotFlagged() {
+            stubSessionWithCores(List.of(mediaCore(Map.of(
+                    "operation", "mix",
+                    "video", "{{interface:card.output.video}}",
+                    "tracks", List.of(
+                            Map.of("source", "{{core:bed.output.file}}", "loop", true),
+                            Map.of("source", "{{core:rain.output.file}}", "loop", true))))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(result.errors())
+                    .noneMatch(e -> "INVALID_CONFIG".equals(e.get("type")));
+        }
+
+        @Test
+        @DisplayName("all-looping tracks with a LITERAL FileRef OBJECT video -> the anchor check is suppressed too (audit regression)")
+        void allLoopingMixWithObjectVideoNotFlagged() {
+            // The video param legally holds a literal FileRef map (Files picker / agent-built
+            // plan); a string-only check false-positived the anchor error on those plans.
+            stubSessionWithCores(List.of(mediaCore(Map.of(
+                    "operation", "mix",
+                    "video", Map.of("_type", "file", "path", "1/general/files/x_clip.mp4", "name", "clip.mp4"),
+                    "tracks", List.of(
+                            Map.of("source", "{{core:bed.output.file}}", "loop", true),
+                            Map.of("source", "{{core:rain.output.file}}", "loop", true))))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(result.errors())
+                    .noneMatch(e -> "INVALID_CONFIG".equals(e.get("type")));
+        }
+
+        @Test
+        @DisplayName("audio-only mix where ONE track does not loop -> no anchor INVALID_CONFIG error")
+        void audioOnlyMixWithOneNonLoopingTrackNotFlagged() {
+            stubSessionWithCores(List.of(mediaCore(Map.of(
+                    "operation", "mix",
+                    "tracks", List.of(
+                            Map.of("source", "{{core:bed.output.file}}", "loop", true),
+                            Map.of("source", "{{core:voice.output.file}}", "loop", false))))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(result.errors())
+                    .noneMatch(e -> "INVALID_CONFIG".equals(e.get("type")));
+        }
+
+        // ---- v2 operations: concat / frame / overlay -----------------------
+
+        private Map<String, Object> concatParams(List<Map<String, Object>> clips, Map<String, Object> extra) {
+            Map<String, Object> p = new LinkedHashMap<>();
+            p.put("operation", "concat");
+            p.put("inputs", clips);
+            p.putAll(extra);
+            return p;
+        }
+
+        private List<Map<String, Object>> twoClips() {
+            return List.of(
+                    Map.of("source", "{{core:clip_a.output.file}}"),
+                    Map.of("source", "{{core:clip_b.output.file}}"));
+        }
+
+        @Test
+        @DisplayName("concat without inputs -> MISSING_INPUT; frame without input -> MISSING_INPUT")
+        void concatAndFrameRequiredParamsFlagged() {
+            stubSessionWithCores(List.of(mediaCore(Map.of("operation", "concat"))));
+            WorkflowErrorChecker.CheckResult concatResult = checker.checkForErrors(session);
+            assertThat(concatResult.errors())
+                    .anyMatch(e -> "MISSING_INPUT".equals(e.get("type"))
+                            && ((String) e.get("message")).contains("requires inputs"));
+
+            stubSessionWithCores(List.of(mediaCore(Map.of("operation", "frame"))));
+            WorkflowErrorChecker.CheckResult frameResult = checker.checkForErrors(session);
+            assertThat(frameResult.errors())
+                    .anyMatch(e -> "MISSING_INPUT".equals(e.get("type"))
+                            && ((String) e.get("message")).contains("frame requires an input"));
+        }
+
+        @Test
+        @DisplayName("concat clip without a source -> MISSING_INPUT naming inputs[i]")
+        void concatClipMissingSourceFlagged() {
+            stubSessionWithCores(List.of(mediaCore(concatParams(List.of(
+                    Map.of("source", "{{core:clip_a.output.file}}"),
+                    Map.of("speed", 1.5)), Map.of()))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(result.errors())
+                    .anyMatch(e -> "MISSING_INPUT".equals(e.get("type"))
+                            && ((String) e.get("message")).contains("inputs[1] requires a source"));
+        }
+
+        @Test
+        @DisplayName("concat with crossfade and ONE input -> INVALID_CONFIG (crossfade needs 2)")
+        void concatCrossfadeSingleInputFlagged() {
+            stubSessionWithCores(List.of(mediaCore(concatParams(
+                    List.of(Map.of("source", "{{core:clip_a.output.file}}")),
+                    Map.of("transition", "crossfade")))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(result.errors())
+                    .anyMatch(e -> "INVALID_CONFIG".equals(e.get("type"))
+                            && ((String) e.get("message")).contains("crossfade needs at least 2 inputs"));
+        }
+
+        @Test
+        @DisplayName("concat with crossfade and TWO inputs -> no crossfade INVALID_CONFIG error")
+        void concatCrossfadeTwoInputsNotFlagged() {
+            stubSessionWithCores(List.of(mediaCore(concatParams(twoClips(),
+                    Map.of("transition", "crossfade")))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(result.errors())
+                    .noneMatch(e -> "INVALID_CONFIG".equals(e.get("type")));
+        }
+
+        @Test
+        @DisplayName("transition_seconds outside 0.1-5.0 -> INVALID_CONFIG naming the bound")
+        void concatTransitionSecondsOutOfBoundsFlagged() {
+            stubSessionWithCores(List.of(mediaCore(concatParams(twoClips(),
+                    Map.of("transition", "crossfade", "transition_seconds", 6)))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(result.errors())
+                    .anyMatch(e -> "INVALID_CONFIG".equals(e.get("type"))
+                            && ((String) e.get("message")).contains("between 0.1 and 5.0"));
+        }
+
+        @Test
+        @DisplayName("transition_seconds as a {{template}} -> NOT flagged (resolves at run time)")
+        void concatTransitionSecondsTemplateNotFlagged() {
+            stubSessionWithCores(List.of(mediaCore(concatParams(twoClips(),
+                    Map.of("transition_seconds", "{{trigger:start.output.fade}}")))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(result.errors())
+                    .noneMatch(e -> "INVALID_CONFIG".equals(e.get("type")));
+        }
+
+        @Test
+        @DisplayName("clip with trim_end_seconds <= trim_start_seconds -> INVALID_CONFIG naming the clip")
+        void concatTrimEndBeforeTrimStartFlagged() {
+            stubSessionWithCores(List.of(mediaCore(concatParams(List.of(
+                    Map.of("source", "{{core:clip_a.output.file}}",
+                            "trim_start_seconds", 10, "trim_end_seconds", 5)), Map.of()))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(result.errors())
+                    .anyMatch(e -> "INVALID_CONFIG".equals(e.get("type"))
+                            && ((String) e.get("message")).contains("inputs[0]")
+                            && ((String) e.get("message")).contains("trim_end_seconds must be greater"));
+        }
+
+        @Test
+        @DisplayName("clip with a valid trim window -> no trim INVALID_CONFIG error")
+        void concatValidTrimWindowNotFlagged() {
+            stubSessionWithCores(List.of(mediaCore(concatParams(List.of(
+                    Map.of("source", "{{core:clip_a.output.file}}",
+                            "trim_start_seconds", 2, "trim_end_seconds", 10)), Map.of()))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(result.errors())
+                    .noneMatch(e -> "INVALID_CONFIG".equals(e.get("type")));
+        }
+
+        @Test
+        @DisplayName("target_width without target_height -> INVALID_CONFIG (BOTH or NEITHER)")
+        void concatTargetWidthAloneFlagged() {
+            stubSessionWithCores(List.of(mediaCore(concatParams(twoClips(),
+                    Map.of("target_width", 1920)))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(result.errors())
+                    .anyMatch(e -> "INVALID_CONFIG".equals(e.get("type"))
+                            && ((String) e.get("message")).contains("BOTH or NEITHER"));
+        }
+
+        @Test
+        @DisplayName("target_width AND target_height together -> no dimension INVALID_CONFIG error")
+        void concatBothTargetDimsNotFlagged() {
+            stubSessionWithCores(List.of(mediaCore(concatParams(twoClips(),
+                    Map.of("target_width", 1920, "target_height", 1080)))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(result.errors())
+                    .noneMatch(e -> "INVALID_CONFIG".equals(e.get("type")));
+        }
+
+        @Test
+        @DisplayName("frame with negative at_seconds -> INVALID_CONFIG; a valid at_seconds is not flagged")
+        void frameAtSecondsBounds() {
+            stubSessionWithCores(List.of(mediaCore(Map.of(
+                    "operation", "frame", "input", "{{core:reel.output.file}}", "at_seconds", -1))));
+            WorkflowErrorChecker.CheckResult negative = checker.checkForErrors(session);
+            assertThat(negative.errors())
+                    .anyMatch(e -> "INVALID_CONFIG".equals(e.get("type"))
+                            && ((String) e.get("message")).contains("at_seconds"));
+
+            stubSessionWithCores(List.of(mediaCore(Map.of(
+                    "operation", "frame", "input", "{{core:reel.output.file}}", "at_seconds", 3))));
+            WorkflowErrorChecker.CheckResult valid = checker.checkForErrors(session);
+            assertThat(valid.errors())
+                    .noneMatch(e -> "INVALID_CONFIG".equals(e.get("type")));
+        }
+
+        @Test
+        @DisplayName("overlay missing image -> MISSING_INPUT for the image param (video provided is not flagged)")
+        void overlayMissingImageFlagged() {
+            stubSessionWithCores(List.of(mediaCore(Map.of(
+                    "operation", "overlay", "video", "{{core:reel.output.file}}"))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(result.errors())
+                    .anyMatch(e -> "MISSING_INPUT".equals(e.get("type"))
+                            && ((String) e.get("message")).contains("requires an image"));
+            assertThat(result.errors())
+                    .noneMatch(e -> ((String) e.get("message")).contains("requires a video"));
+        }
+
+        @Test
+        @DisplayName("overlay width_percent outside 1-100 -> INVALID_CONFIG naming the bound")
+        void overlayWidthPercentOutOfBoundsFlagged() {
+            stubSessionWithCores(List.of(mediaCore(Map.of(
+                    "operation", "overlay",
+                    "video", "{{core:reel.output.file}}",
+                    "image", "{{core:logo.output.file}}",
+                    "width_percent", 150))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(result.errors())
+                    .anyMatch(e -> "INVALID_CONFIG".equals(e.get("type"))
+                            && ((String) e.get("message")).contains("between 1 and 100"));
+        }
+
+        @Test
+        @DisplayName("overlay opacity outside 0-1 -> INVALID_CONFIG naming the bound")
+        void overlayOpacityOutOfBoundsFlagged() {
+            stubSessionWithCores(List.of(mediaCore(Map.of(
+                    "operation", "overlay",
+                    "video", "{{core:reel.output.file}}",
+                    "image", "{{core:logo.output.file}}",
+                    "opacity", 2))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(result.errors())
+                    .anyMatch(e -> "INVALID_CONFIG".equals(e.get("type"))
+                            && ((String) e.get("message")).contains("between 0 and 1"));
+        }
+
+        @Test
+        @DisplayName("well-formed overlay with in-bounds options -> no error, workflow creatable")
+        void wellFormedOverlayNotFlagged() {
+            stubSessionWithCores(List.of(mediaCore(Map.of(
+                    "operation", "overlay",
+                    "video", "{{core:reel.output.file}}",
+                    "image", "{{core:logo.output.file}}",
+                    "position", "bottom_right",
+                    "width_percent", 15,
+                    "opacity", 0.7))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(result.errors()).isEmpty();
+            assertThat(result.canCreate()).isTrue();
+        }
+    }
+
     // ==================== EXPRESSION_NOT_EVALUATED (F15/F21 boundary trap) ====================
 
     @Nested
@@ -1128,6 +1652,79 @@ class WorkflowErrorCheckerTest {
             stubSessionWithCores(List.of(c));
 
             assertThat(boundaryWarnings(checker.checkForErrors(session))).isEmpty();
+        }
+    }
+
+    @Nested
+    @DisplayName("MISSING_INPUT check - email_inbox action params")
+    class EmailInboxActionCheck {
+
+        private void stubSessionWithCores(List<Map<String, Object>> cores) {
+            lenient().when(session.getTriggers()).thenReturn(List.of(Map.of("type", "manual", "label", "Start")));
+            lenient().when(session.getMcps()).thenReturn(List.of());
+            lenient().when(session.getCores()).thenReturn(cores);
+            lenient().when(session.getInterfaces()).thenReturn(List.of());
+            lenient().when(session.getTables()).thenReturn(List.of());
+            lenient().when(session.findOrphanNodes()).thenReturn(List.of());
+            lenient().when(session.findDeadEndNodes()).thenReturn(List.of());
+            lenient().when(toolSchemaFetcher.fetchToolInputSchema(anyString())).thenReturn(Optional.empty());
+        }
+
+        private Map<String, Object> inboxCore(Map<String, Object> emailInbox) {
+            Map<String, Object> c = new LinkedHashMap<>();
+            c.put("type", "email_inbox");
+            c.put("label", "File Mail");
+            c.put("emailInbox", emailInbox);
+            return c;
+        }
+
+        private List<String> messagesOf(WorkflowErrorChecker.CheckResult result) {
+            return result.errors().stream().map(e -> String.valueOf(e.get("message"))).toList();
+        }
+
+        @Test
+        @DisplayName("create_folder without targetFolder -> MISSING_INPUT naming targetFolder")
+        void createFolderWithoutTargetFolderFlagged() {
+            stubSessionWithCores(List.of(inboxCore(Map.of("action", "create_folder"))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(messagesOf(result)).anyMatch(m -> m.contains("create_folder action requires targetFolder"));
+        }
+
+        @Test
+        @DisplayName("create_folder must NOT be asked for messageUid, it is a mailbox-level action")
+        void createFolderNotAskedForMessageUid() {
+            // Pre-fix every action but none/list_folders demanded a messageUid, so a valid
+            // create_folder node was rejected with an error that made no sense for it.
+            stubSessionWithCores(List.of(inboxCore(Map.of(
+                "action", "create_folder", "targetFolder", "INBOX.Clients"))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(messagesOf(result)).noneMatch(m -> m.contains("requires messageUid"));
+            assertThat(messagesOf(result)).noneMatch(m -> m.contains("requires targetFolder"));
+        }
+
+        @Test
+        @DisplayName("move still requires both messageUid and targetFolder")
+        void moveStillRequiresBoth() {
+            stubSessionWithCores(List.of(inboxCore(Map.of("action", "move"))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(messagesOf(result)).anyMatch(m -> m.contains("requires messageUid"));
+            assertThat(messagesOf(result)).anyMatch(m -> m.contains("move action requires targetFolder"));
+        }
+
+        @Test
+        @DisplayName("list_folders needs neither messageUid nor targetFolder")
+        void listFoldersNeedsNothing() {
+            stubSessionWithCores(List.of(inboxCore(Map.of("action", "list_folders"))));
+
+            WorkflowErrorChecker.CheckResult result = checker.checkForErrors(session);
+
+            assertThat(messagesOf(result)).noneMatch(m -> m.contains("requires messageUid"));
         }
     }
 }

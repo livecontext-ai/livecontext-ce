@@ -425,7 +425,17 @@ public class StateReconstructor {
         // /state full=false AND marketplace showcase); engine paths (FULL) keep current-epoch
         // semantics untouched (and read the flat sets, never step status). See
         // StepStateBuilder.deriveStatusFromCounts (the rerun guard).
-        if (mode == OutputLoadMode.AGENT_AND_INTERFACE_ONLY) {
+        //
+        // Suppressed during a mid-rerun reset window (an ACTIVE epoch whose DAG has been
+        // rerun, i.e. its spawn counter > 0): a step-rerun resets its subgraph to PENDING at
+        // the NEW spawn before anything re-executes, but the spawn-aware aggregate still keeps
+        // the OLD spawn's rows (they are the latest rows that exist), so the overlay would
+        // resurrect the exact stale COMPLETED/SKIPPED statuses the reset just cleared
+        // (Phase A rerun fix #2). While the epoch is active the current-epoch reconstruction
+        // is authoritative; once the epoch closes (run completes / WAITING_TRIGGER prune)
+        // the overlay resumes and the aggregate again matches reality.
+        if (mode == OutputLoadMode.AGENT_AND_INTERFACE_ONLY
+                && !isMidRerunResetWindow(stateSnapshot, runEntity.getMetadata())) {
             stepStates = applyMultiEpochAggregateStatus(runId, stepStates);
         }
 
@@ -467,6 +477,51 @@ public class StateReconstructor {
             loops,
             interfaces
         );
+    }
+
+    /**
+     * True while some DAG of the run is inside a rerun reset window: it has at least one
+     * ACTIVE (non-closed) epoch AND has been rerun at least once (spawn counter > 0).
+     *
+     * <p>In that window the reset subgraph is PENDING at the new spawn with no rows written
+     * yet, so the "latest spawn per coordinate" aggregate still reports the superseded
+     * spawn's terminal statuses. Reconciling against it would undo the reset on the canvas
+     * (stale COMPLETED on the previously-taken branch of a flipped decision). Once every
+     * epoch is closed the flat view and the aggregate agree again and the overlay is safe.
+     *
+     * <p>The spawn counter that PRODUCTION writes lives in run metadata
+     * ({@code metadata.dagCurrentSpawn}, per-trigger map, written by
+     * {@code TriggerEpochManager.incrementSpawn} on the {@code StepRerunService} path) -
+     * NOT in the snapshot: no production path calls {@code DagState.advanceSpawn()}, so
+     * {@code DagState.currentSpawn} stays 0 on real runs. Read the metadata first and keep
+     * the snapshot field as a fallback so both writers are honoured. The metadata counter
+     * is never reset, so a once-rerun DAG suppresses the overlay for the in-flight part of
+     * every later epoch too - deliberate: while an epoch is executing, the current-epoch
+     * view is authoritative and must never be overwritten by superseded-spawn aggregates.
+     * Package-private + static for DB-free unit tests.
+     */
+    static boolean isMidRerunResetWindow(StateSnapshot snapshot, Map<String, Object> runMetadata) {
+        for (Map.Entry<String, DagState> entry : snapshot.getDags().entrySet()) {
+            DagState dag = entry.getValue();
+            if (dag.hasActiveEpochs() && dagSpawnCounter(runMetadata, entry.getKey(), dag) > 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Current rerun-spawn counter for one DAG: the production value from run metadata
+     * ({@code dagCurrentSpawn[triggerId]}) when present, else the snapshot's
+     * {@code DagState.currentSpawn}.
+     */
+    private static int dagSpawnCounter(Map<String, Object> runMetadata, String triggerId, DagState dag) {
+        if (runMetadata != null
+                && runMetadata.get("dagCurrentSpawn") instanceof Map<?, ?> spawnByTrigger
+                && spawnByTrigger.get(triggerId) instanceof Number spawn) {
+            return Math.max(spawn.intValue(), dag.getCurrentSpawn());
+        }
+        return dag.getCurrentSpawn();
     }
 
     /**

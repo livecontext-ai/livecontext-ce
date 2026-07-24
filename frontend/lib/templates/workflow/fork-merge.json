@@ -1,0 +1,183 @@
+{
+  "schemaVersion": 1,
+  "kind": "workflow",
+  "meta": {
+    "slug": "fork-merge",
+    "kind": "workflow",
+    "order": 30,
+    "difficulty": "intermediate",
+    "icon": "Split",
+    "runnable": true,
+    "teachesCount": 3,
+    "nodeKinds": [
+      "manual",
+      "fork",
+      "transform",
+      "transform",
+      "merge"
+    ]
+  },
+  "plan": {
+    "triggers": [
+      {
+        "id": "trigger-1",
+        "type": "manual",
+        "label": "Start",
+        "position": {
+          "x": 120,
+          "y": 340
+        },
+        "params": {}
+      }
+    ],
+    "mcps": [],
+    "cores": [
+      {
+        "id": "core-fork",
+        "type": "fork",
+        "label": "Fan out",
+        "position": {
+          "x": 460,
+          "y": 340
+        },
+        "forkOutputs": [
+          {
+            "id": "output-1",
+            "label": "templates.workflow.forkMerge.ports.branchA"
+          },
+          {
+            "id": "output-2",
+            "label": "templates.workflow.forkMerge.ports.branchB"
+          }
+        ]
+      },
+      {
+        "id": "core-a",
+        "type": "transform",
+        "label": "Branch a",
+        "position": {
+          "x": 800,
+          "y": 200
+        },
+        "transform": {
+          "mappings": [
+            {
+              "label": "who",
+              "expression": "branch A"
+            }
+          ]
+        }
+      },
+      {
+        "id": "core-b",
+        "type": "transform",
+        "label": "Branch b",
+        "position": {
+          "x": 800,
+          "y": 480
+        },
+        "transform": {
+          "mappings": [
+            {
+              "label": "who",
+              "expression": "branch B"
+            }
+          ]
+        }
+      },
+      {
+        "id": "core-join",
+        "type": "merge",
+        "label": "Join",
+        "position": {
+          "x": 1160,
+          "y": 340
+        }
+      }
+    ],
+    "notes": [
+      {
+        "id": "note-all-branches",
+        "type": "note",
+        "label": "templates.workflow.forkMerge.notes.allBranches.label",
+        "text": "templates.workflow.forkMerge.notes.allBranches.text",
+        "color": "#fef3c7",
+        "borderColor": "#fbbf24",
+        "textColor": "#92400e",
+        "width": 320,
+        "height": 180,
+        "position": {
+          "x": 400,
+          "y": 60
+        }
+      },
+      {
+        "id": "note-implicit-merge",
+        "type": "note",
+        "label": "templates.workflow.forkMerge.notes.implicitMerge.label",
+        "text": "templates.workflow.forkMerge.notes.implicitMerge.text",
+        "color": "#e9d5ff",
+        "borderColor": "#a855f7",
+        "textColor": "#6b21a8",
+        "width": 360,
+        "height": 220,
+        "position": {
+          "x": 1120,
+          "y": 620
+        }
+      },
+      {
+        "id": "note-waits-all",
+        "type": "note",
+        "label": "templates.workflow.forkMerge.notes.waitsAll.label",
+        "text": "templates.workflow.forkMerge.notes.waitsAll.text",
+        "color": "#dbeafe",
+        "borderColor": "#3b82f6",
+        "textColor": "#1e40af",
+        "width": 340,
+        "height": 190,
+        "position": {
+          "x": 1520,
+          "y": 300
+        }
+      },
+      {
+        "id": "note-vs-decision",
+        "type": "note",
+        "label": "templates.workflow.forkMerge.notes.vsDecision.label",
+        "text": "templates.workflow.forkMerge.notes.vsDecision.text",
+        "color": "#d1fae5",
+        "borderColor": "#10b981",
+        "textColor": "#065f46",
+        "width": 320,
+        "height": 170,
+        "position": {
+          "x": 60,
+          "y": 60
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "trigger:start",
+        "to": "core:fan_out"
+      },
+      {
+        "from": "core:fan_out:branch_0",
+        "to": "core:branch_a"
+      },
+      {
+        "from": "core:fan_out:branch_1",
+        "to": "core:branch_b"
+      },
+      {
+        "from": "core:branch_a",
+        "to": "core:join"
+      },
+      {
+        "from": "core:branch_b",
+        "to": "core:join"
+      }
+    ]
+  }
+}

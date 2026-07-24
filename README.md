@@ -11,14 +11,20 @@ Chat, Workflow, Agent and App in one self-hosted platform. No code to write, not
 [![GitHub stars](https://img.shields.io/github/stars/livecontext-ai/livecontext-ce?style=flat&logo=github&color=e11d48)](https://github.com/livecontext-ai/livecontext-ce/stargazers)
 [![Latest release](https://img.shields.io/github/v/release/livecontext-ai/livecontext-ce?color=16a34a)](https://github.com/livecontext-ai/livecontext-ce/releases/latest)
 [![Discussions](https://img.shields.io/github/discussions/livecontext-ai/livecontext-ce?color=2496ED)](https://github.com/livecontext-ai/livecontext-ce/discussions)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-2496ED.svg)](LICENSE)
 ![Java 21](https://img.shields.io/badge/Java-21-e11d48.svg)
 ![Next.js](https://img.shields.io/badge/Next.js-16-000000.svg)
 ![Docker Compose](https://img.shields.io/badge/Docker%20Compose-ready-2496ED.svg)
 ![Self-hosted](https://img.shields.io/badge/self--hosted-%E2%9C%93-16a34a.svg)
 
-[![Watch LiveContext build an automation from a single chat message](frontend/public/landing/videos/builder-built-by-chat.gif)](https://livecontext.ai)
+<a href="https://livecontext.ai">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="frontend/public/landing/readme/hero-dark.webp" />
+    <img src="frontend/public/landing/readme/hero-light.webp" alt="LiveContext builds an automation from a single chat message, then runs it: support, creator, sales, marketing and recruiting" width="100%" />
+  </picture>
+</a>
 
-<sub>The builder, built by chat. <a href="frontend/public/landing/videos/builder-built-by-chat.mp4">Watch the full demo</a> &middot; <a href="https://livecontext.ai">Try the hosted version</a></sub>
+<sub>The builder, built by chat: one message in, a working automation out. Five real scenarios, one loop. <a href="frontend/public/landing/readme/hero-light.mp4">Watch it full size</a> &middot; <a href="https://livecontext.ai">Try the hosted version</a></sub>
 
 <sub>⭐ If LiveContext looks useful, <a href="https://github.com/livecontext-ai/livecontext-ce">give it a star</a>. It helps other teams find it.</sub>
 
@@ -31,26 +37,26 @@ exactly what each one did. The chat (shown above) builds it; here is what it run
 <table>
   <tr>
     <td width="50%" valign="top" align="center">
-      <a href="frontend/public/landing/hero-stack/mechanism-workflow.webp"><img src="frontend/public/landing/hero-stack/mechanism-workflow.webp" alt="Workflow" width="100%" /></a>
-      <br/><b>Workflow</b><br/>
-      50+ blocks: branching, loops, parallel fan-out, sub-workflows, code, HTTP and AI. Readable at 50 steps.
+      <a href="frontend/public/landing/hero-stack/workflow-app.webp"><img src="frontend/public/landing/hero-stack/workflow-app.webp" alt="Workflow and the app it drives" width="100%" /></a>
+      <br/><b>Workflow + App</b><br/>
+      The workflow and the app it drives, in one view. Draw the automation as a readable graph, then wrap it in a real interface: forms, dashboards and live approval screens your team or an agent can act on.
     </td>
     <td width="50%" valign="top" align="center">
-      <a href="frontend/public/landing/hero-stack/mechanism-agent.webp"><img src="frontend/public/landing/hero-stack/mechanism-agent.webp" alt="Agents" width="100%" /></a>
+      <a href="frontend/public/landing/hero-stack/agent.webp"><img src="frontend/public/landing/hero-stack/agent.webp" alt="Agents" width="100%" /></a>
       <br/><b>Agents</b><br/>
-      Scoped tool access, per-agent credit budgets and a full audit trail. No black box.
+      A fleet of scoped agents, one per job: each with its own model, tools, files, credit budget and full audit trail. No black box.
     </td>
   </tr>
   <tr>
     <td width="50%" valign="top" align="center">
-      <a href="frontend/public/landing/hero-stack/mechanism-app.webp"><img src="frontend/public/landing/hero-stack/mechanism-app.webp" alt="App" width="100%" /></a>
-      <br/><b>App</b><br/>
-      Ship small web interfaces (forms, dashboards, approval screens) driven by your workflows.
+      <a href="frontend/public/landing/hero-stack/table.webp"><img src="frontend/public/landing/hero-stack/table.webp" alt="Tables" width="100%" /></a>
+      <br/><b>Tables</b><br/>
+      Built-in data tables your workflows and agents read, write and enrich. Filter, search and export, with no external database to wire up.
     </td>
     <td width="50%" valign="top" align="center">
       <a href="frontend/public/landing/hero-stack/data-metrics.webp"><img src="frontend/public/landing/hero-stack/data-metrics.webp" alt="Data &amp; metrics" width="100%" /></a>
       <br/><b>Data &amp; metrics</b><br/>
-      Per-agent metrics, run history and cost tracking: see exactly what every agent did and spent.
+      Every run charted: calls, tokens, success rate and duration, sliced per agent and per tool. Spot a regression and drill straight into it.
     </td>
   </tr>
 </table>
@@ -149,7 +155,16 @@ Please report vulnerabilities privately. See [SECURITY.md](SECURITY.md).
 
 ## License
 
-See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+LiveContext CE is licensed under the **GNU Affero General Public License v3.0
+(AGPL-3.0)**, see [LICENSE](LICENSE). You are free to use, self-host, modify and
+redistribute it, including commercially. One condition matters most: if you run a
+modified version as a network service, the AGPL requires you to make the
+corresponding source of your changes available to that service's users.
+
+The **LiveContext** name and logo are trademarks of their owner and are not
+covered by the AGPL, see [TRADEMARKS](TRADEMARKS). Third-party components ship
+under their own licenses, see [NOTICE](NOTICE) and
+[THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES).
 
 ---
 

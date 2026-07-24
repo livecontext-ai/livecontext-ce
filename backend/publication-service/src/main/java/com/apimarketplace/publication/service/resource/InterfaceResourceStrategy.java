@@ -105,6 +105,8 @@ public class InterfaceResourceStrategy implements ResourcePublicationStrategy {
         snapshot.put("cssTemplate", iface.getCssTemplate());
         snapshot.put("jsTemplate", iface.getJsTemplate());
         snapshot.put("interfaceType", iface.getInterfaceType());
+        // The format travels with the templates: the clone keeps the published shape.
+        snapshot.put("format", iface.getFormat());
 
         Map<String, Object> sanitizedData = sanitizeData(iface.getData());
         if (sanitizedData != null) {

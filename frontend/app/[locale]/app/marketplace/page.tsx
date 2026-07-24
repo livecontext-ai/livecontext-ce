@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import { useOrgScopedReset } from '@/lib/hooks/useOrgScopedReset';
 import { Search, Package, ShoppingBag, Bot, Zap, Monitor, Table, AppWindow, Eye, Cloud } from 'lucide-react';
@@ -27,6 +27,47 @@ import { PublicationCard, PublicationCardSkeleton } from '@/components/marketpla
 
 // Card + preview helpers extracted to a shared component so the onboarding
 // "suggested apps" modal reuses the exact same markup (no style fork).
+
+const DISPLAY_FILTERS = ['apps', 'agents', 'interfaces', 'tables', 'skills'] as const;
+type DisplayFilter = (typeof DISPLAY_FILTERS)[number];
+
+/**
+ * Enum-valued state that lives in the URL query string instead of component
+ * state.
+ *
+ * The marketplace tab and the Explore type filter both use it so that leaving
+ * the page and coming back - breadcrumb, browser Back, or a pasted link -
+ * restores the grid the user was actually looking at. They used to be plain
+ * `useState`, so every return trip remounted the page on Explore/Applications
+ * and the agent you had just opened was no longer on screen.
+ *
+ * `replace`, not `push`: flipping a filter is not a step the Back button
+ * should have to walk back through. An unknown or unparseable value resolves
+ * to `fallback`, and selecting the fallback drops the param entirely so the
+ * canonical URL stays clean.
+ */
+function useQueryParamState<T extends string>(
+  key: string,
+  allowed: readonly T[],
+  fallback: T,
+): [T, (next: T) => void] {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  const raw = searchParams.get(key);
+  const value = (allowed as readonly string[]).includes(raw ?? '') ? (raw as T) : fallback;
+
+  const setValue = useCallback((next: T) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (next === fallback) params.delete(key);
+    else params.set(key, next);
+    const qs = params.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  }, [router, pathname, searchParams, key, fallback]);
+
+  return [value, setValue];
+}
 
 // ============== Explore Tab ==============
 
@@ -55,7 +96,7 @@ function ExploreTab({ remote = false }: { remote?: boolean }) {
   const activeInstall = rawActiveInstall?.inline ? rawActiveInstall : null;
   const clearInstall = useMarketplaceInstallStore((s) => s.clear);
   const consumeInstallSuccess = useMarketplaceInstallStore((s) => s.consumeSuccess);
-  const [displayFilter, setDisplayFilter] = useState<'apps' | 'agents' | 'interfaces' | 'tables' | 'skills'>('apps');
+  const [displayFilter, setDisplayFilter] = useQueryParamState<DisplayFilter>('type', DISPLAY_FILTERS, 'apps');
   // Applications and Agents are surfaced in the marketplace via the type-filter chips below.
   // Interfaces / Tables / Skills stay hidden for now (their logic is intact - add them to the
   // chip list below to surface them once ready). The backend marketplace query returns ALL
@@ -84,10 +125,46 @@ function ExploreTab({ remote = false }: { remote?: boolean }) {
       return;
     }
     try {
-      const res = await publicationService.getAcquiredApplications();
+      // Two sources, deliberately NOT one.
+      //
+      // Applications keep coming from /publications/acquired: it is derived from
+      // the live cloned workflow, so deleting the clone correctly flips the card
+      // back to "Install", and it applies the org per-member restriction
+      // deny-list. Receipts have neither property (they are permanent and
+      // unfiltered), so keying applications on them would show a phantom
+      // "Installed" with an Open link pointing at a clone that no longer exists,
+      // and would show restricted apps as installed.
+      //
+      // Every OTHER publication type comes from the receipts: an acquired AGENT
+      // produces no APPLICATION workflow clone, so it never appeared in
+      // /acquired and its card kept offering "Install" after a successful
+      // install. recordAcquisition writes a receipt for every type and for free
+      // publications too, which makes it the only type-agnostic install signal.
+      // allSettled, not all: the two signals are independent, so one endpoint
+      // failing must not blank the badges the other one still knows about.
+      const [acquiredRes, purchasesRes] = await Promise.allSettled([
+        publicationService.getAcquiredApplications(),
+        publicationService.getPurchases(),
+      ]);
       const ids = new Set<string>();
-      for (const app of res.applications || []) {
-        if (app.sourcePublicationId) ids.add(app.sourcePublicationId);
+      if (acquiredRes.status === 'fulfilled') {
+        for (const app of acquiredRes.value.applications || []) {
+          if (app.sourcePublicationId) ids.add(app.sourcePublicationId);
+        }
+      }
+      if (purchasesRes.status === 'fulfilled') {
+        for (const purchase of purchasesRes.value.purchases || []) {
+          if (!purchase.publicationId) continue;
+          // Skip everything CLONE-BACKED: /acquired lists every cloned
+          // workflow, whichever display mode it wears, and a clone can be
+          // deleted. Those types are owned by the branch above so a permanent
+          // receipt cannot resurrect a clone that is gone. Agents (and any
+          // future non-workflow type) have no clone to check, so the receipt
+          // is the only signal there is.
+          const mode = purchase.publication?.displayMode || 'WORKFLOW';
+          if (mode === 'APPLICATION' || mode === 'WORKFLOW') continue;
+          ids.add(purchase.publicationId);
+        }
       }
       setAcquiredIds(ids);
     } catch {
@@ -219,7 +296,7 @@ function ExploreTab({ remote = false }: { remote?: boolean }) {
       {/* Applications + Agents surfaced for now; Interfaces/Tables/Skills kept in the logic but off the list. */}
       {SHOW_DISPLAY_FILTERS && (
       <div className="flex items-center flex-wrap gap-2">
-        {(['apps', 'agents', 'interfaces', 'tables', 'skills'] as const)
+        {DISPLAY_FILTERS
           .filter((filter) => filter === 'apps' || filter === 'agents')
           .map((filter) => {
           const isActive = displayFilter === filter;
@@ -690,7 +767,8 @@ export function MyPurchasesTab({ remote = false }: { remote?: boolean }) {
 
 // ============== Main Page ==============
 
-type MarketplaceTab = 'explore' | 'mine' | 'purchases';
+const MARKETPLACE_TABS = ['explore', 'mine', 'purchases'] as const;
+type MarketplaceTab = (typeof MARKETPLACE_TABS)[number];
 
 // `remote` - CE cloud-parity mode (see ExploreTab). Only the Explore reads and
 // the install path differ; My Publications / My Purchases stay on the local
@@ -698,16 +776,19 @@ type MarketplaceTab = 'explore' | 'mine' | 'purchases';
 function MarketplacePageContent({ remote = false }: { remote?: boolean }) {
   const t = useTranslations('marketplace');
   const { isAuthenticated } = useAuth();
-  const [activeTab, setActiveTab] = useState<MarketplaceTab>('explore');
+  const [requestedTab, setActiveTab] = useQueryParamState<MarketplaceTab>('tab', MARKETPLACE_TABS, 'explore');
 
   // Defensive: if the user signs out while on a private tab, or deep-links to
   // ?tab=mine without a session, snap back to Explore so we don't fire auth'd
-  // API calls from MyPublicationsTab / MyPurchasesTab.
+  // API calls from MyPublicationsTab / MyPurchasesTab. Resolved during render
+  // (not only in the effect) so the private tab never gets one frame to mount.
+  const activeTab: MarketplaceTab = !isAuthenticated && requestedTab !== 'explore' ? 'explore' : requestedTab;
+
   useEffect(() => {
-    if (!isAuthenticated && activeTab !== 'explore') {
+    if (!isAuthenticated && requestedTab !== 'explore') {
       setActiveTab('explore');
     }
-  }, [isAuthenticated, activeTab]);
+  }, [isAuthenticated, requestedTab, setActiveTab]);
 
   return (
     <div className="flex-1 overflow-y-auto min-h-0">

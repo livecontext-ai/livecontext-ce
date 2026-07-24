@@ -24,6 +24,7 @@ import {
 import { createDefaultDecisionConditions, createDefaultSwitchCases, createDefaultOptionChoices, createDefaultApprovalOutputs } from '../../types';
 import { nodeRegistry } from '../../registry/nodeRegistry';
 import { sanitizeNodePolicy } from '../../utils/nodePolicy';
+import { extractMediaDataFromPlanParams } from '../../utils/mediaParams';
 import { sanitizeNodeMock } from '../../utils/nodeMock';
 
 export interface NodeCreationResult {
@@ -775,6 +776,61 @@ export class NodeCreationService {
         labelToNodeIdMap.set(cn.label || nodeId, nodeId);
         const normalized = normalizeLabel(cn.label || nodeId);
         if (normalized) labelToNodeIdMap.set(normalized, nodeId);
+      } else if (cn.type === 'public_link') {
+        const nodeId = cn.graphNodeId || cn.id || `public_link-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        // public_link config lives in the generic params map (NOT a dedicated
+        // key like download_file's `download`): { file, ttl_minutes, disposition }.
+        const params = ((cn as any).params || {}) as Record<string, any>;
+        const ttlMinutes =
+          typeof params.ttl_minutes === 'number' ? params.ttl_minutes : undefined;
+        const disposition =
+          params.disposition === 'inline' || params.disposition === 'attachment'
+            ? params.disposition
+            : undefined;
+
+        nodes.push({
+          id: nodeId,
+          type: 'flowNode',
+          position,
+          positionAbsolute: position,
+          data: {
+            id: nodeId,  // Use nodeId (starts with 'public_link-') for consistent detection
+            label: cn.label || 'Public Link',
+            kind: 'public_link',
+            publicLinkFile: typeof params.file === 'string' ? params.file : '',
+            ...(ttlMinutes !== undefined ? { publicLinkTtlMinutes: ttlMinutes } : {}),
+            ...(disposition !== undefined ? { publicLinkDisposition: disposition } : {}),
+            paramExpressions: inputToParamExpressions((cn as any).params),
+          } as any,
+        });
+
+        labelToNodeIdMap.set(cn.label || nodeId, nodeId);
+        const normalized = normalizeLabel(cn.label || nodeId);
+        if (normalized) labelToNodeIdMap.set(normalized, nodeId);
+      } else if (cn.type === 'media') {
+        const nodeId = cn.graphNodeId || cn.id || `media-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        // media config lives in the generic params map (like public_link):
+        // { operation, input/video/audio/tracks, ...contract-named options }.
+        const { mediaOperation, mediaParams } = extractMediaDataFromPlanParams((cn as any).params);
+
+        nodes.push({
+          id: nodeId,
+          type: 'flowNode',
+          position,
+          positionAbsolute: position,
+          data: {
+            id: nodeId,  // Use nodeId (starts with 'media-') for consistent detection
+            label: cn.label || 'Media',
+            kind: 'media',
+            ...(mediaOperation !== undefined ? { mediaOperation } : {}),
+            mediaParams,
+            paramExpressions: inputToParamExpressions((cn as any).params),
+          } as any,
+        });
+
+        labelToNodeIdMap.set(cn.label || nodeId, nodeId);
+        const normalized = normalizeLabel(cn.label || nodeId);
+        if (normalized) labelToNodeIdMap.set(normalized, nodeId);
       } else if (cn.type === 'http_request') {
         const nodeId = cn.graphNodeId || cn.id || `http-request-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
         const httpConfig = (cn as any).httpRequest || {};
@@ -1343,6 +1399,8 @@ export class NodeCreationService {
             emailCc: config.ccEmail || '',
             emailBcc: config.bccEmail || '',
             emailFromName: config.fromName || '',
+            emailFromEmail: config.fromEmail || '',
+            emailReplyTo: config.replyTo || '',
             emailSubject: config.subject || '',
             emailBody: config.body || '',
             emailIsHtml: config.isHtml === true ? 'true' : 'false',
@@ -1377,6 +1435,7 @@ export class NodeCreationService {
             emailAction: config.action || 'none',
             emailMessageUid: config.messageUid || '',
             emailTargetFolder: config.targetFolder || '',
+            emailCreateTargetIfMissing: config.createTargetIfMissing === true ? 'true' : 'false',
             emailFromContains: config.fromContains || '',
             emailSubjectContains: config.subjectContains || '',
             emailBodyContains: config.bodyContains || '',

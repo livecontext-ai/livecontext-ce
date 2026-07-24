@@ -9,7 +9,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 
-export type ConnectionType = 'straight' | 'bezier' | 'smoothstep' | 'step' | 'wave';
+export type ConnectionType = 'auto' | 'straight' | 'bezier' | 'smoothstep' | 'step' | 'wave';
 
 interface ConnectionTypeSelectorProps {
   value: ConnectionType;
@@ -17,6 +17,9 @@ interface ConnectionTypeSelectorProps {
 }
 
 const connectionTypes: Array<{ value: ConnectionType; label: string }> = [
+  // 'auto' follows the reading direction: wave when the flow runs left-to-right,
+  // smoothstep when it runs top-to-bottom (resolved per edge in BuilderEdge).
+  { value: 'auto', label: 'Auto' },
   { value: 'straight', label: 'Straight' },
   { value: 'bezier', label: 'Bezier' },
   { value: 'smoothstep', label: 'Smoothstep' },

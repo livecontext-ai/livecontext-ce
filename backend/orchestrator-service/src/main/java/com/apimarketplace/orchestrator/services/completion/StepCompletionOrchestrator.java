@@ -201,6 +201,43 @@ public class StepCompletionOrchestrator {
             persisted = persistenceResult.persisted();
         }
 
+        // 2b. Traversal truth (tier 2 of the payload-loss contract): when
+        // persistence reports payloadLost for a SUCCESS result, the row already
+        // landed as FAILED (tier 1) - rewrite the in-memory result to FAILED
+        // with the same cause BEFORE the snapshot write below, so NodeCounts,
+        // workflow_epochs, the WS step event and billing all follow the row
+        // truth automatically. The rewritten result is also surfaced on the
+        // returned StepCompletionResult (payloadLost/payloadLostMessage) so
+        // engine callers that decide successors from their own copy of the
+        // result treat this node as FAILED (skip-cascade) instead of
+        // traversing its success path with a vanished output blob.
+        //
+        // Edge case (documented, not solved): the v6 unique index includes
+        // status, so a crash-redelivery of the same completion after this
+        // FAILED row landed could insert a COMPLETED sibling row if a later
+        // delivery's payload write succeeds. Aggregation views tolerate the
+        // FAILED+COMPLETED coexistence - see the attempt-row trade-off comment
+        // on the billing-dedup branch below (same index, same tolerance).
+        boolean payloadLost = false;
+        String payloadLostMessage = null;
+        if (persistenceResult != null && persistenceResult.payloadLost()
+                && completionCtx.result().isSuccess()) {
+            payloadLost = true;
+            payloadLostMessage = "[storage] Output payload lost: "
+                + persistenceResult.payloadLossCause().userMessage();
+            StepExecutionResult originalResult = completionCtx.result();
+            StepExecutionResult rewritten = new StepExecutionResult(
+                originalResult.stepId(),
+                com.apimarketplace.orchestrator.domain.execution.NodeStatus.FAILED,
+                payloadLostMessage,
+                originalResult.output(),
+                originalResult.executionTime(),
+                null);
+            completionCtx = withResult(completionCtx, rewritten);
+            logger.error("[StepCompletion] Output payload lost - rewriting SUCCESS result to FAILED: runId={}, nodeId={}, cause={}",
+                completionCtx.runId(), completionCtx.nodeId(), persistenceResult.payloadLossCause());
+        }
+
         // 3. Update NodeCounts to stay in sync with EdgeCounts.
         // Even when DB persistence is skipped (duplicate), we must increment NodeCounts
         // because EdgeCounts are always incremented by EdgeStatusService regardless of persistence.
@@ -285,8 +322,13 @@ public class StepCompletionOrchestrator {
                 // unified path bills exactly once per tool call.
             }
 
-            // Record completion to merge collector for ForEach merge tracking
-            recordMergeCompletion(withResult(ctx, stripInternalCompletionMetadata(ctx.result())));
+            // Record completion to merge collector for ForEach merge tracking.
+            // Payload-lost rewrite: the collector must observe the FAILED
+            // result (the merge must not aggregate a success whose output blob
+            // is gone) - pass the rewritten context in that case.
+            recordMergeCompletion(payloadLost
+                ? completionCtx
+                : withResult(ctx, stripInternalCompletionMetadata(ctx.result())));
         } else if (kind.bills()) {
             logger.info("[StepCompletion] Duplicate (DB skipped, NodeCounts updated): runId={}, nodeId={}, item={}, iter={}, status={}",
                 completionCtx.runId(), completionCtx.nodeId(), completionCtx.itemIndex(), completionCtx.iteration(),
@@ -347,6 +389,9 @@ public class StepCompletionOrchestrator {
                 completionCtx.runId(), completionCtx.nodeId(), persisted, statusCountsMap);
         }
 
+        if (persisted && payloadLost) {
+            return StepCompletionResult.persistedPayloadLost(statusCountsMap, eventData, payloadLostMessage);
+        }
         return persisted
             ? StepCompletionResult.persisted(statusCountsMap, eventData)
             : StepCompletionResult.duplicate(statusCountsMap, eventData);
@@ -490,13 +535,35 @@ public class StepCompletionOrchestrator {
             int epoch,
             String triggerId,
             boolean suppressGlobalMark) {
+        return completeStepWithResult(execution, nodeId, nodeLabel, result,
+            itemIndex, iteration, epoch, triggerId, suppressGlobalMark).persisted();
+    }
+
+    /**
+     * Full-result variant of {@link #completeStep(WorkflowExecution, String,
+     * String, StepExecutionResult, Integer, Integer, int, String, boolean)}.
+     * Returns the whole {@link StepCompletionResult} so callers can observe
+     * the payload-lost rewrite (tier 2) and drive their traversal decision
+     * from the EFFECTIVE (possibly FAILED) status instead of the node's
+     * original success.
+     */
+    public StepCompletionResult completeStepWithResult(
+            WorkflowExecution execution,
+            String nodeId,
+            String nodeLabel,
+            StepExecutionResult result,
+            Integer itemIndex,
+            Integer iteration,
+            int epoch,
+            String triggerId,
+            boolean suppressGlobalMark) {
 
         StepCompletionContext ctx = StepCompletionContext.of(
             execution, nodeId, nodeLabel, result, itemIndex, iteration, epoch);
         if (suppressGlobalMark) {
             ctx = ctx.withSuppressGlobalMark(true);
         }
-        return complete(ctx, triggerId).persisted();
+        return complete(ctx, triggerId);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

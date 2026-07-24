@@ -31,6 +31,11 @@ import java.util.stream.Collectors;
  * - video_max_duration_seconds / videoMaxDurationSeconds: integer - recording ceiling in seconds (5-120); default 30
  * - video_mode / videoMode: string - smooth (offline frame-by-frame, fluid, default) or live (real-time fallback)
  * - video_fps / videoFps: integer - output frame rate (10-60); default 30
+ *
+ * The display/capture format is NOT a node param: it belongs to the interface itself (an
+ * interface's HTML is authored for one fixed viewport width). Plans written before that move may
+ * still carry `format` / `interface_format` / `interfaceFormat` on the node; those keys are
+ * tolerated and ignored (see KNOWN_PARAMS + NodeParamsValidator).
  */
 public record InterfaceNodeConfig(
     String interfaceId,
@@ -64,7 +69,10 @@ public record InterfaceNodeConfig(
         "video_preset", "videoPreset",
         "video_max_duration_seconds", "videoMaxDurationSeconds",
         "video_mode", "videoMode",
-        "video_fps", "videoFps"
+        "video_fps", "videoFps",
+        // Deprecated and ignored: the format moved to the interface entity. Kept here so a plan
+        // written before the move still validates instead of erroring on an unknown param.
+        "format", "interface_format", "interfaceFormat"
     );
 
     /**
@@ -180,6 +188,10 @@ public record InterfaceNodeConfig(
         // default at render); fps is clamped to 10-60 (null → 30 default at render).
         String videoMode = normalizeVideoMode(getFirstString(params, "video_mode", "videoMode"));
         Integer videoFps = normalizeVideoFps(getFirstInteger(params, "video_fps", "videoFps"));
+
+        // A legacy `format` / `interface_format` / `interfaceFormat` key is deliberately NOT
+        // read: the format belongs to the interface entity now. Dropping it silently keeps
+        // pre-refactor plans running (set it with interface update instead).
 
         return new InterfaceNodeConfig(interfaceId, variableMapping, actionMapping,
             isEntryInterface, generateScreenshot, exposeRenderedSource,

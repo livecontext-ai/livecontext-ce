@@ -942,6 +942,9 @@ public class ShowcaseSnapshotBuilder {
         body.put("htmlTemplate", r.htmlTemplate());
         body.put("cssTemplate", r.cssTemplate());
         body.put("jsTemplate", r.jsTemplate());
+        // The format travels with the templates: the showcase preview must be shaped like the
+        // interface, not letterboxed into a default 1280x800 box.
+        body.put("format", r.format());
         body.put("actionMappings", r.actionMappings());
         List<Map<String, Object>> items = new ArrayList<>();
         for (InterfaceRenderService.ItemRenderData item : r.items()) {

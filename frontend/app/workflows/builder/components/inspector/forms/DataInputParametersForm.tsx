@@ -325,6 +325,10 @@ function DataInputItemEditor({
       name: entry.fileName || 'unknown',
       mimeType: entry.mimeType || 'application/octet-stream',
       size: entry.sizeBytes || 0,
+      // storage.storage row UUID - without it the ref cannot be rendered
+      // (fileRefToUrl returns '' for id-less refs; the canvas preview then has
+      // no media source and falls back to the no-preview hint).
+      id: entry.id,
     };
     onUpdate({ file: fileRef });
   }, [isRunMode, onUpdate]);

@@ -8,10 +8,11 @@ import { useInterfaceRender, useInterfaceById } from '@/app/workflows/builder/ho
 import { useRun } from '@/contexts/WorkflowRunContext';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
 import { InterfaceIframe } from '@/app/workflows/builder/components/interface/InterfaceIframe';
+import { resolveInterfaceFormat } from '@/lib/interfaces/interfaceFormats';
 import { InterfaceToolbar } from '@/app/workflows/builder/components/interface/InterfaceToolbar';
 import type { RenderMode } from '@/app/workflows/builder/utils/interfaceHtmlUtils';
 import { mergeTriggerDataIntoResolved } from '@/app/workflows/builder/utils/interfaceHtmlUtils';
-import { SAFE_CENTERING_CSS } from '@/app/workflows/builder/utils/safeCenteringCss';
+import { centeringCssFor } from '@/app/workflows/builder/utils/safeCenteringCss';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { parseUtcAware } from '@/lib/utils/dateFormatters';
 import { useTranslations } from 'next-intl';
@@ -33,6 +34,8 @@ export interface ApplicationConfig {
   actionMapping: Record<string, string>;
   /** The workflow node ID (e.g., "interface:my_form") for signal resolution */
   nodeId?: string;
+  /** The app's declared entry page (isEntryInterface). The carousel OPENS on it; page ORDER stays canvas order. */
+  isEntryInterface?: boolean;
 }
 
 interface ApplicationTabContentProps {
@@ -483,10 +486,12 @@ export function ApplicationTabContent({ config, runId, workflowId, onAction, car
   const hasResolvedData = !!resolvedData && Object.keys(resolvedData).length > 0;
   const renderMode: RenderMode = hasResolvedData ? 'run' : 'edit';
 
-  // Center iframe body content - see SAFE_CENTERING_CSS for rationale on the
-  // `safe center` keyword (centers small interfaces but lets tall dashboards
-  // scroll from the top instead of clipping above the viewport).
-  const centeringCss = SAFE_CENTERING_CSS;
+  // Center iframe body content for FRAGMENT templates - see SAFE_CENTERING_CSS
+  // for rationale on the `safe center` keyword (centers small interfaces but
+  // lets tall dashboards scroll from the top instead of clipping above the
+  // viewport). A COMPLETE document gets nothing (author owns the body layout;
+  // parity with the screenshot/video renderer, which injects nothing).
+  const centeringCss = centeringCssFor(htmlTemplate);
 
   // Auto-navigate to the latest epoch ONLY when a new one genuinely appears
   // mid-session (e.g. the user fires a trigger and a new epoch closes while
@@ -1125,36 +1130,110 @@ export function ApplicationTabContent({ config, runId, workflowId, onAction, car
     return <>{variablePaginationControl}{launchButton}{epochSelector}{continueButton}</>;
   }, [totalEpochs, epochTimestamps, sortedEpochs, maxDuration, viewingEpoch, currentDisplayEpoch, epochDropdownOpen, handleViewEpoch, runId, isAwaitingSignal, config.nodeId, isContinuing, isCurrentItemPending, handleDefaultContinue, t, tRun, currentItemTriple, pendingSignalCount, launchable, hasPanelTriggers, hasAnyLaunchable, handleLaunchTrigger, isLaunching, tActions, previewMode, activeVariablePage, variablePaginationItems, handleVariablePrevious, handleVariableNext, tCanvas]);
 
+  // ── The interface's display format - scale-to-fit virtual viewport ──
+  // When the INTERFACE declares a format (preset name or "WxH"), the iframe renders inside a
+  // virtual viewport of EXACTLY width x height CSS px, CSS transform: scale()d to CONTAIN in
+  // the container (min ratio, centered both axes, letterboxed). transform keeps the iframe
+  // fully interactive. Without a format the native w-full h-full path is untouched.
+  // The render result wins over the entity: a run reads its frozen snapshot, which may carry
+  // the shape the interface had when the run started.
+  const formatViewport = React.useMemo(
+    () => resolveInterfaceFormat(renderData?.format ?? interfaceDetails?.format),
+    [renderData?.format, interfaceDetails?.format],
+  );
+  // Letterbox measurement: useState callback ref (same rationale as
+  // appContainerEl below) + ResizeObserver so the scale tracks panel resizes.
+  const [formatBoxEl, setFormatBoxEl] = React.useState<HTMLDivElement | null>(null);
+  const [formatBox, setFormatBox] = React.useState({ width: 0, height: 0 });
+  React.useLayoutEffect(() => {
+    if (!formatViewport || !formatBoxEl) return;
+    const update = () => {
+      const rect = formatBoxEl.getBoundingClientRect();
+      setFormatBox(prev =>
+        prev.width === rect.width && prev.height === rect.height
+          ? prev
+          : { width: rect.width, height: rect.height },
+      );
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(formatBoxEl);
+    return () => ro.disconnect();
+  }, [formatViewport, formatBoxEl]);
+  // Clamped at 1: a box larger than the format viewport renders at native
+  // size (centered), never upscaled - transform-upscaling rasterizes the
+  // iframe blurry. Only downscaling ever happens.
+  const formatScale = formatViewport && formatBox.width > 0 && formatBox.height > 0
+    ? Math.min(1, formatBox.width / formatViewport.width, formatBox.height / formatViewport.height)
+    : 0;
+
   // ── Shared iframe content ──
   // The application stays visible at all times. While its workflow run is
   // executing (runStatus === 'running'), a pulsing blue border is overlaid on
   // top to signal "this app's current epoch is running" - see RunningBorder.
   // Rendered here (inside the shared content) so every surface that shows an
   // application gets the same border in both panel and fullscreen modes.
+  const renderApplicationIframe = (sizing: { className?: string; style: React.CSSProperties }) => (
+    <InterfaceIframe
+      htmlTemplate={htmlTemplate}
+      mode={renderMode}
+      resolvedData={hasResolvedData ? resolvedData : undefined}
+      customCss={centeringCss + (renderData?.cssTemplate || interfaceDetails?.cssTemplate || '')}
+      jsTemplate={(renderData as any)?.jsTemplate || (interfaceDetails as any)?.jsTemplate || undefined}
+      className={sizing.className}
+      style={sizing.style}
+      sandbox="allow-same-origin allow-scripts allow-forms"
+      actionMapping={config.actionMapping}
+      triggerData={triggerData}
+      onAction={safeOnAction}
+      onPagination={handleIframePagination}
+      onContinue={handleContinue}
+      onVariablePagination={handleVariablePagination}
+      fileUploadContext={workflowId && runId ? { workflowId, runId } : undefined}
+    />
+  );
   const iframeContent = (
     <div className="relative w-full h-full">
       {!htmlTemplate ? (
         <div className="flex items-center justify-center h-full text-slate-400 dark:text-slate-500 text-sm">
           No template configured
         </div>
+      ) : formatViewport ? (
+        // Contain structure mirrors InterfaceThumbnail's contain mode: an
+        // intermediate box sized to the SCALED dims centers the letterbox,
+        // the inner div holds the exact virtual viewport with scale(s) from
+        // the top-left. Nothing renders until the box is measured (one frame).
+        <div
+          ref={setFormatBoxEl}
+          className="w-full h-full flex items-center justify-center overflow-hidden"
+        >
+          {formatScale > 0 && (
+            <div
+              style={{
+                width: formatViewport.width * formatScale,
+                height: formatViewport.height * formatScale,
+                position: 'relative',
+                flex: 'none',
+              }}
+            >
+              <div
+                data-testid="application-format-viewport"
+                style={{
+                  width: formatViewport.width,
+                  height: formatViewport.height,
+                  transform: `scale(${formatScale})`,
+                  transformOrigin: '0 0',
+                }}
+              >
+                {renderApplicationIframe({
+                  style: { width: formatViewport.width, height: formatViewport.height },
+                })}
+              </div>
+            </div>
+          )}
+        </div>
       ) : (
-        <InterfaceIframe
-          htmlTemplate={htmlTemplate}
-          mode={renderMode}
-          resolvedData={hasResolvedData ? resolvedData : undefined}
-          customCss={centeringCss + (renderData?.cssTemplate || interfaceDetails?.cssTemplate || '')}
-          jsTemplate={(renderData as any)?.jsTemplate || (interfaceDetails as any)?.jsTemplate || undefined}
-          className="w-full h-full"
-          style={{ height: '100%' }}
-          sandbox="allow-same-origin allow-scripts allow-forms"
-          actionMapping={config.actionMapping}
-          triggerData={triggerData}
-          onAction={safeOnAction}
-          onPagination={handleIframePagination}
-          onContinue={handleContinue}
-          onVariablePagination={handleVariablePagination}
-          fileUploadContext={workflowId && runId ? { workflowId, runId } : undefined}
-        />
+        renderApplicationIframe({ className: 'w-full h-full', style: { height: '100%' } })
       )}
       {/* Smooth loading overlay during transitions (epoch change, pagination, execution refetch) */}
       <div

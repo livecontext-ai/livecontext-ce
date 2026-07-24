@@ -372,6 +372,9 @@ public class ProjectService {
         m.put("htmlTemplate", e.getHtmlTemplate());
         m.put("cssTemplate", e.getCssTemplate());
         m.put("jsTemplate", e.getJsTemplate());
+        // The format travels with the templates: the project's interface cards size their
+        // thumbnail from it, and without it they fall back to the 1280x800 default.
+        m.put("format", e.getFormat());
         m.put("projectId", e.getProjectId());
         m.put("interfaceType", e.getInterfaceType());
         m.put("isPublic", e.getIsPublic());

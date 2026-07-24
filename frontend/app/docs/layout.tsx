@@ -9,10 +9,11 @@ import { DocsPrevNext } from './_components/DocsPrevNext';
 import { DocsThemeToggle } from './_components/DocsThemeToggle';
 import { IS_CE } from '@/lib/edition';
 
-// Docs shell. Reuses the public `LandingShell` chrome (header, footer, dark-by-
-// default decoupled theme) and injects the docs CSS via `extraStyles`, then lays
-// out a sidebar / content / TOC grid inside it. English-only: this whole tree
-// lives outside `app/[locale]`, so nothing here may call next-intl hooks.
+// Docs shell. Reuses the public `LandingShell` chrome (header, footer, light-by-
+// default decoupled theme; the toggle below persists a docs-only choice under
+// `docs-theme`) and injects the docs CSS via `extraStyles`, then lays out a
+// sidebar / content / TOC grid inside it. English-only: this whole tree lives
+// outside `app/[locale]`, so nothing here may call next-intl hooks.
 export const metadata: Metadata = {
   title: {
     template: '%s · LiveContext Docs',

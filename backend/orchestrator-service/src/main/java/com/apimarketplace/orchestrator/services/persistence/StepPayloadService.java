@@ -1,6 +1,7 @@
 package com.apimarketplace.orchestrator.services.persistence;
 
 import com.apimarketplace.common.storage.exception.QuotaExceededException;
+import com.apimarketplace.common.storage.exception.StorageSerializationException;
 import com.apimarketplace.common.storage.service.StorageService;
 import com.apimarketplace.orchestrator.domain.workflow.StepExecutionResult;
 import com.apimarketplace.orchestrator.domain.workflow.WorkflowExecution;
@@ -10,10 +11,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.sql.SQLException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 /**
  * Service responsible for persisting step payload data to storage.
@@ -27,12 +30,31 @@ public class StepPayloadService {
 
     private static final Logger logger = LoggerFactory.getLogger(StepPayloadService.class);
 
+    /**
+     * Deliberate bounded retry for TRANSIENT storage failures: max 2 attempts
+     * total (1 retry). Quota and data-shaped failures are never retried - see
+     * {@link #saveWithRetry}. This is THE single retry policy for step payload
+     * writes; the old accidental second attempt in
+     * {@code StepDataPersistenceService.recordStep} was folded into it.
+     */
+    static final int MAX_SAVE_ATTEMPTS = 2;
+
+    /**
+     * Backoff before the retry attempt, in milliseconds. Package-visible
+     * setter for tests (zero it to keep tests fast).
+     */
+    private long retryBackoffMs = 150;
+
     private final StorageService storageService;
     private final OutputSchemaMapper outputSchemaMapper;
 
     public StepPayloadService(StorageService storageService, OutputSchemaMapper outputSchemaMapper) {
         this.storageService = storageService;
         this.outputSchemaMapper = outputSchemaMapper;
+    }
+
+    void setRetryBackoffMs(long retryBackoffMs) {
+        this.retryBackoffMs = retryBackoffMs;
     }
 
     /**
@@ -54,7 +76,8 @@ public class StepPayloadService {
                                    int epoch) {
         Integer itemIndex = extractItemIndex(result);
         int spawn = extractSpawn(result);
-        return persistStepPayloadWithContext(execution, stepId, stepAliasOrId, result, extraMetadata, itemIndex, epoch, spawn);
+        return persistStepPayloadOutcome(execution, stepId, stepAliasOrId, result, extraMetadata, itemIndex, epoch, spawn)
+                .storageId();
     }
 
     /**
@@ -68,13 +91,32 @@ public class StepPayloadService {
                                    int epoch,
                                    int spawn) {
         Integer itemIndex = extractItemIndex(result);
-        return persistStepPayloadWithContext(execution, stepId, stepAliasOrId, result, extraMetadata, itemIndex, epoch, spawn);
+        return persistStepPayloadOutcome(execution, stepId, stepAliasOrId, result, extraMetadata, itemIndex, epoch, spawn)
+                .storageId();
+    }
+
+    /**
+     * Discriminated-outcome variant with epoch + spawn (item index derived from
+     * the result output). This is what the row-writing caller
+     * ({@code StepDataPersistenceService.buildStepEntity}) uses so the failure
+     * CAUSE reaches the step row.
+     */
+    public StepPayloadResult persistStepPayloadOutcome(WorkflowExecution execution,
+                                                       String stepId,
+                                                       String stepAliasOrId,
+                                                       StepExecutionResult result,
+                                                       Map<String, Object> extraMetadata,
+                                                       int epoch,
+                                                       int spawn) {
+        Integer itemIndex = extractItemIndex(result);
+        return persistStepPayloadOutcome(execution, stepId, stepAliasOrId, result, extraMetadata, itemIndex, epoch, spawn);
     }
 
     /**
      * Persists the payload for a step execution to storage with explicit item index.
      * @deprecated Use the overload with spawn parameter instead.
      */
+    @Deprecated
     public UUID persistStepPayloadWithContext(WorkflowExecution execution,
                                               String stepId,
                                               String stepAliasOrId,
@@ -82,12 +124,19 @@ public class StepPayloadService {
                                               Map<String, Object> extraMetadata,
                                               Integer itemIndex,
                                               int epoch) {
-        return persistStepPayloadWithContext(execution, stepId, stepAliasOrId, result, extraMetadata, itemIndex, epoch, 0);
+        return persistStepPayloadOutcome(execution, stepId, stepAliasOrId, result, extraMetadata, itemIndex, epoch, 0)
+                .storageId();
     }
 
     /**
      * Persists the payload for a step execution to storage with explicit item index and spawn.
+     *
+     * @deprecated legacy flattening shim - collapses the discriminated outcome to a
+     *             bare UUID (null on ANY failure). Row-writing callers must use
+     *             {@link #persistStepPayloadOutcome} so the failure cause reaches
+     *             the step row's error_message.
      */
+    @Deprecated
     public UUID persistStepPayloadWithContext(WorkflowExecution execution,
                                               String stepId,
                                               String stepAliasOrId,
@@ -96,6 +145,44 @@ public class StepPayloadService {
                                               Integer itemIndex,
                                               int epoch,
                                               int spawn) {
+        return persistStepPayloadOutcome(execution, stepId, stepAliasOrId, result, extraMetadata, itemIndex, epoch, spawn)
+                .storageId();
+    }
+
+    /**
+     * Persists the payload for a step execution and reports a DISCRIMINATED
+     * outcome instead of flattening every failure to null.
+     *
+     * <p>Retry policy (the ONE deliberate mechanism - the old accidental second
+     * attempt in {@code StepDataPersistenceService.recordStep} was folded in
+     * here): up to {@value #MAX_SAVE_ATTEMPTS} attempts with a short backoff,
+     * ONLY for transient causes. Never retried:
+     * <ul>
+     *   <li>{@link QuotaExceededException} - tenant action required;</li>
+     *   <li>data-shaped failures ({@link StorageSerializationException},
+     *       SQLSTATE class 22 e.g. 22P05) - the same bytes fail the same way
+     *       every time. After the NUL-strip funnels 22P05 should be extinct;
+     *       if it somehow occurs we still refuse to retry it.</li>
+     * </ul>
+     *
+     * <p>Poison-safety contract: each attempt runs in a FRESH transaction.
+     * {@code StorageService} is class-level {@code @Transactional} and no
+     * caller up-stack ({@code StepDataPersistenceService.recordStep},
+     * {@code WorkflowPersistenceService.recordStep},
+     * {@code StepCompletionOrchestrator.complete}) is transactional, so each
+     * {@code saveJsonWithContext} call opens and commits/rolls back its own
+     * transaction - a failed first attempt cannot poison the retry. Pinned by
+     * {@code StepPayloadRetryFreshTransactionIntegrationTest}: if someone adds
+     * {@code @Transactional} up-stack, that test fails.
+     */
+    public StepPayloadResult persistStepPayloadOutcome(WorkflowExecution execution,
+                                                       String stepId,
+                                                       String stepAliasOrId,
+                                                       StepExecutionResult result,
+                                                       Map<String, Object> extraMetadata,
+                                                       Integer itemIndex,
+                                                       int epoch,
+                                                       int spawn) {
         // If result is null (for decisions), use extraMetadata as payload
         if (result == null) {
             return persistDecisionPayload(execution, stepId, stepAliasOrId, extraMetadata, itemIndex, epoch);
@@ -114,34 +201,87 @@ public class StepPayloadService {
         String stepKey = buildStepKey(stepId, stepAliasOrId);
         String runId = execution.getRunId();
 
-        try {
-            return storageService.saveJsonWithContext(
-                    execution.getPlan().getTenantId(),
-                    payload,
-                    ExecutionConstants.CONTENT_TYPE_JSON,
-                    null,
-                    toolUuid,
-                    runId,
-                    stepKey,
-                    itemIndex != null ? itemIndex : 0,
-                    epoch,
-                    spawn,
-                    execution.getPlan().getId(),
-                    "STEP_OUTPUT"
-            );
-        } catch (QuotaExceededException quota) {
-            // F2: distinguish quota-exceeded from generic I/O so operators can
-            // route the alert (tenant action vs infra action). Caller (StepData-
-            // PersistenceService) stamps the row's error_message so the failure
-            // surfaces to the user - never a silent null storageId.
-            logger.error("Storage quota exceeded persisting output payload for step {} (run {}, tenant {}): {}",
-                    stepId, execution.getRunId(), quota.getTenantId(), quota.getMessage());
-            return null;
-        } catch (Exception e) {
-            logger.error("Unable to persist output payload for step {} (run {}): [{}] {}",
-                    stepId, execution.getRunId(), e.getClass().getSimpleName(), e.getMessage(), e);
-            return null;
+        return saveWithRetry(stepId, runId, () -> storageService.saveJsonWithContext(
+                execution.getPlan().getTenantId(),
+                payload,
+                ExecutionConstants.CONTENT_TYPE_JSON,
+                null,
+                toolUuid,
+                runId,
+                stepKey,
+                itemIndex != null ? itemIndex : 0,
+                epoch,
+                spawn,
+                execution.getPlan().getId(),
+                "STEP_OUTPUT"
+        ));
+    }
+
+    /**
+     * The single bounded-retry save loop. See {@link #persistStepPayloadOutcome}
+     * for the policy; this method is the mechanism.
+     */
+    private StepPayloadResult saveWithRetry(String stepId, String runId, Supplier<UUID> save) {
+        for (int attempt = 1; ; attempt++) {
+            try {
+                return StepPayloadResult.stored(save.get());
+            } catch (QuotaExceededException quota) {
+                // Distinguish quota-exceeded from generic I/O so operators can
+                // route the alert (tenant action vs infra action). Never retried:
+                // the quota does not free itself between attempts.
+                logger.error("Storage quota exceeded persisting output payload for step {} (run {}, tenant {}): {}",
+                        stepId, runId, quota.getTenantId(), quota.getMessage());
+                return StepPayloadResult.failed(PayloadFailureCause.QUOTA_EXCEEDED);
+            } catch (Exception e) {
+                if (isDataShaped(e)) {
+                    // Data-shaped (serialization failure or SQLSTATE class 22,
+                    // e.g. 22P05 NUL-in-jsonb): retrying the same bytes cannot
+                    // succeed - fail fast with the discriminated cause.
+                    logger.error("Data-shaped storage failure persisting output payload for step {} (run {}): [{}] {}",
+                            stepId, runId, e.getClass().getSimpleName(), e.getMessage(), e);
+                    return StepPayloadResult.failed(PayloadFailureCause.SERIALIZATION);
+                }
+                if (attempt >= MAX_SAVE_ATTEMPTS) {
+                    logger.error("Unable to persist output payload for step {} (run {}) after {} attempts: [{}] {}",
+                            stepId, runId, attempt, e.getClass().getSimpleName(), e.getMessage(), e);
+                    return StepPayloadResult.failed(PayloadFailureCause.TRANSIENT_EXHAUSTED);
+                }
+                logger.warn("Transient storage failure persisting output payload for step {} (run {}) - attempt {}/{}, retrying in {} ms: [{}] {}",
+                        stepId, runId, attempt, MAX_SAVE_ATTEMPTS, retryBackoffMs,
+                        e.getClass().getSimpleName(), e.getMessage());
+                if (retryBackoffMs > 0) {
+                    try {
+                        Thread.sleep(retryBackoffMs);
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        logger.warn("Interrupted during storage retry backoff for step {} (run {})", stepId, runId);
+                        return StepPayloadResult.failed(PayloadFailureCause.TRANSIENT_EXHAUSTED);
+                    }
+                }
+            }
         }
+    }
+
+    /**
+     * True when the failure is data-shaped: the payload itself can never be
+     * stored, so a retry is guaranteed to fail identically. Covers our own
+     * {@link StorageSerializationException} and any SQLException in the cause
+     * chain with an SQLSTATE in class 22 ("data exception" - includes 22P05,
+     * unsupported Unicode escape sequence / NUL in jsonb).
+     */
+    static boolean isDataShaped(Throwable e) {
+        for (Throwable t = e; t != null; t = (t.getCause() == t ? null : t.getCause())) {
+            if (t instanceof StorageSerializationException) {
+                return true;
+            }
+            if (t instanceof SQLException sql) {
+                String state = sql.getSQLState();
+                if (state != null && state.startsWith("22")) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /**
@@ -240,12 +380,24 @@ public class StepPayloadService {
         }
     }
 
-    private UUID persistDecisionPayload(WorkflowExecution execution,
-                                        String stepId,
-                                        String stepAliasOrId,
-                                        Map<String, Object> extraMetadata,
-                                        Integer itemIndex,
-                                        int epoch) {
+    /**
+     * Decision-payload sibling of {@link #persistStepPayloadOutcome} - same
+     * discriminated outcome, same single retry mechanism ({@link #saveWithRetry}).
+     *
+     * <p>Pre-fix this method swallowed every failure into a silent null (and
+     * the minimal-payload branch was not even guarded - an exception there
+     * killed the whole step row in the caller's catch-all). Note the decision
+     * ROW itself is written by {@code DecisionPersistenceService}, which
+     * already stamps the {@code _storagePayloadFailed} metadata marker when
+     * the returned storageId is null (F10) - this outcome adds the CAUSE for
+     * callers that consume it.
+     */
+    private StepPayloadResult persistDecisionPayload(WorkflowExecution execution,
+                                                     String stepId,
+                                                     String stepAliasOrId,
+                                                     Map<String, Object> extraMetadata,
+                                                     Integer itemIndex,
+                                                     int epoch) {
         String stepKey = buildStepKey(stepId, stepAliasOrId);
         String runId = execution.getRunId();
 
@@ -261,29 +413,19 @@ public class StepPayloadService {
                     .findStep(stepAliasOrId != null ? stepAliasOrId : stepId)
                     .map(step -> step.id() != null ? step.id() : null);
             UUID toolUuid = toolIdOpt.flatMap(this::parseUuid).orElse(null);
-            try {
-                return storageService.saveJsonWithContext(
-                        execution.getPlan().getTenantId(),
-                        extraMetadata,
-                        ExecutionConstants.CONTENT_TYPE_JSON,
-                        null,
-                        toolUuid,
-                        runId,
-                        stepKey,
-                        itemIndex != null ? itemIndex : 0,
-                        epoch,
-                        execution.getPlan().getId(),
-                        "DECISION"
-                );
-            } catch (QuotaExceededException quota) {
-                logger.error("Storage quota exceeded persisting decision payload for {} (run {}, tenant {}): {}",
-                        stepId, execution.getRunId(), quota.getTenantId(), quota.getMessage());
-                return null;
-            } catch (Exception e) {
-                logger.error("Unable to persist decision payload for {} (run {}): [{}] {}",
-                        stepId, execution.getRunId(), e.getClass().getSimpleName(), e.getMessage(), e);
-                return null;
-            }
+            return saveWithRetry(stepId, runId, () -> storageService.saveJsonWithContext(
+                    execution.getPlan().getTenantId(),
+                    extraMetadata,
+                    ExecutionConstants.CONTENT_TYPE_JSON,
+                    null,
+                    toolUuid,
+                    runId,
+                    stepKey,
+                    itemIndex != null ? itemIndex : 0,
+                    epoch,
+                    execution.getPlan().getId(),
+                    "DECISION"
+            ));
         }
         // If extraMetadata is empty, create minimal payload with envelope
         Map<String, Object> minimalPayload = new HashMap<>();
@@ -292,7 +434,7 @@ public class StepPayloadService {
         if (execution.getDisplayName() != null) {
             minimalPayload.put("_display_name", execution.getDisplayName());
         }
-        return storageService.saveJsonWithContext(
+        return saveWithRetry(stepId, runId, () -> storageService.saveJsonWithContext(
                 execution.getPlan().getTenantId(),
                 minimalPayload,
                 ExecutionConstants.CONTENT_TYPE_JSON,
@@ -304,7 +446,7 @@ public class StepPayloadService {
                 epoch,
                 execution.getPlan().getId(),
                 "DECISION"
-        );
+        ));
     }
 
     @SuppressWarnings("unchecked")

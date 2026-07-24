@@ -212,6 +212,48 @@ public class WorkflowRunEntity implements OrgScopedEntity {
     @Column(name = "last_event_seq", nullable = false)
     private long lastEventSeq = 0L;
 
+    /**
+     * Total accumulated cost of this run, in credits (1 credit = $0.001),
+     * summed across ALL epochs. Agent executions are the only cost source; each
+     * settled agent execution notifies the orchestrator, which increments this
+     * column via {@code RunCostService} (a monotonic native UPDATE that bypasses
+     * Hibernate).
+     *
+     * <p>{@code insertable = false, updatable = false}: this column is fully
+     * DB-managed. On INSERT Hibernate omits it so the DB {@code DEFAULT 0}
+     * applies; on UPDATE it is never touched by an entity flush, so a
+     * detached-entity {@code repository.save(run)} (e.g. a status flip in the
+     * trigger path) can never overwrite the live cost with the request handler's
+     * stale load-time value (same fence rationale as {@link #stateSnapshot}). The
+     * native increment writes it; SELECT still hydrates the field; the setter
+     * stays for hydration + test fixtures.
+     */
+    @Column(name = "cost_credits", nullable = false, precision = 15, scale = 4,
+            insertable = false, updatable = false,
+            // DDL default mirrors migration V411 (numeric DEFAULT 0 NOT NULL) so the
+            // hbm2ddl-generated H2 schema in integration tests accepts the INSERT that
+            // omits this DB-managed column. Prod schema is Flyway-owned; this string is
+            // only ever used by test DDL generation.
+            columnDefinition = "numeric(15,4) default 0 not null")
+    private java.math.BigDecimal costCredits = java.math.BigDecimal.ZERO;
+
+    /**
+     * Per-epoch cost breakdown, e.g. {@code {"1": 0.42, "2": 1.05}}, incremented
+     * in lockstep with {@link #costCredits} inside the same native UPDATE. A
+     * plain scalar jsonb column - NOT part of {@code state_snapshot}, so it never
+     * routes through the gated snapshot patch path.
+     *
+     * <p>{@code insertable = false, updatable = false} for the same reason as
+     * {@link #costCredits}: fully DB-managed. Crucially, omitting it from the
+     * INSERT lets the DB {@code DEFAULT '{}'::jsonb} satisfy the {@code NOT NULL}
+     * constraint - Hibernate would otherwise emit an explicit {@code NULL} (the
+     * field is null on a fresh entity) and abort the run INSERT.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "cost_by_epoch", columnDefinition = "jsonb",
+            insertable = false, updatable = false)
+    private Map<String, Object> costByEpoch;
+
     public WorkflowRunEntity() {
     }
 
@@ -416,6 +458,27 @@ public class WorkflowRunEntity implements OrgScopedEntity {
 
     public void setLastEventSeq(long lastEventSeq) {
         this.lastEventSeq = lastEventSeq;
+    }
+
+    public java.math.BigDecimal getCostCredits() {
+        return costCredits;
+    }
+
+    /**
+     * In-memory mirror only - the authoritative writer is
+     * {@code RunCostService}'s native increment (column is {@code updatable=false}).
+     * This setter exists for Hibernate hydration and test fixtures.
+     */
+    public void setCostCredits(java.math.BigDecimal costCredits) {
+        this.costCredits = costCredits;
+    }
+
+    public Map<String, Object> getCostByEpoch() {
+        return costByEpoch;
+    }
+
+    public void setCostByEpoch(Map<String, Object> costByEpoch) {
+        this.costByEpoch = costByEpoch;
     }
 
     public String getSource() {

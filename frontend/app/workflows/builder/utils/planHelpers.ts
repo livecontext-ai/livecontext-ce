@@ -212,6 +212,20 @@ export function isDownloadFileNode(node: Node<BuilderNodeData>): boolean {
 }
 
 /**
+ * Detects if a node is a Public Link node.
+ */
+export function isPublicLinkNode(node: Node<BuilderNodeData>): boolean {
+  return nodeRegistry.isPublicLinkNode(node);
+}
+
+/**
+ * Detects if a node is a Media node.
+ */
+export function isMediaNode(node: Node<BuilderNodeData>): boolean {
+  return nodeRegistry.isMediaNode(node);
+}
+
+/**
  * Detects if a node is an HTTP Request node.
  */
 export function isHttpRequestNode(node: Node<BuilderNodeData>): boolean {

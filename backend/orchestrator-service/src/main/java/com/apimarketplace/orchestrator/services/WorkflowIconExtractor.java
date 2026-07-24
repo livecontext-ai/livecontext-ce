@@ -39,6 +39,20 @@ public final class WorkflowIconExtractor {
         "classify", "classify"
     );
 
+    /**
+     * Sentinel the catalog substitutes when an API has no icon of its own:
+     * every WorkflowInspectorService query selects COALESCE(a.icon_slug, 'mcp').
+     * It is non-blank, so it has to be rejected explicitly - otherwise the real
+     * apiSlug fallback below never fires and the marketplace card renders the
+     * generic API glyph instead of the brand logo.
+     */
+    private static final String UNRESOLVED_ICON_SLUG = "mcp";
+
+    private static boolean isResolvedIconSlug(String slug) {
+        return slug != null && !slug.isBlank()
+            && !UNRESOLVED_ICON_SLUG.equalsIgnoreCase(slug.trim());
+    }
+
     private WorkflowIconExtractor() {}
 
     /**
@@ -83,8 +97,7 @@ public final class WorkflowIconExtractor {
                 // Prefer explicit iconSlug from plan, fallback to apiSlug extracted from id
                 String explicitIconSlug = (String) mcp.get("iconSlug");
                 String apiSlug = id.contains("/") ? id.substring(0, id.indexOf('/')) : id;
-                String slug = (explicitIconSlug != null && !explicitIconSlug.isBlank())
-                    ? explicitIconSlug : apiSlug;
+                String slug = isResolvedIconSlug(explicitIconSlug) ? explicitIconSlug : apiSlug;
 
                 String dedupKey = "mcp:" + slug;
                 if (seen.contains(dedupKey)) continue;

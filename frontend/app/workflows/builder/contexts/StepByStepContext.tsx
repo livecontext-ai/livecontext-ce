@@ -466,6 +466,10 @@ function normalizeNodeId(nodeId: string): string {
       nodeId.includes('wait') || nodeId.includes('fork') ||
       nodeId.includes('exit') || nodeId.includes('response') ||
       nodeId.includes('download_file') || nodeId.includes('download-file') ||
+      nodeId.includes('public_link') || nodeId.includes('public-link') ||
+      // 'media' must be a PREFIX match: MCP tool ids like create_media_container-123
+      // CONTAIN "media" but are mcp: nodes, not core: nodes.
+      nodeId === 'media' || nodeId.startsWith('media-') ||
       nodeId.includes('http_request') || nodeId.includes('http-request') ||
       nodeId.includes('data_input') || nodeId.includes('data-input')) {
     return `core:${normalized}`;

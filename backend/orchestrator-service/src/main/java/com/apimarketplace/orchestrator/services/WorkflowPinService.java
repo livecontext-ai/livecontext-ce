@@ -64,6 +64,16 @@ public class WorkflowPinService {
         RunStatus.PAUSED
     );
 
+    /**
+     * TRUSTED minus COMPLETED - the statuses a run can still FIRE from. Rearm prefers
+     * these (see {@link #rearm}); COMPLETED stays a valid last resort.
+     */
+    private static final List<RunStatus> LIVE_TRUSTED_STATUSES = List.of(
+        RunStatus.WAITING_TRIGGER,
+        RunStatus.RUNNING,
+        RunStatus.PAUSED
+    );
+
     public WorkflowPinService(WorkflowRepository workflowRepository,
                               WorkflowRunRepository workflowRunRepository,
                               WorkflowPlanVersionService versionService,
@@ -195,11 +205,20 @@ public class WorkflowPinService {
      * <p>Idempotent: calling rearm twice with no new termination event is a no-op
      * (the second call finds the same TRUSTED run and writes the same id).
      *
+     * <p>REQUIRES_NEW is load-bearing (round-4 audit, HIGH): the primary caller is
+     * {@code RunTerminationListener}, a {@code @TransactionalEventListener(AFTER_COMMIT)}.
+     * In that phase the terminating transaction's resources are still bound to the
+     * thread but already committed, so a plain REQUIRED join would attach the FK write
+     * to a dead transaction and it would NEVER be flushed - the rearm silently no-oped
+     * on the normal termination path. REQUIRES_NEW suspends whatever is bound and
+     * commits the rearm independently; the resolver's missed-rearm heal remains the
+     * backstop, not the norm.
+     *
      * @return {@code true} if the workflow has a production_run_id after rearm,
      *         {@code false} if no TRUSTED run survived (state SUSPENDED_NO_RUN
      *         should be applied by the caller).
      */
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
     public boolean rearm(UUID workflowId) {
         acquirePinLock(workflowId);
 
@@ -218,9 +237,42 @@ public class WorkflowPinService {
 
         // Same showcase-exclusion rule as pin() - rearm must never elect a
         // frozen clone as the surviving production run.
+        // Prefer a LIVE run (round-4 audit): the plain newest-TRUSTED election could
+        // pick a newer COMPLETED run over a live WAITING_TRIGGER one, converting this
+        // FAILED/CANCELLED termination into a permanent deliberate-stop stall
+        // (COMPLETED FK = the schedule resolves EMPTY forever). COMPLETED remains the
+        // last resort so the pre-existing "COMPLETED survivor" semantics still hold
+        // when no live run exists.
         Optional<WorkflowRunEntity> runOpt = workflowRunRepository
                 .findFirstProductionRunByWorkflowIdAndPlanVersionAndStatusIn(
-                        workflowId, pinned, TRUSTED_STATUSES);
+                        workflowId, pinned, LIVE_TRUSTED_STATUSES);
+        if (runOpt.isEmpty()) {
+            // Round-5 audit (HIGH): before the COMPLETED fallback, check for a run
+            // parked on a blocking signal (approval pending, wait timer). Such a run
+            // is not electable NOW but becomes eligible again the moment its signal
+            // resolves and it parks WAITING_TRIGGER. Electing a COMPLETED sibling
+            // over it would freeze the FK on a deliberate-stop identity that nothing
+            // ever revisits (COMPLETED is exempt from the resolver heal by design,
+            // and this listener never fires for it again) - a permanent stall on a
+            // routine approval workflow. Writing NULL instead hands DISPATCH to the
+            // FK-null bootstrap scan, which serves the signal run once it parks
+            // WAITING_TRIGGER; the FK itself stays NULL until the next pin, rearm,
+            // or run-termination event re-points it (nothing writes the FK from the
+            // scan path).
+            boolean blockedLiveRunExists = workflowRunRepository
+                    .findFirstProductionRunByWorkflowIdAndPlanVersionAndStatusIn(
+                            workflowId, pinned, List.of(RunStatus.AWAITING_SIGNAL))
+                    .isPresent();
+            if (!blockedLiveRunExists) {
+                runOpt = workflowRunRepository
+                        .findFirstProductionRunByWorkflowIdAndPlanVersionAndStatusIn(
+                                workflowId, pinned, TRUSTED_STATUSES);
+            } else {
+                log.info("[WorkflowPinService] rearm: workflow {} has a run AWAITING_SIGNAL at v{} - "
+                        + "clearing production_run_id instead of electing a COMPLETED fallback; the "
+                        + "FK-null scan serves that run once it parks WAITING_TRIGGER", workflowId, pinned);
+            }
+        }
 
         UUID newRunId = runOpt.map(WorkflowRunEntity::getId).orElse(null);
         workflow.setProductionRunId(newRunId);

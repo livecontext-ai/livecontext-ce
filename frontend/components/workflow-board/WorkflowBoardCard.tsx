@@ -4,7 +4,8 @@ import React, { useState } from 'react';
 import { useTranslations } from 'next-intl';
 // Locale-aware router (next-intl) - card navigation must preserve the active locale.
 import { useRouter } from '@/i18n/navigation';
-import { AlertTriangle, Calendar, Clock, Globe, MessageSquareQuote, Workflow as WorkflowIcon } from 'lucide-react';
+import { AlertTriangle, Calendar, Clock, Coins, Globe, MessageSquareQuote, Workflow as WorkflowIcon } from 'lucide-react';
+import { formatCostCompact } from '@/lib/format-cost';
 import { RunApprovalsDialog } from '@/components/approvals/RunApprovalsDialog';
 import { WorkflowNodeIcons } from '@/components/WorkflowNodeIcons';
 import { ShowcasePreview } from '@/components/marketplace/ShowcasePreview';
@@ -175,6 +176,28 @@ export function WorkflowBoardCard({ card, isDragging, onDragStart }: WorkflowBoa
               <span className="text-slate-300 dark:text-slate-600">&middot;</span>
               <Calendar className="h-2.5 w-2.5" />
               <span>{t('card.epochs', { count: card.productionRunEpochCount })}</span>
+            </>
+          )}
+          {/* Production-run cost (all epochs). Over budget turns red. */}
+          {card.costCredits != null && card.costCredits > 0 && (
+            <>
+              <span className="text-slate-300 dark:text-slate-600">&middot;</span>
+              <Coins className={`h-2.5 w-2.5 ${
+                card.budgetCredits != null && card.budgetCredits > 0 && card.costCredits >= card.budgetCredits
+                  ? 'text-red-500 dark:text-red-400' : ''
+              }`} />
+              <span
+                className={
+                  card.budgetCredits != null && card.budgetCredits > 0 && card.costCredits >= card.budgetCredits
+                    ? 'text-red-500 dark:text-red-400' : ''
+                }
+                title={t('card.costTitle')}
+              >
+                {formatCostCompact(card.costCredits)}
+                {card.budgetCredits != null && card.budgetCredits > 0 && (
+                  <span className="text-theme-muted"> / {formatCostCompact(card.budgetCredits)}</span>
+                )}
+              </span>
             </>
           )}
           {card.productionRunStatus && (

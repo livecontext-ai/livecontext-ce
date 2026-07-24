@@ -823,6 +823,74 @@ class InterfaceNodeTest {
     }
 
     @Nested
+    @DisplayName("execute() - the node no longer carries a display format")
+    class NoNodeLevelFormat {
+
+        private static final String INTERFACE_UUID = "11111111-2222-3333-4444-555555555555";
+
+        private InterfaceNode node(boolean generateScreenshot, boolean generateVideo, String videoPreset) {
+            return new InterfaceNode("interface:form", INTERFACE_UUID, Map.of(), false,
+                generateScreenshot, false, false, null, false,
+                generateVideo, videoPreset, null, null, null);
+        }
+
+        private ServiceRegistry registryWith(InterfaceScreenshotService screenshotService) {
+            ServiceRegistry registry = mock(ServiceRegistry.class);
+            when(registry.getInterfaceScreenshotService()).thenReturn(screenshotService);
+            return registry;
+        }
+
+        @Test
+        @DisplayName("capture is called with no format argument - the shape comes from the interface")
+        void captureTakesNoFormat() {
+            // The screenshot service resolves the format from the render snapshot, so the node
+            // must not (and cannot) pass one: it does not know the interface's shape.
+            InterfaceScreenshotService screenshotService = mock(InterfaceScreenshotService.class);
+            when(screenshotService.capture(any(), any(), anyInt(), anyInt(), any(), any(), any()))
+                .thenReturn(Optional.empty());
+
+            InterfaceNode node = node(true, false, null);
+            node.acceptServices(registryWith(screenshotService));
+            node.execute(context);
+
+            verify(screenshotService).capture(any(), any(), anyInt(), anyInt(), any(), any(),
+                eq(UUID.fromString(INTERFACE_UUID)));
+        }
+
+        @Test
+        @DisplayName("captureVideo forwards only the explicit videoPreset override")
+        void captureVideoForwardsOnlyThePreset() {
+            InterfaceScreenshotService screenshotService = mock(InterfaceScreenshotService.class);
+            when(screenshotService.captureVideo(any(), any(), anyInt(), anyInt(), any(), any(), any(),
+                any(), any(), any(), any())).thenReturn(Optional.empty());
+
+            InterfaceNode node = node(false, true, "horizontal");
+            node.acceptServices(registryWith(screenshotService));
+            node.execute(context);
+
+            verify(screenshotService).captureVideo(any(), any(), anyInt(), anyInt(), any(), any(),
+                eq(UUID.fromString(INTERFACE_UUID)), eq("horizontal"), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("resolved_params exposes no format / formatWidth / formatHeight")
+        @SuppressWarnings("unchecked")
+        void resolvedParamsHaveNoFormat() {
+            // The inspector used to show the node's format; it cannot any more without fetching
+            // the interface, and advertising a stale value would be worse than showing none.
+            InterfaceNode node = node(false, false, null);
+            node.acceptServices(registryWith(null));
+
+            NodeExecutionResult result = node.execute(context);
+
+            Map<String, Object> resolved = (Map<String, Object>) result.output().get("resolved_params");
+            assertFalse(resolved.containsKey("format"));
+            assertFalse(resolved.containsKey("formatWidth"));
+            assertFalse(resolved.containsKey("formatHeight"));
+        }
+    }
+
+    @Nested
     @DisplayName("execute() - exposeRenderedSource toggle")
     class RenderedSourceExposureTests {
 

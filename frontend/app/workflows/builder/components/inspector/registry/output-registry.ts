@@ -199,6 +199,18 @@ export const outputRegistry: Record<InspectorNodeType, OutputDefinition> = {
     emptyMessage: 'File download result will appear here.',
   },
 
+  'public_link': {
+    ...defaultOutputDefinition,
+    title: 'Public Link',
+    emptyMessage: 'The public expiring URL will appear here after execution.',
+  },
+
+  'media': {
+    ...defaultOutputDefinition,
+    title: 'Media Result',
+    emptyMessage: 'The media file (or probe report) will appear here after execution.',
+  },
+
   'aggregate': {
     ...defaultOutputDefinition,
     title: 'Aggregated Data',

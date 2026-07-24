@@ -1,19 +1,13 @@
 'use client';
 
 import * as React from 'react';
-import { Plus, Trash2, Info } from 'lucide-react';
+import { Info } from 'lucide-react';
 import type { Node } from 'reactflow';
 import { useTranslations } from 'next-intl';
-import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import type { BuilderNodeData } from '../../../types';
-
-interface InputMapping {
-  id: string;
-  key: string;
-  value: string;
-}
 
 interface SubWorkflowParametersFormProps {
   node: Node<BuilderNodeData>;
@@ -23,15 +17,13 @@ interface SubWorkflowParametersFormProps {
 }
 
 /**
- * Generate a unique ID for a new input mapping entry
- */
-function generateMappingId(): string {
-  return `mapping_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-}
-
-/**
  * Form component for SubWorkflow node parameters.
- * Configures the workflow ID, input mappings, timeout, and max depth.
+ *
+ * The backend `SubWorkflowConfig.inputMapping` is a SINGLE SpEL expression string that
+ * resolves to the object handed to the sub-workflow's trigger (e.g. `{{core:build.output}}`
+ * or `{{trigger.output.payload}}`), NOT a list of key/value pairs. Plans and MCP-built nodes
+ * therefore carry a string here; rendering it as an array crashed the inspector, so this form
+ * edits it as one expression field, matching the contract.
  */
 export function SubWorkflowParametersForm({
   node,
@@ -51,111 +43,46 @@ export function SubWorkflowParametersForm({
       onUpdate({ ...data, subWorkflowId: wfData.workflowId } as BuilderNodeData);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  const inputMapping: InputMapping[] = React.useMemo(() => {
-    const existing = (data as any).subWorkflowInputMapping as InputMapping[] | undefined;
-    if (existing && existing.length > 0) {
-      return existing;
-    }
-    return [];
-  }, [(data as any).subWorkflowInputMapping]);
-  const timeout: number = (data as any).subWorkflowTimeout ?? 300;
+
+  // Coerce to string: back-compat with any legacy array-shaped value (never a valid backend
+  // config) so the field never receives a non-string and never crashes.
+  const rawMapping = (data as any).subWorkflowInputMapping;
+  const inputMapping: string = typeof rawMapping === 'string' ? rawMapping : '';
+  const timeout: number = (data as any).subWorkflowTimeoutSeconds ?? (data as any).subWorkflowTimeout ?? 300;
   const maxDepth: number = (data as any).subWorkflowMaxDepth ?? 3;
 
   const handleWorkflowIdChange = React.useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     if (isRunMode) return;
-    onUpdate({
-      ...data,
-      subWorkflowId: event.target.value,
-    } as BuilderNodeData);
+    onUpdate({ ...data, subWorkflowId: event.target.value } as BuilderNodeData);
   }, [data, isRunMode, onUpdate]);
 
-  const handleAddMapping = React.useCallback(() => {
+  const handleInputMappingChange = React.useCallback((event: React.ChangeEvent<HTMLTextAreaElement>) => {
     if (isRunMode) return;
-    const newMapping: InputMapping = {
-      id: generateMappingId(),
-      key: '',
-      value: '',
-    };
-    const updatedMappings = [...inputMapping, newMapping];
-    onUpdate({
-      ...data,
-      subWorkflowInputMapping: updatedMappings,
-    } as BuilderNodeData);
-  }, [data, inputMapping, isRunMode, onUpdate]);
-
-  const handleDeleteMapping = React.useCallback((mappingId: string) => {
-    if (isRunMode) return;
-    const updatedMappings = inputMapping.filter(m => m.id !== mappingId);
-    onUpdate({
-      ...data,
-      subWorkflowInputMapping: updatedMappings,
-    } as BuilderNodeData);
-  }, [data, inputMapping, isRunMode, onUpdate]);
-
-  const handleMappingKeyChange = React.useCallback((mappingId: string, newKey: string) => {
-    if (isRunMode) return;
-    const updatedMappings = inputMapping.map(m =>
-      m.id === mappingId ? { ...m, key: newKey } : m
-    );
-    onUpdate({
-      ...data,
-      subWorkflowInputMapping: updatedMappings,
-    } as BuilderNodeData);
-  }, [data, inputMapping, isRunMode, onUpdate]);
-
-  const handleMappingValueChange = React.useCallback((mappingId: string, newValue: string) => {
-    if (isRunMode) return;
-    const updatedMappings = inputMapping.map(m =>
-      m.id === mappingId ? { ...m, value: newValue } : m
-    );
-    onUpdate({
-      ...data,
-      subWorkflowInputMapping: updatedMappings,
-    } as BuilderNodeData);
-  }, [data, inputMapping, isRunMode, onUpdate]);
+    onUpdate({ ...data, subWorkflowInputMapping: event.target.value } as BuilderNodeData);
+  }, [data, isRunMode, onUpdate]);
 
   const handleTimeoutChange = React.useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     if (isRunMode) return;
     const value = event.target.value;
     if (value === '') {
-      onUpdate({
-        ...data,
-        subWorkflowTimeout: 1,
-      } as BuilderNodeData);
+      onUpdate({ ...data, subWorkflowTimeoutSeconds: 1 } as BuilderNodeData);
       return;
     }
-
     const numValue = parseInt(value, 10);
-    if (isNaN(numValue) || numValue < 1) {
-      return;
-    }
-
-    onUpdate({
-      ...data,
-      subWorkflowTimeout: numValue,
-    } as BuilderNodeData);
+    if (isNaN(numValue) || numValue < 1) return;
+    onUpdate({ ...data, subWorkflowTimeoutSeconds: numValue } as BuilderNodeData);
   }, [data, isRunMode, onUpdate]);
 
   const handleMaxDepthChange = React.useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     if (isRunMode) return;
     const value = event.target.value;
     if (value === '') {
-      onUpdate({
-        ...data,
-        subWorkflowMaxDepth: 1,
-      } as BuilderNodeData);
+      onUpdate({ ...data, subWorkflowMaxDepth: 1 } as BuilderNodeData);
       return;
     }
-
     const numValue = parseInt(value, 10);
-    if (isNaN(numValue) || numValue < 1) {
-      return;
-    }
-
-    onUpdate({
-      ...data,
-      subWorkflowMaxDepth: numValue,
-    } as BuilderNodeData);
+    if (isNaN(numValue) || numValue < 1) return;
+    onUpdate({ ...data, subWorkflowMaxDepth: numValue } as BuilderNodeData);
   }, [data, isRunMode, onUpdate]);
 
   return (
@@ -200,60 +127,17 @@ export function SubWorkflowParametersForm({
         )}
       </div>
 
-      {/* Input Mapping */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('inputMapping')}</span>
-          {!isRunMode && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="flex-shrink-0 h-6 w-6 text-slate-400 hover:text-slate-600 hover:bg-slate-50 dark:hover:bg-slate-800"
-              onClick={(e) => {
-                e.stopPropagation();
-                handleAddMapping();
-              }}
-              title={t('addMapping')}
-            >
-              <Plus className="h-3 w-3" />
-            </Button>
-          )}
-        </div>
-        <div className="space-y-3">
-          {inputMapping.map((mapping) => (
-            <div key={mapping.id} className="flex items-center gap-2">
-              <Input
-                value={mapping.key}
-                onChange={(e) => handleMappingKeyChange(mapping.id, e.target.value)}
-                className="flex-1 min-w-0 text-sm"
-                placeholder={t('mappingKeyPlaceholder')}
-                readOnly={isRunMode}
-              />
-              <Input
-                value={mapping.value}
-                onChange={(e) => handleMappingValueChange(mapping.id, e.target.value)}
-                className="flex-1 min-w-0 text-sm"
-                placeholder={t('mappingValuePlaceholder')}
-                readOnly={isRunMode}
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="flex-shrink-0 h-6 w-6 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleDeleteMapping(mapping.id);
-                }}
-                disabled={isRunMode}
-                title={t('removeMapping')}
-              >
-                <Trash2 className="h-3 w-3" />
-              </Button>
-            </div>
-          ))}
-        </div>
+      {/* Input mapping (single SpEL expression) */}
+      <div className="space-y-1">
+        <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('inputMapping')}</span>
+        <Textarea
+          value={inputMapping}
+          onChange={handleInputMappingChange}
+          className="w-full font-mono text-sm min-h-[64px]"
+          placeholder={t('inputMappingPlaceholder')}
+          readOnly={isRunMode}
+        />
+        <p className="text-sm text-slate-400 dark:text-slate-500">{t('inputMappingHelp')}</p>
       </div>
 
       {/* Timeout */}

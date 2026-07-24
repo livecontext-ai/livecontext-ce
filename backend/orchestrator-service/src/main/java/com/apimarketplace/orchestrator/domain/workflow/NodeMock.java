@@ -38,6 +38,11 @@ import java.util.Set;
  * {@code selected_case_index}, {@code selected_choice_index}, {@code selected_port},
  * {@code selected_category_index}) via {@code ExecutionNode.portSelectionOutput}.
  *
+ * <p>{@code durationMs} simulates the node's execution time: the engine waits that
+ * long before serving the mock result, like the real call would (the step's measured
+ * execution time reflects it). Valid with every source, capped at
+ * {@link #MAX_DURATION_MS} (10 minutes). Absent or 0 = instant.
+ *
  * <p>Like {@link NodePolicy}, parsing is lenient on shape (unknown keys ignored for
  * forward compatibility) but STRICT on values, with errors naming the offending node.
  * Node-type compatibility (which sections may carry which source / port) is validated
@@ -48,11 +53,15 @@ public record NodeMock(
         String source,
         Map<String, Object> output,
         String port,
-        MockError error
+        MockError error,
+        Long durationMs
 ) {
 
     /** JSON key of the mock block on a plan node entry. */
     public static final String JSON_KEY = "mock";
+
+    /** Upper bound of {@code durationMs}: 10 minutes. */
+    public static final long MAX_DURATION_MS = 600_000L;
 
     public static final String SOURCE_STATIC = "static";
     public static final String SOURCE_CATALOG_EXAMPLE = "catalog_example";
@@ -75,6 +84,11 @@ public record NodeMock(
         if (source == null || !VALID_SOURCES.contains(source)) {
             throw new IllegalArgumentException(
                     "mock.source must be one of " + VALID_SOURCES + " (got '" + source + "')");
+        }
+        if (durationMs != null && (durationMs < 0 || durationMs > MAX_DURATION_MS)) {
+            throw new IllegalArgumentException(
+                    "mock.durationMs must be between 0 and " + MAX_DURATION_MS
+                            + " milliseconds (10 minutes max), got " + durationMs);
         }
         output = output == null ? null : Map.copyOf(output);
         if (SOURCE_ERROR.equals(source)) {
@@ -118,6 +132,11 @@ public record NodeMock(
         return SOURCE_ERROR.equals(source);
     }
 
+    /** True when this mock simulates execution time (a strictly positive {@code durationMs}). */
+    public boolean hasSimulatedDuration() {
+        return durationMs != null && durationMs > 0;
+    }
+
     /**
      * Parses a raw {@code mock} JSON block.
      *
@@ -150,13 +169,18 @@ public record NodeMock(
             Map<String, Object> output = coerceObject(map.get("output"), "output");
             String port = coerceString(map.get("port"), "port");
             MockError error = parseError(map.get("error"));
+            // duration_ms accepted as an alias: agents used to snake_case output
+            // fields write it naturally, and silently ignoring it would make the
+            // mock "work" with no delay.
+            Long durationMs = coerceDurationMs(
+                    map.containsKey("durationMs") ? map.get("durationMs") : map.get("duration_ms"));
             String source = coerceString(map.get("source"), "source");
             if (source == null) {
                 source = error != null ? SOURCE_ERROR : SOURCE_STATIC;
             } else {
                 source = source.trim().toLowerCase(Locale.ROOT);
             }
-            return new NodeMock(enabled, source, output, port, error);
+            return new NodeMock(enabled, source, output, port, error, durationMs);
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException(
                     "Invalid mock for node '" + nodeKey + "': " + e.getMessage(), e);
@@ -187,6 +211,29 @@ public record NodeMock(
         }
         throw new IllegalArgumentException(field + " must be a JSON object (got "
                 + value.getClass().getSimpleName() + ")");
+    }
+
+    private static Long coerceDurationMs(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number n) {
+            double d = n.doubleValue();
+            if (!Double.isNaN(d) && !Double.isInfinite(d)) {
+                return Math.round(d); // fractional ms round (matches the builder's sanitize)
+            }
+        } else if (value instanceof String s && !s.isBlank()) {
+            try {
+                double d = Double.parseDouble(s.trim());
+                if (!Double.isNaN(d) && !Double.isInfinite(d)) {
+                    return Math.round(d);
+                }
+            } catch (NumberFormatException e) {
+                // fall through to the shared error below
+            }
+        }
+        throw new IllegalArgumentException(
+                "durationMs must be a number of milliseconds (0 to " + MAX_DURATION_MS + ")");
     }
 
     private static String coerceString(Object value, String field) {

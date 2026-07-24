@@ -213,6 +213,33 @@ class NotificationEmitterTest {
     }
 
     @Test
+    @DisplayName("Regression 2026-07-21: production run carrying __agentInitiated__ (or __versionReplay__) DOES fire - "
+            + "production identity trumps EVERY metadata flag, not just __editorRun__")
+    void agentInitiatedProductionRunFires() throws Exception {
+        // Promotion never strips run metadata, so an agent-created run that got
+        // pinned carries __agentInitiated__ forever. Pre-fix that flag was checked
+        // BEFORE the production carve-out: the workflow failed nightly and the user
+        // never heard of it.
+        Map<String, Object> meta = new HashMap<>();
+        meta.put("__agentInitiated__", Boolean.TRUE);
+        meta.put("__versionReplay__", 3);
+        WorkflowRunEntity run = runWithMetadata(meta);
+        Field idField = WorkflowRunEntity.class.getDeclaredField("id");
+        idField.setAccessible(true);
+        idField.set(run, RUN_ID);
+        WorkflowEntity wf = workflowPinned(PINNED_VERSION);
+        wf.setProductionRunId(RUN_ID);
+
+        when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(wf));
+        when(workflowRunRepository.findById(RUN_ID)).thenReturn(Optional.of(run));
+        when(nativeQuery.getResultList()).thenReturn(List.of(42L));
+
+        emitter.onRunTerminated(event(RunStatus.FAILED, PINNED_VERSION));
+
+        verify(redisPublisher).publishNotification(eq(TENANT_ID), eq("notification.created"), any());
+    }
+
+    @Test
     @DisplayName("Editor run whose id DIFFERS from production_run_id stays excluded on run-terminal")
     void editorRunDifferentFromProductionRunStaysExcluded() throws Exception {
         Map<String, Object> meta = new HashMap<>();

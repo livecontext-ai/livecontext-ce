@@ -431,6 +431,54 @@ class AgentPublicationServiceWorkflowSnapshotTest {
         assertThat(interfaces).containsOnlyKeys(ifaceId.toString());
     }
 
+    @Test
+    @DisplayName("the snapshot carries each granted interface's format, under the key the acquire reads")
+    @SuppressWarnings("unchecked")
+    void interfacesGrantCustomSnapshotsTheFormat() {
+        // Producer side of the format's publish -> acquire journey. The consumer
+        // (AgentPublicationService acquire) is tested against a hand-written fixture, so without
+        // this the two sides can drift apart silently: drop the format here and every acquired
+        // copy of a vertical interface is a full-page 1280x800 one, with no error anywhere.
+        UUID ifaceId = UUID.fromString("66666666-6666-4666-8666-666666666666");
+        Map<String, Object> toolsConfig = Map.of(
+                "interfacesGrant", "custom",
+                "interfaces", List.of(ifaceId.toString()));
+
+        InterfaceDto iface = new InterfaceDto();
+        iface.setId(ifaceId);
+        iface.setName("Story Card");
+        iface.setHtmlTemplate("<div>story</div>");
+        iface.setInterfaceType("html");
+        iface.setFormat("vertical");
+        when(interfaceClient.getInterface(ifaceId, TENANT_ID, ORG_ID)).thenReturn(iface);
+
+        Map<String, Object> snapshot = buildSnapshot(toolsConfig, null);
+
+        Map<String, Object> interfaces = (Map<String, Object>) snapshot.get("interfaces");
+        Map<String, Object> ifSnapshot = (Map<String, Object>) interfaces.get(ifaceId.toString());
+        // The literal key is the contract with the acquire path - assert it verbatim.
+        assertThat(ifSnapshot).containsEntry("format", "vertical");
+    }
+
+    @Test
+    @DisplayName("a granted interface with no declared shape snapshots a null format, never a default")
+    @SuppressWarnings("unchecked")
+    void interfacesGrantCustomKeepsUnsetFormatNull() {
+        // Null is a real value (full-page capture): defaulting it here would crop every acquired
+        // copy of a tall page.
+        UUID ifaceId = UUID.fromString("66666666-6666-4666-8666-666666666666");
+        Map<String, Object> toolsConfig = Map.of(
+                "interfacesGrant", "custom",
+                "interfaces", List.of(ifaceId.toString()));
+        stubInterface(ifaceId);
+
+        Map<String, Object> snapshot = buildSnapshot(toolsConfig, null);
+
+        Map<String, Object> interfaces = (Map<String, Object>) snapshot.get("interfaces");
+        Map<String, Object> ifSnapshot = (Map<String, Object>) interfaces.get(ifaceId.toString());
+        assertThat(ifSnapshot).containsEntry("format", null);
+    }
+
     // ====================================================================
     // Tables family - custom-list population (was only all/none/absent covered)
     // ====================================================================

@@ -223,6 +223,43 @@ class InterfaceSnapshotServiceTest {
     }
 
     @Test
+    void refreshSnapshots_propagatesAFormatOnlyChange() {
+        // Re-shaping an interface (vertical -> widescreen) changes NO template, so a refresh
+        // that only compares html/css/js/name/description reports "unchanged" and the waiting
+        // run keeps capturing at the old shape forever. The format is refreshable like the
+        // templates it travels with.
+        InterfaceRunSnapshotEntity snap = InterfaceRunSnapshotEntity.fromInterface(testInterface, runId);
+        snap.setFormat("vertical");
+        testInterface.setFormat("widescreen");
+
+        when(snapshotRepository.findByWorkflowRunId(runId)).thenReturn(List.of(snap));
+        when(interfaceRepository.findById(interfaceId)).thenReturn(Optional.of(testInterface));
+        when(snapshotRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        InterfaceSnapshotService.RefreshResult result = snapshotService.refreshSnapshotsFromLiveInterface(runId);
+
+        assertThat(result.refreshed()).as("a format-only edit must reach the run").isEqualTo(1);
+        assertThat(result.unchanged()).isZero();
+        assertThat(snap.getFormat()).isEqualTo("widescreen");
+    }
+
+    @Test
+    void refreshSnapshots_isStillNoOpWhenOnlyTheFormatMatches() {
+        // Guards the comparison above from over-firing: an identical format must not dirty the
+        // row on every trigger fire.
+        testInterface.setFormat("vertical");
+        InterfaceRunSnapshotEntity snap = InterfaceRunSnapshotEntity.fromInterface(testInterface, runId);
+
+        when(snapshotRepository.findByWorkflowRunId(runId)).thenReturn(List.of(snap));
+        when(interfaceRepository.findById(interfaceId)).thenReturn(Optional.of(testInterface));
+
+        InterfaceSnapshotService.RefreshResult result = snapshotService.refreshSnapshotsFromLiveInterface(runId);
+
+        assertThat(result.unchanged()).isEqualTo(1);
+        verify(snapshotRepository, never()).save(any());
+    }
+
+    @Test
     void refreshSnapshots_keepsFrozenWhenInterfaceDeleted() {
         // The source interface was deleted since the run started (rare but real:
         // user removed the node, or workflow was edited to detach the interface).

@@ -85,6 +85,115 @@ class MockNodeResultFactoryTest {
     }
 
     @Test
+    @DisplayName("durationMs: the factory waits the simulated duration and the result's executionTimeMs reflects it")
+    void durationMsSimulatesExecutionTime() {
+        long before = System.currentTimeMillis();
+        NodeExecutionResult result = factory.build(mcpNode("gmail/list"), context,
+            mock(Map.of("output", Map.of("x", 1), "durationMs", 120)));
+        long elapsed = System.currentTimeMillis() - before;
+
+        assertThat(result.status()).isEqualTo(NodeStatus.COMPLETED);
+        assertThat(elapsed).isGreaterThanOrEqualTo(120L);
+        assertThat(result.durationMs()).isGreaterThanOrEqualTo(120L);
+    }
+
+    @Test
+    @DisplayName("durationMs applies to error mocks too: a simulated slow failure")
+    void durationMsAppliesToErrorMocks() {
+        long before = System.currentTimeMillis();
+        NodeExecutionResult result = factory.build(mcpNode("gmail/list"), context,
+            mock(Map.of("error", Map.of("message", "boom"), "durationMs", 100)));
+        long elapsed = System.currentTimeMillis() - before;
+
+        assertThat(result.status()).isEqualTo(NodeStatus.FAILED);
+        assertThat(elapsed).isGreaterThanOrEqualTo(100L);
+        assertThat(result.durationMs()).isGreaterThanOrEqualTo(100L);
+    }
+
+    @Test
+    @DisplayName("no durationMs = instant substitution (no hidden wait)")
+    void noDurationIsInstant() {
+        long before = System.currentTimeMillis();
+        factory.build(mcpNode("gmail/list"), context, mock(Map.of("output", Map.of("x", 1))));
+        long elapsed = System.currentTimeMillis() - before;
+
+        assertThat(elapsed).isLessThan(1_000L);
+    }
+
+    @Test
+    @DisplayName("a run cancel signal aborts the simulated duration within ~100ms (WaitNode F2.4 pattern) and still serves the mock")
+    void cancelSignalAbortsWaitEarly() {
+        com.apimarketplace.orchestrator.services.streaming.redis.WorkflowRedisPublisher publisher =
+            org.mockito.Mockito.mock(
+                com.apimarketplace.orchestrator.services.streaming.redis.WorkflowRedisPublisher.class);
+        when(publisher.isAgentCancelSignalSet("run-1")).thenReturn(true);
+        factory.setWorkflowRedisPublisher(publisher);
+        lenient().when(context.runId()).thenReturn("run-1");
+
+        long before = System.currentTimeMillis();
+        NodeExecutionResult result = factory.build(mcpNode("gmail/list"), context,
+            mock(Map.of("output", Map.of("x", 1), "durationMs", 8_000)));
+        long elapsed = System.currentTimeMillis() - before;
+
+        assertThat(result.status()).isEqualTo(NodeStatus.COMPLETED);
+        assertThat(result.output()).containsEntry("x", 1);
+        assertThat(elapsed).isLessThan(4_000L); // one ~100ms slice, generous CI margin
+    }
+
+    @Test
+    @DisplayName("durationMs composes with a port mock: the branch selection is intact after the wait")
+    void durationComposesWithPortMock() {
+        DecisionNode decision = new DecisionNode("core:check", List.of(
+            new DecisionNode.ConditionalBranch("if", "x > 1", List.of()),
+            new DecisionNode.ConditionalBranch("else", null, List.of())), null);
+
+        long before = System.currentTimeMillis();
+        NodeExecutionResult result = factory.build(decision, context,
+            mock(Map.of("port", "if", "durationMs", 100)));
+        long elapsed = System.currentTimeMillis() - before;
+
+        assertThat(elapsed).isGreaterThanOrEqualTo(100L);
+        assertThat(result.output()).containsEntry("selected_branch_index", 0);
+        assertThat(decision.getSelectedPort(result)).isEqualTo("if");
+    }
+
+    @Test
+    @DisplayName("durationMs composes with catalog_example: the wait happens and the example is served")
+    void durationComposesWithCatalogExample() {
+        when(catalogMockClient.fetchProjectedExample(eq("gmail/list"), eq("tenant-1")))
+            .thenReturn(new HashMap<>(Map.of("messages", List.of())));
+
+        long before = System.currentTimeMillis();
+        NodeExecutionResult result = factory.build(mcpNode("gmail/list"), context,
+            mock(Map.of("source", "catalog_example", "durationMs", 100)));
+        long elapsed = System.currentTimeMillis() - before;
+
+        assertThat(elapsed).isGreaterThanOrEqualTo(100L);
+        assertThat(result.status()).isEqualTo(NodeStatus.COMPLETED);
+        assertThat(result.output()).containsKey("messages");
+    }
+
+    @Test
+    @DisplayName("an interrupt ends the simulated duration early: the mock is served immediately and the interrupt flag is restored")
+    void interruptEndsWaitEarlyAndRestoresFlag() {
+        Thread.currentThread().interrupt();
+        try {
+            long before = System.currentTimeMillis();
+            NodeExecutionResult result = factory.build(mcpNode("gmail/list"), context,
+                mock(Map.of("output", Map.of("x", 1), "durationMs", 5_000)));
+            long elapsed = System.currentTimeMillis() - before;
+
+            assertThat(result.status()).isEqualTo(NodeStatus.COMPLETED);
+            assertThat(elapsed).isLessThan(5_000L);
+            assertThat(Thread.currentThread().isInterrupted())
+                .as("the interrupt flag must be restored for upstream cancellation handling")
+                .isTrue();
+        } finally {
+            Thread.interrupted(); // clear the flag so it never leaks into other tests
+        }
+    }
+
+    @Test
     @DisplayName("static mock output is copied: engine stamping never mutates the plan-borne map")
     void staticOutputIsCopied() {
         Map<String, Object> planOutput = Map.of("x", 1);

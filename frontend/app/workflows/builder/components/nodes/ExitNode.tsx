@@ -16,7 +16,14 @@ import { NodePlayButton, deriveNodeStatus } from '../NodePlayButton';
 import { useNodeExecutionStatus } from '../../contexts/StepByStepContext';
 import { NodeBottomBar } from './NodeBottomBar';
 
+import { useWorkflowLayoutDirectionSafe } from '@/contexts/WorkflowLayoutDirectionContext';
+import { getTargetHandleGeometry } from './handleGeometry';
 export function ExitNode({ data, selected }: NodeProps<BuilderNodeData>) {
+  // Handle sides follow the canvas reading direction. Safe variant: nodes also
+  // render on provider-less surfaces (marketplace preview, snapshots).
+  const { direction: layoutDirection } = useWorkflowLayoutDirectionSafe();
+  const targetHandle = getTargetHandleGeometry(layoutDirection);
+
   const visuals = getNodeVisual('exit');
   const { targetRef: nodeRef, isVisible: showActions, show } = useHoverVisibility<HTMLDivElement>();
 
@@ -122,14 +129,12 @@ export function ExitNode({ data, selected }: NodeProps<BuilderNodeData>) {
       {/* Only input handle - no output since workflow exits here */}
       <Handle
         type="target"
-        position={Position.Left}
+        position={targetHandle.position}
         id="target-left"
         isConnectable={true}
         className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
         style={{
-          left: -6,
-          top: '50%',
-          transform: 'translateY(-50%)',
+          ...targetHandle.style,
           backgroundColor: 'var(--border-color)',
           opacity: isRunMode ? 0 : 1,
           pointerEvents: isRunMode ? 'none' : 'auto'

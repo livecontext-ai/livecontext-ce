@@ -530,7 +530,9 @@ public class WorkflowBoardService {
                 showcaseInterfaceId,
                 showcaseRunId,
                 visibility,
-                remote
+                remote,
+                run != null ? run.getCostCredits() : null,
+                w.getBudgetCredits()
         );
     }
 }

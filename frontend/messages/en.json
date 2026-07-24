@@ -1133,6 +1133,17 @@
       "noRunResult": "Awaiting execution",
       "modules": "Modules",
       "config": "Configuration"
+    },
+    "runInfo": {
+      "costOfThisRun": "Cost of this run",
+      "costTooltip": "Total cost of this run across all epochs",
+      "budgetReached": "Budget reached, no new run will start",
+      "epochCost": "Epoch {epoch}",
+      "budgetBlockedTitle": "Budget reached",
+      "budgetBlockedMessage": "Spent {spent} of {budget}. No new run was started.",
+      "cost": "Cost",
+      "scopeAll": "all epochs",
+      "scopeEpoch": "epoch {epoch}"
     }
   },
   "data": {
@@ -2144,7 +2155,12 @@
       "successTitle": "Updated",
       "successMessage": "\"{name}\" updated successfully",
       "errorTitle": "Error",
-      "errorMessage": "Failed to update"
+      "errorMessage": "Failed to update",
+      "advancedSection": "Advanced",
+      "budgetLabel": "Cost budget",
+      "budgetPlaceholder": "No limit",
+      "budgetHelpCredits": "Maximum credits this workflow can spend. When reached, no new run starts.",
+      "budgetHelpDollars": "Maximum spend for this workflow. When reached, no new run starts."
     },
     "createWorkflow": {
       "title": "Create New Workflow",
@@ -2178,6 +2194,25 @@
       "cssTemplatePlaceholder": "Enter your CSS styles...",
       "jsTemplateLabel": "JavaScript",
       "jsTemplatePlaceholder": "Enter your JavaScript code...",
+      "formatLabel": "Format",
+      "formatAuto": "Auto (full page)",
+      "formatAutoHint": "Captures the whole page at 1280 wide",
+      "formatHelp": "The shape this interface is designed for. Applies to every preview, screenshot and video of it. Auto captures the whole page at 1280 wide. PDF keeps its own page size.",
+      "formatCustom": "Custom",
+      "formatCustomPlaceholder": "WxH, e.g. 1080x1920",
+      "formatCustomInvalid": "Enter a size as WxH with each side between 16 and 2160 (e.g. 1080x1920).",
+      "formatPreset_classic": "Classic",
+      "formatPreset_widescreen": "Widescreen",
+      "formatPreset_vertical": "Vertical",
+      "formatPreset_square": "Square",
+      "formatPreset_portrait": "Portrait",
+      "formatPreset_mobile": "Mobile",
+      "formatPreset_tablet": "Tablet",
+      "formatPreset_desktop": "Desktop",
+      "formatPreset_banner": "Banner",
+      "formatPreset_social_card": "Social card",
+      "formatPreset_a4_portrait": "A4 portrait",
+      "formatPreset_a4_landscape": "A4 landscape",
       "availableColumns": "Available Columns",
       "back": "Back",
       "next": "Next",
@@ -5697,7 +5732,11 @@
       "creditLimitDescription": "Number of credits usable without confirmation",
       "chatDefaultsTitle": "Chat defaults",
       "chatDefaultsDescription": "Default options applied to new conversations in this workspace.",
-      "savePreferences": "Save Preferences"
+      "savePreferences": "Save Preferences",
+      "workflowLayoutDirection": "Workflow layout",
+      "workflowLayoutDirectionDescription": "Direction the workflow builder reads in: left to right, or top to bottom. Sets where node connections and buttons sit, and how auto-layout arranges the graph.",
+      "workflowLayoutDirectionHorizontal": "Left to right",
+      "workflowLayoutDirectionVertical": "Top to bottom"
     },
     "notifications": {
       "title": "Notification Preferences",
@@ -5963,7 +6002,10 @@
       "useAsMock": "Use as mock output",
       "usedAsMockToast": "Saved as mock output for {label}",
       "mockedBadge": "Mocked",
-      "toggleHelp": "Editor runs return the configured mock instead of executing this node. Production runs are never mocked."
+      "toggleHelp": "Editor runs return the configured mock instead of executing this node. Production runs are never mocked.",
+      "durationLabel": "Simulated duration",
+      "durationUnit": "seconds",
+      "durationHelp": "The node takes this long before returning the mock, like the real call would. Empty or 0 = instant. Maximum 10 minutes."
     },
     "executionErrors": {
       "epochLimitTitle": "Concurrent execution limit reached",
@@ -6108,6 +6150,7 @@
         "variableCountPlural": "{count} variables",
         "mappingPlaceholder": "Drag a variable here or leave empty",
         "mappingHelp": "Map each template variable to a workflow data source. Drag a variable from another node or type the expression.",
+        "formatTitle": "Format",
         "htmlTemplateTitle": "HTML",
         "cssTemplateTitle": "CSS",
         "jsTemplateTitle": "JavaScript",
@@ -6170,6 +6213,7 @@
         "generateVideo": "Generate video",
         "generateVideoDescription": "When enabled, records the interface's animation to an MP4 and exposes it as the video FileRef output for downstream nodes (social upload, Telegram video, email attachment). The recording stops when the page sets window.__DONE__ = true, or after the maximum duration. Best-effort: recording failures leave the output absent without failing the workflow.",
         "videoPreset": "Video format",
+        "videoPresetAuto": "Auto (the interface's format)",
         "videoPresetVertical": "Vertical (1080x1920)",
         "videoPresetHorizontal": "Horizontal (1920x1080)",
         "videoPresetSquare": "Square (1080x1080)",
@@ -6758,7 +6802,9 @@
       "timeoutHelp": "Maximum execution time in seconds",
       "maxDepth": "Max depth",
       "maxDepthPlaceholder": "e.g. 5",
-      "maxDepthHelp": "Maximum nesting depth for recursive sub-workflows"
+      "maxDepthHelp": "Maximum nesting depth for recursive sub-workflows",
+      "inputMappingPlaceholder": "{{core:build.output}} or {{trigger.output.payload}}",
+      "inputMappingHelp": "A single expression resolving to the object passed to the sub-workflow. Leave empty to forward this workflow trigger data."
     },
     "respondToWebhookNode": {
       "title": "Respond to Webhook",
@@ -6799,6 +6845,11 @@
       "bccPlaceholder": "bcc@example.com",
       "fromName": "From name (optional)",
       "fromNamePlaceholder": "Override sender display name",
+      "fromEmail": "From address (optional)",
+      "fromEmailPlaceholder": "sender@example.com",
+      "fromEmailHint": "Leave empty to send as the credential's address (the usual case). Most SMTP servers reject a from address they do not own.",
+      "replyTo": "Reply-To (optional)",
+      "replyToPlaceholder": "replies@example.com, team@example.com",
       "subject": "Subject",
       "subjectPlaceholder": "Email subject",
       "body": "Body",
@@ -6827,6 +6878,7 @@
       "action": "Action",
       "actions": {
         "list_folders": "List folders",
+        "create_folder": "Create folder",
         "none": "Read messages",
         "mark_read": "Mark as read",
         "mark_unread": "Mark as unread",
@@ -6848,7 +6900,10 @@
       "messageUid": "Message UID",
       "messageUidPlaceholder": "{{core:read.output.messages[0].uid}}",
       "targetFolder": "Target folder",
-      "targetFolderPlaceholder": "Archive"
+      "folderToCreate": "Folder to create",
+      "targetFolderPlaceholder": "INBOX.Clients",
+      "targetFolderHint": "Server path exactly as List folders returns it (for example INBOX.Clients on a server that namespaces under the inbox, separator '.'), not the display label.",
+      "createTargetIfMissing": "Create the folder if it does not exist"
     },
     "codeNode": {
       "title": "Code",
@@ -7025,9 +7080,19 @@
         "schedule-trigger": "Scheduler",
         "form-trigger": "Form"
       },
-      "close": "Close"
+      "close": "Close",
+      "layoutDirection": "Layout",
+      "layoutHorizontal": "Left to right",
+      "layoutVertical": "Top to bottom"
     },
     "nodes": {
+      "filePreview": {
+        "expand": "Expand preview",
+        "collapse": "Collapse preview",
+        "openInPanel": "Open in side panel",
+        "noPreview": "No inline preview for this file type",
+        "more": "+{count} more"
+      },
       "deleteNode": "Delete node",
       "duplicateNode": "Duplicate node",
       "showNormalView": "Show normal view",
@@ -7089,7 +7154,8 @@
           "forward": "Forward",
           "refresh": "Refresh"
         }
-      }
+      },
+      "delete": "Delete"
     },
     "forms": {
       "required": "Required",
@@ -7202,6 +7268,131 @@
         "urlPlaceholder": "Enter URL...",
         "filename": "Filename",
         "autoDetect": "Auto-detect from URL"
+      },
+      "publicLink": {
+        "title": "Public Link",
+        "description": "Turns a file produced by an upstream node into a public, time-limited signed URL on the platform's own storage. Use it for APIs that pull media from a URL (Instagram, TikTok) instead of accepting an upload.",
+        "file": "File",
+        "filePlaceholder": "'{{core:download.output.file}}'",
+        "fileHint": "Reference the whole file object from an upstream node, e.g. '{{interface:card.output.video}}'.",
+        "ttlMinutes": "Link lifetime (minutes)",
+        "ttlHint": "Between 5 and 10080 minutes (7 days). Default: 240.",
+        "disposition": "Disposition",
+        "dispositionInline": "Inline (display in browser)",
+        "dispositionAttachment": "Attachment (download prompt)"
+      },
+      "media": {
+        "title": "Media",
+        "description": "Probes, muxes, mixes, extracts, concatenates, grabs frames from, or overlays audio and video files. Files come from upstream nodes as whole file references, e.g. '{{core:download.output.file}}'.",
+        "operation": "Operation",
+        "operationPlaceholder": "Select an operation",
+        "opProbe": "Probe",
+        "opProbeDesc": "Inspect a media file: duration, streams, codecs (no output file)",
+        "opMuxAudio": "Mux audio",
+        "opMuxAudioDesc": "Put one audio track onto one video",
+        "opMix": "Mix",
+        "opMixDesc": "Blend up to 8 audio tracks, optionally onto a video",
+        "opExtractAudio": "Extract audio",
+        "opExtractAudioDesc": "Pull the audio track out of a video",
+        "input": "Input file",
+        "inputPlaceholder": "'{{core:download.output.file}}'",
+        "inputHint": "Reference the whole file object from an upstream node.",
+        "video": "Video",
+        "videoPlaceholder": "'{{interface:card.output.video}}'",
+        "audio": "Audio",
+        "audioPlaceholder": "'{{core:download.output.file}}'",
+        "mixVideoHint": "Optional: with a video the result is an mp4; without it the result is audio only.",
+        "volume": "Volume (%)",
+        "offsetSeconds": "Offset (seconds)",
+        "trimStartSeconds": "Trim start (seconds)",
+        "trimEndSeconds": "Trim end (seconds)",
+        "loop": "Loop",
+        "loopTrimHint": "Trims are disabled while loop is on: loop cannot be combined with trim start/end.",
+        "mixNoVideoLoopHint": "An audio-only mix cannot loop every track: at least one track must not loop so the mix has a length, or add a video.",
+        "fadeInSeconds": "Fade in (seconds)",
+        "fadeOutSeconds": "Fade out (seconds)",
+        "fadeOutHint": "Default: 1 second.",
+        "keepOriginalAudio": "Keep original audio",
+        "removeLiteralFile": "Remove this file",
+        "originalVolume": "Original volume (%)",
+        "audioFit": "Audio fit",
+        "audioFitPad": "Pad (keep video length)",
+        "audioFitShortest": "Shortest (cut to the shorter one)",
+        "audioFitLoop": "Loop (repeat audio to video length)",
+        "normalize": "Loudness normalization",
+        "normalizeAuto": "Automatic (-16 LUFS)",
+        "normalizeCustom": "Custom target",
+        "normalizeOff": "Off",
+        "normalizeLufs": "Loudness target (LUFS)",
+        "normalizeLufsHint": "Between {min} and {max} LUFS. Default: -16.",
+        "audioBitrate": "Audio bitrate",
+        "outputFormat": "Output format",
+        "tracks": "Tracks",
+        "track": "Track {index}",
+        "trackId": "Track id",
+        "trackSource": "Source",
+        "trackSourcePlaceholder": "'{{core:download.output.file}}'",
+        "trackAdvanced": "Advanced",
+        "addTrack": "Add track",
+        "removeTrack": "Remove track",
+        "tracksHint": "Up to {max} tracks. Each track needs a source file.",
+        "speed": "Speed",
+        "speedHint": "Between {min} and {max} (pitch preserved). Default: {default}.",
+        "duckUnder": "Duck under",
+        "duckNone": "No ducking",
+        "duckUnderHint": "This track automatically lowers while the selected track is audible.",
+        "duckAmountDb": "Duck amount (dB)",
+        "duckAttackMs": "Duck attack (ms)",
+        "duckReleaseMs": "Duck release (ms)",
+        "opConcat": "Concat",
+        "opConcatDesc": "Glue up to 8 videos back to back into one video",
+        "opFrame": "Frame",
+        "opFrameDesc": "Extract one still image from a video (cover, thumbnail)",
+        "opOverlay": "Overlay",
+        "opOverlayDesc": "Burn an image (logo, watermark) onto a video",
+        "clips": "Clips",
+        "clip": "Clip {index}",
+        "clipSource": "Source",
+        "clipSourcePlaceholder": "'{{core:download.output.file}}'",
+        "addClip": "Add clip",
+        "removeClip": "Remove clip",
+        "moveClipUp": "Move clip up",
+        "moveClipDown": "Move clip down",
+        "clipsHint": "Up to {max} clips, played in order. Each clip needs a source video.",
+        "transition": "Transition",
+        "transitionCut": "Cut (no transition)",
+        "transitionCrossfade": "Crossfade",
+        "transitionSeconds": "Transition duration (seconds)",
+        "transitionSecondsHint": "Between {min} and {max} seconds, shorter than every clip. Default: {default}.",
+        "targetWidth": "Target width (px)",
+        "targetHeight": "Target height (px)",
+        "targetSizeHint": "Set both or neither ({min} to {max}). Clips that do not match are fitted and padded, never stretched.",
+        "targetFps": "Target frame rate (fps)",
+        "targetFpsHint": "Between {min} and {max}. Default: the first clip's frame rate.",
+        "concatNormalizeHint": "Evens out loudness between clips. Turning this on forces a re-encode.",
+        "atSeconds": "Timestamp (seconds)",
+        "atSecondsHint": "Defaults to the middle of the video. Beyond the end it snaps to just before the end.",
+        "imageFormat": "Image format",
+        "frameWidth": "Width (px)",
+        "frameWidthHint": "Between {min} and {max}. Height adjusts automatically to keep the aspect ratio.",
+        "image": "Image",
+        "imagePlaceholder": "'{{core:download.output.file}}'",
+        "imageHint": "PNG transparency is respected.",
+        "position": "Position",
+        "positionTopLeft": "Top left",
+        "positionTopRight": "Top right",
+        "positionBottomLeft": "Bottom left",
+        "positionBottomRight": "Bottom right",
+        "positionCenter": "Center",
+        "marginPx": "Margin (px)",
+        "marginPxHint": "Distance from the nearest edges. Ignored for center.",
+        "widthPercent": "Width (% of video)",
+        "widthPercentHint": "Between {min} and {max} percent of the video width. Default: 15.",
+        "opacity": "Opacity",
+        "opacityHint": "Between {min} and {max}. Default: 1.",
+        "startSeconds": "Start (seconds)",
+        "endSeconds": "End (seconds)",
+        "overlayTimingHint": "Leave start and end empty to show the overlay for the whole video."
       },
       "fork": {
         "outputBranches": "Output Branches",
@@ -9434,7 +9625,8 @@
     "card": {
       "runs": "{count, plural, one {# run} other {# runs}}",
       "epochs": "{count, plural, one {# epoch} other {# epochs}}",
-      "reviewApprovals": "Review approvals"
+      "reviewApprovals": "Review approvals",
+      "costTitle": "Cost of the production run"
     },
     "status": {
       "live": "Live",
@@ -9594,5 +9786,339 @@
     "done": "Done",
     "working": "Working...",
     "failed": "Failed"
+  },
+  "templates": {
+    "gallery": {
+      "workflowTitle": "Start from a template",
+      "workflowSubtitle": "Open one to see how it works. Every template is annotated on the canvas.",
+      "agentTitle": "Start from a template",
+      "agentSubtitle": "Pick a starting point, then adjust it before you create the agent.",
+      "readyToRun": "Ready to run",
+      "needsSetup": "Needs setup",
+      "beginner": "Beginner",
+      "intermediate": "Intermediate",
+      "advanced": "Advanced",
+      "youWillLearn": "What you will learn",
+      "creating": "Creating...",
+      "createFailed": "Could not create from this template",
+      "use": "Use {name}",
+      "browse": "Templates",
+      "tableTitle": "Start from a template",
+      "tableSubtitle": "Create a table with its columns already set up."
+    },
+    "workflow": {
+      "helloWorkflow": {
+        "title": "Hello workflow",
+        "description": "The smallest workflow that does something: a manual trigger and one step that computes two values.",
+        "teaches": {
+          "0": "Every workflow starts with a trigger",
+          "1": "How a step reads the output of the step before it",
+          "2": "Where to see what a step produced after a run"
+        },
+        "notes": {
+          "trigger": {
+            "label": "Start here",
+            "text": "A workflow always begins with a trigger. This one is manual: nothing happens until you press Run. Other triggers fire on a webhook, on a schedule, on a new chat message, or when another workflow fails."
+          },
+          "label": {
+            "label": "Labels are identifiers",
+            "text": "A step's label is also its name in expressions. 'Build greeting' becomes build_greeting, which is why the connection reads core:build_greeting and the expression above reads trigger:start.output.triggered_by. Rename a step and you must update the expressions that point at it."
+          },
+          "output": {
+            "label": "See what a step produced",
+            "text": "Press Run, then click this step. The right panel shows its outputs. A transform puts its mapped fields under transformed, so a later step reads them with {{core:build_greeting.output.transformed.greeting}}. Leave out the transformed segment and the expression resolves to nothing, silently."
+          }
+        }
+      },
+      "branchDecision": {
+        "title": "Branch with a decision",
+        "description": "A decision sends the run down exactly one path, based on a condition you write.",
+        "teaches": {
+          "0": "A decision takes one branch and only one",
+          "1": "How to connect a specific port of a decision",
+          "2": "Why the branch not taken is marked SKIPPED, not failed"
+        },
+        "notes": {
+          "oneBranch": {
+            "label": "One branch, never two",
+            "text": "A decision evaluates its conditions top to bottom and takes the FIRST one that matches. It never runs two branches. If you want several paths to run at the same time, you want a Fork instead."
+          },
+          "ports": {
+            "label": "The port is part of the connection",
+            "text": "A decision does not just connect to the next step, it connects FROM a specific port. That is why these connections read core:check_amount:if and core:check_amount:else. Extra conditions add elseif_0, then elseif_1, and so on: the elseif ports are numbered from zero, like fork branches."
+          },
+          "elseRequired": {
+            "label": "Always keep an else",
+            "text": "Without an else branch, a value you did not anticipate stops the run on that path: the steps below are marked SKIPPED and no error is raised anywhere. Parallel branches elsewhere keep going. The else branch is where you handle the case you did not think of."
+          },
+          "skipped": {
+            "label": "SKIPPED is not a failure",
+            "text": "After a run, the branch that was not taken shows as SKIPPED. That is the normal, healthy result of a decision. Only a red FAILED step means something went wrong."
+          }
+        },
+        "ports": {
+          "above": "Above 100",
+          "belowOrEqual": "100 or below"
+        }
+      },
+      "forkMerge": {
+        "title": "Run steps in parallel",
+        "description": "A fork runs every branch at the same time, and a merge waits until all of them are done.",
+        "teaches": {
+          "0": "A fork runs all of its branches, unlike a decision",
+          "1": "A merge waits for every predecessor before continuing",
+          "2": "Any step with several incoming connections already merges"
+        },
+        "notes": {
+          "vsDecision": {
+            "label": "Fork is not decision",
+            "text": "A decision picks ONE branch. A fork runs them ALL, at the same time. Use a fork when the branches are independent and you want the run to be faster."
+          },
+          "allBranches": {
+            "label": "All branches start together",
+            "text": "Both branches below start at the same moment. Their ports are numbered from zero: core:fan_out:branch_0 and core:fan_out:branch_1."
+          },
+          "waitsAll": {
+            "label": "The merge waits for everyone",
+            "text": "Join does not run until BOTH branches have finished. Finished means completed, failed OR skipped: a branch that failed still releases the merge, which is exactly what lets a resilient step carry the run forward instead of hanging it."
+          },
+          "implicitMerge": {
+            "label": "Merges can be implicit",
+            "text": "Any step with more than one incoming connection already behaves like a merge: it waits for all of its predecessors. The Merge step exists for when you want that wait to be visible and named on the canvas, not because it is required."
+          }
+        },
+        "ports": {
+          "branchA": "Branch A",
+          "branchB": "Branch B"
+        }
+      },
+      "splitList": {
+        "title": "Process a list",
+        "description": "A split turns one list into many parallel runs, one per item, then an aggregate collects the results.",
+        "teaches": {
+          "0": "A split creates one parallel context per item",
+          "1": "How to read the current item with {{item}} and {{index}}",
+          "2": "The difference between a split and a loop"
+        },
+        "notes": {
+          "parallel": {
+            "label": "One run per item",
+            "text": "Split takes a list and starts the steps after it once per item, in parallel. Three items means the steps below run three times, at the same time, each with its own item."
+          },
+          "vsLoop": {
+            "label": "Split is not loop",
+            "text": "Split runs N copies in parallel over the items of a list. Loop repeats sequentially, one pass after another, for as long as a condition stays true. Use split for a known list, loop for a condition you have to re-check."
+          },
+          "itemVar": {
+            "label": "Reading the current item",
+            "text": "Inside the split, {{item}} is the current element and {{index}} is its position, starting at zero. They resolve for every step of the per-item region, including a decision or a loop, which simply run once per item. The region ends at the step that folds the items back into one: an aggregate, or a merge that gathers the split."
+          },
+          "maxItems": {
+            "label": "maxItems is a safety net",
+            "text": "maxItems caps how many items the split will take, here 10 (the default is 100). Read this one carefully: items beyond the cap are DROPPED silently, with no error and nothing in the run to tell you. Set it above the largest list you realistically expect, it is a safety net against a runaway list, not a performance dial."
+          },
+          "aggregate": {
+            "label": "Collecting the results back",
+            "text": "The parallel branches end here. Aggregate gathers one value from each of them into a single list, which is how you get back to a single execution after a split."
+          }
+        }
+      },
+      "resilientSteps": {
+        "title": "Make a step resilient",
+        "description": "Retries, timeouts and an explicit failure step, so a flaky call does not silently break the whole run.",
+        "teaches": {
+          "0": "How retries, backoff and timeout are configured per step",
+          "1": "What continueOnFailure really changes",
+          "2": "How to fail the run on purpose, with a clear message"
+        },
+        "notes": {
+          "replaceUrl": {
+            "label": "Replace the URL first",
+            "text": "This step points at a placeholder address. Open it and set your own URL before you run this workflow, otherwise the call fails by design."
+          },
+          "retry": {
+            "label": "Retries and backoff",
+            "text": "retryCount is 2, which means 3 attempts in total: the first one plus 2 retries. retryBackoffMs waits 1000 ms between attempts. One thing to understand before you rely on this: an HTTP 4xx or 5xx response is NOT a step failure, the step succeeds with success set to false. Retries only fire on a hard failure such as an unreachable host, a timeout, or an invalid URL. Everything else is handled by the decision opposite."
+          },
+          "timeout": {
+            "label": "A timeout stops waiting, not the work",
+            "text": "Two timeouts are in play here and they are independent. The HTTP step has its own transport timeout (5000 ms), while nodePolicy.timeoutMs (15000 ms) caps each attempt of the call itself. Keep the step-level one above the transport one, otherwise the wrapper fires first and hides the real error. And be careful what a timeout means: you stop WAITING for the answer, but the remote server may well have received and processed your request. For anything that writes data, make the call safe to repeat."
+          },
+          "continueOnFailure": {
+            "label": "continueOnFailure keeps the run alive",
+            "text": "Without it, a failed step marks everything after it as skipped. With it, the run carries on, though the step itself still shows as FAILED. On a hard failure the step does NOT produce the fields you expected (success and data are absent), so an expression pointing at them resolves to nothing and the decision below falls through to else. continueOnFailure is refused on a decision, a switch or an option: a branching step that failed chose no port."
+          },
+          "stopOnError": {
+            "label": "Failing on purpose",
+            "text": "Stop on Error ends the ENTIRE run, every branch, and marks it FAILED with the message you wrote. Prefer it to letting a run finish green on bad data: a loud failure is easier to fix than a silent one."
+          }
+        },
+        "ports": {
+          "succeeded": "Call succeeded",
+          "failed": "Call failed"
+        },
+        "stopMessage": "The API call failed after every retry attempt."
+      },
+      "errorHandler": {
+        "title": "React to a failure",
+        "description": "Two workflows side by side: one that fails, and one that wakes up when it does.",
+        "teaches": {
+          "0": "How an error trigger watches a parent workflow",
+          "1": "What the failure payload contains",
+          "2": "The one setup step everyone forgets"
+        },
+        "notes": {
+          "pickParent": {
+            "label": "Choose the workflow to watch",
+            "text": "Both halves are drawn on one canvas so the shape is easy to read, but they CANNOT stay together. A workflow that contains an error trigger never dispatches its own failures (that is the anti-loop guard), so this handler will never react to the run above it. Move the top DAG into its own workflow, then add a fresh Error trigger here from the palette and pick that workflow as the parent. The watched workflow cannot be changed from the inspector afterwards."
+          },
+          "seedRun": {
+            "label": "Run this workflow once, or it stays deaf",
+            "text": "This is the step almost everyone misses. Save this workflow, then run it manually one time, and leave that run in progress. A handler is only reached through a run that is already waiting: if none exists, failures of the parent are ignored SILENTLY, with no error, no warning, and nothing in the parent run to tell you the handler never fired."
+          },
+          "payload": {
+            "label": "What you receive",
+            "text": "The trigger hands you status (the parent run state at the moment it was dispatched, not always FAILED), parentWorkflowId, parentRunId, errorMessage and triggeredAt, plus the counts failedSteps, completedSteps, totalSteps and skippedSteps when the parent reported statistics. The step next to this note copies a few of them so you can see their shape after a run."
+          },
+          "noLoop": {
+            "label": "No infinite loops",
+            "text": "An error handler that fails does not trigger another error handler. You cannot accidentally build a chain of failures that feeds itself."
+          },
+          "nextStep": {
+            "label": "Where to go from here",
+            "text": "The top DAG is only a stand-in for the workflow you actually want to watch: it does a little work, then fails on purpose. The bottom DAG is the handler. Replace both with the real thing once the shape is clear."
+          }
+        },
+        "noParentSelected": "None selected",
+        "attempted": "Pretending to do something important",
+        "stopMessage": "Failing on purpose, so the handler beside this has something to react to."
+      },
+      "interfacePage": {
+        "title": "Show a page to the user",
+        "description": "A workflow that builds some data and hands it to a web page, then waits for the user to continue.",
+        "teaches": {
+          "0": "The workflow is the backend, the interface is the frontend",
+          "1": "How variable_mapping feeds values into the page",
+          "2": "Why the run pauses at an interface until the user acts"
+        },
+        "interfaceDescription": "Result page created from the \"Show a page to the user\" template.",
+        "notes": {
+          "backendFrontend": {
+            "label": "Two halves of one app",
+            "text": "Think of it this way: the workflow is the backend and the interface is the frontend. Steps compute values, the page displays them. The page never queries the database itself, everything it shows arrives from the workflow."
+          },
+          "variableMapping": {
+            "label": "How values reach the page",
+            "text": "The interface node carries a variable_mapping: each entry names a placeholder in the HTML and the expression that fills it. Here headline, who and when come from the transform before it, and the page writes them as {{headline}}, {{who}} and {{when}}. The |default part after a pipe is what shows when a value is missing."
+          },
+          "pauses": {
+            "label": "The run stops here, on purpose",
+            "text": "An interface step waits. The run holds at this node until the user acts, which is what makes multi-step apps possible. The button on the page sends __continue, the one action that advances the workflow. A plain navigate action would switch pages without advancing it."
+          },
+          "ownCopy": {
+            "label": "This page is yours now",
+            "text": "Creating from this template also created a real interface, owned by you and listed under Interfaces. Edit its HTML and CSS freely: you are changing your own copy, never the template."
+          }
+        },
+        "page": {
+          "headline": "Your workflow built this page",
+          "meta": "Run by",
+          "hint": "Every value on this page came from the step before it. Change that step, run again, and the page changes with it.",
+          "cta": "Continue the workflow"
+        }
+      }
+    },
+    "agent": {
+      "basicAssistant": {
+        "title": "Basic assistant",
+        "description": "A plain conversational agent with no tools, and a system prompt written as a worked example.",
+        "teaches": {
+          "0": "The four parts of a system prompt that works",
+          "1": "Why an agent with no tools is a fine starting point",
+          "2": "What temperature actually changes"
+        },
+        "systemPrompt": "You are a helpful assistant for a small team.\n\nRole: you answer questions clearly and briefly, and you help people think through problems.\n\nTone: direct and friendly. Short sentences. No filler, no flattery.\n\nRules:\n- If you do not know something, say so instead of guessing.\n- Ask a clarifying question when the request is ambiguous.\n- Never invent facts, names, numbers or sources.\n\nFormat: answer in plain prose. Use a short bulleted list only when you are genuinely enumerating things.\n\n(This prompt is a starting point. The four blocks above, role, tone, rules and format, are the parts worth keeping when you rewrite it for your own use.)"
+      },
+      "dataAnalyst": {
+        "title": "Data analyst",
+        "description": "An agent that can read your tables, in read-only mode, and is told to always say where a number came from.",
+        "teaches": {
+          "0": "How to grant an agent access to one family of resources",
+          "1": "Why read-only access is the right default",
+          "2": "Asking an agent to cite its source"
+        },
+        "systemPrompt": "You are a data analyst working with the team's tables.\n\nRole: answer questions about the data by reading the tables you have access to.\n\nRules:\n- Always read the data before answering. Never estimate a number from memory.\n- State which table and which columns a figure came from, every time.\n- If the tables do not contain the answer, say exactly that, and say what would be needed.\n- If a result looks surprising, show the figure and flag it rather than smoothing it over.\n\nFormat: give the number first, then a one-line explanation of how you got it. Use a small table when comparing several values.\n\nYou have READ access only. You cannot modify the data, and you should not offer to."
+      },
+      "workflowConductor": {
+        "title": "Workflow conductor",
+        "description": "An agent allowed to run your workflows, with clear instructions about when it should and should not.",
+        "teaches": {
+          "0": "An agent can trigger the workflows you built",
+          "1": "How to frame when an agent may act instead of answer",
+          "2": "Why you tell an agent to confirm before side effects"
+        },
+        "systemPrompt": "You coordinate the team's workflows.\n\nRole: understand what the user is asking for, decide whether an existing workflow does it, and run that workflow.\n\nRules:\n- Before running anything, say which workflow you intend to run and why.\n- Ask for confirmation before any workflow that sends a message, writes data, or is otherwise visible outside this conversation.\n- If no workflow matches the request, say so. Do not improvise a substitute.\n- After a run, report what happened: succeeded, failed, or partially, and what the output was.\n\nFormat: keep it short. One line for the intent, one line for the result."
+      },
+      "frugalAgent": {
+        "title": "Frugal agent",
+        "description": "Tight limits and a zero temperature, for repetitive work where cost and consistency matter more than flair.",
+        "teaches": {
+          "0": "maxIterations caps how many turns an agent can take",
+          "1": "maxTokens caps the length of each answer",
+          "2": "Temperature zero makes the same input give the same output"
+        },
+        "systemPrompt": "You perform short, repetitive tasks with a predictable output.\n\nRole: do exactly what is asked, once, and stop.\n\nRules:\n- Be brief. No preamble, no summary of the request, no closing pleasantries.\n- Do not ask follow-up questions unless the task is impossible without one.\n- Give the same answer for the same input. Do not vary the wording for style.\n- If the task needs more steps than you are allowed, say what is missing and stop.\n\nFormat: output only the result. No explanation unless it was requested.\n\n(Cost levers live in the Advanced section: maxIterations limits how many turns this agent may take, maxTokens limits the size of each answer, and a credit budget stops it entirely once spent.)"
+      }
+    },
+    "table": {
+      "contacts": {
+        "title": "Contacts",
+        "description": "A simple address book: who they are, how to reach them, and a place for notes.",
+        "teaches": {
+          "0": "A table is a set of typed columns",
+          "1": "Email and phone are their own types, not plain text",
+          "2": "You can add or rename columns at any time"
+        },
+        "columns": {
+          "name": "Name",
+          "email": "Email",
+          "phone": "Phone",
+          "company": "Company",
+          "notes": "Notes"
+        }
+      },
+      "taskTracker": {
+        "title": "Task tracker",
+        "description": "Tasks with a status, a due date and a priority, ready for a workflow to read and update.",
+        "teaches": {
+          "0": "A select column keeps values consistent",
+          "1": "Dates and checkboxes get their own editors",
+          "2": "A workflow can read and update these rows"
+        },
+        "columns": {
+          "title": "Task",
+          "status": "Status",
+          "dueDate": "Due date",
+          "done": "Done",
+          "priority": "Priority"
+        }
+      },
+      "contentCalendar": {
+        "title": "Content calendar",
+        "description": "What you plan to publish, where, and when. A good table to drive a scheduled workflow.",
+        "teaches": {
+          "0": "Planning data belongs in a table, not in the workflow",
+          "1": "A scheduled workflow can pick up what is due today",
+          "2": "A link column keeps the published URL next to the plan"
+        },
+        "columns": {
+          "topic": "Topic",
+          "channel": "Channel",
+          "publishDate": "Publish date",
+          "status": "Status",
+          "link": "Link"
+        }
+      }
+    }
   }
 }

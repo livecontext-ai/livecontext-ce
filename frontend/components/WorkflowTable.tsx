@@ -26,6 +26,7 @@ import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 import { useOrgScopedReset } from '@/lib/hooks/useOrgScopedReset';
 import { createEmptyWorkflowPlan } from '@/lib/workflows/defaultWorkflowPlan';
+import { TemplateGallery } from '@/components/templates/TemplateGallery';
 
 
 
@@ -329,15 +330,31 @@ export default function WorkflowTable({
           <h1 className="text-lg font-semibold text-theme-primary">{t('workflow.title')}</h1>
           <p className="text-sm text-theme-secondary mt-0.5">{t('workflow.subtitle')}</p>
         </div>
-        {canMutate && !loading && (totalCount > 0 || debouncedSearch.trim().length > 0) && (
-          <Button
-            variant="default"
-            size="sm"
-            onClick={() => setShowCreateWorkflowModal(true)}
-          >
-            <Plus className="h-4 w-4 mr-1.5" />
-            {t('workflow.createWorkflow')}
-          </Button>
+        {canMutate && !loading && (
+          <div className="flex shrink-0 items-center gap-2">
+            {/* Templates sit behind this button rather than in a permanent banner:
+                a starting point should not cost scroll on every visit. Shown even
+                when the list is empty, which is when it helps most. */}
+            <TemplateGallery
+              kind="workflow"
+              canMutate={canMutate}
+              existingNames={workflows.map((w) => w.name).filter(Boolean) as string[]}
+              onWorkflowCreated={(id) => router.push(`/app/workflow/${id}`)}
+              onError={(message) =>
+                addToast({ type: 'error', title: t('workflow.errorCreatingWorkflow'), message })
+              }
+            />
+            {(totalCount > 0 || debouncedSearch.trim().length > 0) && (
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => setShowCreateWorkflowModal(true)}
+              >
+                <Plus className="h-4 w-4 mr-1.5" />
+                {t('workflow.createWorkflow')}
+              </Button>
+            )}
+          </div>
         )}
       </div>
 

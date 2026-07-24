@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import { useWorkflowLayoutDirectionSafe } from '@/contexts/WorkflowLayoutDirectionContext';
 import { useTranslations } from 'next-intl';
 import { createPortal } from 'react-dom';
 import { FileJson, Copy, Check, X, Upload, AlertCircle } from 'lucide-react';
@@ -22,6 +23,9 @@ interface WorkflowPlanGeneratorProps {
 }
 
 export function WorkflowPlanGenerator({ nodes, edges, readOnly = false, onNodesChange, onEdgesChange }: WorkflowPlanGeneratorProps) {
+  // A generated plan carries no positions, so dagre lays it out: it must use the
+  // reading direction the canvas is wired for.
+  const { direction: layoutDirection } = useWorkflowLayoutDirectionSafe();
   const t = useTranslations('workflowBuilder.canvas');
   const tenantId = 'google-oauth2|109706784165946220967';
   const [isOpen, setIsOpen] = React.useState(false);
@@ -142,7 +146,7 @@ export function WorkflowPlanGenerator({ nodes, edges, readOnly = false, onNodesC
     });
 
     try {
-      const result = await WorkflowPlanImporter.importPlan(importJson, nodes);
+      const result = await WorkflowPlanImporter.importPlan(importJson, nodes, layoutDirection);
       
       if (result.success) {
         // Merge with existing nodes, avoiding duplicates by ID
@@ -245,7 +249,7 @@ export function WorkflowPlanGenerator({ nodes, edges, readOnly = false, onNodesC
       // PHASE 3.3: Clean up progress callback
       ToolDataService.setProgressCallback(null);
     }
-  }, [importJson, nodes, edges, onNodesChange, onEdgesChange]);
+  }, [importJson, nodes, edges, onNodesChange, onEdgesChange, layoutDirection]);
 
   return (
     <>

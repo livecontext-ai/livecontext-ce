@@ -103,6 +103,16 @@ public class AgentObservabilityService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private FleetStatsCacheService fleetStatsCacheService;
 
+    /**
+     * Optional run-cost notifier. Field-injected (required=false) so the
+     * constructor and all its test call-sites stay untouched. When present, a
+     * settled agent execution that belongs to a workflow run tells the
+     * orchestrator its credit cost, so the run-mode UI can live-update
+     * "Cost of this run" and enforce the workflow budget at the epoch boundary.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private RunCostNotifier runCostNotifier;
+
     public AgentObservabilityService(
             AgentExecutionRepository executionRepository,
             AgentExecutionIterationRepository iterationRepository,
@@ -273,6 +283,19 @@ public class AgentObservabilityService {
         }
 
         emitAgentRunStoppedAnalytics(request, executionId, actualForSettle);
+
+        // Attribute this execution's cost to its workflow run so the run-mode UI
+        // can live-update "Cost of this run" and the workflow budget can gate the
+        // next epoch. Only workflow-run agents carry a runId; chat/standalone
+        // executions have none and are skipped. Fully best-effort (fire-and-forget).
+        if (runCostNotifier != null && request.getRunId() != null && !request.getRunId().isBlank()) {
+            runCostNotifier.notifyRunCost(
+                    request.getRunId(),
+                    request.getOrganizationId(),
+                    request.getTenantId(),
+                    request.getEpoch(),
+                    actualForSettle);
+        }
 
         return executionId;
     }

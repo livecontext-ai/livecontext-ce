@@ -12,6 +12,8 @@ import { favoritesFirst, type ListSortKey, type VisibilityFilter } from '@/lib/u
 import { useResourceFavorites } from '@/hooks/useResourceFavorites';
 import { FavoriteStarButton } from '@/components/ui/FavoriteStarButton';
 import { CreateAgentModal } from '@/components/chat/CreateAgentModal';
+import { TemplateGallery } from '@/components/templates/TemplateGallery';
+import type { hydrateAgent } from '@/lib/templates/hydrate';
 import { orchestratorApi } from '@/lib/api';
 import { agentService } from '@/lib/api/orchestrator/agent.service';
 import { publicationService } from '@/lib/api/orchestrator/publication.service';
@@ -90,6 +92,10 @@ export function AgentTable({ className = '' }: AgentTableProps) {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [editingAgent, setEditingAgent] = useState<AgentRow | null>(null);
+  // A template selection prefills the create modal. It carries NO id on purpose:
+  // CreateAgentModal derives isEditMode from `!!agent?.id`, so an id here would
+  // open it in edit mode against an agent that does not exist yet.
+  const [templateAgent, setTemplateAgent] = useState<ReturnType<typeof hydrateAgent> | null>(null);
   const [publishingAgent, setPublishingAgent] = useState<AgentRow | null>(null);
   const [publishedAgentIds, setPublishedAgentIds] = useState<Set<string>>(new Set());
   const [pendingReviewAgentIds, setPendingReviewAgentIds] = useState<Set<string>>(new Set());
@@ -307,10 +313,23 @@ export function AgentTable({ className = '' }: AgentTableProps) {
     fetchAgents();
     setShowCreateModal(false);
     setEditingAgent(null);
+    setTemplateAgent(null);
+  };
+
+  // Open the create modal blank. Clears any template prefill so the "Create agent"
+  // button always means "start from scratch", whatever the user clicked before.
+  const openCreateModal = () => {
+    setEditingAgent(null);
+    setTemplateAgent(null);
+    setShowCreateModal(true);
   };
 
   // Open edit modal for an agent
   const openEditModal = (agent: AgentRow) => {
+    // Belt and braces: the modal prop already gives `editingAgent` precedence,
+    // so this is not what protects the edit. It keeps the state honest instead,
+    // so a future reordering of that expression cannot resurrect the prefill.
+    setTemplateAgent(null);
     setEditingAgent(agent);
   };
 
@@ -360,8 +379,9 @@ export function AgentTable({ className = '' }: AgentTableProps) {
   return (
     <div className={`space-y-4 w-full overflow-visible ${className}`}>
       {/* Header actions */}
-      {(loading || totalCount > 0 || debouncedSearch.trim().length > 0) && (
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+      {/* Header always rendered (mirrors WorkflowTable): the templates button must
+          stay reachable when the list is empty, which is when it helps most. */}
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-theme-secondary rounded-full flex items-center justify-center">
               <Bot className="w-5 h-5 text-theme-primary" />
@@ -378,17 +398,35 @@ export function AgentTable({ className = '' }: AgentTableProps) {
           {loading ? (
             <div className="h-8 w-28 bg-theme-tertiary rounded animate-pulse"></div>
           ) : canMutate ? (
-            <Button
-              variant="default"
-              size="sm"
-              onClick={() => setShowCreateModal(true)}
-            >
-              <Plus className="h-4 w-4 mr-1.5" />
-              {t('emptyState.agent.createButton')}
-            </Button>
-          ) : null}
-        </div>
-      )}
+            <div className="flex shrink-0 items-center gap-2">
+              {/* Templates sit behind this button rather than in a permanent banner.
+                  Selecting a card opens the create modal PREFILLED, it creates
+                  nothing: the modal is the preview, and a beginner should see an
+                  agent's configuration before committing to it. */}
+              <TemplateGallery
+                kind="agent"
+                canMutate={canMutate}
+                existingNames={agents.map((a) => a.name).filter(Boolean) as string[]}
+                onAgentTemplateSelected={(prefilled) => {
+                  setEditingAgent(null);
+                  setTemplateAgent(prefilled);
+                  setShowCreateModal(true);
+                }}
+                onError={(message) =>
+                  addToast({ type: 'error', title: t('templates.gallery.createFailed'), message })
+                }
+              />
+              <Button
+                variant="default"
+                size="sm"
+                onClick={openCreateModal}
+              >
+                <Plus className="h-4 w-4 mr-1.5" />
+                {t('emptyState.agent.createButton')}
+              </Button>
+            </div>
+        ) : null}
+      </div>
 
       {/* Search + visibility filter + sort */}
       {(totalCount > 0 || debouncedSearch.trim().length > 0) && (
@@ -482,12 +520,18 @@ export function AgentTable({ className = '' }: AgentTableProps) {
 
       {(showCreateModal || editingAgent) && (
         <CreateAgentModal
+          // Remount on intent change. name/systemPrompt/temperature are useState
+          // INITIALIZERS, so reusing the instance when switching from a template
+          // prefill to editing a real agent would leave the template's values in
+          // the fields and overwrite the live agent on save.
+          key={editingAgent?.id ?? (templateAgent ? 'template' : 'blank')}
           onClose={() => {
             setShowCreateModal(false);
             setEditingAgent(null);
+            setTemplateAgent(null);
           }}
           onAgentCreated={handleAgentCreated}
-          agent={editingAgent || undefined}
+          agent={editingAgent || templateAgent || undefined}
         />
       )}
 
@@ -514,7 +558,7 @@ export function AgentTable({ className = '' }: AgentTableProps) {
               ? t('emptyState.agent.createFirstAgent')
               : t('emptyState.agent.noMatchingAgents')}
             actions={canMutate && totalCount === 0 && debouncedSearch.trim().length === 0 ? (
-              <Button variant="default" onClick={() => setShowCreateModal(true)}>
+              <Button variant="default" onClick={openCreateModal}>
                 <Plus className="w-4 h-4 mr-1.5" />
                 {t('emptyState.agent.createButton')}
               </Button>

@@ -2188,29 +2188,29 @@ class SplitAwareNodeExecutorTest {
 
             // Empty resultsByNode (post-restore) -> not warm, must allow the durable backfill.
             assertThat(executor.inMemorySlotsComplete(
-                SplitContext.create("core:s:0", List.of("a", "b", "c")), routed, reader)).isFalse();
+                SplitContext.create("core:s:0", List.of("a", "b", "c")), routed, reader, nodeMap)).isFalse();
 
             // Every present node dense for every routed item AND the reader's direct
             // predecessor present -> warm, skip the durable read.
             SplitContext dense = SplitContext.create("core:s:0", List.of("a", "b", "c"))
                 .withResults("agent:classify", java.util.Arrays.asList(
                     Map.of("c", "0"), Map.of("c", "1"), Map.of("c", "2")));
-            assertThat(executor.inMemorySlotsComplete(dense, routed, reader)).isTrue();
+            assertThat(executor.inMemorySlotsComplete(dense, routed, reader, nodeMap)).isTrue();
 
             // A null slot for a routed item -> not warm (async-partial gap).
             SplitContext nullSlot = SplitContext.create("core:s:0", List.of("a", "b", "c"))
                 .withResults("agent:classify", java.util.Arrays.asList(
                     Map.of("c", "0"), null, Map.of("c", "2")));
-            assertThat(executor.inMemorySlotsComplete(nullSlot, routed, reader)).isFalse();
+            assertThat(executor.inMemorySlotsComplete(nullSlot, routed, reader, nodeMap)).isFalse();
 
             // A short list (routed item 2 absent) -> not warm.
             SplitContext shortList = SplitContext.create("core:s:0", List.of("a", "b", "c"))
                 .withResults("agent:classify", java.util.Arrays.asList(
                     Map.of("c", "0"), Map.of("c", "1")));
-            assertThat(executor.inMemorySlotsComplete(shortList, routed, reader)).isFalse();
+            assertThat(executor.inMemorySlotsComplete(shortList, routed, reader, nodeMap)).isFalse();
 
             // Null split context -> not warm (defensive).
-            assertThat(executor.inMemorySlotsComplete(null, routed, reader)).isFalse();
+            assertThat(executor.inMemorySlotsComplete(null, routed, reader, nodeMap)).isFalse();
         }
 
         @Test
@@ -2226,14 +2226,14 @@ class SplitAwareNodeExecutorTest {
             // dense map as warm and starved the durable backfill - the exact multi-pod blind spot.
             TestNode reader = new TestNode("core:approve", NodeType.APPROVAL);
             reader.setPredecessors(List.of("core:prep_draft"));
-            assertThat(executor.inMemorySlotsComplete(denseForOthers, routed, reader))
+            assertThat(executor.inMemorySlotsComplete(denseForOthers, routed, reader, nodeMap))
                 .as("absent direct predecessor -> memory provably cannot serve it -> not warm")
                 .isFalse();
 
             // Ported predecessor ids normalize before the lookup (core:gate:approved -> core:gate).
             TestNode portedReader = new TestNode("core:observe", NodeType.TRANSFORM);
             portedReader.setPredecessors(List.of("core:gate:approved"));
-            assertThat(executor.inMemorySlotsComplete(denseForOthers, routed, portedReader))
+            assertThat(executor.inMemorySlotsComplete(denseForOthers, routed, portedReader, nodeMap))
                 .as("ported predecessor (core:gate:approved) absent as core:gate -> not warm")
                 .isFalse();
 
@@ -2241,12 +2241,288 @@ class SplitAwareNodeExecutorTest {
             // still warm, the hot path stays query-free.
             TestNode direct = new TestNode("core:tag", NodeType.TRANSFORM);
             direct.setPredecessors(List.of("core:triage"));
-            assertThat(executor.inMemorySlotsComplete(denseForOthers, routed, direct))
+            assertThat(executor.inMemorySlotsComplete(denseForOthers, routed, direct, nodeMap))
                 .as("split-node predecessor is exempt from the absent-key check")
                 .isTrue();
 
             // Null node skips the hardening (pre-existing 2-arg semantics, defensive).
-            assertThat(executor.inMemorySlotsComplete(denseForOthers, routed, null)).isTrue();
+            assertThat(executor.inMemorySlotsComplete(denseForOthers, routed, null, nodeMap)).isTrue();
+        }
+
+        /**
+         * Prod regression, 2026-07-15 (2 orchestrator replicas, ~3 failing runs in 5).
+         *
+         * <p>Chain: {@code split -> snap -> echo_before -> think(async agent) -> echo_after}.
+         * {@code echo_after} reads {@code {{core:snap.output.v}}} and collapsed to item 0's value
+         * (A,A,A instead of A,B,C) while {@code echo_before}, reading the same node one hop
+         * earlier, stayed correct. {@code echo_after}'s only DIRECT predecessor is {@code think},
+         * which IS present in the map, so the direct-only absent-key check read the map as warm
+         * and vetoed the durable backfill for {@code snap} - an INDIRECT ancestor, absent because
+         * it ran on the other pod. The template then fell back to the item-0 base context.
+         */
+        @Test
+        @DisplayName("Regression (indirect ancestor across an async agent): reader whose DIRECT predecessor is present but whose 3-hop ancestor is ABSENT -> not warm")
+        void inMemorySlotsCompleteAbsentIndirectAncestorNotWarm() {
+            java.util.Set<Integer> routed = java.util.Set.of(0, 1, 2);
+
+            // split -> core:snap -> core:echo_before -> agent:think -> core:echo_after
+            TestNode snap = new TestNode("core:snap", NodeType.TRANSFORM);
+            snap.setPredecessors(List.of("core:each"));
+            TestNode echoBefore = new TestNode("core:echo_before", NodeType.TRANSFORM);
+            echoBefore.setPredecessors(List.of("core:snap"));
+            TestNode think = new TestNode("agent:think", NodeType.AGENT);
+            think.setPredecessors(List.of("core:echo_before"));
+            TestNode echoAfter = new TestNode("core:echo_after", NodeType.TRANSFORM);
+            echoAfter.setPredecessors(List.of("agent:think"));
+            nodeMap.put("core:snap", snap);
+            nodeMap.put("core:echo_before", echoBefore);
+            nodeMap.put("agent:think", think);
+            nodeMap.put("core:echo_after", echoAfter);
+
+            // The pod that resumes after the async agent holds a map that is DENSE for the nodes
+            // it ran itself (echo_before, think) but has NO entry for core:snap - it ran on the
+            // other pod. echo_after's template reads core:snap, three hops back.
+            SplitContext denseButSnapAbsent = SplitContext.create("core:each:0", List.of("A", "B", "C"))
+                .withResults("core:echo_before", java.util.Arrays.asList(
+                    Map.of("v", "A"), Map.of("v", "B"), Map.of("v", "C")))
+                .withResults("agent:think", java.util.Arrays.asList(
+                    Map.of("response", "r0"), Map.of("response", "r1"), Map.of("response", "r2")));
+
+            assertThat(executor.inMemorySlotsComplete(denseButSnapAbsent, routed, echoAfter, nodeMap))
+                .as("core:snap is an INDIRECT ancestor absent from the map: memory cannot serve "
+                  + "{{core:snap.output.v}}, so the map is NOT warm and the durable backfill must fire")
+                .isFalse();
+
+            // Control: echo_before, one hop earlier, reads snap as its DIRECT predecessor. It was
+            // already correct pre-fix (A,B,C in prod) and must stay not-warm for the same reason.
+            assertThat(executor.inMemorySlotsComplete(denseButSnapAbsent, routed, echoBefore, nodeMap))
+                .as("direct predecessor core:snap absent -> not warm (pre-existing hardening)")
+                .isFalse();
+
+            // Control: once core:snap IS present and dense, every ancestor of echo_after is
+            // servable from memory -> warm again, no durable query.
+            SplitContext allPresent = denseButSnapAbsent
+                .withResults("core:snap", java.util.Arrays.asList(
+                    Map.of("v", "A"), Map.of("v", "B"), Map.of("v", "C")));
+            assertThat(executor.inMemorySlotsComplete(allPresent, routed, echoAfter, nodeMap))
+                .as("every in-split ancestor present and dense -> warm, stay query-free")
+                .isTrue();
+        }
+
+        @Test
+        @DisplayName("Ancestor walk is walled at the split: a direct split successor stays warm (query-free) even though pre-split ancestors are absent from the map")
+        void inMemorySlotsCompleteAncestorWalkStopsAtSplitNode() {
+            java.util.Set<Integer> routed = java.util.Set.of(0, 1, 2);
+
+            // trigger:webhook -> core:fetch -> core:each(split) -> core:tag
+            // Only core:tag is inside the split. The walk must stop AT core:each and never reach
+            // core:fetch / trigger:webhook - they are not per-item, are never in resultsByNode,
+            // and would otherwise force a durable query on every split's FIRST node.
+            TestNode trigger = new TestNode("trigger:webhook", NodeType.TRIGGER);
+            TestNode fetch = new TestNode("core:fetch", NodeType.TRANSFORM);
+            fetch.setPredecessors(List.of("trigger:webhook"));
+            TestNode each = new TestNode("core:each", NodeType.SPLIT);
+            each.setPredecessors(List.of("core:fetch"));
+            TestNode tag = new TestNode("core:tag", NodeType.TRANSFORM);
+            tag.setPredecessors(List.of("core:each"));
+            nodeMap.put("trigger:webhook", trigger);
+            nodeMap.put("core:fetch", fetch);
+            nodeMap.put("core:each", each);
+            nodeMap.put("core:tag", tag);
+
+            SplitContext dense = SplitContext.create("core:each:0", List.of("a", "b", "c"))
+                .withResults("core:tag", java.util.Arrays.asList(
+                    Map.of("t", "0"), Map.of("t", "1"), Map.of("t", "2")));
+
+            assertThat(executor.inMemorySlotsComplete(dense, routed, tag, nodeMap))
+                .as("the walk is walled at core:each, so absent pre-split nodes (core:fetch, "
+                  + "trigger:webhook) never make the FIRST node after a split issue a durable query")
+                .isTrue();
+        }
+
+        @Test
+        @DisplayName("Ancestor walk on a cycle visits each node once: both members present and dense -> warm (a re-visiting walk would hit the cap and fail open)")
+        void inMemorySlotsCompleteAncestorWalkHandlesCycleWithoutTruncating() {
+            java.util.Set<Integer> routed = java.util.Set.of(0);
+
+            // A cycle inside the split body: core:a -> core:b -> core:a, read by core:reader.
+            TestNode a = new TestNode("core:a", NodeType.TRANSFORM);
+            a.setPredecessors(List.of("core:b"));
+            TestNode b = new TestNode("core:b", NodeType.TRANSFORM);
+            b.setPredecessors(List.of("core:a"));
+            TestNode reader = new TestNode("core:reader", NodeType.TRANSFORM);
+            reader.setPredecessors(List.of("core:a"));
+            nodeMap.put("core:a", a);
+            nodeMap.put("core:b", b);
+            nodeMap.put("core:reader", reader);
+
+            SplitContext dense = SplitContext.create("core:each:0", List.of("x"))
+                .withResults("core:a", java.util.Arrays.asList(Map.of("v", 0)))
+                .withResults("core:b", java.util.Arrays.asList(Map.of("v", 0)));
+
+            // Asserting WARM is what makes this falsifiable: the visited-set is what keeps the
+            // cycle to 2 processed nodes. Drop it and the walk re-enqueues forever, spins to the
+            // processing bound (the 50 floor on this tiny graph), reports truncated, and the
+            // fail-open branch returns NOT warm - flipping this assertion.
+            assertThat(executor.inMemorySlotsComplete(dense, routed, reader, nodeMap))
+                .as("the visited-set bounds the cycle to {core:a, core:b}, both present and dense, "
+                  + "so the walk completes untruncated and the map reads warm")
+                .isTrue();
+        }
+
+        /**
+         * Regression for the root fix (2026-07-16): the walk used to cap at a CONSTANT 50
+         * processed nodes, so a legitimate split body longer than 50 nodes truncated the walk and
+         * the fail-open forced a durable query even though memory was provably complete. The
+         * bound is now the actual graph size ({@code max(50, nodeMap.size() + 1)}); with the
+         * visited-dedup the walk processes each distinct node at most once, so a real plan (all
+         * predecessors resolvable in the nodeMap) can never exhaust it. This dense 60-node chain
+         * must therefore read WARM (query-free). Fails on the pre-fix constant-50 code.
+         */
+        @Test
+        @DisplayName("Regression: a dense 60-node chain with a FULL nodeMap completes untruncated and reads WARM (graph-size bound replaced the constant 50 cap)")
+        void inMemorySlotsCompleteLongChainWithFullNodeMapReadsWarm() {
+            java.util.Set<Integer> routed = java.util.Set.of(0);
+
+            // A 60-node chain inside the split: core:n0 (after the split) -> ... -> core:n59,
+            // read by core:reader. Every node is in the nodeMap and dense in memory.
+            int chainLength = 60;
+            SplitContext dense = SplitContext.create("core:each:0", List.of("x"));
+            for (int i = 0; i < chainLength; i++) {
+                TestNode n = new TestNode("core:n" + i, NodeType.TRANSFORM);
+                n.setPredecessors(List.of(i == 0 ? "core:each" : "core:n" + (i - 1)));
+                nodeMap.put("core:n" + i, n);
+                dense = dense.withResults("core:n" + i, java.util.Arrays.asList(Map.of("v", i)));
+            }
+            TestNode reader = new TestNode("core:reader", NodeType.TRANSFORM);
+            reader.setPredecessors(List.of("core:n" + (chainLength - 1)));
+            nodeMap.put("core:reader", reader);
+
+            assertThat(executor.inMemorySlotsComplete(dense, routed, reader, nodeMap))
+                .as("visited-dedup + a bound >= the graph size make truncation unreachable on a "
+                  + "real plan: all 60 ancestors are seen, all are present and dense, so memory "
+                  + "is provably complete and the map reads warm (query-free)")
+                .isTrue();
+        }
+
+        /**
+         * Fail-open guard, kept as a defensive net. Truncation is unreachable on a real plan
+         * (visited-dedup + graph-size bound), so the only way to exercise the flag is a
+         * pathological input: a reader whose predecessor list references more distinct ids than
+         * the nodeMap resolves, with the 50 floor as the effective bound (unresolvable ids ARE
+         * enqueued and counted; they just cannot expand). Every referenced ancestor is present
+         * and dense in memory, so ONLY the truncated flag can flip the result - a truncated walk
+         * yields a PARTIAL set that cannot prove memory is complete and must never report warm.
+         */
+        @Test
+        @DisplayName("Fail-open (defensive net): 60 unresolvable predecessor ids on a tiny nodeMap truncate at the 50 floor -> NOT warm, even with every referenced ancestor present and dense")
+        void inMemorySlotsCompleteTruncatedWalkFailsOpen() {
+            java.util.Set<Integer> routed = java.util.Set.of(0);
+
+            // Pathological fan-in: 60 distinct predecessor ids, NONE resolvable in the nodeMap.
+            int fanIn = 60;
+            SplitContext dense = SplitContext.create("core:each:0", List.of("x"));
+            java.util.List<String> preds = new java.util.ArrayList<>();
+            for (int i = 0; i < fanIn; i++) {
+                preds.add("core:g" + i);
+                // EVERY referenced ancestor is present and dense: without the truncation signal
+                // the check would find nothing absent and wrongly report warm.
+                dense = dense.withResults("core:g" + i, java.util.Arrays.asList(Map.of("v", i)));
+            }
+            TestNode reader = new TestNode("core:reader", NodeType.TRANSFORM);
+            reader.setPredecessors(preds);
+            // The nodeMap resolves ONLY the reader: bound = max(50, 1 + 1) = 50 (the floor), but
+            // 60 distinct ids are enqueued -> the walk stops with work still queued -> truncated.
+            Map<String, ExecutionNode> tinyMap = Map.of("core:reader", reader);
+
+            assertThat(executor.inMemorySlotsComplete(dense, routed, reader, tinyMap))
+                .as("a truncated walk yields a PARTIAL ancestor set, which cannot prove memory "
+                  + "is complete: fail open and let the durable backfill run")
+                .isFalse();
+
+            // Control: the same pathological shape UNDER the floor (40 ids) completes
+            // untruncated and reads warm - it is the truncation that flips the result, not the
+            // unresolvable ids themselves.
+            int smallFanIn = 40;
+            SplitContext smallDense = SplitContext.create("core:each:0", List.of("x"));
+            java.util.List<String> smallPreds = new java.util.ArrayList<>();
+            for (int i = 0; i < smallFanIn; i++) {
+                smallPreds.add("core:s" + i);
+                smallDense = smallDense.withResults("core:s" + i, java.util.Arrays.asList(Map.of("v", i)));
+            }
+            TestNode smallReader = new TestNode("core:reader", NodeType.TRANSFORM);
+            smallReader.setPredecessors(smallPreds);
+
+            assertThat(executor.inMemorySlotsComplete(smallDense, routed, smallReader,
+                    Map.of("core:reader", smallReader)))
+                .as("an untruncated walk over fully present, dense ancestors reads warm")
+                .isTrue();
+        }
+
+        /**
+         * The AUTO path (UnifiedExecutionEngine.executeNodeCore) passes nodeMap = {nodeId: node}.
+         * This is a distinct production shape from null / Map.of(): the reader IS in the map, so
+         * the BFS seeds from its predecessor ids and still yields the DIRECT predecessors, but it
+         * cannot expand them (they are absent from the singleton map). The effective scope is
+         * therefore the direct predecessors, and the veto must still fire on an absent one.
+         *
+         * <p>AUTO cannot reach the cross-pod sparse map that needs the wider scope (one call stack
+         * in one JVM; it yields out at every signal/async boundary and the resume re-enters through
+         * the full-map path), so degrading there is safe, but it must degrade to the OLD scope,
+         * never to "silently warm".
+         *
+         * <p>Two redundant mechanisms cover this shape (the direct-predecessor seed AND the walk's
+         * own seeding), so this is a shape-characterization test: it flips only when BOTH are
+         * removed. Verified by mutation: disabling seed + walk together turns this assertion true.
+         */
+        @Test
+        @DisplayName("AUTO singleton nodeMap {nodeId: node}: walk cannot expand past the direct predecessors, and the absent-direct-predecessor veto still fires")
+        void inMemorySlotsCompleteWithAutoSingletonNodeMapChecksDirectPredecessors() {
+            java.util.Set<Integer> routed = java.util.Set.of(0, 1, 2);
+            SplitContext denseForOthers = SplitContext.create("core:triage:0", List.of("a", "b", "c"))
+                .withResults("agent:classify", java.util.Arrays.asList(
+                    Map.of("c", "0"), Map.of("c", "1"), Map.of("c", "2")));
+
+            TestNode reader = new TestNode("core:approve", NodeType.APPROVAL);
+            reader.setPredecessors(List.of("core:prep_draft"));
+
+            assertThat(executor.inMemorySlotsComplete(
+                    denseForOthers, routed, reader, Map.of(reader.getNodeId(), reader)))
+                .as("AUTO's singleton map cannot expand past the direct predecessors; the absent "
+                  + "direct predecessor core:prep_draft must still veto the warm skip")
+                .isFalse();
+
+            // And the split's FIRST node stays query-free on the AUTO shape too.
+            TestNode direct = new TestNode("core:tag", NodeType.TRANSFORM);
+            direct.setPredecessors(List.of("core:triage"));
+            assertThat(executor.inMemorySlotsComplete(
+                    denseForOthers, routed, direct, Map.of(direct.getNodeId(), direct)))
+                .as("split-node predecessor is exempt: no durable query for the first node")
+                .isTrue();
+        }
+
+        @Test
+        @DisplayName("Absent-key hardening degrades to direct predecessors (not silently warm) when nodeMap is null or lacks the reader")
+        void inMemorySlotsCompleteWithoutUsableNodeMapChecksDirectPredecessors() {
+            java.util.Set<Integer> routed = java.util.Set.of(0, 1, 2);
+            SplitContext denseForOthers = SplitContext.create("core:triage:0", List.of("a", "b", "c"))
+                .withResults("agent:classify", java.util.Arrays.asList(
+                    Map.of("c", "0"), Map.of("c", "1"), Map.of("c", "2")));
+
+            TestNode reader = new TestNode("core:approve", NodeType.APPROVAL);
+            reader.setPredecessors(List.of("core:prep_draft"));
+
+            // nodeMap null (defensive) -> the transitive walk is skipped, the direct-predecessor
+            // check still catches the absent core:prep_draft.
+            assertThat(executor.inMemorySlotsComplete(denseForOthers, routed, reader, null))
+                .as("null nodeMap must not weaken the pre-existing direct-predecessor hardening")
+                .isFalse();
+
+            // nodeMap present but without the reader (auto mode can carry a partial map) -> the
+            // walk returns empty, the direct-predecessor check still fires.
+            assertThat(executor.inMemorySlotsComplete(denseForOthers, routed, reader, Map.of()))
+                .as("nodeMap lacking the reader must not weaken the direct-predecessor hardening")
+                .isFalse();
         }
 
         @Test
@@ -2495,6 +2771,149 @@ class SplitAwareNodeExecutorTest {
             assertThat(resolvedDrafts)
                 .as("the absent predecessor must resolve per item from the durable store")
                 .containsExactlyInAnyOrder("d0", "d1", "d2");
+            local.shutdown();
+        }
+
+        /**
+         * Prod regression, 2026-07-15: the reported (A,A,A) collapse, driven through execute().
+         *
+         * <p>Chain {@code split -> snap -> echo_before -> think(async agent) -> echo_after}, on the
+         * pod that resumes after the agent: the map is dense for {@code echo_before}/{@code think}
+         * but has no entry for {@code snap}. {@code echo_after} is a PLAIN transform (not
+         * signal-yielding, not a cross-item consumer), so neither unconditional bypass applies and
+         * the warm-skip veto is the only thing standing between it and the durable backfill.
+         * Pre-fix the veto only looked at {@code echo_after}'s DIRECT predecessor
+         * ({@code think}, present) and vetoed the load, collapsing {{core:snap.output.v}} to
+         * item 0's value. This also pins the nodeMap threading: without it the veto has no graph
+         * to walk.
+         */
+        @Test
+        @DisplayName("Regression (indirect ancestor A,A,A collapse): a plain node reading a 3-hop ancestor absent from a dense map issues the durable query and resolves it per item")
+        void plainNodeAbsentIndirectAncestorOnDenseMapLoadsDurable() {
+            com.apimarketplace.orchestrator.services.StepOutputService svc =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.StepOutputService.class);
+            SplitAwareNodeExecutor local = new SplitAwareNodeExecutor(
+                contextManager, null, null, null, null, null, Executors.newFixedThreadPool(2));
+            local.setStepOutputService(svc);
+
+            TestNode snap = new TestNode("core:snap", NodeType.TRANSFORM);
+            snap.setPredecessors(List.of("core:each"));
+            TestNode echoBefore = new TestNode("core:echo_before", NodeType.TRANSFORM);
+            echoBefore.setPredecessors(List.of("core:snap"));
+            TestNode think = new TestNode("agent:think", NodeType.AGENT);
+            think.setPredecessors(List.of("core:echo_before"));
+            TestNode echoAfter = new TestNode("core:echo_after", NodeType.TRANSFORM);
+            echoAfter.setPredecessors(List.of("agent:think"));
+
+            java.util.Queue<Object> resolvedSnaps = new java.util.concurrent.ConcurrentLinkedQueue<>();
+            echoAfter.setDynamicResult(ctx -> {
+                Object v = aliasOutput(ctx, "core:snap", "v");
+                if (v != null) {
+                    resolvedSnaps.add(v);
+                }
+                return NodeExecutionResult.success("core:echo_after", Map.of("echoed", true));
+            });
+            nodeMap.put("core:snap", snap);
+            nodeMap.put("core:echo_before", echoBefore);
+            nodeMap.put("agent:think", think);
+            nodeMap.put("core:echo_after", echoAfter);
+
+            SplitContext splitContext = SplitContext.create("core:each:0", List.of("A", "B", "C"))
+                .withResults("core:echo_before", java.util.Arrays.asList(
+                    Map.of("v", "A"), Map.of("v", "B"), Map.of("v", "C")))
+                .withResults("agent:think", java.util.Arrays.asList(
+                    Map.of("response", "r0"), Map.of("response", "r1"), Map.of("response", "r2")));
+            when(contextManager.findActiveContext(eq("run1"), eq("core:echo_after"), eq(0), any()))
+                .thenReturn(Optional.of(splitContext));
+            when(context.withGlobalData(any(), any())).thenReturn(context);
+            when(context.withItemIndex(anyInt())).thenReturn(context);
+            when(context.runId()).thenReturn("run1");
+            when(context.tenantId()).thenReturn("tenant1");
+            when(svc.loadPerItemOutputsByStepKey("run1", 0, "tenant1")).thenReturn(Map.of(
+                "core:snap", Map.of(
+                    0, Map.of("v", "A"),
+                    1, Map.of("v", "B"),
+                    2, Map.of("v", "C"))));
+
+            local.execute(echoAfter, context, "run1", nodeMap);
+
+            org.mockito.Mockito.verify(svc, org.mockito.Mockito.times(1))
+                .loadPerItemOutputsByStepKey("run1", 0, "tenant1");
+            assertThat(resolvedSnaps)
+                .as("each item must resolve {{core:snap.output.v}} to ITS OWN value: the reported "
+                  + "bug returned A,A,A here")
+                .containsExactlyInAnyOrder("A", "B", "C");
+            local.shutdown();
+        }
+
+        /**
+         * Pins the invariant the whole nodeMap-scope decision rests on.
+         *
+         * <p>The ancestor scope is only wired on the STEP_BY_STEP / resume path, because AUTO passes
+         * a {nodeId: node} singleton map. That is safe ONLY while AUTO never runs a non-direct
+         * split successor through the gate: the "auto mode + not direct successor" branch in
+         * execute() returns from executeNodeBody and never reaches executeForAllItemsAndTraverse,
+         * so the singleton map only ever meets the gate for DIRECT successors, whose ancestor set
+         * is empty and walled anyway.
+         *
+         * <p>If a future change lets AUTO fall through to the fan-out, the singleton map would
+         * silently narrow the veto to direct predecessors and the item-0 collapse would return with
+         * no test saying a word. This asserts the seam itself: a dense-but-incomplete map that WOULD
+         * force a durable load if the gate were reached must issue ZERO durable queries under AUTO.
+         */
+        @Test
+        @DisplayName("AUTO invariant: a non-direct split successor never reaches the fan-out gate, so the singleton nodeMap never narrows the ancestor scope")
+        void autoModeNonDirectSuccessorNeverReachesTheDurableGate() {
+            com.apimarketplace.orchestrator.services.StepOutputService svc =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.StepOutputService.class);
+            SplitAwareNodeExecutor local = new SplitAwareNodeExecutor(
+                contextManager, null, null, null, null, null, Executors.newFixedThreadPool(2));
+            local.setStepOutputService(svc);
+
+            // core:echo_after reads a non-split predecessor (readsNonSplitPredecessor -> true) and
+            // its ancestor core:snap is ABSENT from an otherwise dense map. Were the gate reached,
+            // inMemorySlotsComplete would return false and a durable epoch query WOULD fire.
+            TestNode echoAfter = new TestNode("core:echo_after", NodeType.TRANSFORM);
+            echoAfter.setPredecessors(List.of("agent:think"));
+            echoAfter.setExecuteResult(NodeExecutionResult.success("core:echo_after", Map.of("ok", true)));
+            TestNode think = new TestNode("agent:think", NodeType.AGENT);
+            think.setPredecessors(List.of("core:snap"));   // core:snap is the ABSENT indirect ancestor
+            TestNode snap = new TestNode("core:snap", NodeType.TRANSFORM);
+            snap.setPredecessors(List.of("core:each"));
+            nodeMap.put("core:echo_after", echoAfter);
+            nodeMap.put("agent:think", think);
+            nodeMap.put("core:snap", snap);
+            nodeMap.put("core:each", new TestNode("core:each", NodeType.SPLIT));
+
+            // Dense for agent:think, NO entry for core:snap: exactly the prod shape that makes
+            // inMemorySlotsComplete return false and the gate fire a durable query.
+            SplitContext splitContext = SplitContext.create("core:each:0", List.of("A", "B", "C"))
+                .withResults("agent:think", java.util.Arrays.asList(
+                    Map.of("response", "r0"), Map.of("response", "r1"), Map.of("response", "r2")));
+            when(contextManager.findActiveContext(eq("run1"), eq("core:echo_after"), eq(0), any()))
+                .thenReturn(Optional.of(splitContext));
+            when(context.itemIndex()).thenReturn(1);
+            // Fully stub the fan-out's context needs, so that if the gate WERE reached the durable
+            // query would really be issued (an under-stubbed context would make verify(never) pass
+            // for the wrong reason).
+            org.mockito.Mockito.lenient().when(context.withGlobalData(any(), any())).thenReturn(context);
+            org.mockito.Mockito.lenient().when(context.withItemIndex(anyInt())).thenReturn(context);
+            org.mockito.Mockito.lenient().when(context.runId()).thenReturn("run1");
+            org.mockito.Mockito.lenient().when(context.tenantId()).thenReturn("tenant1");
+            org.mockito.Mockito.lenient().when(svc.loadPerItemOutputsByStepKey("run1", 0, "tenant1"))
+                .thenReturn(Map.of("core:snap", Map.of(0, Map.of("v", "A"))));
+
+            // Auto mode is signalled by a non-null SuccessorTraverser.
+            SplitAwareNodeExecutor.SuccessorTraverser noopTraverser = (s, c, idx) -> c;
+
+            local.execute(echoAfter, context, "run1", nodeMap, null, null, 0, noopTraverser);
+
+            org.mockito.Mockito.verify(svc, org.mockito.Mockito.never())
+                .loadPerItemOutputsByStepKey(anyString(), anyInt(), anyString());
+            assertThat(echoAfter.getExecuteCount())
+                .as("AUTO executes the chained node ONCE for its own item (the per-item fan-out, "
+                  + "and therefore the gate, belongs to the resume path that carries the full map)")
+                .isEqualTo(1);
             local.shutdown();
         }
 

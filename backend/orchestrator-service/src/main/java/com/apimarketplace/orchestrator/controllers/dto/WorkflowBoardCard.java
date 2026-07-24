@@ -74,5 +74,17 @@ public record WorkflowBoardCard(
      * and for own published apps / regular workflows. Mirrors {@code /app/applications}, which marks
      * the same cloud-sourced acquisitions {@code remote=true}.
      */
-    Boolean remote
+    Boolean remote,
+    /**
+     * Total accumulated cost of the production run across all epochs, in credits
+     * (1 credit = $0.001). Null when there is no production run yet. The card
+     * shows it as dollars in CE and raw credits in cloud.
+     */
+    java.math.BigDecimal costCredits,
+    /**
+     * The workflow's cost budget in credits, or null when none is set. Lets the
+     * card paint the over-budget state (costCredits >= budgetCredits) without a
+     * second fetch.
+     */
+    java.math.BigDecimal budgetCredits
 ) {}

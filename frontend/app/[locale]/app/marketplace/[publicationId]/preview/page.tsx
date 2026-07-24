@@ -198,6 +198,9 @@ export function MarketplacePreviewInner({ publicationId }: { publicationId: stri
           jsTemplate={snap.jsTemplate}
           className="w-full h-full"
           autoFit={false}
+          // The published interface's own shape: without it a vertical publication previews at
+          // its native size in this box instead of being letterboxed to fit.
+          format={snap.format as string | null | undefined}
           emptyLabel={t('previewUnavailable')}
         />
         <PreviewInfoOverlay publication={publication} remote={remote} />

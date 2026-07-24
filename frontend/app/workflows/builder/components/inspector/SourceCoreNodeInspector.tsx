@@ -47,6 +47,8 @@ export function getCoreNodeSchema(
   if (nodeRegistry.isMergeNode(node)) return getOutputSchema('MERGE');
   if (nodeRegistry.isTransformNode(node)) return getOutputSchema('TRANSFORM');
   if (nodeRegistry.isDownloadFileNode(node)) return getOutputSchema('DOWNLOAD_FILE');
+  if (nodeRegistry.isPublicLinkNode(node)) return getOutputSchema('PUBLIC_LINK');
+  if (nodeRegistry.isMediaNode(node)) return getOutputSchema('MEDIA');
   if (nodeRegistry.isHttpRequestNode(node)) return getOutputSchema('HTTP_REQUEST');
   if (nodeRegistry.isUserApprovalNode(node)) return getOutputSchema('APPROVAL');
   if (nodeRegistry.isResponseNode(node)) return getOutputSchema('RESPONSE');

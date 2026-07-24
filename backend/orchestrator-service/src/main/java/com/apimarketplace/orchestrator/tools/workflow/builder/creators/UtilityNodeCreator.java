@@ -226,6 +226,244 @@ public class UtilityNodeCreator extends CreatorBase {
             downloadSavedParams);
     }
 
+    // ==================== Public Link ====================
+
+    public ToolExecutionResult executeAddPublicLink(WorkflowBuilderSession session, Map<String, Object> parameters) {
+        // 1. Validate
+        String label = getString(parameters, "label", "name");
+        var labelError = validateLabel(label, "public_link");
+        if (labelError != null) return labelError;
+
+        if (session.getTriggers().isEmpty()) {
+            return triggerRequiredError("public_link");
+        }
+
+        String file = getString(parameters, "file", "file_ref", "fileRef");
+        if (file == null) {
+            return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "PUBLIC LINK: 'file' is required.\n" +
+                "Reference the WHOLE FileRef output of an upstream node.\n" +
+                "Example: params={file: '{{interface:card.output.video}}', ttl_minutes: 240}\n" +
+                "Use the resulting {{core:<label>.output.url}} in URL-pull API params (Instagram video_url, TikTok PULL_FROM_URL, link).");
+        }
+
+        // 2. Build node
+        String normalizedLabel = WorkflowBuilderSession.normalizeLabel(label);
+        String nodeId = NodeType.PUBLIC_LINK.buildNodeId(normalizedLabel);
+        var existsError = validateNodeNotExists(session, nodeId, label);
+        if (existsError != null) return existsError;
+
+        String connectAfter = resolveConnectAfter(parameters, session);
+        var connectError = validateConnectAfter(connectAfter, session);
+        if (connectError != null) return connectError;
+
+        Integer ttlMinutes = getInt(parameters, "ttl_minutes", "ttlMinutes");
+        String disposition = getString(parameters, "disposition");
+
+        Map<String, Object> linkParams = new LinkedHashMap<>();
+        linkParams.put("file", file);
+        if (ttlMinutes != null) linkParams.put("ttl_minutes", ttlMinutes);
+        if (disposition != null) linkParams.put("disposition", disposition);
+
+        Map<String, Object> node = new LinkedHashMap<>();
+        node.put("id", nodeId);
+        node.put("label", label);
+        node.put("type", "public_link");
+        node.put("position", calculatePosition(session, NodeType.PUBLIC_LINK));
+        node.put("params", linkParams);
+
+        // 3. Add and finalize
+        session.getCores().add(LabelNormalizer.normalizeVariableReferencesDeep(node));
+        if (connectAfter != null) createSimpleEdge(session, connectAfter, nodeId);
+        finalizeNode(session, sessionStore, NodeType.PUBLIC_LINK, nodeId, node, connectAfter);
+
+        return buildSuccessResponse("public_link", nodeId, label, normalizedLabel, connectAfter,
+            Map.of("file", file,
+                   "ttl_minutes", ttlMinutes != null ? ttlMinutes : 240,
+                   "access_pattern", "{{core:" + normalizedLabel + ".output.url}}",
+                   "usage", "The url output is PUBLIC until expires_at: feed it to API params that pull media from a URL (Instagram create_media_container video_url, TikTok source_info video_url, Facebook link). The link only works for files owned by this workflow's tenant."),
+            new LinkedHashMap<>(linkParams));
+    }
+
+    // ==================== Media ====================
+
+    /** The media operations and their agent-facing one-liners (shared by error + success responses). */
+    private static final Map<String, String> MEDIA_OPERATIONS = createMediaOperations();
+
+    private static Map<String, String> createMediaOperations() {
+        Map<String, String> ops = new LinkedHashMap<>();
+        ops.put("probe", "Read metadata of a video/audio file. Requires: input (whole FileRef expression). Outputs FLAT fields: duration_seconds, size_bytes, format_name, bit_rate, has_video, has_audio, video, audio.");
+        ops.put("mux_audio", "Put ONE audio track onto ONE video. Requires: video + audio (whole FileRef expressions). Options: volume (0-400, default 100), offset_seconds, trim_start_seconds/trim_end_seconds, loop, fade_in_seconds (0)/fade_out_seconds (1.0), keep_original_audio (+original_volume), audio_fit (pad|shortest|loop), normalize, audio_bitrate ('192k'). Output: file (mp4) + duration_seconds.");
+        ops.put("mix", "Mix 1-8 audio tracks, optionally onto a video. Requires: tracks=[{source, id?, volume?, offset_seconds?, trim_*?, loop?, fade_*?, speed (0.5-2.0)?, duck_under? (+duck_amount_db 12/duck_attack_ms 20/duck_release_ms 300)}]. Optional: video, keep_original_audio/original_volume (video only), audio_fit, normalize, audio_bitrate, output_format (mp3|wav|aac when no video; mp4 forced with video). Output: file + duration_seconds.");
+        ops.put("extract_audio", "Pull the audio track out of a video. Requires: input (whole FileRef expression). Options: output_format (mp3|wav|aac, default mp3), audio_bitrate ('192k'), trim_start_seconds/trim_end_seconds. Output: file + duration_seconds.");
+        ops.put("concat", "Glue 1-8 videos back to back into one mp4 (a SINGLE input = trim/speed edit). Requires: inputs=[{source (whole FileRef expression), trim_start_seconds?, trim_end_seconds?, speed (0.5-2.0)?}]. Options: transition (cut|crossfade, default cut; crossfade needs >= 2 inputs), transition_seconds (0.1-5.0, default 0.5), target_width+target_height (16-4096, BOTH or NEITHER; clips are scaled to fit and padded, never stretched), target_fps (1-60), fade_in_seconds (0)/fade_out_seconds (0), normalize (default FALSE: true evens out loudness between clips but forces re-encode), audio_bitrate ('192k'). Output: file (mp4) + duration_seconds.");
+        ops.put("frame", "Extract ONE still image from a video (cover/thumbnail). Requires: input (whole FileRef expression). Options: at_seconds (>= 0; default = the MIDDLE of the video; clamped to the end, never an error), image_format (jpeg|png, default jpeg), width (16-4096, aspect ratio kept). Output: file (image) + timestamp_seconds (the ACTUAL timestamp used); duration_seconds is null.");
+        ops.put("overlay", "Burn an image (logo, watermark, badge) onto a video. Requires: video + image (whole FileRef expressions; png alpha respected). Options: position (top_left|top_right|bottom_left|bottom_right|center, default bottom_right), margin_px (>= 0, default 24), width_percent (1-100, % of the video width, default 15), opacity (0-1, default 1), start_seconds/end_seconds (visibility window; absent = whole video). Output: file (mp4) + duration_seconds.");
+        return ops;
+    }
+
+    /** Agent-friendly aliases resolved to the canonical operation before validation/storage. */
+    private static final Map<String, String> MEDIA_OPERATION_ALIASES = Map.of(
+        "stitch", "concat",
+        "join", "concat",
+        "join_videos", "concat",
+        "thumbnail", "frame",
+        "cover", "frame",
+        "watermark", "overlay");
+
+    /**
+     * A usable media file param: a non-blank expression string ({@code {{...output.file}}})
+     * OR a literal FileRef object (the builder's Files picker stores those) with a path.
+     */
+    private static boolean isFileParam(Object value) {
+        if (value instanceof String s) {
+            return !s.isBlank();
+        }
+        return value instanceof Map<?, ?> map && map.get("path") instanceof String p && !p.isBlank();
+    }
+
+    /** Every accepted media param key (besides operation and the framework keys) copied into the node's params map. */
+    private static final List<String> MEDIA_PARAM_KEYS = List.of(
+        "input", "video", "audio", "image", "tracks", "inputs",
+        "volume", "offset_seconds", "trim_start_seconds", "trim_end_seconds", "loop",
+        "fade_in_seconds", "fade_out_seconds", "keep_original_audio", "original_volume",
+        "audio_fit", "normalize", "audio_bitrate", "output_format",
+        "transition", "transition_seconds", "target_width", "target_height", "target_fps",
+        "at_seconds", "image_format", "width",
+        "position", "margin_px", "width_percent", "opacity", "start_seconds", "end_seconds");
+
+    public ToolExecutionResult executeAddMedia(WorkflowBuilderSession session, Map<String, Object> parameters) {
+        // 1. Validate
+        String label = getString(parameters, "label", "name");
+        var labelError = validateLabel(label, "media");
+        if (labelError != null) return labelError;
+
+        if (session.getTriggers().isEmpty()) {
+            return triggerRequiredError("media");
+        }
+
+        String operation = getString(parameters, "operation", "op");
+        if (operation == null) {
+            return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "MEDIA: 'operation' is required.\n" +
+                "Available operations:\n" + mediaOperationsTable() +
+                "\nExample: params={operation: 'mux_audio', video: '{{interface:card.output.video}}', audio: '{{core:dl.output.file}}', volume: 80, fade_out_seconds: 2}");
+        }
+        operation = operation.trim().toLowerCase();
+        operation = MEDIA_OPERATION_ALIASES.getOrDefault(operation, operation);
+        if (!MEDIA_OPERATIONS.containsKey(operation)) {
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_ENUM_VALUE, "MEDIA: unknown operation '" + operation + "'.\n" +
+                "Available operations:\n" + mediaOperationsTable());
+        }
+
+        Object tracks = parameters.get("tracks");
+        switch (operation) {
+            case "probe", "extract_audio", "frame" -> {
+                if (!isFileParam(parameters.get("input")) && !isFileParam(parameters.get("file"))) {
+                    return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "MEDIA " + operation + ": 'input' is required.\n" +
+                        "Reference the WHOLE FileRef output of an upstream node (or a literal FileRef object).\n" +
+                        "Example: params={operation: '" + operation + "', input: '{{core:dl.output.file}}'}");
+                }
+            }
+            case "mux_audio" -> {
+                boolean missingVideo = !isFileParam(parameters.get("video"));
+                boolean missingAudio = !isFileParam(parameters.get("audio"));
+                if (missingVideo || missingAudio) {
+                    return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "MEDIA mux_audio: " +
+                        (missingVideo && missingAudio ? "'video' and 'audio' are" : missingVideo ? "'video' is" : "'audio' is") +
+                        " required (whole FileRef expressions or literal FileRef objects).\n" +
+                        "Example: params={operation: 'mux_audio', video: '{{interface:card.output.video}}', audio: '{{core:music.output.file}}', volume: 80, fade_out_seconds: 2}");
+                }
+            }
+            case "mix" -> {
+                if (!(tracks instanceof List<?> trackList) || trackList.isEmpty()) {
+                    return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "MEDIA mix: 'tracks' is required - a non-empty array of 1-8 tracks, each with a 'source' FileRef expression.\n" +
+                        "Example: params={operation: 'mix', tracks: [{id: 'voice', source: '{{core:tts.output.file}}'}, {id: 'music', source: '{{core:dl.output.file}}', volume: 60, duck_under: 'voice'}]}");
+                }
+            }
+            case "concat" -> {
+                if (!(parameters.get("inputs") instanceof List<?> inputList) || inputList.isEmpty()) {
+                    return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "MEDIA concat: 'inputs' is required - a non-empty array of 1-8 clips, each with a 'source' FileRef expression.\n" +
+                        "Example: params={operation: 'concat', inputs: [{source: '{{core:clip_a.output.file}}'}, {source: '{{core:clip_b.output.file}}'}], transition: 'crossfade'}");
+                } else if (inputList.size() > 8) {
+                    return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE, "MEDIA concat: 'inputs' accepts at most 8 clips (got " + inputList.size() + ").");
+                } else {
+                    for (int i = 0; i < inputList.size(); i++) {
+                        if (!(inputList.get(i) instanceof Map<?, ?> item) || !isFileParam(item.get("source"))) {
+                            return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "MEDIA concat: 'inputs[" + i + "].source' is required - " +
+                                "the WHOLE FileRef expression of that clip (or a literal FileRef object).\n" +
+                                "Example: inputs: [{source: '{{core:clip_a.output.file}}', trim_end_seconds: 10}]");
+                        }
+                    }
+                }
+            }
+            case "overlay" -> {
+                boolean missingVideo = !isFileParam(parameters.get("video"));
+                boolean missingImage = !isFileParam(parameters.get("image"));
+                if (missingVideo || missingImage) {
+                    return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "MEDIA overlay: " +
+                        (missingVideo && missingImage ? "'video' and 'image' are" : missingVideo ? "'video' is" : "'image' is") +
+                        " required (whole FileRef expressions or literal FileRef objects).\n" +
+                        "Example: params={operation: 'overlay', video: '{{core:clip.output.file}}', image: '{{core:logo.output.file}}', position: 'bottom_right', width_percent: 15}");
+                }
+            }
+            default -> { /* unreachable - operation validated above */ }
+        }
+
+        // 2. Build node
+        String normalizedLabel = WorkflowBuilderSession.normalizeLabel(label);
+        String nodeId = NodeType.MEDIA.buildNodeId(normalizedLabel);
+        var existsError = validateNodeNotExists(session, nodeId, label);
+        if (existsError != null) return existsError;
+
+        String connectAfter = resolveConnectAfter(parameters, session);
+        var connectError = validateConnectAfter(connectAfter, session);
+        if (connectError != null) return connectError;
+
+        Map<String, Object> mediaParams = new LinkedHashMap<>();
+        mediaParams.put("operation", operation);
+        if ("probe".equals(operation) || "extract_audio".equals(operation) || "frame".equals(operation)) {
+            Object input = isFileParam(parameters.get("input")) ? parameters.get("input") : parameters.get("file");
+            if (isFileParam(input)) mediaParams.put("input", input);
+        }
+        for (String key : MEDIA_PARAM_KEYS) {
+            Object value = parameters.get(key);
+            if (value != null && !mediaParams.containsKey(key)) {
+                mediaParams.put(key, value);
+            }
+        }
+
+        Map<String, Object> node = new LinkedHashMap<>();
+        node.put("id", nodeId);
+        node.put("label", label);
+        node.put("type", "media");
+        node.put("position", calculatePosition(session, NodeType.MEDIA));
+        node.put("params", mediaParams);
+
+        // 3. Add and finalize
+        session.getCores().add(LabelNormalizer.normalizeVariableReferencesDeep(node));
+        if (connectAfter != null) createSimpleEdge(session, connectAfter, nodeId);
+        finalizeNode(session, sessionStore, NodeType.MEDIA, nodeId, node, connectAfter);
+
+        String accessPattern = switch (operation) {
+            case "probe" -> "{{core:" + normalizedLabel + ".output.duration_seconds}} (probe outputs FLAT metadata fields, no file)";
+            case "frame" -> "{{core:" + normalizedLabel + ".output.file}} (an image; {{core:" + normalizedLabel
+                + ".output.timestamp_seconds}} = the actual timestamp used, duration_seconds is null)";
+            default -> "{{core:" + normalizedLabel + ".output.file}}";
+        };
+        return buildSuccessResponse("media", nodeId, label, normalizedLabel, connectAfter,
+            Map.of("operation", operation,
+                   "available_operations", MEDIA_OPERATIONS,
+                   "access_pattern", accessPattern,
+                   "usage", "Runs on the optional renderer component: when it is not enabled on this installation the node FAILS at run time (validate warns with MEDIA_RENDERER_UNAVAILABLE). File params take the WHOLE FileRef output of an upstream node ({{core:dl.output.file}}), never .path or a URL."),
+            new LinkedHashMap<>(mediaParams));
+    }
+
+    private static String mediaOperationsTable() {
+        StringBuilder sb = new StringBuilder();
+        MEDIA_OPERATIONS.forEach((op, description) ->
+            sb.append("- ").append(op).append(": ").append(description).append('\n'));
+        return sb.toString();
+    }
+
     // ==================== Exit ====================
 
     public ToolExecutionResult executeAddExit(WorkflowBuilderSession session, Map<String, Object> parameters) {
@@ -1439,10 +1677,20 @@ public class UtilityNodeCreator extends CreatorBase {
         putIfPresent(sshConfig, "authMethod", getString(parameters, "authMethod", "auth_method", "auth"));
         putIfPresent(sshConfig, "password", getString(parameters, "password"));
         putIfPresent(sshConfig, "privateKey", getString(parameters, "privateKey", "private_key", "key"));
-        Object portObj = parameters.get("port");
-        if (portObj instanceof Number n) sshConfig.put("port", n.intValue());
-        Object timeoutObj = parameters.get("timeout");
-        if (timeoutObj instanceof Number n) sshConfig.put("timeout", n.intValue());
+        // port/timeout: coerce numeric strings too (LLMs routinely quote "22"); getInt
+        // handles both Number and numeric String, unlike the old instanceof Number check
+        // which silently dropped a quoted value.
+        Integer port = getInt(parameters, "port");
+        if (port != null) sshConfig.put("port", port);
+        Integer timeout = getInt(parameters, "timeout");
+        if (timeout != null) sshConfig.put("timeout", timeout);
+        // credentialId: pin a stored SSH credential (runtime falls back when absent).
+        // Coerced from a numeric string. A NON-numeric value is dropped here rather than
+        // preserved: unlike the approval delegation (parsed field-by-field), this config is
+        // deserialized whole by Jackson (parseConfigSafe), which hard-fails on a non-numeric
+        // Long and would drop the ENTIRE node config, strictly worse than a per-field drop.
+        Long credentialId = getLong(parameters, "credentialId", "credential_id");
+        if (credentialId != null) sshConfig.put("credentialId", credentialId);
 
         Map<String, Object> node = new LinkedHashMap<>();
         node.put("id", nodeId);
@@ -1508,10 +1756,15 @@ public class UtilityNodeCreator extends CreatorBase {
         putIfPresent(sftpConfig, "privateKey", getString(parameters, "privateKey", "private_key", "key"));
         putIfPresent(sftpConfig, "localContent", getString(parameters, "localContent", "local_content", "content"));
         putIfPresent(sftpConfig, "newPath", getString(parameters, "newPath", "new_path"));
-        Object portObj = parameters.get("port");
-        if (portObj instanceof Number n) sftpConfig.put("port", n.intValue());
-        Object timeoutObj = parameters.get("timeout");
-        if (timeoutObj instanceof Number n) sftpConfig.put("timeout", n.intValue());
+        // port/timeout: coerce numeric strings too (see executeAddSsh).
+        Integer port = getInt(parameters, "port");
+        if (port != null) sftpConfig.put("port", port);
+        Integer timeout = getInt(parameters, "timeout");
+        if (timeout != null) sftpConfig.put("timeout", timeout);
+        // credentialId: pin a stored SFTP credential; numeric-string coerced, non-numeric
+        // dropped (see executeAddSsh for the Jackson whole-config rationale).
+        Long credentialId = getLong(parameters, "credentialId", "credential_id");
+        if (credentialId != null) sftpConfig.put("credentialId", credentialId);
 
         Map<String, Object> node = new LinkedHashMap<>();
         node.put("id", nodeId);
@@ -1600,14 +1853,18 @@ public class UtilityNodeCreator extends CreatorBase {
         putIfPresent(dbConfig, "dbType", getString(parameters, "dbType", "db_type", "type"));
         putIfPresent(dbConfig, "username", getString(parameters, "username", "user"));
         putIfPresent(dbConfig, "password", getString(parameters, "password"));
-        Object portObj = parameters.get("port");
-        if (portObj instanceof Number n) dbConfig.put("port", n.intValue());
-        Object sslObj = parameters.get("sslEnabled");
-        if (sslObj == null) sslObj = parameters.get("ssl_enabled");
-        if (sslObj == null) sslObj = parameters.get("ssl");
-        if (sslObj instanceof Boolean b) dbConfig.put("sslEnabled", b);
-        Object timeoutObj = parameters.get("timeout");
-        if (timeoutObj instanceof Number n) dbConfig.put("timeout", n.intValue());
+        // port/timeout: coerce numeric strings too (see executeAddSsh).
+        Integer port = getInt(parameters, "port");
+        if (port != null) dbConfig.put("port", port);
+        // sslEnabled: coerce "true"/"false" strings via getBoolean, not just Boolean.
+        Boolean sslEnabled = getBoolean(parameters, "sslEnabled", "ssl_enabled", "ssl");
+        if (sslEnabled != null) dbConfig.put("sslEnabled", sslEnabled);
+        Integer timeout = getInt(parameters, "timeout");
+        if (timeout != null) dbConfig.put("timeout", timeout);
+        // credentialId: pin a stored database credential; numeric-string coerced, non-numeric
+        // dropped (see executeAddSsh for the Jackson whole-config rationale).
+        Long credentialId = getLong(parameters, "credentialId", "credential_id");
+        if (credentialId != null) dbConfig.put("credentialId", credentialId);
         Object paramsObj = parameters.get("queryParams");
         if (paramsObj == null) paramsObj = parameters.get("query_params");
         if (paramsObj instanceof List<?> paramsList) {
@@ -2362,9 +2619,17 @@ public class UtilityNodeCreator extends CreatorBase {
         String body = getString(parameters, "body", "content", "message");
         Boolean isHtml = getBoolean(parameters, "isHtml", "is_html", "html");
         if (isHtml == null) isHtml = false;
+        String fromEmail = getString(parameters, "fromEmail", "from_email");
+        String replyTo = getString(parameters, "replyTo", "reply_to");
         // Reply threading - pass the original message's messageId (from email_inbox output)
         String inReplyTo = getString(parameters, "inReplyTo", "in_reply_to", "replyToMessageId");
         String references = getString(parameters, "references");
+        // credentialId: pin a specific SMTP credential (runtime falls back to the default
+        // when absent). Numeric strings are coerced (LLMs routinely quote numbers); a
+        // non-numeric value is dropped rather than preserved, because this config is
+        // deserialized whole by Jackson (parseConfigSafe) which hard-fails on a non-numeric
+        // Long and would drop the ENTIRE node config.
+        Long credentialId = getLong(parameters, "credentialId", "credential_id");
 
         String normalizedLabel = WorkflowBuilderSession.normalizeLabel(label);
         String nodeId = NodeType.SEND_EMAIL.buildNodeId(normalizedLabel);
@@ -2380,11 +2645,14 @@ public class UtilityNodeCreator extends CreatorBase {
         if (ccEmail != null) config.put("ccEmail", ccEmail);
         if (bccEmail != null) config.put("bccEmail", bccEmail);
         if (fromName != null) config.put("fromName", fromName);
+        if (fromEmail != null) config.put("fromEmail", fromEmail);
+        if (replyTo != null) config.put("replyTo", replyTo);
         if (subject != null) config.put("subject", subject);
         if (body != null) config.put("body", body);
         config.put("isHtml", isHtml);
         if (inReplyTo != null) config.put("inReplyTo", inReplyTo);
         if (references != null) config.put("references", references);
+        if (credentialId != null) config.put("credentialId", credentialId);
 
         Map<String, Object> node = new LinkedHashMap<>();
         node.put("id", nodeId);
@@ -2422,6 +2690,7 @@ public class UtilityNodeCreator extends CreatorBase {
         String action = getString(parameters, "action");
         String messageUid = getString(parameters, "messageUid", "message_uid", "uid");
         String targetFolder = getString(parameters, "targetFolder", "target_folder", "destination");
+        Boolean createTargetIfMissing = getBoolean(parameters, "createTargetIfMissing", "create_target_if_missing");
         // READ-mode search filters + attachments
         String fromContains = getString(parameters, "fromContains", "from_contains", "from");
         String subjectContains = getString(parameters, "subjectContains", "subject_contains", "subject");
@@ -2429,6 +2698,10 @@ public class UtilityNodeCreator extends CreatorBase {
         Boolean flaggedOnly = getBoolean(parameters, "flaggedOnly", "flagged_only", "flagged");
         Integer beforeDays = getInt(parameters, "beforeDays", "before_days");
         Boolean downloadAttachments = getBoolean(parameters, "downloadAttachments", "download_attachments", "attachments");
+        // credentialId: pin a specific IMAP credential (runtime falls back to the default
+        // when absent). Numeric strings are coerced; a non-numeric value is dropped rather
+        // than preserved (see executeAddSendEmail for the Jackson whole-config rationale).
+        Long credentialId = getLong(parameters, "credentialId", "credential_id");
 
         String normalizedLabel = WorkflowBuilderSession.normalizeLabel(label);
         String nodeId = NodeType.EMAIL_INBOX.buildNodeId(normalizedLabel);
@@ -2448,12 +2721,14 @@ public class UtilityNodeCreator extends CreatorBase {
         if (action != null) config.put("action", action);
         if (messageUid != null) config.put("messageUid", messageUid);
         if (targetFolder != null) config.put("targetFolder", targetFolder);
+        if (createTargetIfMissing != null) config.put("createTargetIfMissing", createTargetIfMissing);
         if (fromContains != null) config.put("fromContains", fromContains);
         if (subjectContains != null) config.put("subjectContains", subjectContains);
         if (bodyContains != null) config.put("bodyContains", bodyContains);
         if (flaggedOnly != null) config.put("flaggedOnly", flaggedOnly);
         if (beforeDays != null) config.put("beforeDays", beforeDays);
         if (downloadAttachments != null) config.put("downloadAttachments", downloadAttachments);
+        if (credentialId != null) config.put("credentialId", credentialId);
 
         Map<String, Object> node = new LinkedHashMap<>();
         node.put("id", nodeId);
@@ -2621,6 +2896,14 @@ public class UtilityNodeCreator extends CreatorBase {
             if (value instanceof String s) {
                 try { return Integer.parseInt(s); } catch (NumberFormatException ignored) {}
             }
+        }
+        return null;
+    }
+
+    private Long getLong(Map<String, Object> params, String... keys) {
+        for (String key : keys) {
+            Long value = toLongOrNull(params.get(key));
+            if (value != null) return value;
         }
         return null;
     }

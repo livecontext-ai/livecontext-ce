@@ -17,7 +17,15 @@ import { useNodeExecutionStatus } from '../../contexts/StepByStepContext';
 import { NodeBottomBar } from './NodeBottomBar';
 
 
+import { useWorkflowLayoutDirectionSafe } from '@/contexts/WorkflowLayoutDirectionContext';
+import { getTargetHandleGeometry, getBranchHandleGeometry, getBranchRowFlow } from './handleGeometry';
 export function OptionNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
+  // Handle sides follow the canvas reading direction. Safe variant: nodes also
+  // render on provider-less surfaces (marketplace preview, snapshots).
+  const { direction: layoutDirection } = useWorkflowLayoutDirectionSafe();
+  const targetHandle = getTargetHandleGeometry(layoutDirection);
+  const branchOut = getBranchHandleGeometry(layoutDirection, true);
+
   const visuals = getNodeVisual('option');
   const options: OptionChoice[] =
     (data.optionChoices as OptionChoice[] | undefined) ?? createDefaultOptionChoices(data.id);
@@ -98,7 +106,11 @@ export function OptionNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
         nodeFamily={nodeFamily}
       />
 
-      <div className="mt-4 space-y-2 text-[11px] text-slate-500" style={{ paddingBottom: effectiveStatus && effectiveStatus !== 'pending' ? '10px' : '0' }}>
+      <div className={`mt-4 ${getBranchRowFlow(layoutDirection)} text-[11px] text-slate-500`} style={
+          layoutDirection === 'vertical'
+            ? { paddingRight: effectiveStatus && effectiveStatus !== 'pending' ? '10px' : '0' }
+            : { paddingBottom: effectiveStatus && effectiveStatus !== 'pending' ? '10px' : '0' }
+        }>
         {options.map((option, index) => {
           const handleId = option.id;
 
@@ -113,12 +125,10 @@ export function OptionNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
               <Handle
                 type="source"
                 id={handleId}
-                position={Position.Right}
+                position={branchOut.position}
                 className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
                 style={{
-                  right: -27,
-                  top: '50%',
-                  transform: 'translateY(-50%)',
+                  ...branchOut.style,
                   backgroundColor: 'var(--border-color)',
                   opacity: isRunMode ? 0 : 1,
                   pointerEvents: isRunMode ? 'none' : 'auto'
@@ -161,12 +171,10 @@ export function OptionNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
 
       <Handle
         type="target"
-        position={Position.Left}
+        position={targetHandle.position}
         className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
         style={{
-          left: -6,
-          top: '50%',
-          transform: 'translateY(-50%)',
+          ...targetHandle.style,
           backgroundColor: 'var(--border-color)',
           opacity: isRunMode ? 0 : 1,
           pointerEvents: isRunMode ? 'none' : 'auto'

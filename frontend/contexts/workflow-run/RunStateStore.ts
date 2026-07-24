@@ -70,6 +70,13 @@ export interface RunState {
   /** Sum of all per-node completed+failed+skipped counts from streaming statusCounts.
    *  Increases with each epoch completion even when node statuses don't change. */
   executionTotal: number;
+  /** Total accumulated run cost across ALL epochs, in credits (1 credit = $0.001).
+   *  Seeded from the /state payload, live-updated by the runCost WS event. Null = unknown. */
+  costCredits: number | null;
+  /** Per-epoch cost breakdown, epoch number (as string) -> credits. */
+  costByEpoch: Record<string, number>;
+  /** Workflow cost budget in credits, or null when none is set. */
+  budgetCredits: number | null;
 
   // Step tracking (authoritative from API)
   readySteps: Set<string>;
@@ -130,6 +137,12 @@ export interface InitializeFromApiPayload {
   currentEpoch?: number;
   epochTimestamps?: Array<{ epoch: number; startedAt: string; endedAt: string | null }>;
   totalDurationMs?: number;
+  /** Total accumulated run cost across all epochs, in credits (1 credit = $0.001). */
+  costCredits?: number | null;
+  /** Per-epoch cost breakdown, epoch number (as string) -> credits. */
+  costByEpoch?: Record<string, number> | null;
+  /** Workflow cost budget in credits, or null when none is set. */
+  budgetCredits?: number | null;
   /** Backend monotonic sequence (StateSnapshot.seq) - used by manager for partial-apply gating. */
   seq?: number;
 }
@@ -201,6 +214,9 @@ function createDefaultState(): RunState {
     epochTimestamps: [],
     snapshotSeq: -1,
     executionTotal: 0,
+    costCredits: null,
+    costByEpoch: {},
+    budgetCredits: null,
     readySteps: new Set(),
     epochReadySteps: {},
     activeEpochs: [],
@@ -599,6 +615,28 @@ export class RunStateStore {
   }
 
   /**
+   * Apply a live run-cost update from the `runCost` WS event. The total is
+   * authoritative (accumulated across all epochs); the budget is carried on the
+   * event so the panel can paint the over-budget state without a refetch. Both
+   * in credits. `budgetCredits` is only overwritten when the event carries one
+   * (a null budget on the wire means "no budget", which we honor).
+   */
+  setRunCost(
+    costCredits: number | null | undefined,
+    budgetCredits?: number | null,
+    epoch?: number,
+    epochCostCredits?: number | null,
+  ): void {
+    const changes: Partial<RunState> = {};
+    if (typeof costCredits === 'number') changes.costCredits = costCredits;
+    if (budgetCredits !== undefined) changes.budgetCredits = budgetCredits;
+    if (typeof epoch === 'number' && typeof epochCostCredits === 'number') {
+      changes.costByEpoch = { ...this.state.costByEpoch, [String(epoch)]: epochCostCredits };
+    }
+    if (Object.keys(changes).length > 0) this.update(changes);
+  }
+
+  /**
    * Set rerunning status.
    */
   setRerunning(isRerunning: boolean): void {
@@ -872,6 +910,11 @@ export class RunStateStore {
       totalDurationMs: data.totalDurationMs ?? null,
       currentEpoch: data.currentEpoch ?? 0,
       epochTimestamps: data.epochTimestamps ?? [],
+      // Seed run cost + workflow budget from the /state payload (rawState is the
+      // full response). Live deltas arrive later via the runCost WS event.
+      costCredits: data.costCredits ?? data.rawState?.costCredits ?? null,
+      costByEpoch: data.costByEpoch ?? data.rawState?.costByEpoch ?? {},
+      budgetCredits: data.budgetCredits ?? data.rawState?.budgetCredits ?? null,
       rawRunState: data.rawState || null,
       isLoading: false,
       error: null,

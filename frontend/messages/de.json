@@ -1128,7 +1128,18 @@
     },
     "rejected": "Abgelehnt",
     "sharedInReview": "Geteilt · wartet auf Admin-Genehmigung",
-    "sharedRejected": "Geteilt · von der Prüfung abgelehnt"
+    "sharedRejected": "Geteilt · von der Prüfung abgelehnt",
+    "runInfo": {
+      "costOfThisRun": "Kosten dieser Ausführung",
+      "costTooltip": "Gesamtkosten dieser Ausführung über alle Epochen",
+      "budgetReached": "Budget erreicht, es wird keine neue Ausführung gestartet",
+      "epochCost": "Epoche {epoch}",
+      "budgetBlockedTitle": "Budget erreicht",
+      "budgetBlockedMessage": "{spent} von {budget} ausgegeben. Es wurde keine neue Ausführung gestartet.",
+      "cost": "Kosten",
+      "scopeAll": "alle Epochen",
+      "scopeEpoch": "Epoche {epoch}"
+    }
   },
   "data": {
     "title": "Tabellen",
@@ -2086,6 +2097,25 @@
       "cssTemplatePlaceholder": "Ihre CSS-Stile eingeben...",
       "jsTemplateLabel": "JavaScript",
       "jsTemplatePlaceholder": "Ihren JavaScript-Code eingeben...",
+      "formatLabel": "Format",
+      "formatAuto": "Auto (ganze Seite)",
+      "formatAutoHint": "Erfasst die ganze Seite mit 1280 Breite",
+      "formatHelp": "Die Form, für die diese Oberfläche gestaltet ist. Gilt für jede Vorschau, jeden Screenshot und jedes Video davon. Auto erfasst die ganze Seite mit 1280 Breite. Das PDF behält seine eigene Seitengröße.",
+      "formatCustom": "Benutzerdefiniert",
+      "formatCustomPlaceholder": "BxH, z. B. 1080x1920",
+      "formatCustomInvalid": "Geben Sie eine Größe als BxH an, jede Seite zwischen 16 und 2160 (z. B. 1080x1920).",
+      "formatPreset_classic": "Klassisch",
+      "formatPreset_widescreen": "Breitbild",
+      "formatPreset_vertical": "Hochformat",
+      "formatPreset_square": "Quadratisch",
+      "formatPreset_portrait": "Porträt",
+      "formatPreset_mobile": "Mobil",
+      "formatPreset_tablet": "Tablet",
+      "formatPreset_desktop": "Desktop",
+      "formatPreset_banner": "Banner",
+      "formatPreset_social_card": "Social-Karte",
+      "formatPreset_a4_portrait": "A4 hoch",
+      "formatPreset_a4_landscape": "A4 quer",
       "availableColumns": "Verfügbare Spalten",
       "back": "Zuruck",
       "next": "Weiter",
@@ -2737,7 +2767,12 @@
       "saving": "Wird gespeichert...",
       "successMessage": "\"{name}\" erfolgreich aktualisiert",
       "successTitle": "Aktualisiert",
-      "title": "Details bearbeiten"
+      "title": "Details bearbeiten",
+      "advancedSection": "Erweitert",
+      "budgetLabel": "Kostenbudget",
+      "budgetPlaceholder": "Kein Limit",
+      "budgetHelpCredits": "Maximale Credits, die dieser Workflow ausgeben kann. Bei Erreichen startet keine neue Ausführung.",
+      "budgetHelpDollars": "Maximale Ausgaben für diesen Workflow. Bei Erreichen startet keine neue Ausführung."
     },
     "suggestedApps": {
       "cta": "Marketplace durchsuchen",
@@ -5413,7 +5448,11 @@
       "creditLimitDescription": "Anzahl der Credits, die ohne Bestätigung verwendbar sind",
       "chatDefaultsTitle": "Chat-Standards",
       "chatDefaultsDescription": "Standardoptionen für neue Unterhaltungen in diesem Workspace.",
-      "savePreferences": "Einstellungen speichern"
+      "savePreferences": "Einstellungen speichern",
+      "workflowLayoutDirection": "Workflow-Anordnung",
+      "workflowLayoutDirectionDescription": "Leserichtung des Workflow-Editors: von links nach rechts oder von oben nach unten. Legt fest, wo Verbindungen und Schaltflächen der Knoten sitzen und wie das automatische Layout den Graphen anordnet.",
+      "workflowLayoutDirectionHorizontal": "Von links nach rechts",
+      "workflowLayoutDirectionVertical": "Von oben nach unten"
     },
     "notifications": {
       "title": "Benachrichtigungseinstellungen",
@@ -5741,7 +5780,10 @@
       "useAsMock": "Als Mock-Ausgabe verwenden",
       "usedAsMockToast": "Als Mock-Ausgabe für {label} gespeichert",
       "mockedBadge": "Gemockt",
-      "toggleHelp": "Editor-Ausführungen liefern den konfigurierten Mock zurück, statt diesen Knoten auszuführen. Produktionsläufe werden nie gemockt."
+      "toggleHelp": "Editor-Ausführungen liefern den konfigurierten Mock zurück, statt diesen Knoten auszuführen. Produktionsläufe werden nie gemockt.",
+      "durationLabel": "Simulierte Dauer",
+      "durationUnit": "Sekunden",
+      "durationHelp": "Der Knoten braucht diese Zeit, bevor er den Mock zurückgibt, wie es der echte Aufruf tun würde. Leer oder 0 = sofort. Maximal 10 Minuten."
     },
     "executionErrors": {
       "epochLimitTitle": "Gleichzeitiges Ausführungslimit erreicht",
@@ -5866,6 +5908,7 @@
         "variableCountPlural": "{count} Variablen",
         "mappingPlaceholder": "Variable hierher ziehen oder leer lassen",
         "mappingHelp": "Ordnen Sie jede Template-Variable einer Workflow-Datenquelle zu. Ziehen Sie eine Variable aus einem anderen Knoten oder geben Sie den Ausdruck ein.",
+        "formatTitle": "Format",
         "htmlTemplateTitle": "HTML",
         "cssTemplateTitle": "CSS",
         "jsTemplateTitle": "JavaScript",
@@ -5930,6 +5973,7 @@
         "generateVideo": "Video generieren",
         "generateVideoDescription": "Wenn aktiviert, wird die Animation des Interfaces als MP4 aufgezeichnet und als die video-FileRef-Ausgabe für nachgelagerte Knoten bereitgestellt (Social-Media-Upload, Telegram-Video, E-Mail-Anhang). Die Aufnahme stoppt, sobald die Seite window.__DONE__ = true setzt, oder nach der maximalen Dauer. Best-Effort: Aufnahmefehler lassen die Ausgabe weg, ohne den Workflow zum Scheitern zu bringen.",
         "videoPreset": "Videoformat",
+        "videoPresetAuto": "Auto (Format der Oberfläche)",
         "videoPresetVertical": "Vertikal (1080x1920)",
         "videoPresetHorizontal": "Horizontal (1920x1080)",
         "videoPresetSquare": "Quadratisch (1080x1080)",
@@ -6536,7 +6580,9 @@
       "timeoutHelp": "Maximale Ausführungszeit in Sekunden",
       "maxDepth": "Maximale Tiefe",
       "maxDepthPlaceholder": "z. B. 5",
-      "maxDepthHelp": "Maximale Verschachtelungstiefe für rekursive Sub-Workflows"
+      "maxDepthHelp": "Maximale Verschachtelungstiefe für rekursive Sub-Workflows",
+      "inputMappingPlaceholder": "{{core:build.output}} oder {{trigger.output.payload}}",
+      "inputMappingHelp": "Ein einzelner Ausdruck, der das an den Sub-Workflow uebergebene Objekt liefert. Leer lassen, um die Triggerdaten dieses Workflows weiterzugeben."
     },
     "respondToWebhookNode": {
       "title": "Auf Webhook antworten",
@@ -6577,6 +6623,11 @@
       "bccPlaceholder": "bcc@beispiel.com",
       "fromName": "Absendername (optional)",
       "fromNamePlaceholder": "Angezeigten Absendernamen überschreiben",
+      "fromEmail": "Absenderadresse (optional)",
+      "fromEmailPlaceholder": "absender@example.com",
+      "fromEmailHint": "Leer lassen, um über die Adresse der Zugangsdaten zu senden (der Normalfall). Die meisten SMTP-Server lehnen eine Absenderadresse ab, die ihnen nicht gehört.",
+      "replyTo": "Antwort an (optional)",
+      "replyToPlaceholder": "antworten@example.com, team@example.com",
       "subject": "Betreff",
       "subjectPlaceholder": "E-Mail-Betreff",
       "body": "Body",
@@ -6605,6 +6656,7 @@
       "action": "Aktion",
       "actions": {
         "list_folders": "Ordner auflisten",
+        "create_folder": "Ordner erstellen",
         "none": "Nachrichten lesen",
         "mark_read": "Als gelesen markieren",
         "mark_unread": "Als ungelesen markieren",
@@ -6626,7 +6678,10 @@
       "messageUid": "Nachrichten-UID",
       "messageUidPlaceholder": "{{core:read.output.messages[0].uid}}",
       "targetFolder": "Zielordner",
-      "targetFolderPlaceholder": "Archiv"
+      "folderToCreate": "Zu erstellender Ordner",
+      "targetFolderPlaceholder": "INBOX.Clients",
+      "targetFolderHint": "Serverpfad genau so, wie „Ordner auflisten“ ihn zurückgibt (zum Beispiel INBOX.Clients auf einem Server, der Ordner unter dem Posteingang verschachtelt, Trennzeichen „.“), nicht die Anzeigebezeichnung.",
+      "createTargetIfMissing": "Ordner erstellen, falls er nicht existiert"
     },
     "codeNode": {
       "title": "Code",
@@ -6803,9 +6858,19 @@
         "schedule-trigger": "Zeitplaner",
         "form-trigger": "Formular"
       },
-      "close": "Schließen"
+      "close": "Schließen",
+      "layoutDirection": "Anordnung",
+      "layoutHorizontal": "Von links nach rechts",
+      "layoutVertical": "Von oben nach unten"
     },
     "nodes": {
+      "filePreview": {
+        "expand": "Vorschau erweitern",
+        "collapse": "Vorschau einklappen",
+        "openInPanel": "Im Seitenpanel öffnen",
+        "noPreview": "Keine Inline-Vorschau für diesen Dateityp",
+        "more": "+{count} weitere"
+      },
       "deleteNode": "Knoten löschen",
       "duplicateNode": "Knoten duplizieren",
       "showNormalView": "Normalansicht anzeigen",
@@ -6867,7 +6932,8 @@
           "forward": "Vor",
           "refresh": "Aktualisieren"
         }
-      }
+      },
+      "delete": "Loeschen"
     },
     "forms": {
       "required": "Required",
@@ -6931,6 +6997,131 @@
         "urlPlaceholder": "URL eingeben...",
         "filename": "Filename",
         "autoDetect": "Automatisch aus URL erkennen"
+      },
+      "publicLink": {
+        "title": "Öffentlicher Link",
+        "description": "Wandelt eine von einem vorgelagerten Knoten erzeugte Datei in eine öffentliche, zeitlich begrenzte signierte URL im plattformeigenen Speicher um. Für APIs, die Medien über eine URL abrufen (Instagram, TikTok), statt einen Upload zu akzeptieren.",
+        "file": "Datei",
+        "filePlaceholder": "'{{core:download.output.file}}'",
+        "fileHint": "Referenzieren Sie das gesamte Dateiobjekt eines vorgelagerten Knotens, z. B. '{{interface:card.output.video}}'.",
+        "ttlMinutes": "Gültigkeitsdauer des Links (Minuten)",
+        "ttlHint": "Zwischen 5 und 10080 Minuten (7 Tage). Standard: 240.",
+        "disposition": "Darstellung",
+        "dispositionInline": "Inline (im Browser anzeigen)",
+        "dispositionAttachment": "Anhang (Download-Aufforderung)"
+      },
+      "media": {
+        "title": "Medien",
+        "description": "Analysiert, muxt, mischt, extrahiert, fügt aneinander, erstellt Standbilder oder überlagert Audio- und Videodateien. Dateien kommen aus vorgelagerten Knoten als vollständige Dateireferenzen, z. B. '{{core:download.output.file}}'.",
+        "operation": "Operation",
+        "operationPlaceholder": "Operation auswählen",
+        "opProbe": "Analysieren",
+        "opProbeDesc": "Mediendatei untersuchen: Dauer, Streams, Codecs (keine Ausgabedatei)",
+        "opMuxAudio": "Audio muxen",
+        "opMuxAudioDesc": "Eine Audiospur auf ein Video legen",
+        "opMix": "Mischen",
+        "opMixDesc": "Bis zu 8 Audiospuren mischen, optional auf ein Video",
+        "opExtractAudio": "Audio extrahieren",
+        "opExtractAudioDesc": "Die Audiospur aus einem Video herausziehen",
+        "input": "Eingabedatei",
+        "inputPlaceholder": "'{{core:download.output.file}}'",
+        "inputHint": "Referenzieren Sie das gesamte Dateiobjekt eines vorgelagerten Knotens.",
+        "video": "Video",
+        "videoPlaceholder": "'{{interface:card.output.video}}'",
+        "audio": "Audio",
+        "audioPlaceholder": "'{{core:download.output.file}}'",
+        "mixVideoHint": "Optional: mit Video ist das Ergebnis ein mp4; ohne Video nur Audio.",
+        "volume": "Lautstärke (%)",
+        "offsetSeconds": "Versatz (Sekunden)",
+        "trimStartSeconds": "Schnittanfang (Sekunden)",
+        "trimEndSeconds": "Schnittende (Sekunden)",
+        "loop": "Schleife",
+        "loopTrimHint": "Schnitte sind deaktiviert, solange die Schleife aktiv ist: Schleife und Schnittanfang/-ende lassen sich nicht kombinieren.",
+        "mixNoVideoLoopHint": "Eine reine Audio-Mischung kann nicht alle Spuren in Schleife abspielen: mindestens eine Spur darf nicht loopen, damit die Mischung eine Länge hat, oder fügen Sie ein Video hinzu.",
+        "fadeInSeconds": "Einblenden (Sekunden)",
+        "fadeOutSeconds": "Ausblenden (Sekunden)",
+        "fadeOutHint": "Standard: 1 Sekunde.",
+        "keepOriginalAudio": "Originalton behalten",
+        "removeLiteralFile": "Diese Datei entfernen",
+        "originalVolume": "Originallautstärke (%)",
+        "audioFit": "Audioanpassung",
+        "audioFitPad": "Auffüllen (Videolänge behalten)",
+        "audioFitShortest": "Kürzestes (auf das Kürzere schneiden)",
+        "audioFitLoop": "Schleife (Audio auf Videolänge wiederholen)",
+        "normalize": "Lautheitsnormalisierung",
+        "normalizeAuto": "Automatisch (-16 LUFS)",
+        "normalizeCustom": "Eigener Zielwert",
+        "normalizeOff": "Aus",
+        "normalizeLufs": "Lautheitsziel (LUFS)",
+        "normalizeLufsHint": "Zwischen {min} und {max} LUFS. Standard: -16.",
+        "audioBitrate": "Audio-Bitrate",
+        "outputFormat": "Ausgabeformat",
+        "tracks": "Spuren",
+        "track": "Spur {index}",
+        "trackId": "Spur-ID",
+        "trackSource": "Quelle",
+        "trackSourcePlaceholder": "'{{core:download.output.file}}'",
+        "trackAdvanced": "Erweitert",
+        "addTrack": "Spur hinzufügen",
+        "removeTrack": "Spur entfernen",
+        "tracksHint": "Bis zu {max} Spuren. Jede Spur benötigt eine Quelldatei.",
+        "speed": "Geschwindigkeit",
+        "speedHint": "Zwischen {min} und {max} (Tonhöhe bleibt erhalten). Standard: {default}.",
+        "duckUnder": "Absenken unter",
+        "duckNone": "Kein Ducking",
+        "duckUnderHint": "Diese Spur wird automatisch leiser, solange die ausgewählte Spur hörbar ist.",
+        "duckAmountDb": "Absenkung (dB)",
+        "duckAttackMs": "Ansprechzeit (ms)",
+        "duckReleaseMs": "Rückstellzeit (ms)",
+        "opConcat": "Aneinanderfügen",
+        "opConcatDesc": "Fügt bis zu 8 Videos hintereinander zu einem Video zusammen",
+        "opFrame": "Standbild",
+        "opFrameDesc": "Extrahiert ein Standbild aus einem Video (Cover, Vorschaubild)",
+        "opOverlay": "Overlay",
+        "opOverlayDesc": "Brennt ein Bild (Logo, Wasserzeichen) auf ein Video",
+        "clips": "Clips",
+        "clip": "Clip {index}",
+        "clipSource": "Quelle",
+        "clipSourcePlaceholder": "'{{core:download.output.file}}'",
+        "addClip": "Clip hinzufügen",
+        "removeClip": "Clip entfernen",
+        "moveClipUp": "Clip nach oben verschieben",
+        "moveClipDown": "Clip nach unten verschieben",
+        "clipsHint": "Bis zu {max} Clips, in Reihenfolge abgespielt. Jeder Clip braucht ein Quellvideo.",
+        "transition": "Übergang",
+        "transitionCut": "Schnitt (kein Übergang)",
+        "transitionCrossfade": "Überblendung",
+        "transitionSeconds": "Übergangsdauer (Sekunden)",
+        "transitionSecondsHint": "Zwischen {min} und {max} Sekunden, kürzer als jeder Clip. Standard: {default}.",
+        "targetWidth": "Zielbreite (px)",
+        "targetHeight": "Zielhöhe (px)",
+        "targetSizeHint": "Beide oder keines setzen ({min} bis {max}). Nicht passende Clips werden eingepasst und mit Balken aufgefüllt, nie verzerrt.",
+        "targetFps": "Ziel-Bildrate (fps)",
+        "targetFpsHint": "Zwischen {min} und {max}. Standard: die Bildrate des ersten Clips.",
+        "concatNormalizeHint": "Gleicht die Lautstärke zwischen den Clips an. Das Aktivieren erzwingt eine Neukodierung.",
+        "atSeconds": "Zeitpunkt (Sekunden)",
+        "atSecondsHint": "Standard: die Mitte des Videos. Hinter dem Ende wird auf kurz vor das Ende begrenzt.",
+        "imageFormat": "Bildformat",
+        "frameWidth": "Breite (px)",
+        "frameWidthHint": "Zwischen {min} und {max}. Die Höhe passt sich automatisch an, um das Seitenverhältnis zu erhalten.",
+        "image": "Bild",
+        "imagePlaceholder": "'{{core:download.output.file}}'",
+        "imageHint": "PNG-Transparenz wird berücksichtigt.",
+        "position": "Position",
+        "positionTopLeft": "Oben links",
+        "positionTopRight": "Oben rechts",
+        "positionBottomLeft": "Unten links",
+        "positionBottomRight": "Unten rechts",
+        "positionCenter": "Mitte",
+        "marginPx": "Abstand (px)",
+        "marginPxHint": "Abstand zu den nächstgelegenen Rändern. Für die Mitte ignoriert.",
+        "widthPercent": "Breite (% des Videos)",
+        "widthPercentHint": "Zwischen {min} und {max} Prozent der Videobreite. Standard: 15.",
+        "opacity": "Deckkraft",
+        "opacityHint": "Zwischen {min} und {max}. Standard: 1.",
+        "startSeconds": "Start (Sekunden)",
+        "endSeconds": "Ende (Sekunden)",
+        "overlayTimingHint": "Start und Ende leer lassen, um das Overlay im ganzen Video anzuzeigen."
       },
       "fork": {
         "outputBranches": "Ausgabezweige",
@@ -9422,7 +9613,8 @@
     "card": {
       "epochs": "{count, plural, one {# Epoche} other {# Epochen}}",
       "runs": "{count, plural, one {# Ausführung} other {# Ausführungen}}",
-      "reviewApprovals": "Genehmigungen prüfen"
+      "reviewApprovals": "Genehmigungen prüfen",
+      "costTitle": "Kosten der Produktionsausführung"
     },
     "columns": {
       "draft": "Entwurf",
@@ -9594,5 +9786,339 @@
     "done": "Fertig",
     "working": "In Arbeit...",
     "failed": "Fehlgeschlagen"
+  },
+  "templates": {
+    "gallery": {
+      "workflowTitle": "Mit einer Vorlage starten",
+      "workflowSubtitle": "Öffnen Sie eine Vorlage, um zu sehen, wie sie funktioniert. Jede Vorlage ist auf der Arbeitsfläche kommentiert.",
+      "agentTitle": "Mit einer Vorlage starten",
+      "agentSubtitle": "Wählen Sie einen Ausgangspunkt und passen Sie ihn an, bevor Sie den Agenten erstellen.",
+      "readyToRun": "Sofort einsatzbereit",
+      "needsSetup": "Einrichtung erforderlich",
+      "beginner": "Einsteiger",
+      "intermediate": "Fortgeschritten",
+      "advanced": "Experte",
+      "youWillLearn": "Das lernen Sie",
+      "creating": "Wird erstellt ...",
+      "createFailed": "Aus dieser Vorlage konnte nichts erstellt werden",
+      "use": "{name} verwenden",
+      "browse": "Vorlagen",
+      "tableTitle": "Mit einer Vorlage starten",
+      "tableSubtitle": "Erstellen Sie eine Tabelle, deren Spalten bereits eingerichtet sind."
+    },
+    "workflow": {
+      "helloWorkflow": {
+        "title": "Hallo Workflow",
+        "description": "Der kleinste Workflow, der etwas tut: ein manueller Trigger und ein Schritt, der zwei Werte berechnet.",
+        "teaches": {
+          "0": "Jeder Workflow beginnt mit einem Trigger",
+          "1": "Wie ein Schritt die Ausgabe des vorherigen Schritts liest",
+          "2": "Wo Sie nach einem Lauf sehen, was ein Schritt erzeugt hat"
+        },
+        "notes": {
+          "trigger": {
+            "label": "Hier beginnt es",
+            "text": "Ein Workflow beginnt immer mit einem Trigger. Dieser hier ist manuell: Es passiert nichts, bis Sie auf Run drücken. Andere Trigger starten über einen Webhook, nach einem Zeitplan, bei einer neuen Chat-Nachricht oder wenn ein anderer Workflow fehlschlägt."
+          },
+          "label": {
+            "label": "Labels sind Bezeichner",
+            "text": "Das Label eines Schritts ist zugleich sein Name in Ausdrücken. Aus 'Build greeting' wird build_greeting, deshalb lautet die Verbindung core:build_greeting und der Ausdruck oben trigger:start.output.triggered_by. Wenn Sie einen Schritt umbenennen, müssen Sie alle Ausdrücke anpassen, die auf ihn verweisen."
+          },
+          "output": {
+            "label": "Sehen, was ein Schritt erzeugt hat",
+            "text": "Drücken Sie auf Run und klicken Sie dann auf diesen Schritt. Das rechte Panel zeigt seine Ausgaben. Ein Transform-Schritt legt seine zugeordneten Felder unter transformed ab, ein späterer Schritt liest sie also mit {{core:build_greeting.output.transformed.greeting}}. Lassen Sie das Segment transformed weg, wird der Ausdruck stillschweigend zu nichts aufgelöst."
+          }
+        }
+      },
+      "branchDecision": {
+        "title": "Verzweigen mit einer Decision",
+        "description": "Eine Decision schickt den Lauf über genau einen Pfad, abhängig von einer Bedingung, die Sie schreiben.",
+        "teaches": {
+          "0": "Eine Decision nimmt genau einen Zweig, niemals mehrere",
+          "1": "Wie Sie einen bestimmten Port einer Decision verbinden",
+          "2": "Warum der nicht genommene Zweig als SKIPPED markiert wird und nicht als fehlgeschlagen"
+        },
+        "notes": {
+          "oneBranch": {
+            "label": "Ein Zweig, niemals zwei",
+            "text": "Eine Decision prüft ihre Bedingungen von oben nach unten und nimmt die ERSTE, die zutrifft. Sie führt niemals zwei Zweige aus. Wenn mehrere Pfade gleichzeitig laufen sollen, brauchen Sie stattdessen einen Fork."
+          },
+          "ports": {
+            "label": "Der Port gehört zur Verbindung",
+            "text": "Eine decision verbindet sich nicht einfach mit dem nächsten Schritt, sondern geht von einem bestimmten Port aus. Deshalb lauten diese Verbindungen core:check_amount:if und core:check_amount:else. Jede zusätzliche Bedingung fügt elseif_0 hinzu, dann elseif_1 und so weiter: Die elseif-Ports werden ab null nummeriert, genau wie die Zweige eines fork."
+          },
+          "elseRequired": {
+            "label": "Behalten Sie immer einen else-Zweig",
+            "text": "Ohne else-Zweig hält ein Wert, den Sie nicht vorhergesehen haben, den Lauf auf diesem Pfad an: Die Schritte darunter werden als SKIPPED markiert, und nirgendwo wird ein Fehler ausgelöst. Parallele Zweige an anderer Stelle laufen weiter. Im else-Zweig behandeln Sie genau den Fall, an den Sie nicht gedacht haben."
+          },
+          "skipped": {
+            "label": "SKIPPED ist kein Fehler",
+            "text": "Nach einem Lauf erscheint der nicht genommene Zweig als SKIPPED. Das ist das normale und gesunde Ergebnis einer Decision. Nur ein roter FAILED-Schritt bedeutet, dass etwas schiefgegangen ist."
+          }
+        },
+        "ports": {
+          "above": "Über 100",
+          "belowOrEqual": "100 oder weniger"
+        }
+      },
+      "forkMerge": {
+        "title": "Schritte parallel ausführen",
+        "description": "Ein Fork führt alle Zweige gleichzeitig aus, und ein Merge wartet, bis alle fertig sind.",
+        "teaches": {
+          "0": "Ein Fork führt alle seine Zweige aus, anders als eine Decision",
+          "1": "Ein Merge wartet auf jeden Vorgängerschritt, bevor es weitergeht",
+          "2": "Jeder Schritt mit mehreren eingehenden Verbindungen führt bereits zusammen"
+        },
+        "notes": {
+          "vsDecision": {
+            "label": "Fork ist nicht Decision",
+            "text": "Eine Decision wählt EINEN Zweig. Ein Fork führt ALLE aus, und zwar gleichzeitig. Verwenden Sie einen Fork, wenn die Zweige unabhängig voneinander sind und der Lauf schneller werden soll."
+          },
+          "allBranches": {
+            "label": "Alle Zweige starten gemeinsam",
+            "text": "Beide Zweige unten starten im selben Moment. Ihre Ports werden ab null nummeriert: core:fan_out:branch_0 und core:fan_out:branch_1."
+          },
+          "waitsAll": {
+            "label": "Der Merge wartet auf alle",
+            "text": "Join läuft erst, wenn BEIDE Zweige fertig sind. Fertig heißt: erfolgreich, fehlgeschlagen ODER übersprungen. Ein fehlgeschlagener Zweig gibt den merge also trotzdem frei, und genau das lässt einen robusten Schritt den Lauf weiterführen, statt ihn hängen zu lassen."
+          },
+          "implicitMerge": {
+            "label": "Merges können implizit sein",
+            "text": "Jeder Schritt mit mehr als einer eingehenden Verbindung verhält sich bereits wie ein Merge: Er wartet auf alle seine Vorgänger. Den Merge-Schritt gibt es, damit dieses Warten auf der Arbeitsfläche sichtbar und benannt ist, nicht weil er zwingend nötig wäre."
+          }
+        },
+        "ports": {
+          "branchA": "Zweig A",
+          "branchB": "Zweig B"
+        }
+      },
+      "splitList": {
+        "title": "Eine Liste verarbeiten",
+        "description": "Ein Split macht aus einer Liste viele parallele Läufe, einen pro Element, und ein Aggregate sammelt die Ergebnisse wieder ein.",
+        "teaches": {
+          "0": "Ein Split erzeugt einen parallelen Kontext pro Element",
+          "1": "Wie Sie das aktuelle Element mit {{item}} und {{index}} lesen",
+          "2": "Der Unterschied zwischen einem Split und einer Loop"
+        },
+        "notes": {
+          "parallel": {
+            "label": "Ein Lauf pro Element",
+            "text": "Split nimmt eine Liste und startet die nachfolgenden Schritte einmal pro Element, parallel. Bei drei Elementen laufen die Schritte unten dreimal gleichzeitig, jeder mit seinem eigenen Element."
+          },
+          "vsLoop": {
+            "label": "Split ist nicht Loop",
+            "text": "Split führt N Kopien parallel über die Elemente einer Liste aus. Loop wiederholt sequenziell, einen Durchlauf nach dem anderen, solange eine Bedingung erfüllt bleibt. Nehmen Sie Split für eine bekannte Liste und Loop für eine Bedingung, die immer wieder neu geprüft werden muss."
+          },
+          "itemVar": {
+            "label": "Das aktuelle Element lesen",
+            "text": "Innerhalb des split ist {{item}} das aktuelle Element und {{index}} seine Position, beginnend bei null. Sie werden in jedem Schritt des Bereichs pro Element aufgelöst, auch in einer decision oder einer loop, die einfach einmal pro Element laufen. Der Bereich endet bei dem Schritt, der die Elemente wieder zu einem zusammenführt: einem aggregate oder einem merge, der den split einsammelt."
+          },
+          "maxItems": {
+            "label": "maxItems ist ein Sicherheitsnetz",
+            "text": "maxItems begrenzt, wie viele Elemente der split übernimmt, hier 10 (der Standardwert ist 100). Lesen Sie das genau: Elemente oberhalb der Grenze werden STILLSCHWEIGEND VERWORFEN, ohne Fehler und ohne jeden Hinweis im Lauf. Setzen Sie den Wert über die größte Liste, mit der Sie realistisch rechnen. Er ist ein Sicherheitsnetz gegen eine ausufernde Liste, kein Performance-Regler."
+          },
+          "aggregate": {
+            "label": "Die Ergebnisse wieder einsammeln",
+            "text": "Hier enden die parallelen Zweige. Aggregate sammelt aus jedem von ihnen einen Wert in einer einzigen Liste. So kommen Sie nach einem Split zurück zu einer einzelnen Ausführung."
+          }
+        }
+      },
+      "resilientSteps": {
+        "title": "Einen Schritt robust machen",
+        "description": "Wiederholungen, Timeouts und ein expliziter Fehlerschritt, damit ein instabiler Aufruf nicht stillschweigend den ganzen Lauf zerstört.",
+        "teaches": {
+          "0": "Wie Wiederholungen, Backoff und Timeout pro Schritt konfiguriert werden",
+          "1": "Was continueOnFailure wirklich verändert",
+          "2": "Wie Sie den Lauf absichtlich mit einer klaren Meldung scheitern lassen"
+        },
+        "notes": {
+          "replaceUrl": {
+            "label": "Zuerst die URL ersetzen",
+            "text": "Dieser Schritt zeigt auf eine Platzhalteradresse. Öffnen Sie ihn und tragen Sie Ihre eigene URL ein, bevor Sie diesen Workflow ausführen, sonst schlägt der Aufruf zwangsläufig fehl."
+          },
+          "retry": {
+            "label": "Wiederholungen und Backoff",
+            "text": "retryCount steht auf 2, das ergibt insgesamt 3 Versuche: den ersten plus 2 Wiederholungen. retryBackoffMs wartet 1000 ms zwischen den Versuchen. Eines sollten Sie wissen, bevor Sie sich darauf verlassen: Eine HTTP-Antwort mit 4xx oder 5xx ist KEIN Fehlschlag des Schritts, der Schritt gelingt und setzt success auf false. Wiederholungen greifen nur bei einem harten Fehler, etwa einem nicht erreichbaren Host, einem Timeout oder einer ungültigen URL. Alles andere übernimmt die decision gegenüber."
+          },
+          "timeout": {
+            "label": "Timeout beendet nur das Warten",
+            "text": "Hier sind zwei Timeouts im Spiel, und sie sind unabhängig voneinander. Der HTTP-Schritt hat sein eigenes Transport-Timeout (5000 ms), während nodePolicy.timeoutMs (15000 ms) jeden einzelnen Versuch des Aufrufs selbst begrenzt. Halten Sie den Wert auf Schrittebene über dem des Transports, sonst greift die Hülle zuerst und verdeckt den echten Fehler. Und achten Sie darauf, was ein Timeout bedeutet: Sie hören auf, auf die Antwort zu WARTEN, aber der entfernte Server hat Ihre Anfrage möglicherweise trotzdem empfangen und verarbeitet. Sorgen Sie bei allem, was Daten schreibt, dafür, dass der Aufruf gefahrlos wiederholt werden kann."
+          },
+          "continueOnFailure": {
+            "label": "continueOnFailure lässt weiterlaufen",
+            "text": "Ohne diese Option markiert ein fehlgeschlagener Schritt alles Nachfolgende als übersprungen. Mit ihr läuft der Lauf weiter, der Schritt selbst bleibt aber als FAILED angezeigt. Bei einem harten Fehler erzeugt der Schritt NICHT die Felder, die Sie erwartet haben (success und data fehlen). Ein Ausdruck, der auf sie zeigt, wird also zu nichts aufgelöst, und die decision darunter fällt auf else zurück. continueOnFailure wird bei einer decision, einem switch oder einer option abgelehnt: Ein fehlgeschlagener Verzweigungsschritt hat keinen Port gewählt."
+          },
+          "stopOnError": {
+            "label": "Absichtlich scheitern",
+            "text": "Stop on Error beendet den GESAMTEN Lauf mit allen Zweigen und markiert ihn als FAILED mit der Meldung, die Sie geschrieben haben. Das ist besser, als einen Lauf mit fehlerhaften Daten grün beenden zu lassen: Ein lautes Scheitern lässt sich leichter beheben als ein stilles."
+          }
+        },
+        "ports": {
+          "succeeded": "Aufruf erfolgreich",
+          "failed": "Aufruf fehlgeschlagen"
+        },
+        "stopMessage": "Der API-Aufruf ist nach allen Wiederholungsversuchen fehlgeschlagen."
+      },
+      "errorHandler": {
+        "title": "Auf einen Fehler reagieren",
+        "description": "Zwei Workflows nebeneinander: einer, der fehlschlägt, und einer, der genau dann anspringt.",
+        "teaches": {
+          "0": "Wie ein Fehler-Trigger einen übergeordneten Workflow überwacht",
+          "1": "Was die Fehlerdaten enthalten",
+          "2": "Der eine Einrichtungsschritt, den alle vergessen"
+        },
+        "notes": {
+          "pickParent": {
+            "label": "Den überwachten Workflow wählen",
+            "text": "Beide Hälften sind auf einer Arbeitsfläche gezeichnet, damit die Struktur gut lesbar ist, aber sie KÖNNEN nicht zusammenbleiben. Ein Workflow, der einen Error-Trigger enthält, verteilt seine eigenen Fehler nie weiter (das ist die Schleifenschutz-Sperre), dieser Handler wird also niemals auf den Lauf darüber reagieren. Verschieben Sie den oberen DAG in einen eigenen Workflow, fügen Sie dann hier aus der Palette einen neuen Error-Trigger hinzu und wählen Sie diesen Workflow als übergeordneten Workflow. Der überwachte Workflow lässt sich danach im Inspektor nicht mehr ändern."
+          },
+          "seedRun": {
+            "label": "Einmal ausführen, sonst bleibt er taub",
+            "text": "Das ist der Schritt, den fast alle übersehen. Speichern Sie diesen Workflow, führen Sie ihn dann einmal manuell aus und LASSEN Sie diesen Lauf laufen. Ein Handler wird nur über einen Lauf erreicht, der bereits wartet: Gibt es keinen, werden Fehler des übergeordneten Workflows STILLSCHWEIGEND ignoriert, ohne Fehler, ohne Warnung und ohne irgendetwas im übergeordneten Lauf, das Ihnen sagt, dass der Handler nie ausgelöst wurde."
+          },
+          "payload": {
+            "label": "Was Sie erhalten",
+            "text": "Der Trigger übergibt Ihnen status (den Zustand des übergeordneten Laufs zum Zeitpunkt der Auslösung, nicht immer FAILED), parentWorkflowId, parentRunId, errorMessage und triggeredAt sowie die Zähler failedSteps, completedSteps, totalSteps und skippedSteps, sofern der übergeordnete Lauf Statistiken gemeldet hat. Der Schritt neben dieser Notiz kopiert einige davon, damit Sie nach einem Lauf ihre Struktur sehen können."
+          },
+          "noLoop": {
+            "label": "Keine Endlosschleifen",
+            "text": "Ein Fehler-Handler, der selbst fehlschlägt, löst keinen weiteren Fehler-Handler aus. Sie können also nicht versehentlich eine Fehlerkette bauen, die sich selbst nährt."
+          },
+          "nextStep": {
+            "label": "Wie es weitergeht",
+            "text": "Der obere DAG steht nur stellvertretend für den Workflow, den Sie wirklich überwachen wollen: Er erledigt ein wenig Arbeit und schlägt dann absichtlich fehl. Der untere DAG ist der Handler. Ersetzen Sie beide durch das Echte, sobald die Struktur klar ist."
+          }
+        },
+        "noParentSelected": "Keine Auswahl",
+        "attempted": "Wir tun so, als würden wir etwas Wichtiges erledigen",
+        "stopMessage": "Absichtlicher Fehlschlag, damit der Handler daneben etwas hat, worauf er reagieren kann."
+      },
+      "interfacePage": {
+        "title": "Dem Nutzer eine Seite zeigen",
+        "description": "Ein Workflow, der Daten aufbaut und sie an eine Webseite übergibt, und dann darauf wartet, dass der Nutzer fortfährt.",
+        "teaches": {
+          "0": "Der Workflow ist das Backend, die Oberfläche ist das Frontend",
+          "1": "Wie variable_mapping Werte in die Seite einspeist",
+          "2": "Warum der Lauf an einer Oberfläche anhält, bis der Nutzer handelt"
+        },
+        "interfaceDescription": "Ergebnisseite, erstellt aus der Vorlage „Dem Nutzer eine Seite zeigen“.",
+        "notes": {
+          "backendFrontend": {
+            "label": "Zwei Hälften einer Anwendung",
+            "text": "Stellen Sie es sich so vor: Der Workflow ist das Backend und die Oberfläche ist das Frontend. Die Schritte berechnen Werte, die Seite zeigt sie an. Die Seite fragt niemals selbst die Datenbank ab, alles, was sie anzeigt, kommt aus dem Workflow."
+          },
+          "variableMapping": {
+            "label": "Wie die Werte auf die Seite gelangen",
+            "text": "Der Oberflächen-Knoten trägt ein variable_mapping: Jeder Eintrag benennt einen Platzhalter im HTML und den Ausdruck, der ihn füllt. Hier stammen headline, who und when aus dem Transform davor, und die Seite schreibt sie als {{headline}}, {{who}} und {{when}}. Der Teil |default hinter dem senkrechten Strich ist das, was erscheint, wenn ein Wert fehlt."
+          },
+          "pauses": {
+            "label": "Der Lauf hält hier an, mit Absicht",
+            "text": "Ein Oberflächen-Schritt wartet. Der Lauf bleibt an diesem Knoten stehen, bis der Nutzer handelt, und genau das macht mehrstufige Anwendungen möglich. Die Schaltfläche auf der Seite sendet __continue, die einzige Aktion, die den Workflow weiterbringt. Eine reine navigate-Aktion würde die Seite wechseln, ohne ihn weiterzubringen."
+          },
+          "ownCopy": {
+            "label": "Diese Seite gehört jetzt Ihnen",
+            "text": "Beim Erstellen aus dieser Vorlage ist auch eine echte Oberfläche entstanden, die Ihnen gehört und unter Interfaces aufgeführt ist. Bearbeiten Sie ihr HTML und CSS ganz frei: Sie ändern Ihre eigene Kopie, niemals die Vorlage."
+          }
+        },
+        "page": {
+          "headline": "Ihr Workflow hat diese Seite gebaut",
+          "meta": "Ausgeführt von",
+          "hint": "Jeder Wert auf dieser Seite kommt aus dem Schritt davor. Ändern Sie diesen Schritt, starten Sie erneut, und die Seite ändert sich mit.",
+          "cta": "Workflow fortsetzen"
+        }
+      }
+    },
+    "agent": {
+      "basicAssistant": {
+        "title": "Einfacher Assistent",
+        "description": "Ein rein dialogorientierter Agent ohne Werkzeuge, mit einem System-Prompt als durchgearbeitetem Beispiel.",
+        "teaches": {
+          "0": "Die vier Bestandteile eines System-Prompts, der funktioniert",
+          "1": "Warum ein Agent ohne Werkzeuge ein guter Ausgangspunkt ist",
+          "2": "Was die Temperatur tatsächlich verändert"
+        },
+        "systemPrompt": "Du bist ein hilfreicher Assistent für ein kleines Team.\n\nRolle: Du beantwortest Fragen klar und knapp und hilfst dabei, Probleme zu durchdenken.\n\nTon: direkt und freundlich. Kurze Sätze. Keine Füllwörter, keine Schmeicheleien.\n\nRegeln:\n- Wenn du etwas nicht weißt, sage es, statt zu raten.\n- Stelle eine Rückfrage, wenn die Anfrage mehrdeutig ist.\n- Erfinde niemals Fakten, Namen, Zahlen oder Quellen.\n\nFormat: Antworte in normalem Fließtext. Verwende eine kurze Aufzählung nur dann, wenn du wirklich Dinge aufzählst.\n\n(Dieser Prompt ist ein Ausgangspunkt. Die vier Blöcke oben, Rolle, Ton, Regeln und Format, sind die Teile, die Sie beibehalten sollten, wenn Sie ihn für Ihren eigenen Zweck neu schreiben.)"
+      },
+      "dataAnalyst": {
+        "title": "Datenanalyst",
+        "description": "Ein Agent, der Ihre Tabellen lesen darf, nur lesend, und der angewiesen ist, immer die Herkunft einer Zahl zu nennen.",
+        "teaches": {
+          "0": "Wie Sie einem Agenten Zugriff auf eine Ressourcenfamilie geben",
+          "1": "Warum lesender Zugriff die richtige Voreinstellung ist",
+          "2": "Einen Agenten dazu bringen, seine Quelle zu nennen"
+        },
+        "systemPrompt": "Du bist ein Datenanalyst und arbeitest mit den Tabellen des Teams.\n\nRolle: Beantworte Fragen zu den Daten, indem du die Tabellen liest, auf die du Zugriff hast.\n\nRegeln:\n- Lies die Daten immer, bevor du antwortest. Schätze niemals eine Zahl aus dem Gedächtnis.\n- Nenne jedes Mal, aus welcher Tabelle und aus welchen Spalten eine Zahl stammt.\n- Wenn die Tabellen die Antwort nicht enthalten, sage genau das und sage, was nötig wäre.\n- Wenn ein Ergebnis überraschend wirkt, zeige die Zahl und weise darauf hin, statt sie zu glätten.\n\nFormat: Nenne zuerst die Zahl, dann in einer Zeile, wie du zu ihr gekommen bist. Verwende eine kleine Tabelle, wenn du mehrere Werte vergleichst.\n\nDu hast ausschließlich LESENDEN Zugriff. Du kannst die Daten nicht ändern und solltest das auch nicht anbieten."
+      },
+      "workflowConductor": {
+        "title": "Workflow-Dirigent",
+        "description": "Ein Agent, der Ihre Workflows ausführen darf, mit klaren Anweisungen, wann er das tun soll und wann nicht.",
+        "teaches": {
+          "0": "Ein Agent kann die Workflows auslösen, die Sie gebaut haben",
+          "1": "Wie Sie festlegen, wann ein Agent handeln darf statt zu antworten",
+          "2": "Warum Sie einen Agenten vor Aktionen mit Außenwirkung nachfragen lassen"
+        },
+        "systemPrompt": "Du koordinierst die Workflows des Teams.\n\nRolle: Verstehe, worum der Nutzer bittet, entscheide, ob ein vorhandener Workflow das erledigt, und führe diesen Workflow aus.\n\nRegeln:\n- Sage vor jeder Ausführung, welchen Workflow du ausführen willst und warum.\n- Bitte um Bestätigung vor jedem Workflow, der eine Nachricht sendet, Daten schreibt oder auf andere Weise außerhalb dieser Unterhaltung sichtbar wird.\n- Wenn kein Workflow zur Anfrage passt, sage das. Improvisiere keinen Ersatz.\n- Berichte nach einem Lauf, was passiert ist: erfolgreich, fehlgeschlagen oder teilweise, und wie die Ausgabe lautete.\n\nFormat: Halte es kurz. Eine Zeile für die Absicht, eine Zeile für das Ergebnis."
+      },
+      "frugalAgent": {
+        "title": "Sparsamer Agent",
+        "description": "Enge Grenzen und Temperatur null, für wiederkehrende Arbeit, bei der Kosten und Beständigkeit wichtiger sind als Ausdruckskraft.",
+        "teaches": {
+          "0": "maxIterations begrenzt, wie viele Züge ein Agent machen darf",
+          "1": "maxTokens begrenzt die Länge jeder Antwort",
+          "2": "Temperatur null sorgt dafür, dass dieselbe Eingabe dieselbe Ausgabe liefert"
+        },
+        "systemPrompt": "Du erledigst kurze, wiederkehrende Aufgaben mit vorhersehbarer Ausgabe.\n\nRolle: Tu genau das, worum gebeten wird, einmal, und höre dann auf.\n\nRegeln:\n- Fasse dich kurz. Keine Einleitung, keine Zusammenfassung der Anfrage, keine Schlussfloskeln.\n- Stelle keine Rückfragen, es sei denn, die Aufgabe ist ohne sie unmöglich.\n- Gib für dieselbe Eingabe dieselbe Antwort. Variiere die Formulierung nicht aus stilistischen Gründen.\n- Wenn die Aufgabe mehr Schritte braucht, als dir erlaubt sind, sage, was fehlt, und höre auf.\n\nFormat: Gib nur das Ergebnis aus. Keine Erklärung, sofern sie nicht verlangt wurde.\n\n(Die Kostenhebel finden Sie im Bereich Erweitert: maxIterations begrenzt, wie viele Züge dieser Agent machen darf, maxTokens begrenzt die Größe jeder Antwort, und ein Guthabenbudget stoppt ihn vollständig, sobald es aufgebraucht ist.)"
+      }
+    },
+    "table": {
+      "contacts": {
+        "title": "Kontakte",
+        "description": "Ein einfaches Adressbuch: wer die Kontakte sind, wie Sie sie erreichen, und Platz für Notizen.",
+        "teaches": {
+          "0": "Eine Tabelle besteht aus Spalten mit festem Typ",
+          "1": "E-Mail und Telefon sind eigene Typen, kein reiner Text",
+          "2": "Sie können Spalten jederzeit hinzufügen oder umbenennen"
+        },
+        "columns": {
+          "name": "Name",
+          "email": "E-Mail",
+          "phone": "Telefon",
+          "company": "Firma",
+          "notes": "Notizen"
+        }
+      },
+      "taskTracker": {
+        "title": "Aufgabenverfolgung",
+        "description": "Aufgaben mit Status, Fälligkeitsdatum und Priorität, bereit für einen Workflow, der sie liest und aktualisiert.",
+        "teaches": {
+          "0": "Eine Auswahlspalte hält die Werte einheitlich",
+          "1": "Datumsangaben und Kontrollkästchen haben eigene Editoren",
+          "2": "Ein Workflow kann diese Zeilen lesen und aktualisieren"
+        },
+        "columns": {
+          "title": "Aufgabe",
+          "status": "Status",
+          "dueDate": "Fällig am",
+          "done": "Erledigt",
+          "priority": "Priorität"
+        }
+      },
+      "contentCalendar": {
+        "title": "Redaktionskalender",
+        "description": "Was Sie veröffentlichen wollen, wo und wann. Eine gute Tabelle als Grundlage für einen geplanten Workflow.",
+        "teaches": {
+          "0": "Planungsdaten gehören in eine Tabelle, nicht in den Workflow",
+          "1": "Ein geplanter Workflow kann abholen, was heute ansteht",
+          "2": "Eine Link-Spalte hält die veröffentlichte URL direkt beim Plan"
+        },
+        "columns": {
+          "topic": "Thema",
+          "channel": "Kanal",
+          "publishDate": "Veröffentlichung",
+          "status": "Status",
+          "link": "Link"
+        }
+      }
+    }
   }
 }

@@ -210,6 +210,10 @@ export function InterfacePanelContent({ interfaceId }: InterfacePanelContentProp
         jsTemplate={renderResult?.jsTemplate || interfaceData?.jsTemplate}
         className="w-full h-full"
         autoFit={false}
+        // The interface's own shape: without it a vertical page renders at its native size in
+        // the panel's box instead of being letterboxed to fit.
+        format={(renderResult as { format?: string | null } | undefined)?.format
+          ?? (interfaceData as { format?: string | null } | undefined)?.format}
         isLoading={isResolvingData}
       />
 

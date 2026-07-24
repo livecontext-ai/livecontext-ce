@@ -109,6 +109,65 @@ describe('ExpressionField - Drive picker mode', () => {
     expect(screen.queryByTestId('mock-drive-picker-spreadsheetId')).toBeNull();
   });
 
+  /**
+   * Regression: clicking "use file picker" on a param wired to {{...}} was a dead button.
+   * `mode` returned 'expression' whenever `valueIsExpression`, and switchBackToPicker only
+   * cleared `forceExpression` (it deliberately kept the value when hasPicker), so the
+   * expression survived, pinned the mode, and the effect re-forced expression mode. Every
+   * chained file-ID param (the common case) could never reach the picker.
+   *
+   * The parent owns the value, so these use a stateful harness: a vi.fn() onChange would
+   * never echo the cleared value back and would hide the bug.
+   */
+  const PickerHarness = ({ initial }: { initial: string }) => {
+    const [value, setValue] = React.useState(initial);
+    return (
+      <ExpressionField
+        {...base}
+        value={value}
+        onChange={setValue}
+        picker={{ provider: 'google-drive', mimeType: SHEET_MIME }}
+      />
+    );
+  };
+
+  it('switches an expression-valued param to the Drive picker when the user asks for it', () => {
+    render(<PickerHarness initial="{{mcp:create.output.spreadsheetId}}" />);
+    expect(screen.getByTestId('mock-expression-editor')).not.toBeNull();
+
+    fireEvent.click(screen.getByTestId('expr-switch-picker-param-spreadsheetId'));
+
+    expect(screen.getByTestId('mock-drive-picker-spreadsheetId')).not.toBeNull();
+    expect(screen.queryByTestId('mock-expression-editor')).toBeNull();
+  });
+
+  it('drops the expression when switching to the picker, so it is never shown as a file ID', () => {
+    const onChange = vi.fn();
+    render(
+      <ExpressionField
+        {...base}
+        value="{{mcp:create.output.spreadsheetId}}"
+        onChange={onChange}
+        picker={{ provider: 'google-drive', mimeType: SHEET_MIME }}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('expr-switch-picker-param-spreadsheetId'));
+    expect(onChange).toHaveBeenCalledWith('');
+  });
+
+  it('keeps a picked file ID when the user goes to the expression editor and back', () => {
+    render(<PickerHarness initial="1AbCdEfGhIjKlMnOpQrStUvWxYz" />);
+    expect(screen.getByTestId('mock-drive-picker-spreadsheetId')).not.toBeNull();
+
+    fireEvent.click(screen.getByTestId('mock-use-expr-spreadsheetId'));
+    expect(screen.getByTestId('mock-expression-editor').textContent).toBe(
+      '1AbCdEfGhIjKlMnOpQrStUvWxYz',
+    );
+
+    fireEvent.click(screen.getByTestId('expr-switch-picker-param-spreadsheetId'));
+    expect(screen.getByTestId('mock-drive-picker-spreadsheetId')).not.toBeNull();
+  });
+
   it('does not render the Drive picker for a non-scalar (object) param even with a hint', () => {
     render(
       <ExpressionField

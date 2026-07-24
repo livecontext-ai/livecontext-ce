@@ -13,7 +13,7 @@ interface PendingConnection {
     nodeId: string;
     handleId: string;
     handleType: 'source' | 'target';
-    handlePosition: 'left' | 'right' | 'top';
+    handlePosition: 'left' | 'right' | 'top' | 'bottom';
     position: XYPosition;
     screenPosition: { x: number; y: number };
 }
@@ -118,6 +118,8 @@ function PendingConnectionOverlay({
                 return { x: handlePos.x + edgeLength, y: handlePos.y };
             case 'top':
                 return { x: handlePos.x, y: handlePos.y - edgeLength };
+            case 'bottom':
+                return { x: handlePos.x, y: handlePos.y + edgeLength };
             default:
                 return { x: handlePos.x + edgeLength, y: handlePos.y };
         }
@@ -293,10 +295,11 @@ export function HoverEdgeManager({
             const isSource = handleEl.classList.contains('source');
             const handleType = isSource ? 'source' : 'target';
 
-            // Show + buttons on LEFT, RIGHT, and TOP handles
-            // Skip bottom handles (they receive connections from top handles)
-            if (position === 'bottom') return;
-
+            // A "+" shows on both the source AND the target handle, whatever edge
+            // they render on. The old code skipped `bottom` because the only bottom
+            // handles were the fleet's, and this manager runs on the DAG builder only
+            // (never the fleet). Now the vertical canvas puts the SOURCE on the bottom
+            // edge, so skipping it hid the whole "add-node" affordance in vertical.
             const handleRect = handleEl.getBoundingClientRect();
 
             // Get handle ID
@@ -376,7 +379,7 @@ export function HoverEdgeManager({
     }, [startHideTimeout]);
 
     // Handle plus button click
-    const handlePlusClick = React.useCallback((nodeId: string, handleId: string, handleType: 'source' | 'target', handlePosition: 'left' | 'right', position: { x: number; y: number }) => {
+    const handlePlusClick = React.useCallback((nodeId: string, handleId: string, handleType: 'source' | 'target', handlePosition: 'left' | 'right' | 'top' | 'bottom', position: { x: number; y: number }) => {
         // Reset the overlay ref - important! Without this, the next hover won't hide properly
         // because the button disappears immediately and onMouseLeave doesn't fire
         isOverOverlayRef.current = false;

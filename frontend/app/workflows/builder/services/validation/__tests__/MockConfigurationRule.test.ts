@@ -92,6 +92,31 @@ describe('MockConfigurationRule', () => {
     expect(issues[0].severity).toBe('warning');
   });
 
+  it('(g) accepts valid durations: number, numeric string, at the 10-minute cap', () => {
+    const nodes = [
+      mcpToolNode({ output: { ok: true }, durationMs: 90000 }, 'n-d-1'),
+      mcpToolNode({ output: { ok: true }, durationMs: '90000' }, 'n-d-2'),
+      mcpToolNode({ output: { ok: true }, durationMs: 600000 }, 'n-d-3'),
+      mcpToolNode({ output: { ok: true }, duration_ms: 5000 }, 'n-d-4'),
+    ];
+    expect(issuesOf(rule, nodes, 'mock_duration_invalid')).toHaveLength(0);
+  });
+
+  it('(g) warns for invalid durations: non-numeric, negative, beyond the cap, NaN', () => {
+    expect(
+      issuesOf(rule, [mcpToolNode({ output: { ok: true }, durationMs: 'fast' })], 'mock_duration_invalid')
+    ).toHaveLength(1);
+    expect(
+      issuesOf(rule, [mcpToolNode({ output: { ok: true }, durationMs: -1 })], 'mock_duration_invalid')
+    ).toHaveLength(1);
+    expect(
+      issuesOf(rule, [mcpToolNode({ output: { ok: true }, durationMs: 600001 })], 'mock_duration_invalid')
+    ).toHaveLength(1);
+    expect(
+      issuesOf(rule, [mcpToolNode({ output: { ok: true }, durationMs: Number.NaN })], 'mock_duration_invalid')
+    ).toHaveLength(1);
+  });
+
   it('(b) warns for catalog_example on a non-mcp node', () => {
     const transform = node('flowNode', { kind: 'transform', mock: { source: 'catalog_example' } });
     expect(issuesOf(rule, [transform], 'mock_catalog_example_non_mcp')).toHaveLength(1);

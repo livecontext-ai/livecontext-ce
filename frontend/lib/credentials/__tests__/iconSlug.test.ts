@@ -6,7 +6,7 @@
  * the join key between the workflow plan's tool data and `catalog.credentials`.
  */
 import { describe, it, expect } from 'vitest';
-import { normalizeIconSlug } from '../iconSlug';
+import { normalizeIconSlug, isUnresolvedIconSlug, resolveIconSlug } from '../iconSlug';
 
 describe('normalizeIconSlug', () => {
   it('Regression - apiSlug "google-gemini" collapses to canonical "googlegemini"', () => {
@@ -56,5 +56,47 @@ describe('normalizeIconSlug', () => {
     expect(normalizeIconSlug('awss3')).toBe('awss3');
     expect(normalizeIconSlug('googlecloudstorage')).toBe('googlecloudstorage');
     expect(normalizeIconSlug('dalle')).toBe('dalle');
+  });
+});
+
+describe('isUnresolvedIconSlug / resolveIconSlug', () => {
+  // Regression: every WorkflowInspectorService query selects
+  // COALESCE(a.icon_slug, 'mcp'), so an API with no icon of its own reports the
+  // literal slug "mcp". Because that is TRUTHY, the old `data.iconSlug ||
+  // data.apiSlug` chains never fell through to the real slug and the node
+  // rendered /icons/services/mcp.svg - a generic "API" circle - instead of the
+  // brand logo, on the canvas and on every marketplace card.
+  it('Treats the catalog "mcp" sentinel as unresolved', () => {
+    expect(isUnresolvedIconSlug('mcp')).toBe(true);
+    expect(isUnresolvedIconSlug('MCP')).toBe(true);
+    expect(isUnresolvedIconSlug('  mcp  ')).toBe(true);
+  });
+
+  it('Treats a real brand slug as resolved', () => {
+    expect(isUnresolvedIconSlug('slack')).toBe(false);
+    expect(isUnresolvedIconSlug('googlesheets')).toBe(false);
+    // Guards against an over-eager substring match killing a real API whose
+    // slug merely contains "mcp".
+    expect(isUnresolvedIconSlug('mcpserver')).toBe(false);
+  });
+
+  it('Blank input is unresolved', () => {
+    expect(isUnresolvedIconSlug(null)).toBe(true);
+    expect(isUnresolvedIconSlug(undefined)).toBe(true);
+    expect(isUnresolvedIconSlug('')).toBe(true);
+  });
+
+  it('Regression - resolveIconSlug falls past the sentinel to the real apiSlug', () => {
+    expect(resolveIconSlug('mcp', 'slack', 'slack/post_message')).toBe('slack');
+  });
+
+  it('Prefers an explicit slug when it is real', () => {
+    expect(resolveIconSlug('googlesheets', 'google', 'x')).toBe('googlesheets');
+  });
+
+  it('Skips blanks, and returns undefined when nothing resolves', () => {
+    expect(resolveIconSlug(null, '', '   ', 'notion')).toBe('notion');
+    expect(resolveIconSlug('mcp', null, undefined)).toBeUndefined();
+    expect(resolveIconSlug()).toBeUndefined();
   });
 });

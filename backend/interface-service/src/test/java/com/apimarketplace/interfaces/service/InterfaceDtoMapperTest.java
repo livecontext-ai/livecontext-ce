@@ -71,6 +71,42 @@ class InterfaceDtoMapperTest {
     }
 
     @Test
+    void toListDto_shouldKeepFormat_soListCardsCanShapeTheirThumbnail() {
+        // The list payload drops the heavy templates but MUST keep the shape: a list card sizes
+        // its thumbnail from it. Nulling it here (an easy mistake when trimming this payload)
+        // silently sends every card back to the 1280x800 default.
+        InterfaceEntity entity = createTestEntity();
+        entity.setFormat("vertical");
+
+        InterfaceDto dto = mapper.toListDto(entity);
+
+        assertThat(dto.getHtmlTemplate()).isNull();
+        assertThat(dto.getFormat()).isEqualTo("vertical");
+    }
+
+    @Test
+    void toDto_shouldCarryFormat() {
+        InterfaceEntity entity = createTestEntity();
+        entity.setFormat("1080x1920");
+
+        assertThat(mapper.toDto(entity).getFormat()).isEqualTo("1080x1920");
+    }
+
+    @Test
+    void toSnapshotDto_shouldCarryFormat_soRunsKeepTheirShape() {
+        // The render path prefers a run snapshot over the live interface, so a snapshot without
+        // the format silently reverts the run to 1280x800.
+        InterfaceEntity entity = createTestEntity();
+        entity.setFormat("vertical");
+        InterfaceRunSnapshotEntity snapshot =
+            InterfaceRunSnapshotEntity.fromInterface(entity, UUID.randomUUID());
+
+        InterfaceSnapshotDto dto = mapper.toSnapshotDto(snapshot);
+
+        assertThat(dto.getFormat()).isEqualTo("vertical");
+    }
+
+    @Test
     void toSnapshotDto_shouldMapAllFields() {
         InterfaceEntity entity = createTestEntity();
         UUID runId = UUID.randomUUID();

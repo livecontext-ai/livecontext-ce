@@ -4,7 +4,8 @@ import { useRef, useEffect, useState, useCallback, useMemo, memo } from 'react';
 import { createPortal } from 'react-dom';
 // Aliased: `List` is also a lucide-react icon used for the list-view toggle button.
 import { List as VirtualList, useListRef, type RowComponentProps } from 'react-window';
-import { Edit3, Play, History, Square, StepForward, ChevronDown, ChevronUp, List, GanttChart, Calendar, CheckCircle2, XCircle, Loader2, CircleSlash, PauseCircle, Eye, Pin } from 'lucide-react';
+import { Edit3, Play, History, Square, StepForward, ChevronDown, ChevronUp, List, GanttChart, Calendar, CheckCircle2, XCircle, Loader2, CircleSlash, PauseCircle, Eye, Pin, Coins } from 'lucide-react';
+import { formatCost, formatCostCompact } from '@/lib/format-cost';
 import { Button } from '@/components/ui/button';
 import { useTranslations, useLocale } from 'next-intl';
 import { useRouter, usePathname } from 'next/navigation';
@@ -49,6 +50,8 @@ interface WorkflowModeToggleProps {
     runningCount?: number;
     skippedCount?: number;
     executionTotal?: number;
+    /** Per-epoch cost breakdown, epoch number (as string) -> credits. */
+    costByEpoch?: Record<string, number>;
   }) | null;
   isStepByStep?: boolean;
   isRunsHistoryOpen?: boolean;
@@ -124,6 +127,31 @@ export function WorkflowModeToggle({
   const router = useRouter();
   const pathname = usePathname();
   const { toasts, addToast, removeToast } = useToast();
+
+  // Surface an explanatory toast when the backend refuses to open a new epoch
+  // because the workflow budget was reached (the in-flight epoch still finishes).
+  // WorkflowRunManager (non-React) dispatches this window CustomEvent on the
+  // runBudgetBlocked WS event; we only react to the run this panel is showing.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { runId?: string; spentCredits?: number; budgetCredits?: number } | undefined;
+      if (!detail) return;
+      const panelRunId = currentRunInfo?.runId;
+      if (panelRunId && detail.runId && detail.runId !== panelRunId) return;
+      addToast({
+        type: 'warning',
+        title: t('workflow.runInfo.budgetBlockedTitle'),
+        message: t('workflow.runInfo.budgetBlockedMessage', {
+          spent: formatCost(detail.spentCredits ?? null),
+          budget: formatCost(detail.budgetCredits ?? null),
+        }),
+      });
+    };
+    window.addEventListener('workflow:runBudgetBlocked', handler as EventListener);
+    return () => window.removeEventListener('workflow:runBudgetBlocked', handler as EventListener);
+    // currentRunId is defined below from currentRunInfo; addToast/t are stable-ish.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentRunInfo?.runId]);
   // Canvas run identity - used to scope the cross-tree viewingEpochChanged event
   // so side-panel app tabs for OTHER runs don't move this canvas's epoch.
   const { setViewingEpoch, setRunId, runId: canvasRunId } = useWorkflowMode();
@@ -593,6 +621,7 @@ export function WorkflowModeToggle({
 
               {/* Expanded steps panel - grows to fill available space like NodeCreatorPanel */}
               {isStepsExpanded && (
+                <>
                 <TooltipProvider delayDuration={150}>
                 <div className="overflow-y-auto flex-1 min-h-0">
                   {/* Toolbar: status filter (left) + view toggle (right) */}
@@ -806,6 +835,38 @@ export function WorkflowModeToggle({
                   )}
                 </div>
                 </TooltipProvider>
+
+                {/* Cost - a gray token icon then the price, bottom-right. Same size +
+                    colour as the node status-count/duration text above (text-[10px]
+                    gray); the icon stays gray even when the price turns red. Compact
+                    K/M rounding. Epoch-aware: a selected epoch shows that epoch's cost,
+                    "All" shows the run total; over the run budget it turns red. */}
+                {currentRunInfo?.costCredits != null && (() => {
+                  const total = currentRunInfo.costCredits ?? 0;
+                  const budget = currentRunInfo.budgetCredits ?? null;
+                  const hasBudget = budget != null && budget > 0;
+                  const overBudget = hasBudget && total >= budget;
+                  const viewingEpoch = selectedEpoch != null;
+                  const shown = viewingEpoch
+                    ? (currentRunInfo.costByEpoch?.[String(selectedEpoch)] ?? 0)
+                    : total;
+                  return (
+                    <div className="flex-shrink-0 flex justify-end px-3 py-1.5">
+                      <span className="inline-flex items-center gap-1 text-[10px] tabular-nums whitespace-nowrap">
+                        <Coins className="h-2.5 w-2.5 flex-shrink-0 text-gray-400 dark:text-gray-500" aria-hidden />
+                        <span className={`transition-colors ${
+                          overBudget && !viewingEpoch ? 'text-red-500 dark:text-red-400' : 'text-gray-500 dark:text-gray-400'
+                        }`}>
+                          {formatCostCompact(shown)}
+                          {hasBudget && !viewingEpoch && (
+                            <span className="text-gray-400 dark:text-gray-500">{' / '}{formatCostCompact(budget)}</span>
+                          )}
+                        </span>
+                      </span>
+                    </div>
+                  );
+                })()}
+                </>
               )}
             </div>
           )}

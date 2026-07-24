@@ -63,6 +63,8 @@ export function useNodeTypeDetection(data: BuilderNodeData, node?: Node<BuilderN
     isForkNode: nodeRegistry.isForkNode(mockNode),
     isWaitNode: nodeRegistry.isWaitNode(mockNode),
     isDownloadFileNode: nodeRegistry.isDownloadFileNode(mockNode),
+    isPublicLinkNode: nodeRegistry.isPublicLinkNode(mockNode),
+    isMediaNode: nodeRegistry.isMediaNode(mockNode),
     isHttpRequestNode: nodeRegistry.isHttpRequestNode(mockNode),
     isDataInputNode: nodeRegistry.isDataInputNode(mockNode),
     isDecisionNode: nodeRegistry.isDecisionNode(mockNode),

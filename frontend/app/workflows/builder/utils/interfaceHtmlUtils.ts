@@ -12,7 +12,16 @@ import { isFileRef, fileRefToUrl, normalizeFileRef, type FileRef } from '@/lib/a
 // =============================================================================
 
 /**
- * Base CSS for iframe content
+ * Platform base stylesheet for FRAGMENT templates only - the default theme a
+ * bare HTML snippet inherits when the platform wraps it in its own document
+ * scaffold (system font, border-box sizing, 8px breathing room).
+ *
+ * NEVER injected into a COMPLETE document (isCompleteHtml): the author owns
+ * the whole page there, and injecting this at the end of <head> would WIN the
+ * cascade over their own body/box-sizing rules - making the preview diverge
+ * from the screenshot/video renderer, which injects nothing (WYSIWYG parity;
+ * the backend fragment scaffold injects this same base, see
+ * InterfaceScreenshotServiceImpl.FRAGMENT_BASE_CSS - keep both in sync).
  */
 const BASE_IFRAME_CSS = `
 * { box-sizing: border-box; }
@@ -558,7 +567,11 @@ export function generateBridgeScript(
 }
 
 /**
- * Auto-fit CSS styles
+ * Auto-fit CSS styles - FRAGMENT templates only (like BASE_IFRAME_CSS and
+ * SAFE_CENTERING_CSS). A complete document never receives these: the
+ * overflow:hidden + flex centering would silently clip/re-center the author's
+ * page in canvas previews while the renderer and application panel inject
+ * nothing, breaking WYSIWYG parity between surfaces.
  */
 const AUTO_FIT_CSS = `
 html, body {
@@ -656,8 +669,21 @@ export function ensureCompleteHtml(html: string, customCss?: string, autoFit?: b
   if (!html) return '';
 
   const autoFitStyles = autoFit ? AUTO_FIT_CSS : '';
-  const combinedCss = [BASE_IFRAME_CSS, autoFitStyles, customCss].filter(Boolean).join('\n');
   const renderedHtml = resolvedData ? renderForRunMode(html, resolvedData, resolveFileUrl) : html;
+  // Complete documents get NO platform styling from THIS funnel: no base CSS
+  // and no AUTO_FIT_CSS. The author owns the page, and the screenshot/video
+  // renderer and the application panel inject nothing (WYSIWYG parity; an
+  // embedder may still pass surface-specific customCss, e.g. the thumbnail's
+  // scrollbar suppression). Before
+  // this gate, AUTO_FIT_CSS's overflow:hidden + flex centering silently
+  // re-centered/clipped complete documents in canvas-node previews only,
+  // masking body-margin bleed that the run panel then exposed.
+  // Fragments inherit the base theme, with the author's CSS AFTER it so every
+  // base rule stays overridable.
+  const combinedCss = (isCompleteHtml(renderedHtml)
+    ? [customCss]
+    : [BASE_IFRAME_CSS, autoFitStyles, customCss]
+  ).filter(Boolean).join('\n');
 
   // Generate bridge script if action mapping is provided
   const bridgeScriptHtml = actionMapping ? generateBridgeScript(actionMapping, triggerData) : '';
@@ -689,8 +715,10 @@ export function ensureCompleteHtml(html: string, customCss?: string, autoFit?: b
         result = styleTag + '\n' + result;
       }
     }
-    // Inject scripts before </body>
-    const scriptsToInject = [HEIGHT_REPORTER_SCRIPT, NAVIGATION_GATE_SCRIPT, BROKEN_IMG_SCRIPT, autoFit ? AUTO_FIT_SCRIPT : '', bridgeScriptHtml, dataScriptHtml, userJsScriptHtml].filter(Boolean).join('\n');
+    // Inject scripts before </body>. AUTO_FIT_SCRIPT is deliberately absent:
+    // only fragments get the #auto-fit-wrapper it targets, so on a complete
+    // document it was dead weight shipped with every preview.
+    const scriptsToInject = [HEIGHT_REPORTER_SCRIPT, NAVIGATION_GATE_SCRIPT, BROKEN_IMG_SCRIPT, bridgeScriptHtml, dataScriptHtml, userJsScriptHtml].filter(Boolean).join('\n');
     if (scriptsToInject) {
       if (result.includes('</body>')) {
         result = injectBefore(result, '</body>', `${scriptsToInject}\n`);

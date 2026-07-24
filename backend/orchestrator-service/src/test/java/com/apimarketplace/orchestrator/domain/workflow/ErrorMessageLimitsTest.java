@@ -54,6 +54,58 @@ class ErrorMessageLimitsTest {
     }
 
     @Nested
+    @DisplayName("truncate() U+0000 strip (PG rejects NUL in the TEXT error_message column)")
+    class NulStrip {
+
+        /** The NUL codepoint, built per convention via (char) 0 - never a source escape. */
+        private static final String NUL = String.valueOf((char) 0);
+
+        @Test
+        @DisplayName("removes U+0000 preserving surrounding text: a<NUL>b -> ab")
+        void stripsNulPreservingSurroundingText() {
+            assertEquals("ab", ErrorMessageLimits.truncate("a" + NUL + "b"),
+                    "a NUL byte in a diagnostic (e.g. raw upstream bytes in an exception "
+                            + "message) would otherwise 22P05 the whole step-row INSERT");
+        }
+
+        @Test
+        @DisplayName("removes multiple U+0000 occurrences")
+        void stripsAllOccurrences() {
+            assertEquals("abc", ErrorMessageLimits.truncate(NUL + "a" + NUL + "b" + NUL + "c" + NUL));
+        }
+
+        @Test
+        @DisplayName("NUL-free messages keep the no-alloc identity fast path")
+        void nulFreeKeepsIdentity() {
+            String msg = "plain diagnostic";
+            assertSame(msg, ErrorMessageLimits.truncate(msg));
+        }
+
+        @Test
+        @DisplayName("strip composes with truncation: an oversized NUL-laden message is both stripped and capped")
+        void stripComposesWithTruncation() {
+            // 2*MAX visible chars + NULs: still over the cap AFTER the strip,
+            // so both mechanisms must fire on the same message.
+            String msg = ("xy" + NUL).repeat(ErrorMessageLimits.MAX_LENGTH);
+            String out = ErrorMessageLimits.truncate(msg);
+            assertFalse(out.contains(NUL), "no NUL may survive");
+            assertTrue(out.length() <= ErrorMessageLimits.MAX_LENGTH);
+            assertTrue(out.contains("…[truncated, was "), "truncation marker must still fire");
+        }
+
+        @Test
+        @DisplayName("a NUL-laden message that fits the cap AFTER stripping is stripped but NOT truncated")
+        void strippedMessageWithinCapNotTruncated() {
+            String msg = ("x" + NUL).repeat(ErrorMessageLimits.MAX_LENGTH);
+            String out = ErrorMessageLimits.truncate(msg);
+            assertFalse(out.contains(NUL));
+            assertEquals(ErrorMessageLimits.MAX_LENGTH, out.length(),
+                    "post-strip length is exactly MAX_LENGTH - inclusive cap, no marker");
+            assertFalse(out.contains("…[truncated"), "no spurious truncation of an in-budget message");
+        }
+    }
+
+    @Nested
     @DisplayName("truncate() slow-path (cap enforced)")
     class SlowPath {
 

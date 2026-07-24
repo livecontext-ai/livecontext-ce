@@ -573,4 +573,66 @@ class CoreValidatorTest {
                 w.code().equals("APPROVAL_DELEGATION_INVALID_CREDENTIAL"));
         }
     }
+
+    @Nested
+    @DisplayName("email_inbox actions")
+    class EmailInboxActionTests {
+
+        private ValidationResult validate(Map<String, Object> emailInbox) {
+            Map<String, Object> core = Map.of(
+                "type", "email_inbox", "label", "File Mail", "emailInbox", emailInbox);
+            when(session.getCores()).thenReturn(List.of(core));
+            ValidationResult result = ValidationResult.builder().build();
+            validator.validate(session, result);
+            return result;
+        }
+
+        @Test
+        @DisplayName("create_folder requires targetFolder (it names the folder to create)")
+        void createFolderRequiresTargetFolder() {
+            ValidationResult result = validate(Map.of("action", "create_folder"));
+
+            assertThat(result.getErrors()).anyMatch(e -> e.code().equals("INBOX_NO_TARGET_FOLDER"));
+        }
+
+        @Test
+        @DisplayName("create_folder must NOT require messageUid: it is a mailbox-level action, not a per-message one")
+        void createFolderDoesNotRequireMessageUid() {
+            // create_folder ships with this change, so nothing regressed: this guards the branch.
+            // The generic rule here demands a messageUid for every action but none/list_folders,
+            // so without its own branch create_folder would be rejected with a nonsensical error.
+            ValidationResult result = validate(Map.of(
+                "action", "create_folder", "targetFolder", "INBOX.Clients"));
+
+            assertThat(result.getErrors()).noneMatch(e -> e.code().equals("INBOX_NO_MESSAGE_UID"));
+            assertThat(result.getErrors()).noneMatch(e -> e.code().equals("INBOX_NO_TARGET_FOLDER"));
+        }
+
+        @Test
+        @DisplayName("move still requires both messageUid and targetFolder")
+        void moveStillRequiresUidAndTargetFolder() {
+            ValidationResult result = validate(Map.of("action", "move"));
+
+            assertThat(result.getErrors()).anyMatch(e -> e.code().equals("INBOX_NO_MESSAGE_UID"));
+            assertThat(result.getErrors()).anyMatch(e -> e.code().equals("INBOX_NO_TARGET_FOLDER"));
+        }
+
+        @Test
+        @DisplayName("delete still requires messageUid but not targetFolder")
+        void deleteRequiresOnlyMessageUid() {
+            ValidationResult result = validate(Map.of("action", "delete"));
+
+            assertThat(result.getErrors()).anyMatch(e -> e.code().equals("INBOX_NO_MESSAGE_UID"));
+            assertThat(result.getErrors()).noneMatch(e -> e.code().equals("INBOX_NO_TARGET_FOLDER"));
+        }
+
+        @Test
+        @DisplayName("list_folders needs neither messageUid nor targetFolder")
+        void listFoldersNeedsNothing() {
+            ValidationResult result = validate(Map.of("action", "list_folders"));
+
+            assertThat(result.getErrors()).noneMatch(e -> e.code().equals("INBOX_NO_MESSAGE_UID"));
+            assertThat(result.getErrors()).noneMatch(e -> e.code().equals("INBOX_NO_TARGET_FOLDER"));
+        }
+    }
 }

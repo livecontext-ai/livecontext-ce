@@ -261,8 +261,8 @@ export const PublicationCard = memo(function PublicationCard({ publication, curr
     ? `/app/marketplace/agents/${publication.id}`
     : `/app/marketplace/${publication.id}/preview`;
 
-  // Agent count badges - derived from snapshot counts; shown inside the hover overlay
-  // below the foot row (only the non-zero ones). Icons mirror the left sidebar.
+  // Agent count badges - derived from snapshot counts; rendered on the publisher
+  // row (only the non-zero ones). Icons mirror the left sidebar.
   const countBadges = isAgent
     ? ([
         { icon: Network, count: publication.agentCount || 0, label: t('resourceType.AGENT') },
@@ -438,18 +438,24 @@ export const PublicationCard = memo(function PublicationCard({ publication, curr
               className="shrink-0"
             />
           )}
+          {/* Agent resource counts belong on this same row, to the RIGHT of the
+              publisher - not on a line of their own underneath it. An agent
+              publication carries no plan, so it has no nodeIcons and these
+              badges are the only integration-ish glyphs the card shows; giving
+              them their own row made them read as detached from the publisher.
+              The publisher chip truncates (min-w-0 above) so the badges keep
+              their slot on a narrow card instead of being pushed off. */}
+          {countBadges.length > 0 && (
+            <div className="flex items-center gap-2 shrink-0">
+              {countBadges.map((b, i) => (
+                <span key={i} className="inline-flex items-center gap-0.5 text-xs text-theme-muted" title={b.label}>
+                  <b.icon className="h-3 w-3" />
+                  {b.count}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
-
-        {countBadges.length > 0 && (
-          <div className="flex items-center gap-2 pt-0.5">
-            {countBadges.map((b, i) => (
-              <span key={i} className="inline-flex items-center gap-0.5 text-xs text-theme-muted" title={b.label}>
-                <b.icon className="h-3 w-3" />
-                {b.count}
-              </span>
-            ))}
-          </div>
-        )}
 
         {showStats && (
           <div className="flex items-center gap-3 pt-0.5">

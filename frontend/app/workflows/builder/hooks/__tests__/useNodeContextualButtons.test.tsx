@@ -28,8 +28,9 @@ vi.mock('@/components/app/AgentPanelContent', () => ({
 vi.mock('@/components/app/DataSourcePanelContent', () => ({
   DataSourcePanelContent: () => null,
 }));
+const openFilesPanelMock = vi.fn();
 vi.mock('@/lib/sidePanel/openFilesPanel', () => ({
-  openFilesPanel: vi.fn(),
+  openFilesPanel: (...args: unknown[]) => openFilesPanelMock(...args),
 }));
 
 import { deriveNodeContextFlags, useNodeContextualButtons } from '../useNodeContextualButtons';
@@ -106,7 +107,7 @@ describe('deriveNodeContextFlags', () => {
     expect(flags.triggerVariant).toBe('play');
   });
 
-  it.each(['download_file', 'convert_to_file', 'compression', 'sftp'])('flags %s as a static file-producing node', (kind) => {
+  it.each(['download_file', 'convert_to_file', 'compression', 'sftp', 'media'])('flags %s as a static file-producing node', (kind) => {
     expect(deriveNodeContextFlags(nodeData({ id: kind, kind })).isStaticFileProducingNode).toBe(true);
   });
 
@@ -171,14 +172,53 @@ describe('useNodeContextualButtons', () => {
 
   it('preserves button order agent → table → files → sub-workflow when includeFiles', () => {
     const data = nodeData({
-      id: 'ai-agent',
-      kind: 'sub_workflow',
+      id: 'sub_workflow',
+      kind: 'media',
+      label: 'Agent media',
       agentConfigId: 'cfg-1',
       dataSourceData: { dataSourceId: 'ds1' },
       subWorkflowId: 'wf-1',
     });
-    const { result } = render(data, { includeFiles: true, currentFile: { url: 'x' } });
+    const { result } = render(data, { includeFiles: true });
     expect(result.current.map((b) => b.key)).toEqual(['agent-config', 'agent-conv', 'table-data', 'files', 'subworkflow']);
+  });
+
+  /**
+   * The canvas file strip (FileNodePreview) carries its own open-in-side-panel
+   * button and now sits exactly where the bar's Files button used to be, so the
+   * two must never be on screen together. currentFile is set by FileNodePreview
+   * only while its strip is rendered, which makes it the exact "strip is up" flag.
+   */
+  describe('files button vs the canvas file strip (never both)', () => {
+    const mediaNode = () => nodeData({ id: 'media', kind: 'media' });
+
+    it('drops the files button once the strip is up (currentFile set) - the strip owns that row and duplicates the button', () => {
+      const { result } = render(mediaNode(), { includeFiles: true, currentFile: { path: 'p', id: 'f1' } });
+      expect(result.current.find((b) => b.key === 'files')).toBeUndefined();
+    });
+
+    it('keeps the files button with no strip (edit mode, or a run that produced no file): nothing else opens the files there', () => {
+      const { result } = render(mediaNode(), { includeFiles: true });
+      expect(result.current.find((b) => b.key === 'files')).toBeTruthy();
+    });
+
+    // Behavior change, deliberate: an MCP/catalog node with a resolved FileRef used
+    // to get this button (the old condition was `isStaticFileProducingNode ||
+    // currentFile`). A resolved FileRef now means the strip is on screen with its
+    // own panel button, so the bar button would be the duplicate we are removing.
+    it('gives a non-static node no files button even with a resolved file - the strip it necessarily has already carries that action', () => {
+      const { result } = render(nodeData({ id: 'http-request', kind: 'http_request' }), {
+        includeFiles: true,
+        currentFile: { path: 'p', id: 'f1' },
+      });
+      expect(result.current.find((b) => b.key === 'files')).toBeUndefined();
+    });
+
+    it('opens the Files tab with no file target: the button only survives where nothing has resolved one', () => {
+      const { result } = render(mediaNode(), { includeFiles: true });
+      result.current.find((b) => b.key === 'files')!.onClick({ stopPropagation() {} } as any);
+      expect(openFilesPanelMock).toHaveBeenCalledWith(mockSidePanel);
+    });
   });
 
   it('returns no buttons for a plain node', () => {

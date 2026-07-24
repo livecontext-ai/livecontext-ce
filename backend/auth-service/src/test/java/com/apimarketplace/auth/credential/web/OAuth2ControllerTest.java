@@ -116,6 +116,62 @@ class OAuth2ControllerTest {
     }
 
     @Test
+    @DisplayName("picker-token returns the App ID of the credential's own OAuth client, which drive.file needs for the pick to grant anything")
+    void pickerToken_returnsAppId_derivedFromTheCredentialsClient() {
+        HttpServletRequest req = mock(HttpServletRequest.class);
+        when(tenantResolver.resolve(req)).thenReturn("u1");
+        when(tenantResolver.resolveOrgId(req)).thenReturn("org1");
+        when(internalCredentialService.refreshAccessToken("u1", "googledocs", "org1"))
+                .thenReturn(Optional.of("ya29.fresh"));
+        when(internalCredentialService.getCredentialDataMap("u1", "googledocs", "org1"))
+                .thenReturn(Map.of("oauth_client_id", "785967600625-abc.apps.googleusercontent.com"));
+
+        ResponseEntity<?> response = controller.pickerToken(req,
+                new PickerTokenRequest("Google Docs", "googledocs"));
+
+        assertThat(response.getStatusCode().value()).isEqualTo(200);
+        // Resolved from the SAME credential the token was minted from, so BYOK/CE clients each
+        // yield their own project number instead of a baked-in platform value.
+        assertThat(((PickerTokenResponse) response.getBody()).appId()).isEqualTo("785967600625");
+    }
+
+    @Test
+    @DisplayName("picker-token falls back to client_id when the credential has no oauth_client_id copy")
+    void pickerToken_appId_fallsBackToClientId() {
+        HttpServletRequest req = mock(HttpServletRequest.class);
+        when(tenantResolver.resolve(req)).thenReturn("u1");
+        when(tenantResolver.resolveOrgId(req)).thenReturn(null);
+        when(internalCredentialService.refreshAccessToken("u1", "googleslides", null))
+                .thenReturn(Optional.of("ya29.fresh"));
+        when(internalCredentialService.getCredentialDataMap("u1", "googleslides", null))
+                .thenReturn(Map.of("client_id", "111222333444-xyz.apps.googleusercontent.com"));
+
+        ResponseEntity<?> response = controller.pickerToken(req,
+                new PickerTokenRequest("Google Slides", "googleslides"));
+
+        assertThat(((PickerTokenResponse) response.getBody()).appId()).isEqualTo("111222333444");
+    }
+
+    @Test
+    @DisplayName("picker-token still returns the token when the App ID cannot be resolved, rather than failing the mint")
+    void pickerToken_appIdNull_stillReturnsToken() {
+        HttpServletRequest req = mock(HttpServletRequest.class);
+        when(tenantResolver.resolve(req)).thenReturn("u1");
+        when(tenantResolver.resolveOrgId(req)).thenReturn(null);
+        when(internalCredentialService.refreshAccessToken("u1", "googlesheets", null))
+                .thenReturn(Optional.of("ya29.fresh"));
+        when(internalCredentialService.getCredentialDataMap("u1", "googlesheets", null))
+                .thenThrow(new IllegalStateException("credential vault unavailable"));
+
+        ResponseEntity<?> response = controller.pickerToken(req,
+                new PickerTokenRequest("Google Sheets", "googlesheets"));
+
+        assertThat(response.getStatusCode().value()).isEqualTo(200);
+        assertThat(((PickerTokenResponse) response.getBody()).accessToken()).isEqualTo("ya29.fresh");
+        assertThat(((PickerTokenResponse) response.getBody()).appId()).isNull();
+    }
+
+    @Test
     @DisplayName("picker-token refuses a non-picker integration with 403 and never touches the credential service")
     void pickerToken_403_forUnsupportedIntegration() {
         HttpServletRequest req = mock(HttpServletRequest.class);

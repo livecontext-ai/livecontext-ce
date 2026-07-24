@@ -300,4 +300,63 @@ class AgentAsyncCompletionServiceFailureCascadeTest {
         verify(skipPropagationService, never()).cascadeFailureToSuccessors(
             any(), any(), anyInt(), anyInt(), any(), anyBoolean(), anyString());
     }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Payload-lost rewrite (tier 2): a SUCCESS delivery whose output blob could
+    // not be stored (orchestrator reported payloadLost, row flipped to FAILED)
+    // must traverse EXACTLY like an async failure.
+    // ────────────────────────────────────────────────────────────────────────
+    @Test
+    @DisplayName("Async SUCCESS with payloadLost persistence cascades SKIPPED like a failure")
+    void asyncSuccessWithPayloadLostCascadesLikeFailure() {
+        PendingAgent pending = nonSplitAgent("corr-lost");
+        when(registry.consume("corr-lost")).thenReturn(Optional.of(pending));
+        primeRebuildAndRun();
+        when(stepCompletionOrchestrator.complete(any(), eq("trigger:cron")))
+            .thenReturn(com.apimarketplace.orchestrator.services.completion.StepCompletionResult
+                .persistedPayloadLost(Map.of(), Map.of(),
+                    "[storage] Output payload lost: storage write failed after retries"));
+
+        service.onAgentResult(successResult("corr-lost"));
+
+        // Traversal truth: descendants are skip-cascaded exactly like an async failure.
+        verify(skipPropagationService).cascadeFailureToSuccessors(
+            any(), eq(failedNode), eq(0), eq(2), eq("trigger:cron"),
+            eq(false), eq(V2SkipPropagationService.SOURCE_ASYNC));
+    }
+
+    @Test
+    @DisplayName("Async SUCCESS with payloadLost does NOT advance the loop back-edge (success-only continuation)")
+    void asyncSuccessWithPayloadLostDoesNotAdvanceLoopBackEdge() {
+        PendingAgent pending = nonSplitAgent("corr-lost-loop");
+        when(registry.consume("corr-lost-loop")).thenReturn(Optional.of(pending));
+        primeRebuildAndRun();
+        when(stepCompletionOrchestrator.complete(any(), eq("trigger:cron")))
+            .thenReturn(com.apimarketplace.orchestrator.services.completion.StepCompletionResult
+                .persistedPayloadLost(Map.of(), Map.of(),
+                    "[storage] Output payload lost: storage quota exceeded - free space or raise the limit"));
+
+        service.onAgentResult(successResult("corr-lost-loop"));
+
+        verify(signalResumeService, never()).advanceLoopBackEdgeForAsyncCompletedNode(
+            anyString(), any(), anyString(), anyInt(), anyInt(), any(), any());
+    }
+
+    @Test
+    @DisplayName("BEHAVIOUR GUARD: async SUCCESS with a NORMAL persisted completion does not cascade and DOES advance the loop back-edge")
+    void asyncSuccessWithNormalPersistenceAdvancesLoopBackEdge() {
+        PendingAgent pending = nonSplitAgent("corr-normal");
+        when(registry.consume("corr-normal")).thenReturn(Optional.of(pending));
+        primeRebuildAndRun();
+        when(stepCompletionOrchestrator.complete(any(), eq("trigger:cron")))
+            .thenReturn(com.apimarketplace.orchestrator.services.completion.StepCompletionResult
+                .persisted(Map.of(), Map.of()));
+
+        service.onAgentResult(successResult("corr-normal"));
+
+        verify(skipPropagationService, never()).cascadeFailureToSuccessors(
+            any(), any(), anyInt(), anyInt(), any(), anyBoolean(), anyString());
+        verify(signalResumeService).advanceLoopBackEdgeForAsyncCompletedNode(
+            eq("run-1"), any(), eq("agent:analyze"), eq(0), eq(2), eq("trigger:cron"), any());
+    }
 }

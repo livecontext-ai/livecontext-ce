@@ -50,6 +50,8 @@ public class CoreNodeBuilder {
         createWaitNodes(nodeMap, plan);
         createTransformNodes(nodeMap, plan);
         createDownloadFileNodes(nodeMap, plan);
+        createPublicLinkNodes(nodeMap, plan);
+        createMediaNodes(nodeMap, plan);
         createExitNodes(nodeMap, plan);
         createEndNodes(nodeMap, plan);
         createResponseNodes(nodeMap, plan);
@@ -630,6 +632,75 @@ public class CoreNodeBuilder {
 
             nodeMap.put(downloadKey, downloadNode);
             logger.info("📥 Created download file node: {} (url={})", downloadKey, urlExpression);
+        }
+    }
+
+    /**
+     * Creates public link nodes from Core definitions.
+     * Public link nodes mint a public, time-limited signed URL for a stored file (FileRef),
+     * for APIs that pull media from a URL (Instagram containers, TikTok PULL_FROM_URL, ...).
+     * Config comes from the generic {@code params} map: file (FileRef expression, required),
+     * ttl_minutes (5-10080, default 240), disposition (inline|attachment, default inline).
+     */
+    public void createPublicLinkNodes(Map<String, ExecutionNode> nodeMap, WorkflowPlan plan) {
+        if (plan.getCores() == null) {
+            return;
+        }
+
+        for (Core coreNode : plan.getCores()) {
+            if (!"public_link".equals(coreNode.type())) {
+                continue;
+            }
+
+            String label = coreNode.label() != null ? coreNode.label() : coreNode.id();
+            String normalizedLabel = LabelNormalizer.normalizeLabel(label);
+            String linkKey = "core:" + normalizedLabel;
+
+            if (nodeMap.containsKey(linkKey)) {
+                continue; // Already created
+            }
+
+            Map<String, Object> params = coreNode.params() != null ? coreNode.params() : Map.of();
+            String fileExpression = params.get("file") instanceof String s && !s.isBlank() ? s : null;
+            Integer ttlMinutes = params.get("ttl_minutes") instanceof Number n ? n.intValue()
+                : params.get("ttlMinutes") instanceof Number n2 ? n2.intValue() : null;
+            String disposition = params.get("disposition") instanceof String d && !d.isBlank() ? d : null;
+
+            PublicLinkNode linkNode = new PublicLinkNode(linkKey, fileExpression, ttlMinutes, disposition);
+            nodeMap.put(linkKey, linkNode);
+            logger.info("🔗 Created public link node: {} (file={})", linkKey, fileExpression);
+        }
+    }
+
+    /**
+     * Creates media nodes from Core definitions.
+     * Media nodes process audio/video files on the optional renderer component:
+     * probe (metadata), mux_audio (one audio onto one video), mix (1-8 tracks,
+     * optional video), extract_audio. Config comes from the generic {@code params}
+     * map and is validated at execute() time (params accept runtime templates).
+     */
+    public void createMediaNodes(Map<String, ExecutionNode> nodeMap, WorkflowPlan plan) {
+        if (plan.getCores() == null) {
+            return;
+        }
+
+        for (Core coreNode : plan.getCores()) {
+            if (!"media".equals(coreNode.type())) {
+                continue;
+            }
+
+            String label = coreNode.label() != null ? coreNode.label() : coreNode.id();
+            String normalizedLabel = LabelNormalizer.normalizeLabel(label);
+            String mediaKey = "core:" + normalizedLabel;
+
+            if (nodeMap.containsKey(mediaKey)) {
+                continue; // Already created
+            }
+
+            Map<String, Object> params = coreNode.params() != null ? coreNode.params() : Map.of();
+            MediaNode mediaNode = new MediaNode(mediaKey, params);
+            nodeMap.put(mediaKey, mediaNode);
+            logger.info("🎬 Created media node: {} (operation={})", mediaKey, params.get("operation"));
         }
     }
 

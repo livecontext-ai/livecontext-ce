@@ -87,13 +87,21 @@ public class InterfaceRenderService implements InterfaceRenderer {
         List<ItemRenderData> items,
         PaginationInfo pagination,
         Map<String, String> actionMappings, // CSS selector → trigger ref
-        RenderTruncation truncation
+        RenderTruncation truncation,
+        String format // interface's display/capture format; null = full page at 1280x800
     ) {
-        /** Backward-compatible 6-arg constructor: no truncation. */
+        /** Backward-compatible 6-arg constructor: no truncation, no format. */
         public InterfaceRenderResult(String htmlTemplate, String cssTemplate, String jsTemplate,
                                      List<ItemRenderData> items, PaginationInfo pagination,
                                      Map<String, String> actionMappings) {
-            this(htmlTemplate, cssTemplate, jsTemplate, items, pagination, actionMappings, null);
+            this(htmlTemplate, cssTemplate, jsTemplate, items, pagination, actionMappings, null, null);
+        }
+
+        /** Backward-compatible 7-arg constructor: no format. */
+        public InterfaceRenderResult(String htmlTemplate, String cssTemplate, String jsTemplate,
+                                     List<ItemRenderData> items, PaginationInfo pagination,
+                                     Map<String, String> actionMappings, RenderTruncation truncation) {
+            this(htmlTemplate, cssTemplate, jsTemplate, items, pagination, actionMappings, truncation, null);
         }
     }
 
@@ -148,12 +156,21 @@ public class InterfaceRenderService implements InterfaceRenderer {
      * @param js     raw JS template (may be null when the interface has none)
      * @param vars   the variable map used for substitution (items[0].data()); empty when no items
      */
-    public record ResolvedTemplateSnapshot(String html, String css, String js, Map<String, Object> vars) {}
+    /**
+     * @param format the interface's display/capture format (preset name or "WxH"), null when the
+     *               interface declares none (full-page capture at 1280x800).
+     */
+    public record ResolvedTemplateSnapshot(String html, String css, String js, Map<String, Object> vars, String format) {
+        /** Back-compat 4-arg constructor: no declared format. */
+        public ResolvedTemplateSnapshot(String html, String css, String js, Map<String, Object> vars) {
+            this(html, css, js, vars, null);
+        }
+    }
 
     /**
      * Template data and configuration for a run
      */
-    private record TemplateConfig(String htmlTemplate, String cssTemplate, String jsTemplate, Map<String, String> variableMappings, Map<String, String> actionMappings) {}
+    private record TemplateConfig(String htmlTemplate, String cssTemplate, String jsTemplate, Map<String, String> variableMappings, Map<String, String> actionMappings, String format) {}
 
     /**
      * Génère les données de rendu pour une interface et un run donné.
@@ -193,6 +210,8 @@ public class InterfaceRenderService implements InterfaceRenderer {
         String cssTemplate = config.cssTemplate();
         String jsTemplate = config.jsTemplate();
         Map<String, String> actionMappings = config.actionMappings();
+        // Interface-declared display/capture format (null = full page at 1280x800).
+        String format = config.format();
 
         logger.info("[InterfaceRender] render() interface={} runId={} callerTenant={} ownerTenant={} actionMappings={}",
                 interfaceId, runId, tenantId, ownerTenantId, actionMappings);
@@ -212,7 +231,7 @@ public class InterfaceRenderService implements InterfaceRenderer {
 
         if (htmlTemplate == null || htmlTemplate.isEmpty()) {
             logger.warn("No template found for interface {} and run {}", interfaceId, runId);
-            return new InterfaceRenderResult("", cssTemplate, jsTemplate, List.of(), new PaginationInfo(page, effectiveSize, 0, 0), actionMappings);
+            return new InterfaceRenderResult("", cssTemplate, jsTemplate, List.of(), new PaginationInfo(page, effectiveSize, 0, 0), actionMappings, null, format);
         }
 
         // 3. Get variable mappings from snapshot (may be empty for static interfaces)
@@ -242,7 +261,7 @@ public class InterfaceRenderService implements InterfaceRenderer {
 
         if (projections.isEmpty()) {
             logger.debug("No step data found for run {}", runId);
-            return new InterfaceRenderResult(htmlTemplate, cssTemplate, jsTemplate, List.of(), new PaginationInfo(page, effectiveSize, 0, 0), actionMappings);
+            return new InterfaceRenderResult(htmlTemplate, cssTemplate, jsTemplate, List.of(), new PaginationInfo(page, effectiveSize, 0, 0), actionMappings, null, format);
         }
 
         // Group by (epoch, itemIndex) and keep only the max spawn for each group
@@ -286,7 +305,7 @@ public class InterfaceRenderService implements InterfaceRenderer {
         int toIndex = Math.min(fromIndex + effectiveSize, totalItems);
 
         if (fromIndex >= totalItems) {
-            return new InterfaceRenderResult(htmlTemplate, cssTemplate, jsTemplate, List.of(), new PaginationInfo(page, effectiveSize, totalItems, totalPages), actionMappings);
+            return new InterfaceRenderResult(htmlTemplate, cssTemplate, jsTemplate, List.of(), new PaginationInfo(page, effectiveSize, totalItems, totalPages), actionMappings, null, format);
         }
 
         List<EpochItem> pageItems = sortedKeys.subList(fromIndex, toIndex);
@@ -324,7 +343,8 @@ public class InterfaceRenderService implements InterfaceRenderer {
             items,
             new PaginationInfo(page, effectiveSize, totalItems, totalPages),
             actionMappings,
-            truncation
+            truncation,
+            format
         );
     }
 
@@ -333,23 +353,25 @@ public class InterfaceRenderService implements InterfaceRenderer {
      * Uses InterfaceClient to fetch from interface-service.
      */
     private TemplateConfig getTemplateConfigForRun(UUID interfaceId, UUID workflowRunId, String tenantId) {
-        // First try snapshot via interface-service
+        // First try snapshot via interface-service. The format travels with the templates: the
+        // snapshot wins over the live interface, so reading the format from anywhere else here
+        // would silently revert a snapshot-backed run to the 1280x800 default.
         if (workflowRunId != null) {
             InterfaceSnapshotDto snapshot = interfaceClient.getSnapshot(interfaceId, workflowRunId, tenantId);
             if (snapshot != null) {
                 Map<String, String> mappings = snapshot.getVariableMappings() != null ? snapshot.getVariableMappings() : Map.of();
                 Map<String, String> actions = snapshot.getActionMappings() != null ? snapshot.getActionMappings() : Map.of();
-                return new TemplateConfig(snapshot.getHtmlTemplate(), snapshot.getCssTemplate(), snapshot.getJsTemplate(), mappings, actions);
+                return new TemplateConfig(snapshot.getHtmlTemplate(), snapshot.getCssTemplate(), snapshot.getJsTemplate(), mappings, actions, snapshot.getFormat());
             }
         }
 
         // Fallback to live interface (no tenant restriction for internal lookup)
         InterfaceDto iface = interfaceClient.getInterfaceTemplateForRender(interfaceId);
         if (iface != null) {
-            return new TemplateConfig(iface.getHtmlTemplate(), iface.getCssTemplate(), iface.getJsTemplate(), Map.of(), Map.of());
+            return new TemplateConfig(iface.getHtmlTemplate(), iface.getCssTemplate(), iface.getJsTemplate(), Map.of(), Map.of(), iface.getFormat());
         }
 
-        return new TemplateConfig(null, null, null, Map.of(), Map.of());
+        return new TemplateConfig(null, null, null, Map.of(), Map.of(), null);
     }
 
     /**
@@ -838,6 +860,9 @@ public class InterfaceRenderService implements InterfaceRenderer {
         info.put("totalItems", totalItems);
         info.put("actionMappings", config.actionMappings());
         info.put("epochTimestamps", epochTimestamps);
+        // The interface's own shape, so panel / share surfaces size the iframe like the
+        // screenshot does instead of assuming 1280x800.
+        info.put("format", config.format());
         return Optional.of(info);
     }
 
@@ -858,7 +883,7 @@ public class InterfaceRenderService implements InterfaceRenderer {
             ? items.get(0).data()
             : Map.of();
         String resolvedHtml = InterfaceTemplateDefaults.apply(result.htmlTemplate(), vars);
-        return Optional.of(new ResolvedTemplateSnapshot(resolvedHtml, result.cssTemplate(), result.jsTemplate(), vars));
+        return Optional.of(new ResolvedTemplateSnapshot(resolvedHtml, result.cssTemplate(), result.jsTemplate(), vars, result.format()));
     }
 
     /**
@@ -913,12 +938,14 @@ public class InterfaceRenderService implements InterfaceRenderer {
         InterfaceDto iface = interfaceClient.getInterfaceTemplateForRender(interfaceId);
         if (iface == null) {
             logger.warn("Interface not found: {}", interfaceId);
-            return new InterfaceRenderResult("", null, null, List.of(), new PaginationInfo(page, size, 0, 0), Map.of());
+            return new InterfaceRenderResult("", null, null, List.of(), new PaginationInfo(page, size, 0, 0), Map.of(), null, null);
         }
 
         String htmlTemplate = iface.getHtmlTemplate();
         String cssTemplate = iface.getCssTemplate();
         String jsTemplate = iface.getJsTemplate();
+        // Interface-declared display/capture format (null = full page at 1280x800).
+        String format = iface.getFormat();
 
         // 1b. Clamp size to the configured per-render cap BEFORE we ask the datasource for rows.
         // Without this, the previous getAllItems() loaded the entire table (up to the
@@ -939,14 +966,14 @@ public class InterfaceRenderService implements InterfaceRenderer {
 
         if (htmlTemplate == null || htmlTemplate.isEmpty()) {
             logger.warn("No template found for interface {}", interfaceId);
-            return new InterfaceRenderResult("", cssTemplate, jsTemplate, List.of(), new PaginationInfo(page, effectiveSize, 0, 0), Map.of());
+            return new InterfaceRenderResult("", cssTemplate, jsTemplate, List.of(), new PaginationInfo(page, effectiveSize, 0, 0), Map.of(), null, format);
         }
 
         // 2. Check if interface has a datasource
         Long dataSourceId = iface.getDataSourceId();
         if (dataSourceId == null) {
             logger.debug("Interface {} has no datasource attached", interfaceId);
-            return new InterfaceRenderResult(htmlTemplate, cssTemplate, jsTemplate, List.of(), new PaginationInfo(page, effectiveSize, 0, 0), Map.of());
+            return new InterfaceRenderResult(htmlTemplate, cssTemplate, jsTemplate, List.of(), new PaginationInfo(page, effectiveSize, 0, 0), Map.of(), null, format);
         }
 
         // 3. Bounded fetch: count first (cheap), then fetch only the page we need.
@@ -955,14 +982,14 @@ public class InterfaceRenderService implements InterfaceRenderer {
         long totalItems = dataSourceClient.getItemsCount(dataSourceId, tenantId);
         if (totalItems <= 0L) {
             logger.debug("No items found in datasource {}", dataSourceId);
-            return new InterfaceRenderResult(htmlTemplate, cssTemplate, jsTemplate, List.of(), new PaginationInfo(page, effectiveSize, 0, 0), Map.of());
+            return new InterfaceRenderResult(htmlTemplate, cssTemplate, jsTemplate, List.of(), new PaginationInfo(page, effectiveSize, 0, 0), Map.of(), null, format);
         }
 
         int totalPages = (int) Math.ceil((double) totalItems / effectiveSize);
         int fromIndex = page * effectiveSize;
         if (fromIndex >= totalItems) {
             return new InterfaceRenderResult(htmlTemplate, cssTemplate, jsTemplate, List.of(),
-                    new PaginationInfo(page, effectiveSize, totalItems, totalPages), Map.of());
+                    new PaginationInfo(page, effectiveSize, totalItems, totalPages), Map.of(), null, format);
         }
 
         List<DataSourceItemDto> pageItems = dataSourceClient.getItems(dataSourceId, tenantId, fromIndex, effectiveSize);
@@ -1028,7 +1055,8 @@ public class InterfaceRenderService implements InterfaceRenderer {
             items,
             new PaginationInfo(page, effectiveSize, totalItems, totalPages),
             Map.of(),
-            truncation
+            truncation,
+            format
         );
     }
 

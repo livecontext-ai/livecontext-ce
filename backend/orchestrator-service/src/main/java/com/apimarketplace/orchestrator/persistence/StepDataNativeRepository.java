@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.persistence;
 
+import com.apimarketplace.common.storage.util.JsonNulSanitizer;
 import com.apimarketplace.orchestrator.domain.WorkflowStepDataEntity;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -228,10 +229,28 @@ public class StepDataNativeRepository {
         return instant != null ? Timestamp.from(instant) : null;
     }
 
+    /**
+     * Serializes {@code input_data} / {@code metadata} / merge-branch values for
+     * the {@code ::jsonb} columns of the step-row INSERT.
+     *
+     * <p>U+0000 hardening (detect-then-clean): PostgreSQL rejects the NUL
+     * codepoint in jsonb with SQLSTATE 22P05. Worse than the payload-blob case,
+     * a NUL here kills the step-row INSERT itself - no row at all, the step
+     * vanishes from history. We serialize once, probe for the backslash-u0000
+     * escape (one {@code indexOf} on the hit-free hot path), and only on
+     * detection strip the actual codepoint via
+     * {@link JsonNulSanitizer#stripNulCodepoints} (parse-and-rebuild, never a
+     * regex over the serialized text, so a LITERAL backslash-u0000 in the data
+     * is preserved).
+     */
     protected String toJson(Object obj) {
         if (obj == null) return null;
         try {
-            return objectMapper.writeValueAsString(obj);
+            String json = objectMapper.writeValueAsString(obj);
+            if (JsonNulSanitizer.containsNulEscape(json)) {
+                json = JsonNulSanitizer.stripNulCodepoints(json);
+            }
+            return json;
         } catch (JsonProcessingException e) {
             logger.warn("[NativeRepo] Failed to serialize to JSON: {}", e.getMessage());
             return null;

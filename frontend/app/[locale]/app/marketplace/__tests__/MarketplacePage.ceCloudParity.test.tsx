@@ -27,6 +27,9 @@ vi.mock('next-intl', () => ({
 const searchParamsState = vi.hoisted(() => ({ params: new URLSearchParams() }));
 vi.mock('next/navigation', () => ({
   useSearchParams: () => searchParamsState.params,
+  // The tab / type filter are query-param backed (useQueryParamState).
+  usePathname: () => '/app/marketplace',
+  useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
 }));
 
 const queryClientMock = vi.hoisted(() => ({

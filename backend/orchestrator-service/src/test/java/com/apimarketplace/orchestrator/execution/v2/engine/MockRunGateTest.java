@@ -62,6 +62,27 @@ class MockRunGateTest {
     }
 
     @Test
+    @DisplayName("Regression 2026-07-21: the PRODUCTION run never mocks, even though promotion left __editorRun__ + __mockMode__ on it")
+    void productionRunNeverMocks() {
+        // Pinning PROMOTES an existing run (usually the editor run the user tested
+        // with) and strips neither flag - so the metadata alone says "mock". The FK
+        // identity must win: production fires never mock.
+        stubRun("promoted-prod", Map.of("__editorRun__", true, "__mockMode__", "all_mcp"));
+        when(runRepository.isProductionRunByRunIdPublic("promoted-prod")).thenReturn(true);
+
+        assertThat(gate.mode("promoted-prod")).isEqualTo(MockRunGate.MockRunMode.OFF);
+    }
+
+    @Test
+    @DisplayName("the production check runs ONLY on the non-OFF path - flag-less runs stay one query")
+    void productionCheckSkippedOnOffPath() {
+        stubRun("plain-run", new HashMap<>());
+
+        assertThat(gate.mode("plain-run")).isEqualTo(MockRunGate.MockRunMode.OFF);
+        verify(runRepository, org.mockito.Mockito.never()).isProductionRunByRunIdPublic("plain-run");
+    }
+
+    @Test
     @DisplayName("HARD GUARD: a run without __editorRun__=true is always OFF, even with __mockMode__ set")
     void nonEditorRunIsAlwaysOff() {
         stubRun("prod-run", Map.of("__mockMode__", "all_mcp"));

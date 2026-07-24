@@ -205,6 +205,56 @@ class InterfaceNodeConfigTest {
                 "video_preset", "videoPreset",
                 "video_max_duration_seconds", "videoMaxDurationSeconds");
         }
+
+        @Test
+        @DisplayName("Should contain the three global-format alias keys")
+        void shouldContainFormatAliasKeys() {
+            assertThat(InterfaceNodeConfig.KNOWN_PARAMS).contains(
+                "format", "interface_format", "interfaceFormat");
+        }
+    }
+
+    @Nested
+    @DisplayName("Retired node-level format (moved to the interface entity)")
+    class RetiredNodeFormat {
+
+        private Map<String, Object> paramsWith(String key, String value) {
+            Map<String, Object> params = new HashMap<>();
+            params.put("interface_id", "uuid-1");
+            params.put(key, value);
+            return params;
+        }
+
+        @Test
+        @DisplayName("A legacy format key is dropped, not carried into the node")
+        void legacyFormatKeyDropped() {
+            // The shape belongs to the interface (its HTML is authored for one fixed viewport
+            // width). Pre-refactor plans still carry the key: fromParams must ignore it rather
+            // than fail, so those workflows keep loading and running.
+            for (String key : new String[] { "format", "interface_format", "interfaceFormat" }) {
+                InterfaceNodeConfig config = InterfaceNodeConfig.fromParams(paramsWith(key, "vertical"));
+                assertThat(config.interfaceId()).isEqualTo("uuid-1");
+            }
+        }
+
+        @Test
+        @DisplayName("The legacy keys stay in KNOWN_PARAMS so validation still accepts them")
+        void legacyKeysStillKnown() {
+            assertThat(InterfaceNodeConfig.KNOWN_PARAMS).contains(
+                "format", "interface_format", "interfaceFormat");
+        }
+
+        @Test
+        @DisplayName("No emitter re-writes a format key back into the plan")
+        void emittersNeverWriteFormat() {
+            // Round-tripping a legacy plan must strip the key for good: re-emitting it would
+            // resurrect a param the engine ignores, and the two would silently drift apart.
+            InterfaceNodeConfig config = InterfaceNodeConfig.fromParams(paramsWith("format", "vertical"));
+
+            assertThat(config.toNodeMap("X", Map.of("x", 0, "y", 0))).doesNotContainKey("format");
+            assertThat(config.toSavedParams()).doesNotContainKey("format");
+            assertThat(config.toExtras()).doesNotContainKey("format");
+        }
     }
 
     @Nested

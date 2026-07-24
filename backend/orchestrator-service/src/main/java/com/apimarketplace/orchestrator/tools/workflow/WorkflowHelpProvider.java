@@ -74,6 +74,7 @@ public class WorkflowHelpProvider {
         "ssh",           // SSH node (execute commands on remote servers)
         "sftp",          // SFTP node (file operations on remote servers)
         "database",      // Database node (execute SQL queries)
+        "media",         // Media node (probe, mux_audio, mix, extract_audio, concat, frame, overlay)
         "runs",          // Inspecting past workflow runs
         "pin",           // Production version pinning (pin/unpin actions)
         "mocking"        // Node mocks: pin a node's output for editor runs (mock/mock_mode/mock_suggest)
@@ -195,7 +196,15 @@ public class WorkflowHelpProvider {
                     "All toggles default to false - only set them when you want the feature on. " +
                     "screenshot output → use generateScreenshot=true; pdf output → use generatePdf=true; " +
                     "video output → use generateVideo=true; " +
-                    "rendered_html / rendered_css / rendered_js outputs → use exposeRenderedSource=true.");
+                    "rendered_html / rendered_css / rendered_js outputs → use exposeRenderedSource=true. " +
+                    "The shape of the screenshot, the video and every preview is NOT set here: it is the " +
+                    "interface's own format. Change it with interface(action='update', interface_id='<uuid>', " +
+                    "format='vertical').");
+            } else if ("media".equals(topic)) {
+                // The DB row carries the params/outputs reference; the static section below
+                // adds the operations table, per-op options and the worked recipes.
+                formatted = new LinkedHashMap<>(formatted);
+                formatted.putAll(getMediaHelp());
             }
             return formatted;
         }
@@ -232,6 +241,11 @@ public class WorkflowHelpProvider {
 
             // Data input aliases
             case "data_input", "datainput", "input_data" -> getNodeHelpByType("data_input");
+
+            // Media aliases (fallback when the node docs row is absent; the "media" topic
+            // itself is normally answered above with the DB row merged with this section)
+            case "media", "mux", "mux_audio", "extract_audio", "audio_video",
+                 "concat", "stitch", "join", "join_videos", "frame", "thumbnail", "cover", "overlay", "watermark" -> getMediaHelp();
 
             // Edge help (connection format)
             case "edge", "edges", "connection", "connections" -> getEdgeHelp();
@@ -309,18 +323,19 @@ public class WorkflowHelpProvider {
         result.put("2_add_node", ordered(
             "syntax", "workflow(action='add_node', type='interface', label='...', params={interface_id: '<uuid>', variable_mapping: {...}, action_mapping: {...}, isEntryInterface: true|false, generateScreenshot: true|false, generatePdf: true|false, pdfFormat: 'A4', pdfLandscape: true|false, generateVideo: true|false, videoPreset: 'vertical', videoMaxDurationSeconds: 30, videoMode: 'smooth', videoFps: 30, exposeRenderedSource: true|false}, connect_after='...')",
             "interface_id", "REQUIRED. UUID returned by interface(action='create').",
-            "isEntryInterface", "OPTIONAL boolean (default false). true = main page shown first in Application Mode. Only ONE interface per app should be marked entry.",
-            "generateScreenshot", "OPTIONAL boolean (default false). true → adds a `screenshot` FileRef to output (PNG of the rendered page, 1280x800). To USE it, map the WHOLE FileRef into a file-accepting tool param to upload it: e.g. Telegram send_photo 'photo': '{{interface:<label>.output.screenshot}}', an email attachment, or an agent image input. Pass the object itself, NOT .path or .id. Best-effort: capture failure leaves the field absent, workflow continues. Rendering is an OPTIONAL deployment component: when it is absent, workflow(action='validate') reports an INTERFACE_RENDERER_UNAVAILABLE warning and the field stays absent at run time - only the user/admin can enable the component.",
+            "shape_and_format", "NOT a node param. The dimensions of the screenshot, the video and every preview come from the INTERFACE's own format, because its HTML is authored for one fixed viewport width. Set it with interface(action='update', interface_id='<uuid>', format='vertical') - or pass format on interface(action='create'). Call interface(action='help') for the preset list. A `format` key on this node is ignored (it was a node param in an earlier version).",
+            "isEntryInterface", "OPTIONAL boolean (default false). true = the app's entry page: the application opens on it (page order otherwise follows canvas layout). An app has exactly ONE entry page: setting it to true on add_node or modify automatically clears the flag on any other interface, and the response reports it under `entry_interface_moved`.",
+            "generateScreenshot", "OPTIONAL boolean (default false). true → adds a `screenshot` FileRef to output (PNG of the rendered page). Dimensions follow the interface's own format: an exact frame when it declares one, a full-page capture at 1280 wide when it does not. To USE it, map the WHOLE FileRef into a file-accepting tool param to upload it: e.g. Telegram send_photo 'photo': '{{interface:<label>.output.screenshot}}', an email attachment, or an agent image input. Pass the object itself, NOT .path or .id. Best-effort: capture failure leaves the field absent, workflow continues. Rendering is an OPTIONAL deployment component: when it is absent, workflow(action='validate') reports an INTERFACE_RENDERER_UNAVAILABLE warning and the field stays absent at run time - only the user/admin can enable the component.",
             "generatePdf", "OPTIONAL boolean (default false). true → adds a `pdf` FileRef to output (a PDF rendering of the same interface). To USE it, map the WHOLE FileRef into a file-accepting tool param: e.g. an email attachment, Telegram send_document 'document': '{{interface:<label>.output.pdf}}', or an agent file input. Pass the object itself, NOT .path or .id. Best-effort: render failure leaves the field absent, workflow continues. Same optional-component caveat as generateScreenshot: an INTERFACE_RENDERER_UNAVAILABLE warning from workflow(action='validate') means the pdf field will be absent on this installation.",
             "pdfFormat", "OPTIONAL string (default 'A4'). Page size for generatePdf: 'A4' | 'Letter' | 'Legal'. Unknown values fall back to A4. Ignored when generatePdf is false.",
             "pdfLandscape", "OPTIONAL boolean (default false). true → the generatePdf output is rendered in landscape orientation. Ignored when generatePdf is false.",
             "generateVideo", "OPTIONAL boolean (default false). true → adds a `video` FileRef to output (an MP4 recording of the interface's animation). The recording starts when the page loads and stops as soon as the interface's JS sets window.__DONE__ = true, or after videoMaxDurationSeconds otherwise - so an animated interface (typewriter reveal, counters) ends its own clip at exactly the right moment. To USE it, map the WHOLE FileRef into a file-accepting tool param: e.g. Telegram send_video 'video': '{{interface:<label>.output.video}}', a social upload param, or an email attachment. Pass the object itself, NOT .path or .id. Best-effort: recording failure leaves the field absent, workflow continues. Same optional-component caveat as generateScreenshot: an INTERFACE_RENDERER_UNAVAILABLE warning from workflow(action='validate') means the video field will be absent on this installation.",
-            "videoPreset", "OPTIONAL string (default 'vertical'). Capture format for generateVideo: 'vertical' (1080x1920, TikTok/Reels/Shorts) | 'horizontal' (1920x1080) | 'square' (1080x1080). Unknown values fall back to vertical. Ignored when generateVideo is false.",
+            "videoPreset", "OPTIONAL string. Per-video override of the capture dimensions: 'vertical' (1080x1920, TikTok/Reels/Shorts) | 'horizontal' (1920x1080) | 'square' (1080x1080). Precedence: explicit videoPreset > the interface's own format > vertical default. OMIT it to let the video and the screenshot share the interface's shape; set it only when this one clip must differ (e.g. a vertical cut of a widescreen dashboard). Unknown values are treated as absent. Ignored when generateVideo is false.",
             "videoMaxDurationSeconds", "OPTIONAL integer (default 30, clamped to 5-120). Recording ceiling in seconds for generateVideo. The interface ends the clip earlier by setting window.__DONE__ = true in its JS. Ignored when generateVideo is false.",
             "videoMode", "OPTIONAL string (default 'smooth'). 'smooth' renders the clip OFFLINE frame by frame under a virtual clock: every frame is perfect and the motion is fluid regardless of load (rendering takes roughly 2-4x the clip duration). 'live' records in real time (faster to produce, frames can drop under load). Unknown values fall back to smooth. Ignored when generateVideo is false.",
             "videoFps", "OPTIONAL integer (default 30, clamped to 10-60). Output frame rate of the generateVideo clip. 60 gives the smoothest motion at roughly double the smooth-mode render time. Ignored when generateVideo is false.",
             "exposeRenderedSource", "OPTIONAL boolean (default false). true → adds 3 string outputs `rendered_html`, `rendered_css`, `rendered_js` (the exact templates the iframe shows, HTML with {{var|default}} substituted via variable_mapping). Downstream consumers: email body, agent text input, debug logs. References: {{interface:<label>.output.rendered_html}}, .rendered_css, .rendered_js. Each capped at 256 KB. Best-effort: render failure leaves the fields absent, workflow continues.",
-            "param_naming", "All boolean params accept BOTH conventions: camelCase (canonical: isEntryInterface, generateScreenshot, generatePdf, pdfLandscape, generateVideo, exposeRenderedSource) and snake_case aliases (is_entry_interface, generate_screenshot, generate_pdf, pdf_landscape, generate_video, expose_rendered_source). pdfFormat/pdf_format, videoPreset/video_preset and videoMode/video_mode are strings; videoMaxDurationSeconds/video_max_duration_seconds and videoFps/video_fps are integers. Pick one and stick to it; the validator accepts either."
+            "param_naming", "All boolean params accept BOTH conventions: camelCase (canonical: isEntryInterface, generateScreenshot, generatePdf, pdfLandscape, generateVideo, exposeRenderedSource) and snake_case aliases (is_entry_interface, generate_screenshot, generate_pdf, pdf_landscape, generate_video, expose_rendered_source). pdfFormat/pdf_format, videoPreset/video_preset and videoMode/video_mode are strings; videoMaxDurationSeconds/video_max_duration_seconds and videoFps/video_fps are integers. Pick one and stick to it; the validator accepts either. There is no format param here: the shape lives on the interface (see shape_and_format)."
         ));
 
         result.put("3_variable_mapping", ordered(
@@ -332,6 +347,8 @@ public class WorkflowHelpProvider {
                 "No legacy `file_url` - these nodes emit only `file` as the canonical FileRef.",
             "file_params", "Sending a file to an mcp: API tool that takes one (Telegram send_photo `photo`/send_document `document`, etc.): map the WHOLE FileRef into that param, e.g. {'photo': '{{interface:card.output.screenshot}}'} or {'document': '{{core:dl.output.file}}'}. " +
                 "The platform uploads the bytes for you. A plain string in the same param is sent verbatim = a public URL or the provider's own file id. Map the object, never .path or .id.",
+            "url_pull_apis", "Some API params want a URL the provider downloads ITSELF (Instagram create_media_container video_url, TikTok PULL_FROM_URL source, link params) - a FileRef does NOT work there because platform file URLs need auth. " +
+                "Add a public_link node (params={file:'{{...output.file}}', ttl_minutes:240}) and map its {{core:<label>.output.url}} into the URL param: a public, expiring, signed URL on the platform's own storage.",
             "BEST_PRACTICE", "Prefer variable_mapping for scalars (visible in builder). js_template only for arrays/JSON parsing. " +
                 "Agent response is STRING - sub-field access won't work. Map whole response, parse in js_template."
         ));
@@ -415,8 +432,8 @@ public class WorkflowHelpProvider {
         result.put("7b_outputs", ordered(
             "always_present", "interface_id (string UUID), action_mapping (object), is_entry_interface (boolean).",
             "action_data", "After the user fires a trigger-bound action: output.<action_name>.<field> + output.<action_name>.fired_at (ISO timestamp). <action_name> = normalized trigger label. Absent until the user fires - guard with a SpEL default ({{interface:x.output.submit.email|}}).",
-            "screenshot", "OPTIONAL FileRef PNG (1280x800). Present iff generateScreenshot=true AND the rendering component captured successfully. Absent on failure or when the optional rendering component is not enabled on this installation (workflow continues; workflow(action='validate') warns INTERFACE_RENDERER_UNAVAILABLE in that case).",
-            "video", "OPTIONAL FileRef MP4. Present iff generateVideo=true AND the rendering component recorded successfully. Size follows videoPreset (vertical 1080x1920 / horizontal 1920x1080 / square 1080x1080); length is at most videoMaxDurationSeconds, shorter when the page sets window.__DONE__ = true. Same absence/validate-warning semantics as screenshot.",
+            "screenshot", "OPTIONAL FileRef PNG. Dimensions follow the interface's own format (set it with interface(action='update', interface_id='<uuid>', format='vertical')): an exact WIDTHxHEIGHT frame when it declares one (below-the-fold content is cropped), otherwise a full-page capture at 1280x800 viewport width. Present iff generateScreenshot=true AND the rendering component captured successfully. Absent on failure or when the optional rendering component is not enabled on this installation (workflow continues; workflow(action='validate') warns INTERFACE_RENDERER_UNAVAILABLE in that case).",
+            "video", "OPTIONAL FileRef MP4. Present iff generateVideo=true AND the rendering component recorded successfully. Dimensions: explicit videoPreset when set (vertical 1080x1920 / horizontal 1920x1080 / square 1080x1080), otherwise the interface's own format, otherwise vertical. Length is at most videoMaxDurationSeconds, shorter when the page sets window.__DONE__ = true. Same absence/validate-warning semantics as screenshot.",
             "rendered_html", "OPTIONAL string - iframe-equivalent HTML with {{var|default}} substituted from variable_mapping. Present iff exposeRenderedSource=true AND interface has an htmlTemplate. Capped at 256 KB (truncated past). Absent on render failure.",
             "rendered_css", "OPTIONAL string - raw CSS template (NOT var-substituted, matches what the iframe receives). Present iff exposeRenderedSource=true AND interface has cssTemplate. Capped at 256 KB.",
             "rendered_js", "OPTIONAL string - raw JS template (NOT var-substituted; runtime vars are injected via window.__RESOLVED_DATA__ in the iframe). Present iff exposeRenderedSource=true AND interface has jsTemplate. Capped at 256 KB.",
@@ -455,6 +472,172 @@ public class WorkflowHelpProvider {
     /**
      * Get help for edge/connection format.
      */
+    /**
+     * Media node help: operations table, per-operation params with defaults/bounds,
+     * and worked recipes (simple mux, ducked mix, probe-calibrated TTS, clip compilation,
+     * cover frame, watermark).
+     */
+    private Map<String, Object> getMediaHelp() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("title", "Media Node - Audio/Video Processing (probe, mux_audio, mix, extract_audio, concat, frame, overlay)");
+        result.put("requires_component", "Runs on the optional renderer component. When that component is not " +
+            "enabled on this installation, the node FAILS at run time (producing the media output IS its purpose - " +
+            "this is NOT best-effort like interface screenshots) and validate warns with MEDIA_RENDERER_UNAVAILABLE. " +
+            "Only the user or an administrator can enable the component.");
+        result.put("file_params", "Every file param (input, video, audio, image, tracks[].source, inputs[].source) " +
+            "takes the WHOLE FileRef output of an upstream node as a whole-value template, e.g. " +
+            "'{{core:download.output.file}}' or '{{interface:card.output.video}}' - never .path, never a URL string. " +
+            "All params accept {{...}} templates resolved at run time. A file that ALREADY exists in Files (no " +
+            "upstream node) can be passed as the literal FileRef object from files(action='get') response field `ref`.");
+        result.put("operations", ordered(
+            "probe", "Read metadata. params={operation:'probe', input:'{{...file}}'}. Outputs FLAT fields (no file): " +
+                "duration_seconds, size_bytes, format_name, bit_rate, has_video, has_audio, " +
+                "video={codec,width,height,fps}|null, audio={codec,sample_rate,channels}|null.",
+            "mux_audio", "Put ONE audio track onto ONE video (the 90% case). params={operation:'mux_audio', " +
+                "video:'{{...file}}', audio:'{{...file}}'} + options below. Output: file (mp4, video stream copied, " +
+                "audio aac) + duration_seconds.",
+            "mix", "Mix 1-8 audio tracks, optionally onto a video. params={operation:'mix', tracks:[{source:'{{...file}}'}, ...]" +
+                ", video:'{{...file}}' (optional)} + options below. Output: file (mp4 when video present, else " +
+                "mp3/wav/aac per output_format) + duration_seconds.",
+            "extract_audio", "Pull the audio track out of a video. params={operation:'extract_audio', input:'{{...file}}', " +
+                "output_format:'mp3'|'wav'|'aac' (default mp3), audio_bitrate:'192k', trim_start_seconds/trim_end_seconds " +
+                "(optional)}. Output: file + duration_seconds.",
+            "concat", "Glue 1-8 videos back to back into ONE mp4. params={operation:'concat', " +
+                "inputs:[{source:'{{...file}}'}, ...]} + options below. A SINGLE input is allowed - that is the " +
+                "trim/speed-edit use case. Output: file (always mp4) + duration_seconds.",
+            "frame", "Extract ONE still image (cover/thumbnail). params={operation:'frame', input:'{{...file}}'} + " +
+                "options below. Output: file (image/jpeg or image/png) + timestamp_seconds (the ACTUAL timestamp " +
+                "used after default/clamp); duration_seconds is null for frame.",
+            "overlay", "Burn an image (logo, watermark, badge) onto a video. params={operation:'overlay', " +
+                "video:'{{...file}}', image:'{{...file}}'} + options below. PNG alpha is respected; the operation " +
+                "fails if the image file is not an image. Output: file (mp4) + duration_seconds."
+        ));
+        result.put("mux_audio_options", ordered(
+            "volume", "Audio volume in percent 0-400, default 100",
+            "offset_seconds", "Audio starts at this time on the video, >= 0, default 0",
+            "trim_start_seconds/trim_end_seconds", "Use only this segment of the AUDIO, >= 0, optional",
+            "loop", "Loop the audio to the video length, default false (same effect as audio_fit:'loop')",
+            "fade_in_seconds/fade_out_seconds", "Fades in seconds, >= 0, defaults 0 / 1.0",
+            "keep_original_audio", "Keep the video's own audio MIXED under the new track, default false; " +
+                "original_volume (percent 0-400, default 100) sets its level",
+            "audio_fit", "What happens when audio is shorter/longer than the video: pad | shortest | loop, default pad",
+            "normalize", "Loudness normalisation: true (default, -16 LUFS), false, or a LUFS target number in -70..-5",
+            "audio_bitrate", "Output audio bitrate string, default '192k'"
+        ));
+        result.put("mix_track_options", ordered(
+            "id", "Optional name used by duck_under references; defaults to track_1, track_2, ... in array order",
+            "source", "REQUIRED whole FileRef expression for this track's audio",
+            "volume/offset_seconds/trim_*/loop/fade_*", "Same semantics and defaults as mux_audio " +
+                "(fade_out_seconds defaults to 0 here)",
+            "speed", "Playback speed 0.5-2.0, pitch-preserving, default 1.0",
+            "duck_under", "Id of ANOTHER track: THIS track auto-lowers while that one is audible " +
+                "(sidechain). Tune with duck_amount_db (default 12), duck_attack_ms (20), duck_release_ms (300)",
+            "globals", "keep_original_audio/original_volume (only with video), audio_fit (default pad), " +
+                "normalize (default true), audio_bitrate ('192k'), output_format (mp4 forced with video; " +
+                "mp3|wav|aac otherwise, default mp3)"
+        ));
+        result.put("concat_input_options", ordered(
+            "source", "REQUIRED whole FileRef expression (or literal FileRef object) of the clip; the clip may or " +
+                "may not have audio (silent clips get a silent bed when re-encoding)",
+            "trim_start_seconds", "Use the clip only FROM this second, >= 0, optional",
+            "trim_end_seconds", "Use the clip only UP TO this second; must be GREATER than trim_start_seconds, optional",
+            "speed", "Playback speed 0.5-2.0, pitch-preserving, default 1.0"
+        ));
+        result.put("concat_options", ordered(
+            "transition", "cut (default) or crossfade. crossfade requires at least 2 inputs and blends both video " +
+                "and audio between consecutive clips",
+            "transition_seconds", "Crossfade length 0.1-5.0 seconds, default 0.5. It must be shorter than every " +
+                "clip's EFFECTIVE duration (after trim/speed) - the run fails naming the offending clip otherwise. " +
+                "Output duration = sum of effective durations - (N-1) x transition_seconds",
+            "target_width/target_height", "Output canvas, 16-4096 each, BOTH or NEITHER (odd values are rounded " +
+                "down to even). Default: the FIRST input's dimensions. Clips that do not match are scaled to FIT " +
+                "and padded with black bars, never stretched",
+            "target_fps", "Output frame rate 1-60, default: the FIRST input's fps",
+            "fade_in_seconds/fade_out_seconds", "Global fades on the RESULT, >= 0, defaults 0 / 0 (NOTE: " +
+                "mux_audio's fade_out default is 1.0; concat's is 0 on purpose)",
+            "normalize", "Default FALSE for concat (unlike mux/mix): set true (or a LUFS number -70..-5) to even " +
+                "out loudness between clips - it forces the re-encode path",
+            "audio_bitrate", "Re-encode path only, default '192k'"
+        ));
+        result.put("frame_options", ordered(
+            "at_seconds", "Timestamp of the still, >= 0. DEFAULT: the MIDDLE of the video (duration/2). A value " +
+                "past the end is CLAMPED to just before the end - never an error. The output field " +
+                "timestamp_seconds reports the ACTUAL timestamp used",
+            "image_format", "jpeg (default, high quality) or png",
+            "width", "Optional 16-4096: scale the image to this width, aspect ratio kept (height automatic)"
+        ));
+        result.put("overlay_options", ordered(
+            "position", "top_left | top_right | bottom_left | bottom_right (default) | center - the corner/center " +
+                "the image is anchored to",
+            "margin_px", "Distance in pixels from the two nearest edges, >= 0, default 24 (ignored for center)",
+            "width_percent", "Image width as a percent of the VIDEO width, 1-100, default 15 (height automatic, " +
+                "aspect ratio kept)",
+            "opacity", "0-1, default 1.0 (semi-transparent watermarks: e.g. 0.5)",
+            "start_seconds/end_seconds", "Optional visibility window: the overlay shows only between these " +
+                "timestamps (end_seconds must be greater than start_seconds); absent = the whole video. The " +
+                "video re-encodes; the audio is copied untouched when present"
+        ));
+        result.put("constraints", ordered(
+            "loop_vs_trim", "loop:true cannot be combined with trim_start_seconds/trim_end_seconds on the same " +
+                "audio or track: extract the trimmed segment with a separate media node first, or drop one of the two.",
+            "mix_length_anchor", "An audio-only mix cannot have loop:true on EVERY track (nothing anchors the " +
+                "output length): keep at least one non-looping track, or provide a video.",
+            "concat_fast_copy", "concat is near-instant and LOSSLESS (no re-encode) only when ALL of: every input " +
+                "shares the same video codec, width, height, aspect and fps AND the same audio situation (all aac " +
+                "with the same sample rate and channels, or none has audio); no clip has trims or speed != 1.0; " +
+                "transition is 'cut'; fade_in_seconds and fade_out_seconds are 0; normalize is false. Anything " +
+                "else re-encodes (h264 + aac mp4) - correct but slower, so prefer defaults when clips come from " +
+                "the same source.",
+            "concat_crossfade", "crossfade needs at least 2 inputs, and transition_seconds must be strictly " +
+                "shorter than every clip's effective duration (after trim/speed) - the failure names the " +
+                "offending clip index.",
+            "concat_target_dims", "target_width and target_height come TOGETHER or not at all; without them the " +
+                "first input defines the canvas and other clips are fitted with black padding, never stretched.",
+            "frame_default_middle", "frame without at_seconds grabs the MIDDLE of the video; an at_seconds past " +
+                "the end is clamped to just before the end (never an error) - read output.timestamp_seconds for " +
+                "the timestamp actually used.",
+            "budget", "Renders have a per-operation time budget and an input size limit on the renderer. A timeout " +
+                "or too-large failure means: use shorter inputs (trim_start_seconds/trim_end_seconds) or smaller files. " +
+                "A busy failure means: retry when fewer media operations run concurrently."
+        ));
+        result.put("examples", ordered(
+            "1_simple_mux", "Soundtrack a rendered clip at 80% volume with a 2s fade-out: " +
+                "workflow(action='add_node', type='media', label='Add Music', params={operation:'mux_audio', " +
+                "video:'{{interface:card.output.video}}', audio:'{{core:download_track.output.file}}', volume:80, " +
+                "fade_out_seconds:2}, connect_after='Card'). Then send {{core:add_music.output.file}} to any file param.",
+            "2_duck_music_under_voice", "Voiceover over background music that automatically dips while the voice " +
+                "speaks: workflow(action='add_node', type='media', label='Final Mix', params={operation:'mix', " +
+                "video:'{{interface:card.output.video}}', tracks:[{id:'voice', source:'{{mcp:tts.output.file}}'}, " +
+                "{id:'music', source:'{{core:download_track.output.file}}', volume:60, loop:true, duck_under:'voice'}]}, " +
+                "connect_after='TTS'). The music track lowers by duck_amount_db (12dB) whenever the voice track is audible.",
+            "3_probe_then_calibrated_tts", "Fit narration to a clip's exact length: (1) media probe on the video -> " +
+                "{{core:probe_clip.output.duration_seconds}}; (2) a code node computes the word budget, e.g. " +
+                "$output = {words: Math.floor(input_duration * 2.5)}; (3) the agent/TTS tool generates speech for " +
+                "that budget; (4) media mux_audio puts the narration onto the video. The probe's flat fields " +
+                "(has_audio, video.fps, ...) are all referencable the same way.",
+            "4_compile_clips_with_crossfade", "Stitch three generated clips into one reel with soft transitions: " +
+                "workflow(action='add_node', type='media', label='Compile Reel', params={operation:'concat', " +
+                "inputs:[{source:'{{core:intro.output.file}}'}, {source:'{{core:demo.output.file}}', " +
+                "trim_end_seconds:12}, {source:'{{core:outro.output.file}}'}], transition:'crossfade', " +
+                "transition_seconds:0.5, fade_out_seconds:1}, connect_after='Outro'). One input + trims/speed = " +
+                "a simple cut-down edit of a single video.",
+            "5_cover_frame", "Grab a cover image for a produced video (default = the middle, usually the best " +
+                "shot): workflow(action='add_node', type='media', label='Cover', params={operation:'frame', " +
+                "input:'{{core:compile_reel.output.file}}', width:1280}, connect_after='Compile Reel'). Then " +
+                "{{core:cover.output.file}} is an image FileRef for thumbnails/posts and " +
+                "{{core:cover.output.timestamp_seconds}} tells you which second was used.",
+            "6_watermark", "Brand a video with a semi-transparent logo bottom-right: workflow(action='add_node', " +
+                "type='media', label='Brand It', params={operation:'overlay', video:'{{core:compile_reel.output.file}}', " +
+                "image:'{{core:download_logo.output.file}}', position:'bottom_right', margin_px:24, width_percent:12, " +
+                "opacity:0.7}, connect_after='Compile Reel')."
+        ));
+        result.put("edges", "No ports. Exactly ONE incoming edge (like every utility node - validate rejects more). "
+            + "To feed it from two branches (e.g. a video download AND an audio download), either chain them "
+            + "(A -> B -> media: the file params reference ANY upstream node by template, not just the direct "
+            + "predecessor) or join the branches with a merge node before it.");
+        return result;
+    }
+
     private Map<String, Object> getEdgeHelp() {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("title", "Edge Format - Connecting Nodes");
@@ -482,7 +665,7 @@ public class WorkflowHelpProvider {
             "approval", "approved, rejected, timeout - Example: core:review:approved",
             "guardrail", "pass, fail - Example: agent:safety:pass, agent:safety:fail",
             "classify", "category_0, category_1, ... - Example: agent:router:category_0",
-            "no_port_nodes", "split, merge, transform, wait, exit, stop_on_error, response, aggregate, http_request, download_file, data_input, code, filter, sort, limit, remove_duplicates, summarize, date_time, crypto_jwt, xml, compression, rss, convert_to_file, extract_from_file, compare_datasets, sub_workflow, respond_to_webhook, send_email, email_inbox, set, html_extract, task, ssh, sftp, database - NO ports, single outgoing edge"
+            "no_port_nodes", "split, merge, transform, wait, exit, stop_on_error, response, aggregate, http_request, download_file, public_link, media, data_input, code, filter, sort, limit, remove_duplicates, summarize, date_time, crypto_jwt, xml, compression, rss, convert_to_file, extract_from_file, compare_datasets, sub_workflow, respond_to_webhook, send_email, email_inbox, set, html_extract, task, ssh, sftp, database - NO ports, single outgoing edge"
         ));
         return result;
     }
@@ -876,8 +1059,8 @@ public class WorkflowHelpProvider {
         help.put("run_behavior", ordered(
             "default_no_version", "Omitting 'version' runs the current plan as an editor run. Executing never creates a new version: the run resolves to the latest version (parameter-level plan changes update that version's stored content in place) and epochs accumulate on the existing live run - it is reused whether it sits in WAITING_TRIGGER between fires or is still RUNNING/PAUSED on a previous epoch (firing then opens a new epoch on the same run). Only a structural plan change (nodes/edges added or removed) or an execution-mode switch (automatic vs step-by-step) starts a fresh run at that same version.",
             "version_int", "version=N replays a specific frozen version as an editor run - no new version is created; runs accumulate at that version. The fired epoch executes EXACTLY the stored content of version N, even if the current canvas plan has changed since.",
-            "version_pinned", "version='pinned' routes through ProductionRunResolver and fires the prod run. Requires pinned_version != null AND an existing WAITING_TRIGGER run at that version.",
-            "editor_vs_prod", "Editor runs carry the __editorRun__ metadata flag and bypass the production-pin chokepoint. version='pinned' does NOT carry that flag - it's a real production fire."
+            "version_pinned", "version='pinned' fires the workflow's PRODUCTION run - the single run its pin points at. Requires a pinned version and that production run to exist and be between fires (waiting for its trigger).",
+            "editor_vs_prod", "Editor fires (no version, or version=N) and production fires (version='pinned') target DIFFERENT runs: an editor fire never touches the production run - it reuses or creates its own editor run, and mock_mode only ever applies there. What makes a run 'production' is being the pin's current target, not how it was originally created: pinning promotes an existing run, so the production run may well have started life as the editor run you tested with."
         ));
 
         // execute_info block

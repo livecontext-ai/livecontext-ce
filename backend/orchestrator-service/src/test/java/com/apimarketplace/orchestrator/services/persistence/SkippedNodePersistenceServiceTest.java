@@ -108,6 +108,61 @@ class SkippedNodePersistenceServiceTest {
         }
 
         @Test
+        @DisplayName("Sibling stamp: skip-payload persist failure keeps status SKIPPED but stamps the storage-loss marker on error_message (never silent)")
+        void stampsErrorMessageWhenSkipPayloadPersistFails() {
+            // Pre-fix sibling of the output-loss bug: a null storageId from
+            // persistSkippedNodePayload was swallowed with NO stamp at all -
+            // the SKIPPED row landed with a silently missing payload blob.
+            UUID workflowRunId = UUID.randomUUID();
+            when(entityResolverService.resolveWorkflowRunId(execution)).thenReturn(Optional.of(workflowRunId));
+            when(entityResolverService.getCurrentEpochFromRun(workflowRunId)).thenReturn(0);
+            when(execution.getRunId()).thenReturn("run-123");
+            when(execution.getPlan()).thenReturn(plan);
+            when(plan.getTenantId()).thenReturn("tenant-1");
+            when(plan.getId()).thenReturn("workflow-1");
+            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt())).thenReturn(null);
+            when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
+
+            boolean result = service.recordSkippedNode(
+                    execution, "mcp:step", "Step", "decision_branch_not_taken",
+                    "core:decision", 0);
+
+            assertTrue(result, "the SKIPPED row must still land");
+            ArgumentCaptor<WorkflowStepDataEntity> captor = ArgumentCaptor.forClass(WorkflowStepDataEntity.class);
+            verify(nativeRepository).insertIgnoringDuplicate(captor.capture());
+            WorkflowStepDataEntity captured = captor.getValue();
+            assertEquals("SKIPPED", captured.getStatus(),
+                    "a skip is not a failure - status must stay SKIPPED");
+            assertNull(captured.getOutputStorageId());
+            assertNotNull(captured.getErrorMessage(), "the loss must be stamped, never silent");
+            assertTrue(captured.getErrorMessage().contains("[storage] Skip payload persist failed"),
+                    "marker must name the skip-payload loss - got: " + captured.getErrorMessage());
+        }
+
+        @Test
+        @DisplayName("BEHAVIOUR GUARD: a successful skip-payload persist leaves error_message null")
+        void successfulSkipPayloadLeavesErrorMessageNull() {
+            UUID workflowRunId = UUID.randomUUID();
+            when(entityResolverService.resolveWorkflowRunId(execution)).thenReturn(Optional.of(workflowRunId));
+            when(entityResolverService.getCurrentEpochFromRun(workflowRunId)).thenReturn(0);
+            when(execution.getRunId()).thenReturn("run-123");
+            when(execution.getPlan()).thenReturn(plan);
+            when(plan.getTenantId()).thenReturn("tenant-1");
+            when(plan.getId()).thenReturn("workflow-1");
+            when(stepPayloadService.persistSkippedNodePayload(anyString(), any(), anyInt()))
+                    .thenReturn(UUID.randomUUID());
+            when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
+
+            assertTrue(service.recordSkippedNode(
+                    execution, "mcp:step", "Step", "decision_branch_not_taken",
+                    "core:decision", 0));
+
+            ArgumentCaptor<WorkflowStepDataEntity> captor = ArgumentCaptor.forClass(WorkflowStepDataEntity.class);
+            verify(nativeRepository).insertIgnoringDuplicate(captor.capture());
+            assertNull(captor.getValue().getErrorMessage());
+        }
+
+        @Test
         @DisplayName("Should successfully record skipped node")
         void shouldSuccessfullyRecordSkippedNode() {
             UUID workflowRunId = UUID.randomUUID();

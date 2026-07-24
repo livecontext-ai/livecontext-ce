@@ -17,6 +17,7 @@ import { useApprovalReviewSelection } from '../hooks/useApprovalReviewSelection'
 import { WorkflowRunsHistoryPanel } from '@/components/workflow/WorkflowRunsHistoryPanel';
 import type { ConnectionType } from './ConnectionTypeSelector';
 import { generateWorkflowPlan } from '../utils/workflowPlanGenerator';
+import { resolveInsertedTargetHandle } from '../utils/hoverConnectHandles';
 import { reconcilePlanCredentials } from '@/lib/credentials/reconcilePlanCredentials';
 import type { Credential } from '@/lib/api/orchestrator';
 import { normalizeLabel, triggerKey, agentKey } from '../utils/labelNormalizer';
@@ -47,6 +48,7 @@ import { ValidationProvider } from '../contexts/ValidationContext';
 import { setCanvasNodes } from '../services/canvasNodesStore';
 import { useWorkflowRunContext } from '@/contexts/WorkflowRunContext';
 import { calculateNodePosition } from '../utils/nodePositioning';
+import { useWorkflowLayoutDirectionSafe } from '@/contexts/WorkflowLayoutDirectionContext';
 import { resolveEffectiveRunId } from '../utils/effectiveRunId';
 import Toast, { useToast } from '@/components/Toast';
 import { useTranslations } from 'next-intl';
@@ -127,6 +129,8 @@ export function WorkflowBuilder({
   onSettingsOpenChange,
 }: WorkflowBuilderProps = {}) {
   const router = useRouter();
+  // Drives where a hover-"+" drops the new node (below in vertical, right in horizontal).
+  const { direction: layoutDirection } = useWorkflowLayoutDirectionSafe();
   const t = useTranslations('workflowBuilder');
   const tCredentials = useTranslations('credentials');
   const { toasts, addToast, removeToast } = useToast();
@@ -213,6 +217,10 @@ export function WorkflowBuilder({
   // Refs for tracking state changes
   const nodesRef = React.useRef(nodes);
   const edgesRef = React.useRef(edges);
+  // The active reading direction, kept in a ref so the (few-dep) save callbacks can
+  // stamp it into the generated plan without re-creating on every direction change.
+  const layoutDirectionRef = React.useRef(layoutDirection);
+  layoutDirectionRef.current = layoutDirection;
 
   // Keep save/runtime refs in sync before the browser can process the next UI action.
   React.useLayoutEffect(() => {
@@ -437,7 +445,7 @@ export function WorkflowBuilder({
     if (!workflowId) return undefined;
     try {
       const plan = reconcilePlanCredentials(
-        generateWorkflowPlan(nodesRef.current, edgesRef.current),
+        generateWorkflowPlan(nodesRef.current, edgesRef.current, layoutDirectionRef.current),
         userCredentialsRef.current,
       );
       await saveWorkflowPlan(workflowId, plan);
@@ -454,7 +462,7 @@ export function WorkflowBuilder({
   // not yet loaded - it never drops valid pins.)
   const getCurrentPlan = React.useCallback((): Record<string, unknown> | null => {
     return reconcilePlanCredentials(
-      generateWorkflowPlan(nodesRef.current, edgesRef.current),
+      generateWorkflowPlan(nodesRef.current, edgesRef.current, layoutDirectionRef.current),
       userCredentialsRef.current,
     ) as unknown as Record<string, unknown>;
   }, []);
@@ -600,6 +608,7 @@ export function WorkflowBuilder({
       updateReadySteps: pauseResumeActions.updateReadySteps,
     },
     onSaveBeforeExecute: autoSaveBeforeExecute,
+    layoutDirection,
   });
 
   // Apply workflow metadata from loader (no extra API call - reuses workflowData from useWorkflowLoader)
@@ -770,6 +779,12 @@ export function WorkflowBuilder({
       executionTotal: runState.executionTotal ?? 0,
       // Plan version this run uses (for version badge in run info header)
       planVersion: runState.rawRunState?.planVersion ?? undefined,
+      // Accumulated run cost (all epochs) + per-epoch breakdown + workflow
+      // budget, for the RunInfo panel's "Cost of this run" row. Live-updated by
+      // the runCost WS event.
+      costCredits: runState.costCredits ?? null,
+      costByEpoch: runState.costByEpoch ?? {},
+      budgetCredits: runState.budgetCredits ?? null,
       // Synthesized cycle result -> drives the badge's display status/color (see above).
       metadata: lastCycleResult ? { lastCycleResult } : undefined,
     };
@@ -1045,6 +1060,7 @@ export function WorkflowBuilder({
           label,
           actionMapping: iData.actionMapping || {},
           nodeId: `interface:${normalizeLabel(label)}`,
+          isEntryInterface: iData.isEntryInterface === true,
         };
       });
   }, [nodes, isRunMode, workflowId]);
@@ -1063,7 +1079,7 @@ export function WorkflowBuilder({
   const lastApplicationConfigsKeyRef = React.useRef<string>('');
   React.useEffect(() => {
     const key = applicationConfigs
-      .map(c => `${c.interfaceId}|${c.label}|${JSON.stringify(c.actionMapping)}`)
+      .map(c => `${c.interfaceId}|${c.label}|${c.isEntryInterface ? 1 : 0}|${JSON.stringify(c.actionMapping)}`)
       .join('||');
     if (key === lastApplicationConfigsKeyRef.current) return;
     lastApplicationConfigsKeyRef.current = key;
@@ -1258,7 +1274,7 @@ export function WorkflowBuilder({
     if (!workflowId) return;
 
     try {
-      const plan = generateWorkflowPlan(nodesRef.current, edgesRef.current);
+      const plan = generateWorkflowPlan(nodesRef.current, edgesRef.current, layoutDirectionRef.current);
       await saveWorkflowPlan(workflowId, { ...plan, name });
 
       setWorkflowNameState(name);
@@ -1458,7 +1474,8 @@ export function WorkflowBuilder({
     const currentPendingConnection = pendingHoverConnectionRef.current;
     const targetPosition = calculateNodePosition(
       currentPendingConnection,
-      nodeCreationCounterRef.current
+      nodeCreationCounterRef.current,
+      layoutDirection,
     );
 
     handleCreateNode(itemData, targetPosition);
@@ -1471,49 +1488,25 @@ export function WorkflowBuilder({
         const newNode = newNodes[newNodes.length - 1];
 
         if (newNode) {
-          const { handlePosition, nodeId, handleId } = currentPendingConnection;
+          const { handleType, nodeId, handleId } = currentPendingConnection;
 
-          if (handlePosition === 'right') {
+          // Decide by handle ROLE, not geometric side, so a vertical "+" (source on
+          // bottom, target on top) connects the same way a horizontal one does. The
+          // old 'right'/'top'/'left' switch fell through to 'left' (backward) for any
+          // vertical position. The former 'top' branch (fleet agent-tool wiring via
+          // `source-bottom-tools`) was dead here: this manager runs on the DAG builder
+          // only, which never rendered a top source handle.
+          if (handleType === 'source') {
+            // "+" on the source → the existing node feeds the new node.
             handleConnect({
               source: nodeId,
               target: newNode.id,
               sourceHandle: handleId,
               targetHandle: null,
             });
-          } else if (handlePosition === 'top') {
-            const nodeData = newNode.data as any;
-            const nodeDataId = nodeData?.id || '';
-            const isInterface = nodeDataId === 'interface' ||
-              nodeDataId.startsWith('interface-') ||
-              newNode.id.startsWith('interface-');
-            const isAiAgent = nodeData?.kind === 'ai_agent' || nodeData?.nodeClass === 'ai_agent';
-
-            if (isInterface) {
-              handleConnect({
-                source: nodeId,
-                target: newNode.id,
-                sourceHandle: handleId,
-                targetHandle: null,
-              });
-            } else if (isAiAgent) {
-              handleConnect({
-                source: newNode.id,
-                target: nodeId,
-                sourceHandle: 'source-bottom-tools',
-                targetHandle: handleId,
-              });
-            } else {
-              // Default: connect from existing node to new node
-              handleConnect({
-                source: nodeId,
-                target: newNode.id,
-                sourceHandle: handleId,
-                targetHandle: null,
-              });
-            }
           } else {
-            // Left handle
-            let sourceHandle = 'source-right';
+            // "+" on the target → the new node feeds the existing node.
+            let sourceHandle = 'source-right'; // logical id, geometry-independent
             if (nodeRegistry.isDecisionLikeNode(newNode)) {
               sourceHandle = `${newNode.id}-if`;
             }
@@ -1521,9 +1514,14 @@ export function WorkflowBuilder({
               source: newNode.id,
               target: nodeId,
               sourceHandle: sourceHandle,
-              targetHandle: handleId !== 'target-left' ? handleId : null,
+              targetHandle: resolveInsertedTargetHandle(handleId),
             });
           }
+          // A node was just ADDED through the hover "+" (a pending connection was
+          // present), so the graph should re-tidy. This fires ONLY here - not for a
+          // drag-drop, a plain node click, or a toolbox/context-menu add, which never
+          // set a pending connection. BuilderCanvas listens and runs auto-layout.
+          window.dispatchEvent(new CustomEvent('hoverPlusNodeInserted'));
         }
       }, 50);
     }

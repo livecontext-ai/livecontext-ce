@@ -7,6 +7,7 @@ import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
 import com.apimarketplace.agent.tools.common.AgentListEnvelope;
 import com.apimarketplace.agent.tools.common.ToolModule;
 import com.apimarketplace.agent.tools.common.ToolRateLimiter;
+import com.apimarketplace.interfaces.client.InterfaceFormat;
 import com.apimarketplace.interfaces.config.InterfaceAgentDefaultsConfig;
 import com.apimarketplace.interfaces.domain.InterfaceEntity;
 import com.apimarketplace.interfaces.service.InterfaceService;
@@ -115,6 +116,13 @@ public class InterfaceCrudModule implements ToolModule {
         String htmlTemplate = getStringParam(parameters, "html_template");
         String cssTemplate = getStringParam(parameters, "css_template");
         String jsTemplate = getStringParam(parameters, "js_template");
+        // Validate the RAW value, not getStringParam's: that returns null for a non-String, which
+        // would look like "no format supplied" and slip past the guard below.
+        if (isUnusableFormat(parameters)) {
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
+                invalidFormatMessage(parameters.get("format")));
+        }
+        String format = getStringParam(parameters, "format");
 
         if (name == null || name.isBlank()) {
             return ToolExecutionResult.failure(ToolErrorCode.MISSING_PARAMETER, "name is required");
@@ -170,7 +178,7 @@ public class InterfaceCrudModule implements ToolModule {
             String orgId = context != null ? context.orgId() : null;
             InterfaceEntity result = interfaceService.createInterface(
                 tenantId, name, description, htmlTemplate, cssTemplate, jsTemplate,
-                null, null, null, null, false, null, orgId
+                null, null, null, null, false, null, orgId, format
             );
 
             if (result == null) {
@@ -188,6 +196,11 @@ public class InterfaceCrudModule implements ToolModule {
             resultMap.put("name", result.getName());
             resultMap.put("description", result.getDescription() != null ? result.getDescription() : "");
             resultMap.put("status", "CREATED");
+            // Echo the stored (normalized) format so an agent that passed an alias
+            // (e.g. 'story') sees the canonical value ('vertical') without a follow-up get.
+            if (result.getFormat() != null) {
+                resultMap.put("format", result.getFormat());
+            }
             resultMap.put("display", Map.of("type", "interface", "id", interfaceId, "title", displayTitle, "name", result.getName()));
             resultMap.put("marker", "[visualize:interface:" + interfaceId + "]");
             resultMap.put("message", "You successfully created interface '" + result.getName() + "' and it's now displayed to the user.");
@@ -375,6 +388,9 @@ public class InterfaceCrudModule implements ToolModule {
                 getResult.put("slide_count", slideCount);
                 getResult.put("marker", "[visualize:slide:" + interfaceId + "]");
             } else {
+                if (entity.getFormat() != null) {
+                    getResult.put("format", entity.getFormat());
+                }
                 getResult.put("htmlTemplate", entity.getHtmlTemplate() != null ? entity.getHtmlTemplate() : "");
                 if (entity.getCssTemplate() != null && !entity.getCssTemplate().isBlank()) {
                     getResult.put("cssTemplate", entity.getCssTemplate());
@@ -496,16 +512,27 @@ public class InterfaceCrudModule implements ToolModule {
         String htmlTemplate = getStringParam(parameters, "html_template");
         String cssTemplate = getStringParam(parameters, "css_template");
         String jsTemplate = getStringParam(parameters, "js_template");
+        // An explicit empty string clears the format back to "no declared shape"; a missing key
+        // leaves it untouched. Both are distinct from a bad value, which is rejected below.
+        boolean formatProvided = parameters.containsKey("format");
 
         @SuppressWarnings("unchecked")
         Map<String, Object> slideData = (Map<String, Object>) parameters.get("slide_data");
 
+        // Validate the RAW value: getStringParam nulls a non-String, which would read as an
+        // explicit clear and WIPE the interface's shape instead of rejecting the call.
+        if (isUnusableFormat(parameters)) {
+            return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
+                invalidFormatMessage(parameters.get("format")));
+        }
+        String format = getStringParam(parameters, "format");
+
         // Reject empty updates BEFORE incrementing the rate-limit counter - otherwise a
         // no-op call silently burns one of the 3 allowed updates for this interface.
         if (name == null && description == null && htmlTemplate == null
-                && cssTemplate == null && jsTemplate == null && slideData == null) {
+                && cssTemplate == null && jsTemplate == null && slideData == null && !formatProvided) {
             return ToolExecutionResult.failure(ToolErrorCode.EXECUTION_FAILED, "No fields to update. Provide at least one of: " +
-                "name, description, html_template, css_template, js_template, slide_data.");
+                "name, description, format, html_template, css_template, js_template, slide_data.");
         }
 
         String updateKey = tenantId + ":" + id;
@@ -544,7 +571,8 @@ public class InterfaceCrudModule implements ToolModule {
                 // (orgId, orgRole) into the strict-isolation finder + deny-list.
                 result = interfaceService.updateInterface(id, tenantId, orgIdForUpdate, orgRoleForUpdate,
                     name, description, htmlTemplate, cssTemplate, jsTemplate,
-                    null, null, null, null, null, null, null);
+                    null, null, null, null, null, null, null,
+                    format, formatProvided ? Boolean.TRUE : null);
             }
 
             if (result == null) {
@@ -556,6 +584,11 @@ public class InterfaceCrudModule implements ToolModule {
             responseMap.put("name", result.getName());
             responseMap.put("description", result.getDescription() != null ? result.getDescription() : "");
             responseMap.put("status", "UPDATED");
+            // Echo the stored (normalized) format so an agent that set/cleared it sees the
+            // canonical result (alias 'story' -> 'vertical'; cleared -> key absent) directly.
+            if (result.getFormat() != null) {
+                responseMap.put("format", result.getFormat());
+            }
             responseMap.put("updateCount", currentCount);
             responseMap.put("maxUpdates", MAX_CONSECUTIVE_UPDATES);
 
@@ -894,6 +927,35 @@ public class InterfaceCrudModule implements ToolModule {
     }
 
     // ==================== Helpers ====================
+
+    /**
+     * True when a {@code format} was supplied but cannot be used: a non-String (e.g. 1080), or a
+     * string that normalises to nothing. Both must be rejected rather than silently treated as
+     * "no format": on update that would CLEAR the interface's shape, the opposite of the intent.
+     * A blank string is NOT unusable - it is the explicit "back to no declared shape" clear.
+     */
+    private static boolean isUnusableFormat(Map<String, Object> parameters) {
+        Object raw = parameters.get("format");
+        if (raw == null) return false;
+        if (!(raw instanceof String str)) return true;
+        return InterfaceFormat.isInvalid(str);
+    }
+
+    /**
+     * Error text for a format the agent cannot use. It spells out every accepted value: the agent
+     * has no other way to discover them, and a bare "invalid format" would leave it guessing.
+     */
+    private static String invalidFormatMessage(Object raw) {
+        String presets = String.join(" | ", InterfaceFormat.presets().entrySet().stream()
+            .map(e -> e.getKey() + " (" + e.getValue().width() + "x" + e.getValue().height() + ")")
+            .toList());
+        return "Invalid format '" + raw + "'. Use one of: " + presets
+            + "; an alias (" + String.join(", ", InterfaceFormat.aliases().keySet()) + ")"
+            + "; or a custom \"WIDTHxHEIGHT\" with each side between "
+            + InterfaceFormat.MIN_DIMENSION + " and " + InterfaceFormat.MAX_DIMENSION
+            + " (e.g. '1080x1920'). Omit format entirely for a full-page capture at 1280 wide,"
+            + " or pass format='' on update to clear it back to that.";
+    }
 
     @SuppressWarnings("unchecked")
     private List<String> getAllowedInterfaceIds(ToolExecutionContext context) {

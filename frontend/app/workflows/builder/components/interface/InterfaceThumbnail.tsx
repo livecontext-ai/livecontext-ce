@@ -2,19 +2,23 @@
 
 import * as React from 'react';
 import { InterfaceShadowPreview } from './InterfaceShadowPreview';
+import { fitScale, useMeasuredBox } from '@/lib/interfaces/useFitScale';
 import type { RenderMode } from '../../utils/interfaceHtmlUtils';
 
 /**
- * Virtual viewport used for thumbnail rendering.
- * The interface is rendered at full page size (1280×800), then CSS-scaled
- * down to fit the card container - giving a consistent, predictable miniature.
+ * Default virtual viewport used for thumbnail rendering when the caller does
+ * not pass a `viewport` prop. The interface is rendered at full page size,
+ * then CSS-scaled down to fit the card container - giving a consistent,
+ * predictable miniature. Callers that know the interface's declared `format`
+ * pass its resolved dimensions via `viewport` instead, so the thumbnail has
+ * the shape the interface was authored for.
  */
 const VIRTUAL_VIEWPORT = { width: 1280, height: 800 } as const;
 
 /**
- * How the thumbnail fills its container:
- *   - `'width'` (default): observe own width, height = `width × 800/1280`, optionally clipped by `maxHeight`. Best for cards with flexible height.
- *   - `'contain'`: observe both width AND height, scale = `min(w/1280, h/800)`, letterboxed inside the box. Best when the parent dictates a fixed shape (canvas nodes, marketplace tiles, fixed `aspectRatio` wrappers).
+ * How the thumbnail fills its container (`vw`/`vh` = the virtual viewport, default 1280/800):
+ *   - `'width'` (default): observe own width, height = `width × vh/vw`, optionally clipped by `maxHeight`. Best for cards with flexible height.
+ *   - `'contain'`: observe both width AND height, scale = `min(w/vw, h/vh)`, letterboxed inside the box. Best when the parent dictates a fixed shape (canvas nodes, marketplace tiles, fixed `aspectRatio` wrappers).
  *
  * In both modes the component fills its parent (`width: 100%`, `height: 100%` in contain), so callers control the box via CSS - no `containerWidth`/`Height` plumbing needed.
  */
@@ -46,12 +50,36 @@ export interface InterfaceThumbnailProps {
   actionMapping?: Record<string, string>;
   /** Previous trigger data (trigger ref → field values) used by the bridge for form pre-fill. Pass with {@code actionMapping}. */
   triggerData?: Record<string, Record<string, unknown>>;
+  /**
+   * Virtual viewport (px) the interface renders at before CSS-scaling. Defaults to the
+   * classic {@code {width: 1280, height: 800}}. Pass the resolved dimensions of the
+   * interface's own {@code format} so the thumbnail matches the shape it was authored for
+   * (and the screenshot/video capture).
+   */
+  viewport?: { width: number; height: number };
+  /**
+   * Extra className for the letterboxed inner frame - the box that is EXACTLY the
+   * viewport's aspect ratio (`vp * scale`). Lets a caller decorate the interface's real
+   * format (rounded clipping, a status ring that hugs the content) instead of the outer
+   * container, which may be letterboxed. Contain mode only; ignored in width-fit mode
+   * (there the whole component already is the format frame).
+   */
+  frameClassName?: string;
+  /**
+   * Style painted on a dedicated OVERLAY above the frame's content (absolute inset-0,
+   * pointer-events none, borderRadius inherited from the frame). Use an INSET box-shadow
+   * ring here: on the frame element itself it would paint BELOW the iframe content
+   * (CSS paint order) and stay invisible over any opaque interface background, and an
+   * outward shadow gets clipped by the overflow-hidden ancestors. Contain mode only.
+   */
+  frameStyle?: React.CSSProperties;
 }
 
 /**
  * **The single thumbnail primitive for interfaces.** Renders any interface HTML in a
- * 1280×800 virtual viewport and CSS-scales it down to fit the parent - Figma-style frame
- * thumbnail with predictable, consistent miniatures.
+ * virtual viewport (1280×800 by default, or the caller-supplied `viewport`) and CSS-scales
+ * it down to fit the parent - Figma-style frame thumbnail with predictable, consistent
+ * miniatures.
  *
  * Used by every preview surface in the app:
  *   - Interface list cards (`/app/interface`)
@@ -80,24 +108,14 @@ export function InterfaceThumbnail({
   emptyLabel,
   actionMapping,
   triggerData,
+  viewport,
+  frameClassName,
+  frameStyle,
 }: InterfaceThumbnailProps) {
-  const ref = React.useRef<HTMLDivElement>(null);
-  const [box, setBox] = React.useState<{ width: number; height: number }>({ width: 0, height: 0 });
-
-  // Self-measure both dimensions. Width is always needed; height is only used in contain mode
-  // but we observe it unconditionally so a caller can switch `fit` at runtime without remount.
-  React.useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    setBox({ width: r.width, height: r.height });
-    const obs = new ResizeObserver(([entry]) => {
-      const cr = entry.contentRect;
-      setBox({ width: cr.width, height: cr.height });
-    });
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, []);
+  const vp = viewport ?? VIRTUAL_VIEWPORT;
+  // Measuring + fit maths are shared with the other surfaces that render an interface at its own
+  // fixed viewport (see lib/interfaces/useFitScale).
+  const [ref, box] = useMeasuredBox<HTMLDivElement>();
 
   // Branded empty state - do not mount the iframe for a blank template.
   if (!htmlTemplate || !htmlTemplate.trim()) {
@@ -118,29 +136,33 @@ export function InterfaceThumbnail({
   const effectiveJs = dropJs ? undefined : jsTemplate;
   const mergedCss = `body { overflow: hidden !important; }${customCss ? '\n' + customCss : ''}`;
 
-  // Contain mode: parent-driven box (w×h), letterboxed scale = min(w/1280, h/800).
+  // Contain mode: parent-driven box (w×h), letterboxed scale = min(w/vw, h/vh).
   if (fit === 'contain') {
     if (box.width <= 0 || box.height <= 0) {
       return <div ref={ref} className={className} style={{ width: '100%', height: '100%' }} />;
     }
-    const scale = Math.min(box.width / VIRTUAL_VIEWPORT.width, box.height / VIRTUAL_VIEWPORT.height);
+    const scale = fitScale(box, vp, 'contain');
     return (
       <div
         ref={ref}
-        className={`flex items-start justify-center overflow-hidden ${className || ''}`}
+        // Centred on both axes: in contain mode the whole interface fits by construction, so
+        // top-aligning it just leaves the letterbox margin all at the bottom - most visible on a
+        // vertical interface, which is narrow and leaves a lot of empty box around it.
+        className={`flex items-center justify-center overflow-hidden ${className || ''}`}
         style={{ width: '100%', height: '100%' }}
       >
         <div
+          className={frameClassName}
           style={{
-            width: VIRTUAL_VIEWPORT.width * scale,
-            height: VIRTUAL_VIEWPORT.height * scale,
+            width: vp.width * scale,
+            height: vp.height * scale,
             position: 'relative',
           }}
         >
           <div
             style={{
-              width: VIRTUAL_VIEWPORT.width,
-              height: VIRTUAL_VIEWPORT.height,
+              width: vp.width,
+              height: vp.height,
               transform: `scale(${scale})`,
               transformOrigin: '0 0',
             }}
@@ -151,23 +173,36 @@ export function InterfaceThumbnail({
               resolvedData={resolvedData}
               customCss={mergedCss}
               jsTemplate={effectiveJs}
-              style={{ width: VIRTUAL_VIEWPORT.width, height: VIRTUAL_VIEWPORT.height }}
+              style={{ width: vp.width, height: vp.height }}
               removeScripts={dropJs}
               actionMapping={actionMapping}
               triggerData={triggerData}
             />
           </div>
+          {frameStyle && (
+            <div
+              aria-hidden
+              data-testid="frame-ring-overlay"
+              style={{
+                position: 'absolute',
+                inset: 0,
+                pointerEvents: 'none',
+                borderRadius: 'inherit',
+                ...frameStyle,
+              }}
+            />
+          )}
         </div>
       </div>
     );
   }
 
-  // Width-fit mode: fill width, height derives from 16:10 ratio (clipped by maxHeight).
+  // Width-fit mode: fill width, height derives from the viewport ratio (clipped by maxHeight).
   if (box.width <= 0) {
     return <div ref={ref} className={className} />;
   }
-  const scale = box.width / VIRTUAL_VIEWPORT.width;
-  const naturalHeight = VIRTUAL_VIEWPORT.height * scale;
+  const scale = fitScale(box, vp, 'width');
+  const naturalHeight = vp.height * scale;
   const displayHeight = maxHeight != null ? Math.min(naturalHeight, maxHeight) : naturalHeight;
 
   return (
@@ -178,8 +213,8 @@ export function InterfaceThumbnail({
     >
       <div
         style={{
-          width: VIRTUAL_VIEWPORT.width,
-          height: VIRTUAL_VIEWPORT.height,
+          width: vp.width,
+          height: vp.height,
           transform: `scale(${scale})`,
           transformOrigin: '0 0',
         }}
@@ -190,7 +225,7 @@ export function InterfaceThumbnail({
           resolvedData={resolvedData}
           customCss={mergedCss}
           jsTemplate={effectiveJs}
-          style={{ width: VIRTUAL_VIEWPORT.width, height: VIRTUAL_VIEWPORT.height }}
+          style={{ width: vp.width, height: vp.height }}
           removeScripts={dropJs}
           actionMapping={actionMapping}
           triggerData={triggerData}

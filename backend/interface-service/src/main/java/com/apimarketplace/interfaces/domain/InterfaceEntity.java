@@ -81,6 +81,20 @@ public class InterfaceEntity implements OrgScopedEntity {
     @Column(name = "interface_type", nullable = false)
     private String interfaceType = "html";
 
+    /**
+     * Display/capture format of this interface: a preset name or a custom "WIDTHxHEIGHT"
+     * (see {@link com.apimarketplace.interfaces.client.InterfaceFormat}). It drives the
+     * screenshot/video dimensions and every preview surface.
+     *
+     * <p>NULL is meaningful and is the default: "no declared shape" = full-page capture at a
+     * 1280x800 viewport. It is NOT the same as the {@code classic} preset (an exact 1280x800
+     * frame that crops below the fold), so this field deliberately has no default value and no
+     * coalescing setter - defaulting it would silently crop every interface authored as a tall
+     * page.
+     */
+    @Column(name = "format")
+    private String format;
+
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "data", columnDefinition = "jsonb")
     private Map<String, Object> data;
@@ -191,6 +205,10 @@ public class InterfaceEntity implements OrgScopedEntity {
 
     public String getInterfaceType() { return interfaceType; }
     public void setInterfaceType(String interfaceType) { this.interfaceType = interfaceType != null ? interfaceType : "html"; }
+
+    public String getFormat() { return format; }
+    /** No null-coalescing here on purpose: null means "full page", not the classic preset. */
+    public void setFormat(String format) { this.format = format; }
 
     public Map<String, Object> getData() { return data; }
     public void setData(Map<String, Object> data) { this.data = data; }

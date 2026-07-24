@@ -126,6 +126,12 @@ vi.mock('@/lib/api/orchestrator/file.service', () => ({
   normalizeFileRef: (x: any) => x,
   findFileRefs: () => [],
   isFileRef: () => false,
+  fileService: { formatFileSize: () => '' },
+}));
+// FileResultStrip / DataInputNodePreview import the side-panel Files opener
+// directly (heavy: it drags FileDetailView + StorageExplorerTab in).
+vi.mock('@/lib/sidePanel/openFilesPanel', () => ({
+  openFilesPanel: vi.fn(),
 }));
 vi.mock('../../interface/InterfaceThumbnail', () => ({ InterfaceThumbnail: () => null }));
 vi.mock('../FleetTriggerButtons', () => ({ FleetTriggerButtons: () => null }));

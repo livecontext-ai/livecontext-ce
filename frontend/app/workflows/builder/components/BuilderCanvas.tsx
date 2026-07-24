@@ -36,7 +36,10 @@ import { nodeTypes, edgeTypes } from '../constants/graphTypes';
 import type { BuilderNodeData, PaletteDragItem } from '../types';
 import type { ConnectionType } from './ConnectionTypeSelector';
 import { generateWorkflowPlan } from '../utils/workflowPlanGenerator';
+import { resolveInsertedTargetHandle } from '../utils/hoverConnectHandles';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
+import { useWorkflowLayoutDirectionSafe } from '@/contexts/WorkflowLayoutDirectionContext';
+import { isFlowBackward } from './nodes/handleGeometry';
 import { useSidePanelSafe } from '@/contexts/SidePanelContext';
 import { isEmbeddedWorkflowCanvas } from '@/lib/workflow/canvasEmbedding';
 import { useSvgSafeId } from '@/hooks/useSvgSafeId';
@@ -44,8 +47,9 @@ import LoadingSpinner from '@/components/LoadingSpinner';
 import { useCanvasViewport } from '../hooks/useCanvasViewport';
 import { useInspectorDrag } from '../hooks/useInspectorDrag';
 import { HoverEdgeManager } from './HoverEdgeManager';
+import { DirectionHandleSync } from './DirectionHandleSync';
 import { SimpleToast, useSimpleToast } from '@/components/chat/SimpleToast';
-import { applyDagreLayout } from '../services/LayoutService';
+import { applyDagreLayout, layoutConfigForDirection } from '../services/LayoutService';
 
 // New extracted modules
 import { getDisplayedSuggestions, type WorkflowSuggestion } from '../constants/workflowSuggestions';
@@ -116,7 +120,7 @@ interface BuilderCanvasProps {
     nodeId: string;
     handleId: string;
     handleType: 'source' | 'target';
-    handlePosition: 'left' | 'right' | 'top';
+    handlePosition: 'left' | 'right' | 'top' | 'bottom';
     position: { x: number; y: number };
   } | null>;
   /**
@@ -269,9 +273,10 @@ function CustomConnectionLine({
   fromPosition,
   toPosition,
 }: ConnectionLineComponentProps) {
-  const isHorizontalBackward = (fromPosition === 'right' || fromPosition === 'left') && fromX > toX;
-  const isVerticalBackward = (fromPosition === 'top' || fromPosition === 'bottom') && fromY < toY;
-  const isBackwardConnection = isHorizontalBackward || isVerticalBackward;
+  // Same rule as the rendered BuilderEdge, from the same helper: the drag preview
+  // must not curve one way and then snap to another shape on drop.
+  const { direction: layoutDirection } = useWorkflowLayoutDirectionSafe();
+  const isBackwardConnection = isFlowBackward(layoutDirection, fromX, fromY, toX, toY);
 
   let path: string;
   if (isBackwardConnection) {
@@ -337,6 +342,14 @@ export function BuilderCanvas({
 }: BuilderCanvasProps) {
   const t = useTranslations('workflowBuilder.canvas');
   const { isRunMode, isPreviewOnly } = useWorkflowMode();
+  // Safe variant: the canvas also mounts on surfaces without the provider
+  // (marketplace preview, snapshots), which must keep the horizontal default.
+  const { direction: layoutDirection } = useWorkflowLayoutDirectionSafe();
+  // Kept in a ref so the Save-event effect can stamp the active direction into the
+  // plan WITHOUT re-registering the listener on every direction flip (a live toggle
+  // must not tear down and rebind the save handler mid-interaction).
+  const layoutDirectionRef = React.useRef(layoutDirection);
+  layoutDirectionRef.current = layoutDirection;
   const isLocked = isRunMode || isPreviewOnly;
   const { theme } = useTheme();
   const isDark = theme === 'dark';
@@ -645,7 +658,11 @@ export function BuilderCanvas({
             } : instanceNode;
           })
           : nodes;
-        const plan = generateWorkflowPlan(nodesWithRealPositions, edges);
+        // Stamp the active reading direction so the header "Save" / pin-button path
+        // persists it into the plan (the workflow's rendering identity), matching the
+        // save-before-run and rename paths. Read from the ref so a live toggle is
+        // reflected without re-binding this listener.
+        const plan = generateWorkflowPlan(nodesWithRealPositions, edges, layoutDirectionRef.current);
         await onSaveWorkflow(workflowId, plan);
         window.dispatchEvent(new CustomEvent('workflowViewSaveComplete', {
           detail: { success: true, workflowId }
@@ -755,11 +772,16 @@ export function BuilderCanvas({
     const pending = pendingHoverConnectionRef?.current;
     if (pending && pending.nodeId !== node.id) {
       const clickedIsTrigger = nodeRegistry.isTrigger(node);
-      const clickedHasLeftHandle = !clickedIsTrigger;
-      const clickedHasRightHandle = true; // all nodes have source-right
+      const clickedHasTargetHandle = !clickedIsTrigger; // triggers have no incoming handle
+      const clickedHasSourceHandle = true; // every node has an outgoing handle
 
-      if (pending.handlePosition === 'right' && clickedHasLeftHandle) {
-        // Clicked "+" on right of source → connect source-right to clicked node's left
+      // Decide by the handle's ROLE, not its geometric side. `handleType` already
+      // carries source/target, so this is direction-agnostic: a source is on the
+      // right in horizontal and the bottom in vertical, but it is a source either
+      // way. Keying off `handlePosition === 'right'` (as this did) made the "+"
+      // create a BACKWARD edge on a vertical canvas, where the source is 'bottom'.
+      if (pending.handleType === 'source' && clickedHasTargetHandle) {
+        // "+" on the source → the hovered node feeds the clicked node.
         onConnect({
           source: pending.nodeId,
           target: node.id,
@@ -769,9 +791,9 @@ export function BuilderCanvas({
         pendingHoverConnectionRef!.current = null;
         window.dispatchEvent(new CustomEvent('workflowNodeCreated'));
         return;
-      } else if (pending.handlePosition === 'left' && clickedHasRightHandle) {
-        // Clicked "+" on left of source → connect clicked node's right to source's left
-        let sourceHandle = 'source-right';
+      } else if (pending.handleType === 'target' && clickedHasSourceHandle) {
+        // "+" on the target → the clicked node feeds the hovered node.
+        let sourceHandle = 'source-right'; // logical id, geometry-independent
         if (nodeRegistry.isDecisionLikeNode(node)) {
           sourceHandle = `${node.id}-if`;
         }
@@ -779,7 +801,7 @@ export function BuilderCanvas({
           source: node.id,
           target: pending.nodeId,
           sourceHandle,
-          targetHandle: pending.handleId !== 'target-left' ? pending.handleId : null,
+          targetHandle: resolveInsertedTargetHandle(pending.handleId),
         });
         pendingHoverConnectionRef!.current = null;
         window.dispatchEvent(new CustomEvent('workflowNodeCreated'));
@@ -819,14 +841,32 @@ export function BuilderCanvas({
     });
   }, []);
 
+  // Auto-layout must land in the SAME direction the nodes are wired for, or the
+  // button re-flows a top-down graph into a left-right one while every handle still
+  // points down.
   const handleAutoLayout = React.useCallback(() => {
     if (!onForceNodesUpdate) return;
-    const layoutedNodes = applyDagreLayout(nodes, edges);
+    const layoutedNodes = applyDagreLayout(nodes, edges, layoutConfigForDirection(layoutDirection));
     onForceNodesUpdate(layoutedNodes);
     if (instance) {
       setTimeout(() => instance.fitView({ padding: 0.2, duration: 300 }), 100);
     }
-  }, [nodes, edges, onForceNodesUpdate, instance]);
+  }, [nodes, edges, onForceNodesUpdate, instance, layoutDirection]);
+
+  // Re-tidy the graph after a node is inserted through the hover "+", and ONLY then
+  // (the `hoverPlusNodeInserted` event fires from that one path - not drag-drop, plain
+  // node clicks, or toolbox/context-menu adds). A ref keeps the listener on the latest
+  // handleAutoLayout without re-subscribing; the short delay lets the new node + edge
+  // settle into state before the layout reads them.
+  const autoLayoutRef = React.useRef(handleAutoLayout);
+  React.useEffect(() => {
+    autoLayoutRef.current = handleAutoLayout;
+  });
+  React.useEffect(() => {
+    const onInserted = () => window.setTimeout(() => autoLayoutRef.current(), 130);
+    window.addEventListener('hoverPlusNodeInserted', onInserted);
+    return () => window.removeEventListener('hoverPlusNodeInserted', onInserted);
+  }, []);
 
   // --- Right-click context menu -------------------------------------------
   const handleNodeContextMenu = React.useCallback<NodeMouseHandler>((event, node) => {
@@ -1053,6 +1093,12 @@ export function BuilderCanvas({
               isRunMode={isLocked}
               hoveredNodeId={isLocked ? null : hoveredNodeId}
               onPlusClick={() => onOpenNodeCreator?.()}
+            />
+
+            {/* Re-measure handles when the reading direction changes (seed or toggle). */}
+            <DirectionHandleSync
+              direction={layoutDirection}
+              nodeIds={React.useMemo(() => nodes.map((n) => n.id), [nodes])}
             />
 
             {/* Custom selection box */}

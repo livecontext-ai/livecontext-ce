@@ -79,7 +79,10 @@ public class SendEmailNode extends BaseNode {
             String smtpPassword = getString(cred, "password");
             String fromEmail = getString(cred, "from_email");
             String fromName = getString(cred, "from_name");
-            boolean smtpUseTls = "true".equalsIgnoreCase(getString(cred, "use_tls"));
+            boolean smtpUseTls = resolveUseTls(getString(cred, "use_tls"));
+            // Surfaced so a failed send shows WHY the transport was chosen: "useTls=true" on a
+            // relay with no STARTTLS is the whole diagnosis, and it is otherwise invisible.
+            resolvedParams.put("useTls", smtpUseTls);
 
             // 2. Resolve per-email fields from node config via SpEL
             String toEmail = resolveExpression(
@@ -98,12 +101,25 @@ public class SendEmailNode extends BaseNode {
             resolvedParams.put("subject", subject);
             resolvedParams.put("isHtml", isHtml);
 
-            // Override fromName from node config if provided
+            // Override fromName / fromEmail from node config if provided. fromEmail was declared
+            // and documented as the sender address but never read, so a node that set it silently
+            // sent from the credential address instead.
             String nodeFromName = resolveExpression(
                     sendEmailConfig != null ? sendEmailConfig.fromName() : null, context);
             if (nodeFromName != null && !nodeFromName.isBlank()) {
                 fromName = nodeFromName;
             }
+            String nodeFromEmail = resolveExpression(
+                    sendEmailConfig != null ? sendEmailConfig.fromEmail() : null, context);
+            if (nodeFromEmail != null && !nodeFromEmail.isBlank()) {
+                fromEmail = nodeFromEmail;
+            }
+            String replyTo = resolveExpression(
+                    sendEmailConfig != null ? sendEmailConfig.replyTo() : null, context);
+            // Surface both: a fromEmail the relay rejects is the likeliest cause of a failed send,
+            // and it must be visible in resolved_params rather than guessed at.
+            if (nodeFromEmail != null && !nodeFromEmail.isBlank()) resolvedParams.put("fromEmail", fromEmail);
+            if (replyTo != null && !replyTo.isBlank()) resolvedParams.put("replyTo", replyTo);
 
             // 3. Validate required fields
             if (smtpHost == null || smtpHost.isBlank()) {
@@ -117,26 +133,7 @@ public class SendEmailNode extends BaseNode {
             }
 
             // 4. Build SMTP session
-            Properties props = new Properties();
-            props.put("mail.smtp.host", smtpHost);
-            props.put("mail.smtp.port", String.valueOf(smtpPort));
-            props.put("mail.smtp.auth", String.valueOf(smtpUsername != null && !smtpUsername.isBlank()));
-
-            if (smtpUseTls || smtpPort == 587 || smtpPort == 465) {
-                if (smtpPort == 465) {
-                    props.put("mail.smtp.ssl.enable", "true");
-                    props.put("mail.smtp.ssl.protocols", "TLSv1.2 TLSv1.3");
-                } else {
-                    props.put("mail.smtp.starttls.enable", "true");
-                    props.put("mail.smtp.starttls.required", "true");
-                    props.put("mail.smtp.ssl.protocols", "TLSv1.2 TLSv1.3");
-                    props.put("mail.smtp.ssl.trust", smtpHost);
-                }
-            }
-
-            props.put("mail.smtp.connectiontimeout", "10000");
-            props.put("mail.smtp.timeout", "10000");
-            props.put("mail.smtp.writetimeout", "10000");
+            Properties props = buildSmtpProperties(smtpHost, smtpPort, smtpUsername, smtpUseTls);
 
             Session session;
             if (smtpUsername != null && !smtpUsername.isBlank()) {
@@ -151,47 +148,14 @@ public class SendEmailNode extends BaseNode {
             }
 
             // 5. Build and send message
-            MimeMessage message = new MimeMessage(session);
-
-            String senderEmail = fromEmail != null && !fromEmail.isBlank() ? fromEmail : smtpUsername;
-            if (fromName != null && !fromName.isBlank()) {
-                message.setFrom(new InternetAddress(senderEmail, fromName));
-            } else {
-                message.setFrom(new InternetAddress(senderEmail));
-            }
-
-            message.setRecipients(Message.RecipientType.TO, InternetAddress.parse(toEmail));
-
-            if (ccEmail != null && !ccEmail.isBlank()) {
-                message.setRecipients(Message.RecipientType.CC, InternetAddress.parse(ccEmail));
-            }
-            if (bccEmail != null && !bccEmail.isBlank()) {
-                message.setRecipients(Message.RecipientType.BCC, InternetAddress.parse(bccEmail));
-            }
-
-            message.setSubject(subject);
-
-            // Reply threading - In-Reply-To / References headers (resolved from config)
             String inReplyTo = resolveExpression(
                     sendEmailConfig != null ? sendEmailConfig.inReplyTo() : null, context);
             String references = resolveExpression(
                     sendEmailConfig != null ? sendEmailConfig.references() : null, context);
-            if (inReplyTo != null && !inReplyTo.isBlank()) {
-                message.setHeader("In-Reply-To", inReplyTo);
-                // If no explicit References chain, seed it with the message being replied to
-                if (references == null || references.isBlank()) {
-                    references = inReplyTo;
-                }
-            }
-            if (references != null && !references.isBlank()) {
-                message.setHeader("References", references);
-            }
 
-            if (isHtml) {
-                message.setContent(body != null ? body : "", "text/html; charset=utf-8");
-            } else {
-                message.setText(body != null ? body : "", "utf-8");
-            }
+            MimeMessage message = buildMessage(session, new MessageFields(
+                    fromEmail, fromName, smtpUsername, replyTo, toEmail, ccEmail, bccEmail,
+                    subject, body, isHtml, inReplyTo, references));
 
             Transport.send(message);
 
@@ -224,9 +188,119 @@ public class SendEmailNode extends BaseNode {
             failOutput.put("itemIndex", context.itemIndex());
             failOutput.put("item_id", context.itemId());
             failOutput.put("resolved_params", resolvedParams);
+            // sent/success must be present and FALSE on the failure path: a downstream
+            // {{core:send.output.success}} check read null (not false) when they were omitted.
+            failOutput.put("sent", false);
+            failOutput.put("success", false);
             failOutput.put("error", e.getMessage());
             return NodeExecutionResult.failureWithOutput(nodeId, e.getMessage(), failOutput, 0L);
         }
+    }
+
+    /** The already-resolved per-email fields that {@link #buildMessage} turns into a MimeMessage. */
+    record MessageFields(
+        String fromEmail, String fromName, String smtpUsername, String replyTo,
+        String toEmail, String ccEmail, String bccEmail,
+        String subject, String body, boolean isHtml,
+        String inReplyTo, String references
+    ) {}
+
+    /**
+     * Assemble the MimeMessage from already-resolved fields. Extracted from execute() so the
+     * header decisions (sender override, Reply-To, threading) are testable without a live SMTP
+     * server: execute() only builds the session, calls this, and hands the result to Transport.
+     */
+    static MimeMessage buildMessage(Session session, MessageFields f) throws Exception {
+        MimeMessage message = new MimeMessage(session);
+
+        // A node-level fromEmail wins over the credential's from_email; the credential's username
+        // is the last resort.
+        String senderEmail = notBlank(f.fromEmail()) ? f.fromEmail() : f.smtpUsername();
+        if (notBlank(f.fromName())) {
+            message.setFrom(new InternetAddress(senderEmail, f.fromName()));
+        } else {
+            message.setFrom(new InternetAddress(senderEmail));
+        }
+
+        if (notBlank(f.replyTo())) {
+            message.setReplyTo(InternetAddress.parse(f.replyTo()));
+        }
+
+        message.setRecipients(Message.RecipientType.TO, InternetAddress.parse(f.toEmail()));
+        if (notBlank(f.ccEmail())) {
+            message.setRecipients(Message.RecipientType.CC, InternetAddress.parse(f.ccEmail()));
+        }
+        if (notBlank(f.bccEmail())) {
+            message.setRecipients(Message.RecipientType.BCC, InternetAddress.parse(f.bccEmail()));
+        }
+
+        message.setSubject(f.subject());
+
+        // Reply threading - In-Reply-To / References headers.
+        String references = f.references();
+        if (notBlank(f.inReplyTo())) {
+            message.setHeader("In-Reply-To", f.inReplyTo());
+            // If no explicit References chain, seed it with the message being replied to.
+            if (!notBlank(references)) {
+                references = f.inReplyTo();
+            }
+        }
+        if (notBlank(references)) {
+            message.setHeader("References", references);
+        }
+
+        if (f.isHtml()) {
+            message.setContent(f.body() != null ? f.body() : "", "text/html; charset=utf-8");
+        } else {
+            message.setText(f.body() != null ? f.body() : "", "utf-8");
+        }
+        return message;
+    }
+
+    private static boolean notBlank(String s) { return s != null && !s.isBlank(); }
+
+    /**
+     * Resolve the credential's {@code use_tls} flag. Secure by default, matching the IMAP
+     * credential: an ABSENT or unrecognised value means TLS on, and only an explicit "false" opts
+     * out. The previous {@code "true".equalsIgnoreCase(...)} defaulted an absent key to false, so
+     * a credential on any port other than 587/465 sent in CLEARTEXT with no warning.
+     *
+     * <p>Extracted from execute() so this decision is testable without a live SMTP server.
+     */
+    static boolean resolveUseTls(String credentialUseTls) {
+        return !"false".equalsIgnoreCase(credentialUseTls);
+    }
+
+    /**
+     * SMTP session properties. Extracted so the transport-security decisions are testable without
+     * a live SMTP server: whether TLS is enabled at all, and that certificate validation is never
+     * disabled.
+     */
+    static Properties buildSmtpProperties(String smtpHost, int smtpPort, String smtpUsername, boolean smtpUseTls) {
+        Properties props = new Properties();
+        props.put("mail.smtp.host", smtpHost);
+        props.put("mail.smtp.port", String.valueOf(smtpPort));
+        props.put("mail.smtp.auth", String.valueOf(smtpUsername != null && !smtpUsername.isBlank()));
+
+        if (smtpUseTls || smtpPort == 587 || smtpPort == 465) {
+            if (smtpPort == 465) {
+                props.put("mail.smtp.ssl.enable", "true");
+                props.put("mail.smtp.ssl.protocols", "TLSv1.2 TLSv1.3");
+            } else {
+                props.put("mail.smtp.starttls.enable", "true");
+                props.put("mail.smtp.starttls.required", "true");
+                props.put("mail.smtp.ssl.protocols", "TLSv1.2 TLSv1.3");
+                // Deliberately NO mail.smtp.ssl.trust: trusting the very host we are connecting to
+                // disables certificate-chain validation, so a spoofed or self-signed server would
+                // be accepted and handed the SMTP credentials. The 465 path never set it, and the
+                // two paths must agree.
+            }
+        }
+
+        props.put("mail.smtp.connectiontimeout", "10000");
+        props.put("mail.smtp.timeout", "10000");
+        props.put("mail.smtp.writetimeout", "10000");
+        return props;
     }
 
     private String resolveExpression(String expression, ExecutionContext context) {

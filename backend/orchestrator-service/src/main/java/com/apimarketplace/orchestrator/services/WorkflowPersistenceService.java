@@ -310,6 +310,11 @@ public class WorkflowPersistenceService {
      * Execution never mints a version number: when the execution plan drifted from
      * the latest version's stored content, that content is overwritten in place
      * (same number) - only explicit save paths advance the history.
+     *
+     * <p>On a PINNED workflow, a plan matching the pinned version resolves to the
+     * pinned number read-only instead: this method used to hand the pinned plan to
+     * the resolver as if it were drifted canvas content, which overwrote a newer
+     * draft in place and destroyed the user's work in progress.
      */
     private void autoArchiveExecutionPlan(UUID workflowId, WorkflowPlan executionPlan, String tenantId) {
         try {

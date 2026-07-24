@@ -18,12 +18,20 @@ import { NodeBottomBar } from './NodeBottomBar';
 import { useNodeExecutionStatus } from '../../contexts/StepByStepContext';
 
 
+import { useWorkflowLayoutDirectionSafe } from '@/contexts/WorkflowLayoutDirectionContext';
+import { getSourceHandleGeometry, getTargetHandleGeometry } from './handleGeometry';
 /**
  * WorkflowNode - A specialized node for workflow triggers
  *
  * This node is used for workflow triggers that reference another workflow.
  */
 export function WorkflowNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
+  // Handle sides follow the canvas reading direction. Safe variant: nodes also
+  // render on provider-less surfaces (marketplace preview, snapshots).
+  const { direction: layoutDirection } = useWorkflowLayoutDirectionSafe();
+  const targetHandle = getTargetHandleGeometry(layoutDirection);
+  const sourceHandle = getSourceHandleGeometry(layoutDirection);
+
   const visuals = getNodeVisual('entry');
   const { targetRef: nodeRef, isVisible: showActions, show } = useHoverVisibility<HTMLDivElement>();
   const { isRunMode, viewingEpoch } = useWorkflowMode();
@@ -175,12 +183,10 @@ export function WorkflowNode({ data, selected, id }: NodeProps<BuilderNodeData>)
       {/* Target handle on left (receives connections) */}
       <Handle
         type="target"
-        position={Position.Left}
+        position={targetHandle.position}
         className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
         style={{
-          left: -6,
-          top: '50%',
-          transform: 'translateY(-50%)',
+          ...targetHandle.style,
           backgroundColor: 'var(--border-color)',
           opacity: isRunMode ? 0 : 1,
           pointerEvents: isRunMode ? 'none' : 'auto'
@@ -190,13 +196,11 @@ export function WorkflowNode({ data, selected, id }: NodeProps<BuilderNodeData>)
       {/* Source handle on right (sends connections) */}
       <Handle
         type="source"
-        position={Position.Right}
+        position={sourceHandle.position}
         id="source-right"
         className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
         style={{
-          right: -6,
-          top: '50%',
-          transform: 'translateY(-50%)',
+          ...sourceHandle.style,
           backgroundColor: 'var(--border-color)',
           opacity: isRunMode ? 0 : 1,
           pointerEvents: isRunMode ? 'none' : 'auto'

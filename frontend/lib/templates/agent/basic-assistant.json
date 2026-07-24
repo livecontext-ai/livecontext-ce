@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "kind": "agent",
+  "meta": {
+    "slug": "basic-assistant",
+    "kind": "agent",
+    "order": 10,
+    "difficulty": "beginner",
+    "icon": "Bot",
+    "runnable": true,
+    "teachesCount": 3,
+    "avatarUrl": "preset:purple"
+  },
+  "agent": {
+    "systemPromptKey": "templates.agent.basicAssistant.systemPrompt",
+    "temperature": 0.7,
+    "maxTokens": 16000,
+    "maxIterations": 30,
+    "avatarUrl": "preset:purple",
+    "toolsConfig": {
+      "mode": "none",
+      "webSearch": false
+    }
+  }
+}

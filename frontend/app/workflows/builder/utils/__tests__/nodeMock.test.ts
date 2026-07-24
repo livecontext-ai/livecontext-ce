@@ -12,6 +12,7 @@ import {
   nodePortOptions,
   isMockedOutput,
   stripMockMarkers,
+  MOCK_MAX_DURATION_MS,
 } from '../nodeMock';
 
 function makeNode(
@@ -77,6 +78,51 @@ describe('sanitizeNodeMock', () => {
     expect(sanitizeNodeMock({ output: [1, 2] })).toBeUndefined();
     expect(sanitizeNodeMock({ output: 'text' })).toBeUndefined();
     expect(sanitizeNodeMock({ output: null })).toBeUndefined();
+  });
+
+  it('keeps durationMs only when a finite positive number (numeric strings coerced like the backend)', () => {
+    expect(sanitizeNodeMock({ output: { a: 1 }, durationMs: 90000 })).toEqual({
+      output: { a: 1 },
+      durationMs: 90000,
+    });
+    expect(sanitizeNodeMock({ output: { a: 1 }, durationMs: '90000' })).toEqual({
+      output: { a: 1 },
+      durationMs: 90000,
+    });
+    expect(sanitizeNodeMock({ output: { a: 1 }, durationMs: 0 })).toEqual({ output: { a: 1 } });
+    expect(sanitizeNodeMock({ output: { a: 1 }, durationMs: -5 })).toEqual({ output: { a: 1 } });
+    expect(sanitizeNodeMock({ output: { a: 1 }, durationMs: 'fast' })).toEqual({
+      output: { a: 1 },
+    });
+    expect(sanitizeNodeMock({ output: { a: 1 }, durationMs: Number.NaN })).toEqual({
+      output: { a: 1 },
+    });
+  });
+
+  it('accepts the snake_case alias duration_ms, camelCase winning when both are present', () => {
+    expect(sanitizeNodeMock({ output: { a: 1 }, duration_ms: 5000 })).toEqual({
+      output: { a: 1 },
+      durationMs: 5000,
+    });
+    expect(
+      sanitizeNodeMock({ output: { a: 1 }, durationMs: 2000, duration_ms: 5000 })
+    ).toEqual({ output: { a: 1 }, durationMs: 2000 });
+  });
+
+  it('rounds fractional durations and clamps beyond the backend 10-minute cap (the backend rejects beyond-cap plans)', () => {
+    expect(sanitizeNodeMock({ output: { a: 1 }, durationMs: 1500.6 })).toEqual({
+      output: { a: 1 },
+      durationMs: 1501,
+    });
+    expect(sanitizeNodeMock({ output: { a: 1 }, durationMs: MOCK_MAX_DURATION_MS + 1 })).toEqual({
+      output: { a: 1 },
+      durationMs: MOCK_MAX_DURATION_MS,
+    });
+  });
+
+  it('returns undefined for a lone durationMs (a duration alone is not a mock)', () => {
+    expect(sanitizeNodeMock({ durationMs: 5000 })).toBeUndefined();
+    expect(sanitizeNodeMock({ enabled: false, durationMs: 5000 })).toBeUndefined();
   });
 
   it('keeps port only when a non-empty string', () => {
@@ -188,6 +234,15 @@ describe('gateNodeMockForNode', () => {
     expect(gateNodeMockForNode({ port: 'if' }, mcp)).toBeUndefined();
     expect(gateNodeMockForNode({ port: 'if', output: { a: 1 } }, mcp)).toEqual({
       output: { a: 1 },
+    });
+  });
+
+  it('a lone durationMs left after gating is not a mock (returns undefined)', () => {
+    const mcp = mcpToolNode();
+    expect(gateNodeMockForNode({ port: 'if', durationMs: 5000 }, mcp)).toBeUndefined();
+    expect(gateNodeMockForNode({ port: 'if', output: { a: 1 }, durationMs: 5000 }, mcp)).toEqual({
+      output: { a: 1 },
+      durationMs: 5000,
     });
   });
 

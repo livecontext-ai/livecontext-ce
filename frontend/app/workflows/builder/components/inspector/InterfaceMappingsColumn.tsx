@@ -11,6 +11,7 @@ import { FileText, Save, Edit, X, Info, Plus, Trash2, ChevronRight } from 'lucid
 import { useInterfaceById } from '../../hooks/useInterfaces';
 import { orchestratorApi } from '@/lib/api';
 import { ExpressionEditor } from '@/components/ui/expression-editor';
+import { InterfaceFormatSelect } from '@/components/interfaces/InterfaceFormatSelect';
 import { getDefaultForType } from '../../utils/interfaceHtmlUtils';
 import { clampVideoMaxDuration } from '../../utils/videoParams';
 import { useNodes, useEdges, type Node } from 'reactflow';
@@ -366,6 +367,28 @@ export const InterfaceMappingsColumn = ({
     data.interfaceData?.actionMapping || {}
   );
 
+  // The interface's display/capture format. Saved to the DB with the templates (zone 1), never
+  // onto the node: it is the width the HTML is authored for. null = Auto (full-page capture).
+  const [editedFormat, setEditedFormat] = React.useState<string | null>(null);
+  const [originalFormatOnEdit, setOriginalFormatOnEdit] = React.useState<string | null>(null);
+  const [isFormatInvalid, setIsFormatInvalid] = React.useState(false);
+  // Bumped on cancel to remount the format control. The control owns its own dropdown selection
+  // and custom-size draft, and it deliberately ignores an echoed `value` (that guard is what stops
+  // it rewriting the draft mid-typing). So restoring `editedFormat` alone cannot reset it: after
+  // cancelling a half-typed custom size the control would still read "Custom" while the interface
+  // holds its old format. A remount is the honest reset, and it lets the control re-report its own
+  // validity instead of the parent guessing.
+  const [formatControlKey, setFormatControlKey] = React.useState(0);
+
+  // Collapsing the template section unmounts the format control, taking any half-typed custom size
+  // with it. The flag has to go too: the control can no longer report itself valid again, and the
+  // Save button lives OUTSIDE the collapsed section, so it would sit greyed out with nothing on
+  // screen to explain why. Nothing unsafe is unlocked: an unusable draft is never emitted, so
+  // `editedFormat` still holds the last good value.
+  React.useEffect(() => {
+    if (!isTemplateSectionOpen) setIsFormatInvalid(false);
+  }, [isTemplateSectionOpen]);
+
   // Discover eligible target nodes (triggers, other interfaces) from the workflow
   // Only show nodes that are connected (directly or indirectly) to this interface in the DAG
   const allNodes = useNodes<BuilderNodeData>();
@@ -500,6 +523,13 @@ export const InterfaceMappingsColumn = ({
       setEditedJsTemplate(jsFromDb);
       setOriginalJsTemplateOnEdit(jsFromDb);
 
+      // Initialize the format from DB - it is an interface property like the templates above.
+      const formatFromDb = interfaceDetails.format ?? null;
+      setEditedFormat(formatFromDb);
+      setOriginalFormatOnEdit(formatFromDb);
+      // No setIsFormatInvalid here: the control is keyed per interface, so switching remounts it
+      // and it re-reports its own validity on mount.
+
       // Initialize variable mapping from node data
       const existingMapping = interfaceData?.variableMapping || {};
       setEditedVariableMapping(existingMapping);
@@ -566,11 +596,14 @@ export const InterfaceMappingsColumn = ({
   const htmlChanged = baselineTemplate !== '' && currentTemplate !== baselineTemplate;
   const cssChanged = editedCssTemplate !== baselineCssTemplate;
   const jsChanged = editedJsTemplate !== baselineJsTemplate;
+  // The format is an interface property saved by the same button as the templates, so it has to
+  // count as a change like they do, or a format-only edit leaves the node looking pristine.
+  const formatChanged = editedFormat !== originalFormatOnEdit;
   const hasChanges = !justSaved &&
     hasInterfaceId &&
     isInterfaceInitialized &&
     hasLoadedTemplate &&
-    (htmlChanged || cssChanged || jsChanged);
+    (htmlChanged || cssChanged || jsChanged || formatChanged);
 
   // Update node data to indicate unsaved changes (for validation service)
   React.useEffect(() => {
@@ -604,12 +637,20 @@ export const InterfaceMappingsColumn = ({
     const templateToRestore = originalTemplateOnEdit || (interfaceDetails?.htmlTemplate || interfaceDetails?.editorExpression || '');
     const cssToRestore = originalCssTemplateOnEdit || (interfaceDetails?.cssTemplate || '');
     const jsToRestore = originalJsTemplateOnEdit || ((interfaceDetails as any)?.jsTemplate || '');
+    // Tracks the last saved format (set on load and after each save), so it restores verbatim.
+    // Null is a real format here ("no declared shape"), never a "missing" to fall back from.
+    const formatToRestore = originalFormatOnEdit;
     setEditedHtmlTemplate(templateToRestore);
     setOriginalTemplateOnEdit(templateToRestore);
     setEditedCssTemplate(cssToRestore);
     setOriginalCssTemplateOnEdit(cssToRestore);
     setEditedJsTemplate(jsToRestore);
     setOriginalJsTemplateOnEdit(jsToRestore);
+    setEditedFormat(formatToRestore);
+    // Remount rather than setIsFormatInvalid(false) here: forcing the flag from outside desyncs it
+    // from the control (which may still hold an unusable draft), and the flag could never be
+    // raised again - leaving the Save guard dead for the rest of the session.
+    setFormatControlKey((k) => k + 1);
     setIsEditMode(false);
 
     // Restore the template and clear the unsaved flag in a single update to avoid race conditions
@@ -648,7 +689,10 @@ export const InterfaceMappingsColumn = ({
         htmlTemplate: cleanTemplate,
         cssTemplate: editedCssTemplate || undefined,
         jsTemplate: editedJsTemplate || undefined,
-      } as any);
+        // Always sent, including as null: the REST layer reads the KEY's presence, so omitting
+        // it would make "back to Auto" impossible.
+        format: editedFormat,
+      });
       // Update editedHtmlTemplate with saved value (also clean in case API returns HTML)
       const rawSavedTemplate = updated.htmlTemplate || (updated as any).editorExpression || cleanTemplate;
       const savedTemplate = stripHtmlTags(rawSavedTemplate);
@@ -660,6 +704,9 @@ export const InterfaceMappingsColumn = ({
       setOriginalCssTemplateOnEdit(savedCssTemplate);
       setEditedJsTemplate(savedJsTemplate);
       setOriginalJsTemplateOnEdit(savedJsTemplate);
+      const savedFormat = updated.format ?? null;
+      setEditedFormat(savedFormat);
+      setOriginalFormatOnEdit(savedFormat);
       setHasLoadedTemplate(true);
 
       // Exit edit mode
@@ -918,6 +965,7 @@ export const InterfaceMappingsColumn = ({
             </div>
           )}
 
+
           {/* Generate screenshot toggle - exposes a `screenshot` FileRef output for downstream nodes. */}
           {!isRunMode && (
             <div className="flex items-center justify-between mt-2 px-1 gap-3">
@@ -1069,17 +1117,23 @@ export const InterfaceMappingsColumn = ({
                     <select
                       id="video-preset-select"
                       className="text-xs rounded-md border border-gray-200/60 dark:border-gray-700/60 bg-[var(--bg-primary)] px-2 py-1 text-slate-600 dark:text-slate-300"
-                      value={interfaceData.videoPreset || 'vertical'}
+                      // Backend precedence: explicit videoPreset > the interface's own format >
+                      // vertical. Unset is the normal case (the clip then has the interface's
+                      // shape), so Auto is always offered.
+                      value={interfaceData.videoPreset || ''}
                       onChange={(e) => {
                         onUpdate({
                           ...data,
                           interfaceData: {
                             ...interfaceData,
-                            videoPreset: e.target.value,
+                            // Empty = the Auto option: delete the override so the video follows
+                            // the interface's own format again.
+                            videoPreset: e.target.value || undefined,
                           },
                         });
                       }}
                     >
+                      <option value="">{t('videoPresetAuto')}</option>
                       <option value="vertical">{t('videoPresetVertical')}</option>
                       <option value="horizontal">{t('videoPresetHorizontal')}</option>
                       <option value="square">{t('videoPresetSquare')}</option>
@@ -1479,7 +1533,9 @@ export const InterfaceMappingsColumn = ({
                       size="sm"
                       className="h-6 px-2 text-xs"
                       onClick={handleSave}
-                      disabled={isRunMode}
+                      // An unusable custom size normalises to null, which would CLEAR the shape -
+                      // the opposite of what was typed. Block the save on it, like the editor modal.
+                      disabled={isRunMode || isFormatInvalid}
                     >
                       <Save className="h-3 w-3 mr-1" />
                       {t('save')}
@@ -1506,6 +1562,34 @@ export const InterfaceMappingsColumn = ({
 
           {/* Collapsible content */}
           {isTemplateSectionOpen && (<>
+          {/* Format - a property of the INTERFACE, like the templates below it, so it belongs in
+              this zone and saves to the DB with them. It is the width the HTML underneath is
+              written for, which is why it sits above the editor rather than in the node's
+              workflow-mapping zone. */}
+          {hasInterfaceId && (
+            <div className="flex flex-col gap-2">
+              <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">{t('formatTitle')}</span>
+              <InterfaceFormatSelect
+                // Keyed by interface too, not just the cancel counter: this column is reused
+                // across nodes (no key at its call site), and the control ignores an echoed value.
+                // Two interfaces sharing a format would leave `value` unchanged, so a half-typed
+                // custom size from the previous node would survive onto this one.
+                key={`${interfaceId ?? 'none'}:${formatControlKey}`}
+                // Distinct id: the builder can show this inspector and the create-interface modal
+                // at the same time, and the modal's <label htmlFor> must not resolve to this
+                // trigger sitting behind the dialog.
+                id="inspector-interface-format-select"
+                // The help paragraph does not fit this narrow column, and it would repeat above
+                // every interface node's editor.
+                showHelp={false}
+                value={editedFormat}
+                onChange={setEditedFormat}
+                onValidityChange={setIsFormatInvalid}
+                disabled={isReadOnly}
+              />
+            </div>
+          )}
+
           {/* HTML Template Editor */}
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between flex-shrink-0">

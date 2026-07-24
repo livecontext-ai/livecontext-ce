@@ -24,6 +24,11 @@ public class InterfaceSnapshotDto {
     private String htmlTemplate;
     private String cssTemplate;
     private String jsTemplate;
+    /**
+     * Frozen display/capture format. The render path prefers a snapshot over the live
+     * interface, so this must travel with the templates or the run reverts to 1280x800.
+     */
+    private String format;
     private Map<String, String> variableMappings;
     private Map<String, String> actionMappings;
     private Instant createdAt;
@@ -58,6 +63,9 @@ public class InterfaceSnapshotDto {
 
     public String getJsTemplate() { return jsTemplate; }
     public void setJsTemplate(String jsTemplate) { this.jsTemplate = jsTemplate; }
+
+    public String getFormat() { return format; }
+    public void setFormat(String format) { this.format = format; }
 
     public Map<String, String> getVariableMappings() { return variableMappings; }
     public void setVariableMappings(Map<String, String> variableMappings) { this.variableMappings = variableMappings; }

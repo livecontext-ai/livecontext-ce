@@ -143,7 +143,13 @@ public class InterfaceNode extends BaseNode {
         }
         resolvedParams.put("generateVideo", generateVideo);
         if (generateVideo) {
-            resolvedParams.put("videoPreset", videoPreset != null ? videoPreset : "vertical");
+            // Only the explicit override is knowable here: with no videoPreset the dimensions
+            // come from the interface's own format, resolved at render time. Emit the key only
+            // when it is actually set - a placeholder string would read as a settable preset
+            // value (the enum is vertical|horizontal|square) and mislead.
+            if (videoPreset != null) {
+                resolvedParams.put("videoPreset", videoPreset);
+            }
             resolvedParams.put("videoMaxDurationSeconds",
                 videoMaxDurationSeconds != null ? videoMaxDurationSeconds : 30);
             resolvedParams.put("videoMode", videoMode != null ? videoMode : "smooth");

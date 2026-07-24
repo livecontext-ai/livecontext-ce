@@ -5,6 +5,7 @@ import com.apimarketplace.orchestrator.domain.WorkflowRunEntity;
 import com.apimarketplace.orchestrator.domain.workflow.RunStatus;
 import com.apimarketplace.orchestrator.repository.WorkflowRepository;
 import com.apimarketplace.orchestrator.repository.WorkflowRunRepository;
+import com.apimarketplace.orchestrator.services.WorkflowPinService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -23,7 +24,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
@@ -52,6 +55,8 @@ class ProductionRunResolverTest {
     private WorkflowRepository workflowRepository;
     @Mock
     private WorkflowRunRepository runRepository;
+    @Mock
+    private WorkflowPinService pinService;
 
     @InjectMocks
     private ProductionRunResolver resolver;
@@ -324,7 +329,7 @@ class ProductionRunResolverTest {
         }
 
         @Test
-        @DisplayName("production_run_id stale (run deleted) → fall back to LATEST_TRUSTED")
+        @DisplayName("production_run_id points at a deleted run → TRUSTED scan degradation (pin service ABSENT; Spring contexts heal via rearm)")
         void fkStaleFallback() {
             UUID prodRunId = UUID.randomUUID();
             WorkflowEntity wf = pinnedWorkflow();
@@ -423,12 +428,14 @@ class ProductionRunResolverTest {
         }
 
         /**
-         * Self-healing path: a workflow whose {@code production_run_id} was set
-         * before the fix may still point at a showcase clone. The resolver must
-         * detect that, log it, and fall back to the showcase-excluding lookup.
+         * A workflow whose {@code production_run_id} was set before the fix may still
+         * point at a showcase clone. The resolver must detect that and never yield the
+         * clone. pinService is ABSENT in this nested class, so the corrupt-FK branch
+         * degrades to the showcase-excluding scan (unit-construction path); in a real
+         * Spring context the same state heals via rearm (showcaseFkHealsViaRearm).
          */
         @Test
-        @DisplayName("BY_PRODUCTION_RUN_ID self-heals when FK points at a showcase clone")
+        @DisplayName("Showcase-clone FK degrades to the showcase-excluding scan when the pin service is ABSENT")
         void fkPointingAtShowcaseFallsBackToTrustedLookup() {
             UUID showcaseRunId = UUID.randomUUID();
             WorkflowEntity wf = pinnedWorkflow();
@@ -457,8 +464,144 @@ class ProductionRunResolverTest {
             assertThat(res.run().get().getRunIdPublic()).isEqualTo("run-real-3");
         }
 
+        /**
+         * Regression 2026-07-20. Closing the editor-adoption hazard made editor/agent
+         * fires MINT a separate run at the pinned version; with a reusable trigger it
+         * parks in WAITING_TRIGGER, sharing workflow_id + plan_version + status with
+         * production but with a NEWER started_at. The scan orders by started_at DESC,
+         * so the schedule would have fired on the editor run - executing its state,
+         * including any __mockMode__, while production stopped accumulating epochs.
+         * The LATEST_* policies now consult the production_run_id FK first.
+         */
         @Test
-        @DisplayName("BY_PRODUCTION_RUN_ID self-healing detects showcase via runIdPublic prefix even if source field is null")
+        @DisplayName("LATEST_WAITING_TRIGGER prefers the production_run_id FK over a newer editor run at the same version")
+        void latestWaitingTriggerPrefersFkOverNewerEditorRun() {
+            UUID productionRunId = UUID.randomUUID();
+            WorkflowEntity wf = pinnedWorkflow();
+            wf.setProductionRunId(productionRunId);
+
+            WorkflowRunEntity productionRun = run(RunStatus.WAITING_TRIGGER);
+            productionRun.setRunIdPublic("run-production");
+
+            when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(wf));
+            when(runRepository.findById(productionRunId)).thenReturn(Optional.of(productionRun));
+
+            ProductionRunResolver.Resolution res = resolver.resolve(WORKFLOW_ID,
+                ProductionRunResolver.RunSelectionPolicy.LATEST_WAITING_TRIGGER);
+
+            assertThat(res.outcome()).isEqualTo(ProductionRunResolver.Outcome.FOUND);
+            assertThat(res.run().get().getRunIdPublic()).isEqualTo("run-production");
+            // The started_at scan - which the newer editor run would have won - is
+            // never reached.
+            verify(runRepository, never()).findFirstProductionRunByWorkflowIdAndPlanVersionAndStatus(
+                any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("LATEST_TRUSTED prefers the production_run_id FK over a newer editor run at the same version")
+        void latestTrustedPrefersFkOverNewerEditorRun() {
+            UUID productionRunId = UUID.randomUUID();
+            WorkflowEntity wf = pinnedWorkflow();
+            wf.setProductionRunId(productionRunId);
+
+            WorkflowRunEntity productionRun = run(RunStatus.COMPLETED);
+            productionRun.setRunIdPublic("run-production-trusted");
+
+            when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(wf));
+            when(runRepository.findById(productionRunId)).thenReturn(Optional.of(productionRun));
+
+            ProductionRunResolver.Resolution res = resolver.resolve(WORKFLOW_ID,
+                ProductionRunResolver.RunSelectionPolicy.LATEST_TRUSTED);
+
+            assertThat(res.outcome()).isEqualTo(ProductionRunResolver.Outcome.FOUND);
+            assertThat(res.run().get().getRunIdPublic()).isEqualTo("run-production-trusted");
+            verify(runRepository, never()).findFirstProductionRunByWorkflowIdAndPlanVersionAndStatusIn(
+                any(), any(), any());
+        }
+
+        /**
+         * Regression 2026-07-21 (inverts the previous version of this test, which
+         * asserted the scan wins here - exactly the hijack shape). When the FK run is
+         * VALID (live, version-true) but its status fails the policy, the answer is
+         * "production is not fireable this tick", never "hand the tick to whichever
+         * same-version run the scan finds" - post-adoption-fix those rivals are
+         * editor/agent iteration runs.
+         */
+        @Test
+        @DisplayName("LATEST_WAITING_TRIGGER returns EMPTY when the valid FK run's status fails the policy - the scan is never consulted")
+        void latestWaitingTriggerReturnsEmptyWhenFkRunIsNotWaiting() {
+            UUID productionRunId = UUID.randomUUID();
+            WorkflowEntity wf = pinnedWorkflow();
+            wf.setProductionRunId(productionRunId);
+
+            WorkflowRunEntity runningProduction = run(RunStatus.RUNNING);
+            runningProduction.setRunIdPublic("run-production-mid-epoch");
+
+            when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(wf));
+            when(runRepository.findById(productionRunId)).thenReturn(Optional.of(runningProduction));
+
+            ProductionRunResolver.Resolution res = resolver.resolve(WORKFLOW_ID,
+                ProductionRunResolver.RunSelectionPolicy.LATEST_WAITING_TRIGGER);
+
+            assertThat(res.outcome()).isEqualTo(ProductionRunResolver.Outcome.NO_PRODUCTION_RUN);
+            // The rival-prone scan is never consulted when the FK identity is valid.
+            verify(runRepository, never()).findFirstProductionRunByWorkflowIdAndPlanVersionAndStatus(
+                any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("STALE-plan_version FK degrades to the version scan when the pin service is ABSENT (unit-construction path; Spring contexts heal via rearm)")
+        void latestPoliciesSelfHealOnStaleFkVersion() {
+            // pinService is not wired in this nested class, so the corrupt-FK branch
+            // takes healCorruptFk's pinService-null degradation: the bare scan. In a
+            // real Spring context the bean is always present and the same state heals
+            // via rearm (see TerminalFkSelfHealTests + ByProductionRunIdUnificationTests).
+            UUID productionRunId = UUID.randomUUID();
+            WorkflowEntity wf = pinnedWorkflow();
+            wf.setProductionRunId(productionRunId);
+
+            WorkflowRunEntity staleVersionRun = run(RunStatus.WAITING_TRIGGER);
+            staleVersionRun.setRunIdPublic("run-stale-version");
+            staleVersionRun.setPlanVersion(PINNED_VERSION - 1);
+
+            WorkflowRunEntity scanned = run(RunStatus.WAITING_TRIGGER);
+            scanned.setRunIdPublic("run-scanned-current-version");
+
+            when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(wf));
+            when(runRepository.findById(productionRunId)).thenReturn(Optional.of(staleVersionRun));
+            when(runRepository.findFirstProductionRunByWorkflowIdAndPlanVersionAndStatus(
+                WORKFLOW_ID, PINNED_VERSION, RunStatus.WAITING_TRIGGER))
+                .thenReturn(Optional.of(scanned));
+
+            ProductionRunResolver.Resolution res = resolver.resolve(WORKFLOW_ID,
+                ProductionRunResolver.RunSelectionPolicy.LATEST_WAITING_TRIGGER);
+
+            assertThat(res.run().get().getRunIdPublic()).isEqualTo("run-scanned-current-version");
+        }
+
+        @Test
+        @DisplayName("LATEST_* still uses the scan when no production_run_id FK is set (unpinned bootstrap / rearm cleared it)")
+        void latestPoliciesFallBackWhenFkIsNull() {
+            WorkflowEntity wf = pinnedWorkflow();
+            wf.setProductionRunId(null);
+
+            WorkflowRunEntity scanned = run(RunStatus.WAITING_TRIGGER);
+            scanned.setRunIdPublic("run-scanned");
+
+            when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(wf));
+            when(runRepository.findFirstProductionRunByWorkflowIdAndPlanVersionAndStatus(
+                WORKFLOW_ID, PINNED_VERSION, RunStatus.WAITING_TRIGGER))
+                .thenReturn(Optional.of(scanned));
+
+            ProductionRunResolver.Resolution res = resolver.resolve(WORKFLOW_ID,
+                ProductionRunResolver.RunSelectionPolicy.LATEST_WAITING_TRIGGER);
+
+            assertThat(res.run().get().getRunIdPublic()).isEqualTo("run-scanned");
+            verify(runRepository, never()).findById(any());
+        }
+
+        @Test
+        @DisplayName("Showcase detection works via runIdPublic prefix even if source field is null (pin service ABSENT → scan degradation)")
         void fkPointingAtShowcasePrefixedRunIsDetected() {
             UUID showcaseRunId = UUID.randomUUID();
             WorkflowEntity wf = pinnedWorkflow();
@@ -484,6 +627,391 @@ class ProductionRunResolverTest {
                 ProductionRunResolver.RunSelectionPolicy.BY_PRODUCTION_RUN_ID);
 
             assertThat(res.run().get().getRunIdPublic()).isEqualTo("run-real-4");
+        }
+    }
+
+    // ============================================================
+    // Terminal-FK self-heal - a FAILED/CANCELLED/TIMEOUT production
+    // run behind the FK means the one-shot AFTER_COMMIT rearm was
+    // lost (cross-pod failover, swallowed rearm failure). The
+    // resolver performs the MISSED rearm instead of dead-ending
+    // every production lane forever - and instead of the raw scan,
+    // whose winner would fire as production while the FK still
+    // pointed at the dead run (so MockRunGate / plan-edit guard /
+    // NotificationEmitter would all misclassify it).
+    // ============================================================
+
+    @Nested
+    @DisplayName("Terminal-FK self-heal (missed rearm)")
+    class TerminalFkSelfHealTests {
+
+        private final UUID deadRunId = UUID.randomUUID();
+        private final UUID electedRunId = UUID.randomUUID();
+
+        @BeforeEach
+        void wirePinService() {
+            // @InjectMocks uses constructor injection only; the @Autowired(required=false)
+            // pinService field stays null - wire it through the test seam.
+            resolver.setPinService(pinService);
+        }
+
+        private WorkflowEntity workflowWithFk(UUID fk) {
+            WorkflowEntity wf = pinnedWorkflow();
+            wf.setProductionRunId(fk);
+            return wf;
+        }
+
+        @Test
+        @DisplayName("FAILED FK run → missed rearm is performed and the HEALED FK answers the policy (scan never consulted)")
+        void deadFkTriggersMissedRearmAndResolvesTheHealedFk() {
+            WorkflowRunEntity deadRun = run(RunStatus.FAILED);
+            deadRun.setRunIdPublic("run-dead-production");
+            WorkflowRunEntity electedRun = run(RunStatus.WAITING_TRIGGER);
+            electedRun.setRunIdPublic("run-elected-by-rearm");
+
+            // First read sees the dead FK, the re-read after rearm sees the healed FK.
+            when(workflowRepository.findById(WORKFLOW_ID))
+                .thenReturn(Optional.of(workflowWithFk(deadRunId)))
+                .thenReturn(Optional.of(workflowWithFk(electedRunId)));
+            when(runRepository.findById(deadRunId)).thenReturn(Optional.of(deadRun));
+            when(runRepository.findById(electedRunId)).thenReturn(Optional.of(electedRun));
+
+            ProductionRunResolver.Resolution res = resolver.resolve(WORKFLOW_ID,
+                ProductionRunResolver.RunSelectionPolicy.LATEST_WAITING_TRIGGER);
+
+            assertThat(res.outcome()).isEqualTo(ProductionRunResolver.Outcome.FOUND);
+            assertThat(res.run().get().getRunIdPublic()).isEqualTo("run-elected-by-rearm");
+            verify(pinService).rearm(WORKFLOW_ID);
+            // The healed run is served via the FK, never the rival-prone scan.
+            verify(runRepository, never()).findFirstProductionRunByWorkflowIdAndPlanVersionAndStatus(
+                any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("Rearm clears the FK (no trusted survivor) → bootstrap scan takes over")
+        void deadFkRearmClearsFkFallsToBootstrapScan() {
+            WorkflowRunEntity deadRun = run(RunStatus.CANCELLED);
+            WorkflowRunEntity scanned = run(RunStatus.WAITING_TRIGGER);
+            scanned.setRunIdPublic("run-scanned-after-clear");
+
+            when(workflowRepository.findById(WORKFLOW_ID))
+                .thenReturn(Optional.of(workflowWithFk(deadRunId)))
+                .thenReturn(Optional.of(workflowWithFk(null)));
+            when(runRepository.findById(deadRunId)).thenReturn(Optional.of(deadRun));
+            when(runRepository.findFirstProductionRunByWorkflowIdAndPlanVersionAndStatus(
+                WORKFLOW_ID, PINNED_VERSION, RunStatus.WAITING_TRIGGER))
+                .thenReturn(Optional.of(scanned));
+
+            ProductionRunResolver.Resolution res = resolver.resolve(WORKFLOW_ID,
+                ProductionRunResolver.RunSelectionPolicy.LATEST_WAITING_TRIGGER);
+
+            assertThat(res.run().get().getRunIdPublic()).isEqualTo("run-scanned-after-clear");
+            verify(pinService).rearm(WORKFLOW_ID);
+        }
+
+        @Test
+        @DisplayName("FK unchanged after rearm (race/failure) → skip this tick, never fire a rival")
+        void deadFkUnchangedAfterRearmSkipsTheTick() {
+            WorkflowRunEntity deadRun = run(RunStatus.TIMEOUT);
+
+            when(workflowRepository.findById(WORKFLOW_ID))
+                .thenReturn(Optional.of(workflowWithFk(deadRunId)))
+                .thenReturn(Optional.of(workflowWithFk(deadRunId)));
+            when(runRepository.findById(deadRunId)).thenReturn(Optional.of(deadRun));
+
+            ProductionRunResolver.Resolution res = resolver.resolve(WORKFLOW_ID,
+                ProductionRunResolver.RunSelectionPolicy.LATEST_WAITING_TRIGGER);
+
+            assertThat(res.outcome()).isEqualTo(ProductionRunResolver.Outcome.NO_PRODUCTION_RUN);
+            verify(pinService).rearm(WORKFLOW_ID);
+            verify(runRepository, never()).findFirstProductionRunByWorkflowIdAndPlanVersionAndStatus(
+                any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("Rearm throws → skip this tick (empty), scan never consulted")
+        void rearmFailureSkipsTheTick() {
+            WorkflowRunEntity deadRun = run(RunStatus.FAILED);
+
+            when(workflowRepository.findById(WORKFLOW_ID))
+                .thenReturn(Optional.of(workflowWithFk(deadRunId)));
+            when(runRepository.findById(deadRunId)).thenReturn(Optional.of(deadRun));
+            when(pinService.rearm(WORKFLOW_ID)).thenThrow(new RuntimeException("advisory lock timeout"));
+
+            ProductionRunResolver.Resolution res = resolver.resolve(WORKFLOW_ID,
+                ProductionRunResolver.RunSelectionPolicy.LATEST_WAITING_TRIGGER);
+
+            assertThat(res.outcome()).isEqualTo(ProductionRunResolver.Outcome.NO_PRODUCTION_RUN);
+            verify(runRepository, never()).findFirstProductionRunByWorkflowIdAndPlanVersionAndStatus(
+                any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("COMPLETED FK run = deliberate stop → EMPTY, rearm is NEVER attempted")
+        void completedFkNeverRearms() {
+            WorkflowRunEntity completedProduction = run(RunStatus.COMPLETED);
+
+            when(workflowRepository.findById(WORKFLOW_ID))
+                .thenReturn(Optional.of(workflowWithFk(deadRunId)));
+            when(runRepository.findById(deadRunId)).thenReturn(Optional.of(completedProduction));
+
+            ProductionRunResolver.Resolution res = resolver.resolve(WORKFLOW_ID,
+                ProductionRunResolver.RunSelectionPolicy.LATEST_WAITING_TRIGGER);
+
+            assertThat(res.outcome()).isEqualTo(ProductionRunResolver.Outcome.NO_PRODUCTION_RUN);
+            verifyNoInteractions(pinService);
+        }
+
+        @Test
+        @DisplayName("Heal electing a LIVE but policy-ineligible run (RUNNING under the strict schedule policy) → EMPTY, not the scan")
+        void healElectingIneligibleLiveRunYieldsEmpty() {
+            // The dominant real-world heal outcome post-LIVE-preference: rearm elects
+            // a RUNNING run; the strict LATEST_WAITING_TRIGGER filter then refuses it
+            // for THIS tick (mid-epoch), and the tick is skipped - never handed to a
+            // same-version rival via the scan.
+            WorkflowRunEntity deadRun = run(RunStatus.FAILED);
+            WorkflowRunEntity electedRunning = run(RunStatus.RUNNING);
+            electedRunning.setRunIdPublic("run-elected-running");
+
+            when(workflowRepository.findById(WORKFLOW_ID))
+                .thenReturn(Optional.of(workflowWithFk(deadRunId)))
+                .thenReturn(Optional.of(workflowWithFk(electedRunId)));
+            when(runRepository.findById(deadRunId)).thenReturn(Optional.of(deadRun));
+            when(runRepository.findById(electedRunId)).thenReturn(Optional.of(electedRunning));
+
+            ProductionRunResolver.Resolution res = resolver.resolve(WORKFLOW_ID,
+                ProductionRunResolver.RunSelectionPolicy.LATEST_WAITING_TRIGGER);
+
+            assertThat(res.outcome()).isEqualTo(ProductionRunResolver.Outcome.NO_PRODUCTION_RUN);
+            verify(pinService).rearm(WORKFLOW_ID);
+            verify(runRepository, never()).findFirstProductionRunByWorkflowIdAndPlanVersionAndStatus(
+                any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("Purged FK row (run deleted) heals via rearm too - not the bare scan")
+        void purgedFkHealsViaRearm() {
+            WorkflowRunEntity electedRun = run(RunStatus.WAITING_TRIGGER);
+            electedRun.setRunIdPublic("run-elected-after-purge");
+
+            when(workflowRepository.findById(WORKFLOW_ID))
+                .thenReturn(Optional.of(workflowWithFk(deadRunId)))
+                .thenReturn(Optional.of(workflowWithFk(electedRunId)));
+            when(runRepository.findById(deadRunId)).thenReturn(Optional.empty());
+            when(runRepository.findById(electedRunId)).thenReturn(Optional.of(electedRun));
+
+            ProductionRunResolver.Resolution res = resolver.resolve(WORKFLOW_ID,
+                ProductionRunResolver.RunSelectionPolicy.LATEST_WAITING_TRIGGER);
+
+            assertThat(res.run().get().getRunIdPublic()).isEqualTo("run-elected-after-purge");
+            verify(pinService).rearm(WORKFLOW_ID);
+            verify(runRepository, never()).findFirstProductionRunByWorkflowIdAndPlanVersionAndStatus(
+                any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("Showcase-clone FK heals via rearm too - the FK gets repaired instead of re-scanning forever")
+        void showcaseFkHealsViaRearm() {
+            WorkflowRunEntity showcase = new WorkflowRunEntity();
+            showcase.setRunIdPublic("showcase_frozen");
+            showcase.setSource("showcase");
+            showcase.setStatus(RunStatus.WAITING_TRIGGER);
+            showcase.setPlanVersion(PINNED_VERSION);
+            WorkflowRunEntity electedRun = run(RunStatus.WAITING_TRIGGER);
+            electedRun.setRunIdPublic("run-elected-after-showcase");
+
+            when(workflowRepository.findById(WORKFLOW_ID))
+                .thenReturn(Optional.of(workflowWithFk(deadRunId)))
+                .thenReturn(Optional.of(workflowWithFk(electedRunId)));
+            when(runRepository.findById(deadRunId)).thenReturn(Optional.of(showcase));
+            when(runRepository.findById(electedRunId)).thenReturn(Optional.of(electedRun));
+
+            ProductionRunResolver.Resolution res = resolver.resolve(WORKFLOW_ID,
+                ProductionRunResolver.RunSelectionPolicy.LATEST_WAITING_TRIGGER);
+
+            assertThat(res.run().get().getRunIdPublic()).isEqualTo("run-elected-after-showcase");
+            verify(pinService).rearm(WORKFLOW_ID);
+        }
+
+        @Test
+        @DisplayName("Pin moved while the heal ran (concurrent re-pin) → skip this tick, stale closures never fire")
+        void pinMovedMidHealSkipsTheTick() {
+            WorkflowRunEntity deadRun = run(RunStatus.FAILED);
+            WorkflowEntity repinned = new WorkflowEntity();
+            repinned.setId(WORKFLOW_ID);
+            repinned.setName("test-wf");
+            repinned.setPinnedVersion(PINNED_VERSION + 1);
+            repinned.setProductionRunId(electedRunId);
+
+            when(workflowRepository.findById(WORKFLOW_ID))
+                .thenReturn(Optional.of(workflowWithFk(deadRunId)))
+                .thenReturn(Optional.of(repinned));
+            when(runRepository.findById(deadRunId)).thenReturn(Optional.of(deadRun));
+
+            ProductionRunResolver.Resolution res = resolver.resolve(WORKFLOW_ID,
+                ProductionRunResolver.RunSelectionPolicy.LATEST_WAITING_TRIGGER);
+
+            // This resolve's status filter + scan closures were built for the OLD pin -
+            // continuing could fire an old-plan-version run as production.
+            assertThat(res.outcome()).isEqualTo(ProductionRunResolver.Outcome.NO_PRODUCTION_RUN);
+            verify(runRepository, never()).findById(electedRunId);
+            verify(runRepository, never()).findFirstProductionRunByWorkflowIdAndPlanVersionAndStatus(
+                any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("Workflow row vanished while the heal ran → skip this tick (defensive)")
+        void workflowVanishedMidHealSkipsTheTick() {
+            WorkflowRunEntity deadRun = run(RunStatus.FAILED);
+
+            when(workflowRepository.findById(WORKFLOW_ID))
+                .thenReturn(Optional.of(workflowWithFk(deadRunId)))
+                .thenReturn(Optional.empty());
+            when(runRepository.findById(deadRunId)).thenReturn(Optional.of(deadRun));
+
+            ProductionRunResolver.Resolution res = resolver.resolve(WORKFLOW_ID,
+                ProductionRunResolver.RunSelectionPolicy.LATEST_WAITING_TRIGGER);
+
+            assertThat(res.outcome()).isEqualTo(ProductionRunResolver.Outcome.NO_PRODUCTION_RUN);
+            verify(pinService).rearm(WORKFLOW_ID);
+        }
+
+        @Test
+        @DisplayName("SBS lane: a dead (FAILED) FK heals via rearm and the elected SBS run takes the tick")
+        void sbsLaneHealsDeadFkViaRearm() {
+            WorkflowRunEntity deadRun = run(RunStatus.FAILED);
+            WorkflowRunEntity electedSbs = run(RunStatus.PAUSED);
+            electedSbs.setRunIdPublic("run-elected-sbs");
+            electedSbs.setExecutionMode(com.apimarketplace.orchestrator.domain.workflow.ExecutionMode.STEP_BY_STEP);
+
+            when(workflowRepository.findById(WORKFLOW_ID))
+                .thenReturn(Optional.of(workflowWithFk(deadRunId)))
+                .thenReturn(Optional.of(workflowWithFk(electedRunId)));
+            when(runRepository.findById(deadRunId)).thenReturn(Optional.of(deadRun));
+            when(runRepository.findById(electedRunId)).thenReturn(Optional.of(electedSbs));
+
+            assertThat(resolver.resolveStepByStepRun(WORKFLOW_ID)).contains(electedSbs);
+            verify(pinService).rearm(WORKFLOW_ID);
+        }
+
+        @Test
+        @DisplayName("Without a wired pin service (partial contexts) a dead FK degrades to the version scan")
+        void withoutPinServiceDeadFkFallsBackToScan() {
+            ProductionRunResolver bare = new ProductionRunResolver(workflowRepository, runRepository);
+            WorkflowRunEntity deadRun = run(RunStatus.FAILED);
+            WorkflowRunEntity scanned = run(RunStatus.WAITING_TRIGGER);
+            scanned.setRunIdPublic("run-scanned-no-pinservice");
+
+            when(workflowRepository.findById(WORKFLOW_ID))
+                .thenReturn(Optional.of(workflowWithFk(deadRunId)));
+            when(runRepository.findById(deadRunId)).thenReturn(Optional.of(deadRun));
+            when(runRepository.findFirstProductionRunByWorkflowIdAndPlanVersionAndStatus(
+                WORKFLOW_ID, PINNED_VERSION, RunStatus.WAITING_TRIGGER))
+                .thenReturn(Optional.of(scanned));
+
+            ProductionRunResolver.Resolution res = bare.resolve(WORKFLOW_ID,
+                ProductionRunResolver.RunSelectionPolicy.LATEST_WAITING_TRIGGER);
+
+            assertThat(res.run().get().getRunIdPublic()).isEqualTo("run-scanned-no-pinservice");
+        }
+    }
+
+    // ============================================================
+    // BY_PRODUCTION_RUN_ID unification - one production-identity rule.
+    // ============================================================
+
+    @Nested
+    @DisplayName("BY_PRODUCTION_RUN_ID routes through the single FK-first rule")
+    class ByProductionRunIdUnificationTests {
+
+        @BeforeEach
+        void wirePinService() {
+            resolver.setPinService(pinService);
+        }
+
+        /**
+         * Kills the round-3 mutation survivor: neutralising the stale-plan_version
+         * check ("else if (false)") would yield the wrong-version FK run directly -
+         * this test then fails because the stale run, not the healed election, comes
+         * back.
+         */
+        @Test
+        @DisplayName("BY_PRODUCTION_RUN_ID heals a STALE-plan_version FK via the missed rearm")
+        void byProductionRunIdSelfHealsOnStaleFkVersion() {
+            UUID prodRunId = UUID.randomUUID();
+            UUID electedRunId = UUID.randomUUID();
+            WorkflowEntity stale = pinnedWorkflow();
+            stale.setProductionRunId(prodRunId);
+            WorkflowEntity healed = pinnedWorkflow();
+            healed.setProductionRunId(electedRunId);
+
+            WorkflowRunEntity staleVersionRun = run(RunStatus.WAITING_TRIGGER);
+            staleVersionRun.setRunIdPublic("run-stale-version");
+            staleVersionRun.setPlanVersion(PINNED_VERSION - 1);
+
+            WorkflowRunEntity electedRun = run(RunStatus.WAITING_TRIGGER);
+            electedRun.setRunIdPublic("run-elected-current-version");
+
+            when(workflowRepository.findById(WORKFLOW_ID))
+                .thenReturn(Optional.of(stale))
+                .thenReturn(Optional.of(healed));
+            when(runRepository.findById(prodRunId)).thenReturn(Optional.of(staleVersionRun));
+            when(runRepository.findById(electedRunId)).thenReturn(Optional.of(electedRun));
+
+            ProductionRunResolver.Resolution res = resolver.resolve(WORKFLOW_ID,
+                ProductionRunResolver.RunSelectionPolicy.BY_PRODUCTION_RUN_ID);
+
+            assertThat(res.run().get().getRunIdPublic()).isEqualTo("run-elected-current-version");
+            verify(pinService).rearm(WORKFLOW_ID);
+        }
+
+        @Test
+        @DisplayName("BY_PRODUCTION_RUN_ID returns the FK run in ANY live status (callers apply their own eligibility)")
+        void byProductionRunIdReturnsFkRunInAnyLiveStatus() {
+            UUID prodRunId = UUID.randomUUID();
+            WorkflowEntity wf = pinnedWorkflow();
+            wf.setProductionRunId(prodRunId);
+
+            WorkflowRunEntity awaiting = run(RunStatus.AWAITING_SIGNAL);
+            awaiting.setRunIdPublic("run-production-awaiting");
+
+            when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(wf));
+            when(runRepository.findById(prodRunId)).thenReturn(Optional.of(awaiting));
+
+            ProductionRunResolver.Resolution res = resolver.resolve(WORKFLOW_ID,
+                ProductionRunResolver.RunSelectionPolicy.BY_PRODUCTION_RUN_ID);
+
+            assertThat(res.outcome()).isEqualTo(ProductionRunResolver.Outcome.FOUND);
+            assertThat(res.run().get().getRunIdPublic()).isEqualTo("run-production-awaiting");
+            verify(runRepository, never()).findFirstProductionRunByWorkflowIdAndPlanVersionAndStatusIn(
+                any(), any(), any(Collection.class));
+        }
+
+        @Test
+        @DisplayName("BY_PRODUCTION_RUN_ID also heals a dead (FAILED) FK through the missed rearm")
+        void byProductionRunIdHealsDeadFk() {
+            UUID deadRunId = UUID.randomUUID();
+            UUID electedRunId = UUID.randomUUID();
+            WorkflowEntity stale = pinnedWorkflow();
+            stale.setProductionRunId(deadRunId);
+            WorkflowEntity healed = pinnedWorkflow();
+            healed.setProductionRunId(electedRunId);
+
+            WorkflowRunEntity deadRun = run(RunStatus.FAILED);
+            WorkflowRunEntity electedRun = run(RunStatus.COMPLETED);
+            electedRun.setRunIdPublic("run-elected");
+
+            when(workflowRepository.findById(WORKFLOW_ID))
+                .thenReturn(Optional.of(stale))
+                .thenReturn(Optional.of(healed));
+            when(runRepository.findById(deadRunId)).thenReturn(Optional.of(deadRun));
+            when(runRepository.findById(electedRunId)).thenReturn(Optional.of(electedRun));
+
+            ProductionRunResolver.Resolution res = resolver.resolve(WORKFLOW_ID,
+                ProductionRunResolver.RunSelectionPolicy.BY_PRODUCTION_RUN_ID);
+
+            assertThat(res.run().get().getRunIdPublic()).isEqualTo("run-elected");
+            verify(pinService).rearm(WORKFLOW_ID);
         }
     }
 
@@ -553,6 +1081,53 @@ class ProductionRunResolverTest {
                 .thenReturn(Optional.of(ProductionRunResolverTest.this.unpinnedWorkflow()));
 
             assertThat(resolver.resolveStepByStepRun(WORKFLOW_ID)).isEmpty();
+            verify(runRepository, org.mockito.Mockito.never())
+                .findFirstProductionRunByWorkflowIdAndPlanVersionAndStatusIn(any(), any(), any(Collection.class));
+        }
+
+        /**
+         * Regression 2026-07-21: ScheduleExecutorService FIRES the run this method
+         * returns (fresh epoch, bypassing the terminal-status guard), and the scan
+         * orders by started_at DESC - so an editor SBS run minted at the pinned
+         * version (adoption is refused since 2026-07-20) would have been EXECUTED as
+         * production, mock overrides included. The FK now decides, like the LATEST_*
+         * policies.
+         */
+        @Test
+        @DisplayName("Regression 2026-07-21: FK-first - an editor SBS run never takes the schedule tick when the FK run is not SBS")
+        void editorSbsRunNeverTakesTheTickWhenProductionIsAutomatic() {
+            UUID productionRunId = UUID.randomUUID();
+            WorkflowEntity wf = pinnedWorkflow();
+            wf.setProductionRunId(productionRunId);
+
+            // Production is a healthy AUTOMATIC run (isStepByStepMode false).
+            WorkflowRunEntity automaticProduction = run(RunStatus.RUNNING);
+            automaticProduction.setRunIdPublic("run-production-automatic");
+
+            when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(wf));
+            when(runRepository.findById(productionRunId)).thenReturn(Optional.of(automaticProduction));
+
+            // Even though a rival editor SBS run would win the scan, the scan is
+            // never consulted: the FK identity is valid, just not SBS.
+            assertThat(resolver.resolveStepByStepRun(WORKFLOW_ID)).isEmpty();
+            verify(runRepository, org.mockito.Mockito.never())
+                .findFirstProductionRunByWorkflowIdAndPlanVersionAndStatusIn(any(), any(), any(Collection.class));
+        }
+
+        @Test
+        @DisplayName("FK-first - a promoted SBS production run parked mid-debug IS returned via the FK")
+        void promotedSbsProductionRunReturnedViaFk() {
+            UUID productionRunId = UUID.randomUUID();
+            WorkflowEntity wf = pinnedWorkflow();
+            wf.setProductionRunId(productionRunId);
+
+            WorkflowRunEntity sbsProduction = sbsRun(RunStatus.PAUSED);
+            sbsProduction.setRunIdPublic("run-production-sbs");
+
+            when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(wf));
+            when(runRepository.findById(productionRunId)).thenReturn(Optional.of(sbsProduction));
+
+            assertThat(resolver.resolveStepByStepRun(WORKFLOW_ID)).contains(sbsProduction);
             verify(runRepository, org.mockito.Mockito.never())
                 .findFirstProductionRunByWorkflowIdAndPlanVersionAndStatusIn(any(), any(), any(Collection.class));
         }

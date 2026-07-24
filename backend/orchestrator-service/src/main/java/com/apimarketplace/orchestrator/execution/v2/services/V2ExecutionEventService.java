@@ -11,6 +11,7 @@ import com.apimarketplace.orchestrator.execution.v2.engine.TriggerItem;
 import com.apimarketplace.orchestrator.domain.execution.StateSnapshot;
 import com.apimarketplace.orchestrator.services.WorkflowStreamingService;
 import com.apimarketplace.orchestrator.services.completion.CompletionKind;
+import com.apimarketplace.orchestrator.services.completion.StepCompletionResult;
 import com.apimarketplace.orchestrator.services.epoch.WorkflowEpochService;
 import com.apimarketplace.orchestrator.services.persistence.WorkflowEntityResolverService;
 import com.apimarketplace.orchestrator.services.state.StateSnapshotService;
@@ -316,15 +317,19 @@ public class V2ExecutionEventService {
 
     /**
      * Emit node execution completion event.
+     *
+     * @return the completion result from the persistence pipeline (null when
+     *         validation short-circuited); carries the payload-lost rewrite
+     *         (tier 2) that the engine must honor for its traversal decision
      */
-    public void emitNodeComplete(
+    public StepCompletionResult emitNodeComplete(
             WorkflowExecution execution,
             ExecutionNode node,
             NodeExecutionResult result,
             TriggerItem item,
             int itemIndex,
             ExecutionContext context) {
-        emitNodeComplete(execution, node, result, item, itemIndex, context, CompletionKind.TERMINAL);
+        return emitNodeComplete(execution, node, result, item, itemIndex, context, CompletionKind.TERMINAL);
     }
 
     /**
@@ -359,7 +364,7 @@ public class V2ExecutionEventService {
      *
      * @param kind disposition - see {@link CompletionKind} for the per-branch contract
      */
-    public void emitNodeComplete(
+    public StepCompletionResult emitNodeComplete(
             WorkflowExecution execution,
             ExecutionNode node,
             NodeExecutionResult result,
@@ -375,19 +380,32 @@ public class V2ExecutionEventService {
             ? nodeCompletionService.extractCurrentIteration(context, node, result)
             : null;
 
-        // Detect branching nodes for WS event emission (not for persistence routing)
-        boolean isBranchingNode = kind.emitsEdges() && isBranchingNode(node, result);
-
         // All nodes go through the standard persistence path:
         // DB persistence (with OutputSchemaMapper) → StateSnapshot update → streaming event.
         // Both dispositions enter the SAME NodeCompletionService → StepCompletionOrchestrator
         // pipeline (these two entry points are thin shims over it); the disposition decides
         // snapshot mutation, row persistence and billing downstream.
+        StepCompletionResult completion;
         if (kind == CompletionKind.TERMINAL) {
-            nodeCompletionService.emitNodeComplete(execution, node, result, item, itemIndex, context);
+            completion = nodeCompletionService.emitNodeComplete(execution, node, result, item, itemIndex, context);
         } else {
             nodeCompletionService.emitNodeFailedAttempt(execution, node, result, item, itemIndex, context);
+            completion = null;
         }
+
+        // Payload-lost rewrite (tier 2): when persistence flipped a SUCCESS
+        // result to FAILED because its output blob could not be stored, the
+        // downstream tail (edges, decisionEvaluated) must observe the SAME
+        // failure the row/snapshot recorded - otherwise edges would show a
+        // completed traversal for a node whose descendants get skip-cascaded.
+        NodeExecutionResult effectiveResult = result;
+        if (completion != null && completion.payloadLost() && result.isSuccess()) {
+            effectiveResult = NodeExecutionResult.failure(
+                node.getNodeId(), completion.payloadLostMessage(), result.durationMs());
+        }
+
+        // Detect branching nodes for WS event emission (not for persistence routing)
+        boolean isBranchingNode = kind.emitsEdges() && isBranchingNode(node, effectiveResult);
 
         // Outgoing-edge tail - TERMINAL only (CompletionKind.emitsEdges): edges record
         // the single terminal traversal, not one COMPLETED/SKIPPED set per attempt; and
@@ -398,7 +416,7 @@ public class V2ExecutionEventService {
             String ctxTriggerId = context != null ? context.triggerId() : null;
             edgeStatusService.beginEdgeBatch();
             try {
-                edgeStatusEmitter.emitOutgoingEdges(execution, node, itemIndex, iteration, result, false, epoch, ctxTriggerId);
+                edgeStatusEmitter.emitOutgoingEdges(execution, node, itemIndex, iteration, effectiveResult, false, epoch, ctxTriggerId);
             } finally {
                 Map<String, Map.Entry<String, Integer>> edgeBatch = edgeStatusService.flushEdgeBatch(execution.getRunId());
                 recordEdgeEpochCounts(execution, edgeBatch, epoch, ctxTriggerId);
@@ -407,7 +425,7 @@ public class V2ExecutionEventService {
             // Emit decisionEvaluated WS event for branching nodes so frontend gets
             // selectedBranch/skippedBranches data without relying on HTTP response
             if (isBranchingNode) {
-                emitDecisionEvaluatedEvent(execution, node, result);
+                emitDecisionEvaluatedEvent(execution, node, effectiveResult);
             }
         }
 
@@ -418,13 +436,15 @@ public class V2ExecutionEventService {
         if (kind.mutatesSnapshotCounts()) {
             snapshotService.sendSnapshot(execution.getRunId());
         }
+
+        return completion;
     }
 
     /**
      * Emit node execution completion event with explicit iteration.
      * Used for body nodes where the iteration is known from the parent context.
      */
-    public void emitNodeComplete(
+    public StepCompletionResult emitNodeComplete(
             WorkflowExecution execution,
             ExecutionNode node,
             NodeExecutionResult result,
@@ -433,18 +453,28 @@ public class V2ExecutionEventService {
             ExecutionContext context,
             Integer explicitIteration) {
 
-        // Detect branching nodes for WS event emission (not for persistence routing)
-        boolean isBranchingNode = isBranchingNode(node, result);
-
         // All nodes go through the standard persistence path
-        nodeCompletionService.emitNodeComplete(execution, node, result, item, itemIndex, context, explicitIteration);
+        StepCompletionResult completion =
+            nodeCompletionService.emitNodeComplete(execution, node, result, item, itemIndex, context, explicitIteration);
+
+        // Payload-lost rewrite (tier 2) - same contract as the kind-parameterized
+        // overload above: the edge tail must observe the FAILED status the row
+        // and snapshot already recorded.
+        NodeExecutionResult effectiveResult = result;
+        if (completion != null && completion.payloadLost() && result.isSuccess()) {
+            effectiveResult = NodeExecutionResult.failure(
+                node.getNodeId(), completion.payloadLostMessage(), result.durationMs());
+        }
+
+        // Detect branching nodes for WS event emission (not for persistence routing)
+        boolean isBranchingNode = isBranchingNode(node, effectiveResult);
 
         // Emit edge events for outgoing connections (batched: single DB transaction for all edges)
         int epoch2 = context != null ? context.epoch() : 0;
         String ctxTriggerId2 = context != null ? context.triggerId() : null;
         edgeStatusService.beginEdgeBatch();
         try {
-            edgeStatusEmitter.emitOutgoingEdges(execution, node, itemIndex, explicitIteration, result, false, epoch2, ctxTriggerId2);
+            edgeStatusEmitter.emitOutgoingEdges(execution, node, itemIndex, explicitIteration, effectiveResult, false, epoch2, ctxTriggerId2);
         } finally {
             Map<String, Map.Entry<String, Integer>> edgeBatch = edgeStatusService.flushEdgeBatch(execution.getRunId());
             recordEdgeEpochCounts(execution, edgeBatch, epoch2, ctxTriggerId2);
@@ -452,11 +482,13 @@ public class V2ExecutionEventService {
 
         // Emit decisionEvaluated WS event for branching nodes
         if (isBranchingNode) {
-            emitDecisionEvaluatedEvent(execution, node, result);
+            emitDecisionEvaluatedEvent(execution, node, effectiveResult);
         }
 
         // Send full snapshot from DB (direct, no batch scheduler)
         snapshotService.sendSnapshot(execution.getRunId());
+
+        return completion;
     }
 
     /**
@@ -633,7 +665,27 @@ public class V2ExecutionEventService {
             int itemIndex,
             ExecutionContext context,
             Integer explicitIteration) {
-        nodeCompletionService.emitNodeComplete(execution, node, result, item, itemIndex, context, explicitIteration);
+        StepCompletionResult completion =
+            nodeCompletionService.emitNodeComplete(execution, node, result, item, itemIndex, context, explicitIteration);
+
+        // Payload-lost acknowledgement (NOT the full tier-2 rewrite - deliberate).
+        // This is a fire-and-forget re-persist of the loop core's synthetic
+        // termination marker (terminated=true) at the FINAL iteration, which
+        // creates a NEW step_data row AFTER the loop has already exited. If that
+        // marker's payload cannot be stored, tier 1 already flipped the new row
+        // to FAILED with the cause on error_message (honest, visible in the row).
+        // We do NOT rewrite the in-memory result here because there is no
+        // traversal left to redirect: the loop already advanced to its exit path
+        // (BackEdgeHandler drives the exit target itself), and marking the loop
+        // node FAILED would be semantically WRONG - the loop DID terminate
+        // successfully; only the extra marker blob was lost. Dropping the return
+        // silently would violate the no-silent-fallback rule, so we log it.
+        if (completion != null && completion.payloadLost()) {
+            logger.warn("[V2ExecutionEventService] Loop-termination re-persist lost its output payload "
+                    + "(row flipped to FAILED, tier 1); loop already exited so no traversal rewrite applies: "
+                    + "runId={}, nodeId={}, message={}",
+                execution.getRunId(), node.getNodeId(), completion.payloadLostMessage());
+        }
     }
 
     /**

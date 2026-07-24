@@ -47,6 +47,7 @@ vi.mock('reactflow', () => ({
   ConnectionMode: { Loose: 'loose', Strict: 'strict' },
   getBezierPath: () => ['', 0, 0, 0, 0],
   getSmoothStepPath: () => ['', 0, 0, 0, 0],
+  useUpdateNodeInternals: () => () => {},
 }));
 
 vi.mock('../../constants/graphTypes', () => ({ nodeTypes: {}, edgeTypes: {} }));

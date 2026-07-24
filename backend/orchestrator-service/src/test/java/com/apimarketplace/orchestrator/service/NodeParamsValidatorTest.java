@@ -216,6 +216,49 @@ class NodeParamsValidatorTest {
         }
 
         @Test
+        @DisplayName("legacy node-level format is accepted and ignored, not rejected as unknown")
+        void legacyNodeFormatAcceptedAndIgnored() {
+            // The format moved from the interface NODE to the interface ENTITY, so V407 drops it
+            // from the DB doc. Plans written before that move still carry it: they must keep
+            // validating. Without the deprecated-tolerated set this hits the interface branch's
+            // "these look like template variables, put them in variable_mapping" suggestion -
+            // actively wrong guidance for a param that was documented the day before.
+            stubInterfaceSchema();
+            ValidationResult result = validator.validate("interface", Map.of(
+                "interface_id", "11111111-2222-3333-4444-555555555555",
+                "format", "vertical"
+            ));
+            assertThat(result.valid()).isTrue();
+        }
+
+        @Test
+        @DisplayName("legacy interface_format / interfaceFormat aliases are tolerated too")
+        void legacyNodeFormatAliasesAccepted() {
+            stubInterfaceSchema();
+            assertThat(validator.validate("interface", Map.of(
+                "interface_id", "11111111-2222-3333-4444-555555555555",
+                "interface_format", "1080x1920"
+            )).valid()).isTrue();
+            assertThat(validator.validate("interface", Map.of(
+                "interface_id", "11111111-2222-3333-4444-555555555555",
+                "interfaceFormat", "square"
+            )).valid()).isTrue();
+        }
+
+        @Test
+        @DisplayName("a genuinely unknown interface param is still rejected")
+        void unknownInterfaceParamStillRejected() {
+            // Guards the tolerance above from becoming a blanket "accept anything" on interface
+            // nodes: only the retired format keys are waived.
+            stubInterfaceSchema();
+            ValidationResult result = validator.validate("interface", Map.of(
+                "interface_id", "11111111-2222-3333-4444-555555555555",
+                "totallyMadeUp", "x"
+            ));
+            assertThat(result.valid()).isFalse();
+        }
+
+        @Test
         @DisplayName("camelCase generateScreenshot accepted (canonical key)")
         void camelCaseGenerateScreenshotAccepted() {
             stubInterfaceSchema();

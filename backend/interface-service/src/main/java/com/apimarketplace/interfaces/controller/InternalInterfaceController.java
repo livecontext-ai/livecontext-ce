@@ -3,6 +3,7 @@ package com.apimarketplace.interfaces.controller;
 import com.apimarketplace.common.recentactivity.RecentActivityItemDto;
 import com.apimarketplace.common.recentactivity.RecentActivityScopeResultDto;
 import com.apimarketplace.common.recentactivity.ResourceKind;
+import com.apimarketplace.interfaces.client.InterfaceFormat;
 import com.apimarketplace.interfaces.client.dto.*;
 import com.apimarketplace.interfaces.domain.InterfaceEntity;
 import com.apimarketplace.interfaces.domain.InterfaceRunSnapshotEntity;
@@ -99,6 +100,13 @@ public class InternalInterfaceController {
     @PostMapping
     public ResponseEntity<InterfaceDto> createInterface(@RequestBody InterfaceCreateRequest request,
                                                           @RequestHeader("X-User-ID") String tenantId) {
+        // Same contract as the public and tool create paths: an unusable format is a 400, never
+        // silently normalised to null - that would hand the caller a shapeless interface it never
+        // asked for. (The /from-snapshot path below is deliberately lenient instead: a bad value
+        // there must not 500 an acquire.)
+        if (InterfaceFormat.isInvalid(request.getFormat())) {
+            return ResponseEntity.badRequest().build();
+        }
         InterfaceEntity created = interfaceService.createInterface(
                 tenantId,
                 request.getName(),
@@ -111,7 +119,8 @@ public class InternalInterfaceController {
                 request.getDataSourceId(),
                 request.getIsPublic(),
                 null,
-                request.getOrganizationId());
+                request.getOrganizationId(),
+                request.getFormat());
         return ResponseEntity.ok(mapper.toDto(created));
     }
 
@@ -156,7 +165,9 @@ public class InternalInterfaceController {
 
         InterfaceEntity created = interfaceService.createFromSnapshot(
                 tenantId, name, description, htmlTemplate, cssTemplate, jsTemplate,
-                interfaceType, data, dataSourceId, sourcePublicationId, organizationId);
+                interfaceType, data, dataSourceId, sourcePublicationId, organizationId,
+                // instanceof, not a cast: a wrong-typed snapshot value must not 500 the acquire.
+                snapshot.get("format") instanceof String fmt ? fmt : null);
         return ResponseEntity.ok(mapper.toDto(created));
     }
 
@@ -166,6 +177,12 @@ public class InternalInterfaceController {
                                                           @RequestHeader("X-User-ID") String tenantId,
                                                           @RequestHeader(value = "X-Organization-ID", required = false) String orgId,
                                                           @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
+        // Same contract as the public and tool paths: an unusable format is a 400, never a silent
+        // no-op. normalize() maps it to null, which with updateFormat set would CLEAR the shape
+        // instead of changing it. Blank stays legal (the explicit clear).
+        if (InterfaceFormat.isInvalid(request.getFormat())) {
+            return ResponseEntity.badRequest().build();
+        }
         // #150 - internal callers that have an active-org context (gateway-
         // routed user requests fan out to internal endpoints, orchestrator
         // proxying user mutations) thread the org headers through so the
@@ -184,7 +201,12 @@ public class InternalInterfaceController {
                 request.getDataSourceId(),
                 request.getIsPublic(),
                 request.getIsActive(),
-                request.getClearDataSource());
+                request.getClearDataSource(),
+                request.getFormat(),
+                // Typed DTO: a null format is indistinguishable from an omitted one, so an
+                // explicit clear_format=true is what clears it (mirrors clear_data_source).
+                (request.getFormat() != null || Boolean.TRUE.equals(request.getClearFormat()))
+                        ? Boolean.TRUE : null);
         return ResponseEntity.ok(mapper.toDto(updated));
     }
 

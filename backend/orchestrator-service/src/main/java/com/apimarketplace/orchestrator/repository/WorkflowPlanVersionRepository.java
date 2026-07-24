@@ -21,7 +21,15 @@ public interface WorkflowPlanVersionRepository extends JpaRepository<WorkflowPla
     Optional<Integer> getMaxVersion(@Param("workflowId") UUID workflowId);
 
     /**
-     * List all versions for a workflow (without plan data for performance), ordered by version DESC.
+     * List all versions for a workflow, ordered by version DESC.
+     *
+     * <p>Returns FULL entities, plan bodies included: {@code plan} is an eager
+     * {@code @JdbcTypeCode(SqlTypes.JSON)} basic attribute, so there is no lazy
+     * loading to opt into. (An earlier version of this javadoc claimed the plans were
+     * excluded "for performance" - they never were.) Callers pay one JSONB
+     * deserialize per row, bounded by {@code workflow.versioning.max-versions};
+     * {@code WorkflowPlanVersionService.findVersionWithMatchingContent} relies on the
+     * bodies being present, so keep it that way or give it its own query.
      */
     List<WorkflowPlanVersionEntity> findByWorkflowIdOrderByVersionDesc(UUID workflowId);
 

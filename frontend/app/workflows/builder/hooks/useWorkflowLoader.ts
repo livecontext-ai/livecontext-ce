@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import { useWorkflowLayoutDirectionSafe } from '@/contexts/WorkflowLayoutDirectionContext';
 import type { Node, Edge } from 'reactflow';
 import type { BuilderNodeData } from '../types';
 import { orchestratorApi, type EdgeState, type StepState } from '@/lib/api';
@@ -174,6 +175,22 @@ export interface UseWorkflowLoaderResult {
  */
 export function useWorkflowLoader(config: UseWorkflowLoaderConfig): UseWorkflowLoaderResult {
   const { workflowId, runId, planOverride, setNodes, setEdges, nodesRef, edgesRef } = config;
+  // Only reached when a stored plan has no positions; keep it in the canvas's
+  // direction rather than silently falling back to horizontal.
+  const { direction: layoutDirection, setWorkflowDirection } = useWorkflowLayoutDirectionSafe();
+  // Read through a ref, NOT a dependency: this value must be the direction at the
+  // moment the plan is imported, but adding it to the effect deps below would
+  // re-register the listener (and, in the loader, re-fetch the workflow) every time
+  // the user flips the preference. A dependency-free read would instead capture the
+  // context's SEED value ('horizontal'): the provider restores the stored direction
+  // in a mount effect, and React flushes child effects BEFORE ancestor ones, so a
+  // hard load straight onto a builder URL would lay the graph out horizontally while
+  // every handle rendered vertically.
+  const layoutDirectionRef = React.useRef(layoutDirection);
+  layoutDirectionRef.current = layoutDirection;
+  const setWorkflowDirectionRef = React.useRef(setWorkflowDirection);
+  setWorkflowDirectionRef.current = setWorkflowDirection;
+
 
   const [isLoadingWorkflow, setIsLoadingWorkflow] = React.useState(false);
   const [workflowLoaded, setWorkflowLoaded] = React.useState(false);
@@ -462,11 +479,26 @@ export function useWorkflowLoader(config: UseWorkflowLoaderConfig): UseWorkflowL
           console.log('[AppDebug] useWorkflowLoader SKIPPING import - plan is not valid (no nodes will be set)', { workflowId });
         }
         if (isValidPlan) {
+          // Seed the canvas direction from the plan when it carries one: that stored
+          // direction is THIS workflow's identity and beats the user's account
+          // default. In-memory only (setWorkflowDirection) so it never pollutes the
+          // global preference. When the plan has NO layoutDirection (a legacy plan
+          // authored before this feature, or a brand-new one), we deliberately do
+          // NOT seed: the canvas keeps the user's account default (horizontal by
+          // default, or whatever they picked in Settings). Forcing horizontal here
+          // instead would override a vertical-preference user's choice on every
+          // un-stamped workflow, breaking the account preference. The direction only
+          // becomes the plan's identity once the user saves it.
+          const planDir = (plan as any).layoutDirection;
+          if (planDir === 'horizontal' || planDir === 'vertical') {
+            setWorkflowDirectionRef.current(planDir);
+            layoutDirectionRef.current = planDir;
+          }
           // Convert plan to JSON string for import
           const planJson = JSON.stringify(plan);
 
           // Import the plan into the builder
-          const importResult = await WorkflowPlanImporter.importPlan(planJson, []);
+          const importResult = await WorkflowPlanImporter.importPlan(planJson, [], layoutDirectionRef.current);
           console.log('[AppDebug] useWorkflowLoader importPlan done', {
             workflowId,
             success: importResult.success,
@@ -628,8 +660,19 @@ export function useWorkflowLoader(config: UseWorkflowLoaderConfig): UseWorkflowL
       if (!plan) return;
 
       try {
+        // Re-seed the reading direction from the restored version BEFORE importing,
+        // so handles/edges attach on the correct node edges (a restored version can
+        // carry a different direction than the current canvas). In-memory only, same
+        // precedence as the initial load: stored direction wins; absent leaves the
+        // current direction untouched (restore does not force a legacy fallback here,
+        // since the canvas already has an active direction).
+        const restoreDir = (plan as any).layoutDirection;
+        if (restoreDir === 'horizontal' || restoreDir === 'vertical') {
+          setWorkflowDirectionRef.current(restoreDir);
+          layoutDirectionRef.current = restoreDir;
+        }
         const planJson = JSON.stringify(plan);
-        const importResult = await WorkflowPlanImporter.importPlan(planJson, []);
+        const importResult = await WorkflowPlanImporter.importPlan(planJson, [], layoutDirectionRef.current);
 
         if (importResult.success) {
           let finalNodes = importResult.nodes;

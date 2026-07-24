@@ -1128,7 +1128,18 @@
     },
     "rejected": "Rejeitado",
     "sharedInReview": "Compartilhado · aguardando aprovação do administrador",
-    "sharedRejected": "Compartilhado · rejeitado pela revisão"
+    "sharedRejected": "Compartilhado · rejeitado pela revisão",
+    "runInfo": {
+      "costOfThisRun": "Custo desta execução",
+      "costTooltip": "Custo total desta execução em todas as épocas",
+      "budgetReached": "Orçamento atingido, nenhuma nova execução será iniciada",
+      "epochCost": "Época {epoch}",
+      "budgetBlockedTitle": "Orçamento atingido",
+      "budgetBlockedMessage": "Gasto {spent} de {budget}. Nenhuma nova execução foi iniciada.",
+      "cost": "Custo",
+      "scopeAll": "todas as épocas",
+      "scopeEpoch": "época {epoch}"
+    }
   },
   "data": {
     "title": "Tabelas",
@@ -2086,6 +2097,25 @@
       "cssTemplatePlaceholder": "Digite seus estilos CSS...",
       "jsTemplateLabel": "JavaScript",
       "jsTemplatePlaceholder": "Digite seu codigo JavaScript...",
+      "formatLabel": "Formato",
+      "formatAuto": "Automático (página inteira)",
+      "formatAutoHint": "Captura a página inteira com 1280 de largura",
+      "formatHelp": "A forma para a qual esta interface foi desenhada. Aplica-se a todas as suas pré-visualizações, capturas e vídeos. Automático captura a página inteira com 1280 de largura. O PDF mantém o seu próprio tamanho de página.",
+      "formatCustom": "Personalizado",
+      "formatCustomPlaceholder": "LxA, por ex. 1080x1920",
+      "formatCustomInvalid": "Introduza um tamanho como LarguraxAltura, cada lado entre 16 e 2160 (por ex. 1080x1920).",
+      "formatPreset_classic": "Clássico",
+      "formatPreset_widescreen": "Panorâmico",
+      "formatPreset_vertical": "Vertical",
+      "formatPreset_square": "Quadrado",
+      "formatPreset_portrait": "Retrato",
+      "formatPreset_mobile": "Telemóvel",
+      "formatPreset_tablet": "Tablet",
+      "formatPreset_desktop": "Computador",
+      "formatPreset_banner": "Faixa",
+      "formatPreset_social_card": "Cartão social",
+      "formatPreset_a4_portrait": "A4 vertical",
+      "formatPreset_a4_landscape": "A4 horizontal",
       "availableColumns": "Colunas Disponiveis",
       "back": "Voltar",
       "next": "Proximo",
@@ -2737,7 +2767,12 @@
       "saving": "Salvando...",
       "successMessage": "\"{name}\" atualizado com sucesso",
       "successTitle": "Atualizado",
-      "title": "Editar detalhes"
+      "title": "Editar detalhes",
+      "advancedSection": "Avançado",
+      "budgetLabel": "Orçamento de custo",
+      "budgetPlaceholder": "Sem limite",
+      "budgetHelpCredits": "Créditos máximos que este fluxo de trabalho pode gastar. Ao atingir, nenhuma nova execução é iniciada.",
+      "budgetHelpDollars": "Gasto máximo para este fluxo de trabalho. Ao atingir, nenhuma nova execução é iniciada."
     },
     "suggestedApps": {
       "cta": "Explorar o marketplace",
@@ -5413,7 +5448,11 @@
       "creditLimitDescription": "Numero de creditos usaveis sem confirmacao",
       "chatDefaultsTitle": "Padrões do chat",
       "chatDefaultsDescription": "Opções padrão aplicadas às novas conversas deste espaço de trabalho.",
-      "savePreferences": "Salvar Preferencias"
+      "savePreferences": "Salvar Preferencias",
+      "workflowLayoutDirection": "Disposição do fluxo de trabalho",
+      "workflowLayoutDirectionDescription": "Sentido de leitura do editor de fluxos: da esquerda para a direita ou de cima para baixo. Define onde ficam as ligações e os botões dos nós, e como a disposição automática organiza o grafo.",
+      "workflowLayoutDirectionHorizontal": "Da esquerda para a direita",
+      "workflowLayoutDirectionVertical": "De cima para baixo"
     },
     "notifications": {
       "title": "Preferencias de Notificacao",
@@ -5741,7 +5780,10 @@
       "useAsMock": "Usar como saída simulada",
       "usedAsMockToast": "Salvo como saída simulada para {label}",
       "mockedBadge": "Simulado",
-      "toggleHelp": "As execuções do editor retornam o mock configurado em vez de executar este nó. As execuções em produção nunca são simuladas."
+      "toggleHelp": "As execuções do editor retornam o mock configurado em vez de executar este nó. As execuções em produção nunca são simuladas.",
+      "durationLabel": "Duração simulada",
+      "durationUnit": "segundos",
+      "durationHelp": "O nó leva este tempo antes de devolver o mock, como faria a chamada real. Vazio ou 0 = instantâneo. Máximo 10 minutos."
     },
     "executionErrors": {
       "epochLimitTitle": "Limite de execuções simultâneas atingido",
@@ -5866,6 +5908,7 @@
         "variableCountPlural": "{count} variaveis",
         "mappingPlaceholder": "Arraste uma variavel aqui ou deixe vazio",
         "mappingHelp": "Mapeie cada variavel do template para uma fonte de dados do workflow. Arraste uma variavel de outro no ou digite a expressao.",
+        "formatTitle": "Formato",
         "htmlTemplateTitle": "HTML",
         "cssTemplateTitle": "CSS",
         "jsTemplateTitle": "JavaScript",
@@ -5930,6 +5973,7 @@
         "generateVideo": "Gerar vídeo",
         "generateVideoDescription": "Quando habilitado, grava a animação da interface em um MP4 e o expõe como a saída video FileRef para os nós posteriores (publicação em redes sociais, vídeo do Telegram, anexo de e-mail). A gravação para quando a página define window.__DONE__ = true, ou após a duração máxima. Melhor esforço: falhas de gravação deixam a saída ausente sem fazer o fluxo de trabalho falhar.",
         "videoPreset": "Formato de vídeo",
+        "videoPresetAuto": "Automático (o formato da interface)",
         "videoPresetVertical": "Vertical (1080x1920)",
         "videoPresetHorizontal": "Horizontal (1920x1080)",
         "videoPresetSquare": "Quadrado (1080x1080)",
@@ -6536,7 +6580,9 @@
       "timeoutHelp": "Tempo máximo de execução em segundos",
       "maxDepth": "Profundidade máxima",
       "maxDepthPlaceholder": "ex.: 5",
-      "maxDepthHelp": "Profundidade máxima de aninhamento para sub-workflows recursivos"
+      "maxDepthHelp": "Profundidade máxima de aninhamento para sub-workflows recursivos",
+      "inputMappingPlaceholder": "{{core:build.output}} ou {{trigger.output.payload}}",
+      "inputMappingHelp": "Uma unica expressao que resolve o objeto passado ao subfluxo. Deixe vazio para encaminhar os dados do gatilho deste fluxo."
     },
     "respondToWebhookNode": {
       "title": "Responder ao Webhook",
@@ -6577,6 +6623,11 @@
       "bccPlaceholder": "bcc@exemplo.com",
       "fromName": "Nome do remetente (opcional)",
       "fromNamePlaceholder": "Substituir nome de exibição do remetente",
+      "fromEmail": "Endereço do remetente (opcional)",
+      "fromEmailPlaceholder": "remetente@example.com",
+      "fromEmailHint": "Deixe vazio para enviar com o endereço da credencial (o caso habitual). A maioria dos servidores SMTP rejeita um endereço de remetente que não lhes pertence.",
+      "replyTo": "Responder para (opcional)",
+      "replyToPlaceholder": "respostas@example.com, equipe@example.com",
       "subject": "Assunto",
       "subjectPlaceholder": "Assunto do e-mail",
       "body": "Corpo",
@@ -6605,6 +6656,7 @@
       "action": "Ação",
       "actions": {
         "list_folders": "Listar pastas",
+        "create_folder": "Criar pasta",
         "none": "Ler mensagens",
         "mark_read": "Marcar como lida",
         "mark_unread": "Marcar como não lida",
@@ -6626,7 +6678,10 @@
       "messageUid": "UID da mensagem",
       "messageUidPlaceholder": "{{core:read.output.messages[0].uid}}",
       "targetFolder": "Pasta de destino",
-      "targetFolderPlaceholder": "Arquivo"
+      "folderToCreate": "Pasta a criar",
+      "targetFolderPlaceholder": "INBOX.Clients",
+      "targetFolderHint": "Caminho no servidor exatamente como «Listar pastas» o devolve (por exemplo INBOX.Clients num servidor que aninha as pastas sob a caixa de entrada, separador «.»), não o rótulo apresentado.",
+      "createTargetIfMissing": "Criar a pasta se ela não existir"
     },
     "codeNode": {
       "title": "Código",
@@ -6803,9 +6858,19 @@
         "schedule-trigger": "Agendador",
         "form-trigger": "Formulário"
       },
-      "close": "Fechar"
+      "close": "Fechar",
+      "layoutDirection": "Disposição",
+      "layoutHorizontal": "Da esquerda para a direita",
+      "layoutVertical": "De cima para baixo"
     },
     "nodes": {
+      "filePreview": {
+        "expand": "Expandir a pré-visualização",
+        "collapse": "Recolher a pré-visualização",
+        "openInPanel": "Abrir no painel lateral",
+        "noPreview": "Sem pré-visualização integrada para este tipo de arquivo",
+        "more": "+{count} mais"
+      },
       "deleteNode": "Excluir nó",
       "duplicateNode": "Duplicar nó",
       "showNormalView": "Mostrar visualização normal",
@@ -6867,7 +6932,8 @@
           "forward": "Avançar",
           "refresh": "Atualizar"
         }
-      }
+      },
+      "delete": "Excluir"
     },
     "forms": {
       "required": "Required",
@@ -6931,6 +6997,131 @@
         "urlPlaceholder": "Inserir URL...",
         "filename": "Filename",
         "autoDetect": "Detecção automática a partir do URL"
+      },
+      "publicLink": {
+        "title": "Link público",
+        "description": "Transforma um arquivo produzido por um nó anterior em uma URL pública assinada de duração limitada no armazenamento da própria plataforma. Use para APIs que buscam a mídia por URL (Instagram, TikTok) em vez de aceitar um upload.",
+        "file": "Arquivo",
+        "filePlaceholder": "'{{core:download.output.file}}'",
+        "fileHint": "Referencie o objeto de arquivo completo de um nó anterior, por ex. '{{interface:card.output.video}}'.",
+        "ttlMinutes": "Duração do link (minutos)",
+        "ttlHint": "Entre 5 e 10080 minutos (7 dias). Padrão: 240.",
+        "disposition": "Disposição",
+        "dispositionInline": "Inline (exibir no navegador)",
+        "dispositionAttachment": "Anexo (solicitação de download)"
+      },
+      "media": {
+        "title": "Mídia",
+        "description": "Analisa, muxa, mixa, extrai, concatena, captura quadros ou sobrepõe arquivos de áudio e vídeo. Os arquivos vêm de nós anteriores como referências de arquivo completas, por ex. '{{core:download.output.file}}'.",
+        "operation": "Operação",
+        "operationPlaceholder": "Selecione uma operação",
+        "opProbe": "Analisar",
+        "opProbeDesc": "Inspecionar um arquivo de mídia: duração, fluxos, codecs (sem arquivo de saída)",
+        "opMuxAudio": "Muxar áudio",
+        "opMuxAudioDesc": "Colocar uma trilha de áudio sobre um vídeo",
+        "opMix": "Mixar",
+        "opMixDesc": "Misturar até 8 trilhas de áudio, opcionalmente sobre um vídeo",
+        "opExtractAudio": "Extrair áudio",
+        "opExtractAudioDesc": "Retirar a trilha de áudio de um vídeo",
+        "input": "Arquivo de entrada",
+        "inputPlaceholder": "'{{core:download.output.file}}'",
+        "inputHint": "Referencie o objeto de arquivo completo de um nó anterior.",
+        "video": "Vídeo",
+        "videoPlaceholder": "'{{interface:card.output.video}}'",
+        "audio": "Áudio",
+        "audioPlaceholder": "'{{core:download.output.file}}'",
+        "mixVideoHint": "Opcional: com vídeo o resultado é um mp4; sem ele, o resultado é apenas áudio.",
+        "volume": "Volume (%)",
+        "offsetSeconds": "Deslocamento (segundos)",
+        "trimStartSeconds": "Início do corte (segundos)",
+        "trimEndSeconds": "Fim do corte (segundos)",
+        "loop": "Loop",
+        "loopTrimHint": "Os cortes ficam desativados enquanto o loop está ativo: o loop não pode ser combinado com início/fim de corte.",
+        "mixNoVideoLoopHint": "Uma mixagem só de áudio não pode repetir todas as trilhas em loop: pelo menos uma trilha não deve estar em loop para dar duração à mixagem, ou adicione um vídeo.",
+        "fadeInSeconds": "Fade de entrada (segundos)",
+        "fadeOutSeconds": "Fade de saída (segundos)",
+        "fadeOutHint": "Padrão: 1 segundo.",
+        "keepOriginalAudio": "Manter o áudio original",
+        "removeLiteralFile": "Remover este arquivo",
+        "originalVolume": "Volume original (%)",
+        "audioFit": "Ajuste de áudio",
+        "audioFitPad": "Preencher (manter a duração do vídeo)",
+        "audioFitShortest": "Mais curto (cortar no mais curto)",
+        "audioFitLoop": "Loop (repetir o áudio até a duração do vídeo)",
+        "normalize": "Normalização de volume",
+        "normalizeAuto": "Automática (-16 LUFS)",
+        "normalizeCustom": "Alvo personalizado",
+        "normalizeOff": "Desativada",
+        "normalizeLufs": "Alvo de sonoridade (LUFS)",
+        "normalizeLufsHint": "Entre {min} e {max} LUFS. Padrão: -16.",
+        "audioBitrate": "Taxa de bits do áudio",
+        "outputFormat": "Formato de saída",
+        "tracks": "Trilhas",
+        "track": "Trilha {index}",
+        "trackId": "Id da trilha",
+        "trackSource": "Fonte",
+        "trackSourcePlaceholder": "'{{core:download.output.file}}'",
+        "trackAdvanced": "Avançado",
+        "addTrack": "Adicionar trilha",
+        "removeTrack": "Remover trilha",
+        "tracksHint": "Até {max} trilhas. Cada trilha precisa de um arquivo fonte.",
+        "speed": "Velocidade",
+        "speedHint": "Entre {min} e {max} (tom preservado). Padrão: {default}.",
+        "duckUnder": "Atenuar sob",
+        "duckNone": "Sem atenuação",
+        "duckUnderHint": "Esta trilha abaixa automaticamente enquanto a trilha selecionada está audível.",
+        "duckAmountDb": "Atenuação (dB)",
+        "duckAttackMs": "Ataque (ms)",
+        "duckReleaseMs": "Liberação (ms)",
+        "opConcat": "Concatenar",
+        "opConcatDesc": "Une até 8 vídeos em sequência num único vídeo",
+        "opFrame": "Quadro",
+        "opFrameDesc": "Extrai uma imagem estática de um vídeo (capa, miniatura)",
+        "opOverlay": "Sobreposição",
+        "opOverlayDesc": "Grava uma imagem (logo, marca d'água) sobre um vídeo",
+        "clips": "Clipes",
+        "clip": "Clipe {index}",
+        "clipSource": "Origem",
+        "clipSourcePlaceholder": "'{{core:download.output.file}}'",
+        "addClip": "Adicionar clipe",
+        "removeClip": "Remover clipe",
+        "moveClipUp": "Mover clipe para cima",
+        "moveClipDown": "Mover clipe para baixo",
+        "clipsHint": "Até {max} clipes, reproduzidos em ordem. Cada clipe precisa de um vídeo de origem.",
+        "transition": "Transição",
+        "transitionCut": "Corte (sem transição)",
+        "transitionCrossfade": "Fusão cruzada",
+        "transitionSeconds": "Duração da transição (segundos)",
+        "transitionSecondsHint": "Entre {min} e {max} segundos, mais curta que cada clipe. Padrão: {default}.",
+        "targetWidth": "Largura alvo (px)",
+        "targetHeight": "Altura alvo (px)",
+        "targetSizeHint": "Defina ambos ou nenhum ({min} a {max}). Clipes que não correspondem são ajustados e preenchidos com barras, nunca esticados.",
+        "targetFps": "Taxa de quadros alvo (fps)",
+        "targetFpsHint": "Entre {min} e {max}. Padrão: a taxa do primeiro clipe.",
+        "concatNormalizeHint": "Iguala o volume entre os clipes. Ativar força uma recodificação.",
+        "atSeconds": "Momento (segundos)",
+        "atSecondsHint": "Padrão: o meio do vídeo. Além do fim, ajusta para logo antes do fim.",
+        "imageFormat": "Formato de imagem",
+        "frameWidth": "Largura (px)",
+        "frameWidthHint": "Entre {min} e {max}. A altura ajusta-se automaticamente para manter a proporção.",
+        "image": "Imagem",
+        "imagePlaceholder": "'{{core:download.output.file}}'",
+        "imageHint": "A transparência PNG é respeitada.",
+        "position": "Posição",
+        "positionTopLeft": "Superior esquerdo",
+        "positionTopRight": "Superior direito",
+        "positionBottomLeft": "Inferior esquerdo",
+        "positionBottomRight": "Inferior direito",
+        "positionCenter": "Centro",
+        "marginPx": "Margem (px)",
+        "marginPxHint": "Distância às bordas mais próximas. Ignorada para o centro.",
+        "widthPercent": "Largura (% do vídeo)",
+        "widthPercentHint": "Entre {min} e {max} por cento da largura do vídeo. Padrão: 15.",
+        "opacity": "Opacidade",
+        "opacityHint": "Entre {min} e {max}. Padrão: 1.",
+        "startSeconds": "Início (segundos)",
+        "endSeconds": "Fim (segundos)",
+        "overlayTimingHint": "Deixe início e fim vazios para mostrar a sobreposição durante todo o vídeo."
       },
       "fork": {
         "outputBranches": "Ramos de saída",
@@ -9422,7 +9613,8 @@
     "card": {
       "epochs": "{count, plural, one {# época} other {# épocas}}",
       "runs": "{count, plural, one {# execução} other {# execuções}}",
-      "reviewApprovals": "Revisar aprovações"
+      "reviewApprovals": "Revisar aprovações",
+      "costTitle": "Custo da execução de produção"
     },
     "columns": {
       "draft": "Rascunho",
@@ -9594,5 +9786,339 @@
     "done": "Concluído",
     "working": "Em andamento...",
     "failed": "Falhou"
+  },
+  "templates": {
+    "gallery": {
+      "workflowTitle": "Comece a partir de um modelo",
+      "workflowSubtitle": "Abra um deles para ver como funciona. Todos os modelos vêm anotados no canvas.",
+      "agentTitle": "Comece a partir de um modelo",
+      "agentSubtitle": "Escolha um ponto de partida e depois ajuste antes de criar o agente.",
+      "readyToRun": "Pronto para executar",
+      "needsSetup": "Requer configuração",
+      "beginner": "Iniciante",
+      "intermediate": "Intermediário",
+      "advanced": "Avançado",
+      "youWillLearn": "O que você vai aprender",
+      "creating": "Criando...",
+      "createFailed": "Não foi possível criar a partir deste modelo",
+      "use": "Usar {name}",
+      "browse": "Modelos",
+      "tableTitle": "Comece a partir de um modelo",
+      "tableSubtitle": "Crie uma tabela com as colunas já configuradas."
+    },
+    "workflow": {
+      "helloWorkflow": {
+        "title": "Fluxo de trabalho inicial",
+        "description": "O menor fluxo de trabalho que faz algo: um gatilho manual e uma etapa que calcula dois valores.",
+        "teaches": {
+          "0": "Todo fluxo de trabalho começa com um gatilho",
+          "1": "Como uma etapa lê a saída da etapa anterior",
+          "2": "Onde ver o que uma etapa produziu após uma execução"
+        },
+        "notes": {
+          "trigger": {
+            "label": "Comece por aqui",
+            "text": "Um fluxo de trabalho sempre começa com um gatilho. Este é manual: nada acontece até você pressionar Run. Outros gatilhos disparam por webhook, por agendamento, ao receber uma nova mensagem de chat ou quando outro fluxo de trabalho falha."
+          },
+          "label": {
+            "label": "Rótulos são identificadores",
+            "text": "O rótulo de uma etapa também é o nome dela nas expressões. 'Build greeting' vira build_greeting, e é por isso que a conexão aparece como core:build_greeting e a expressão acima aparece como trigger:start.output.triggered_by. Se você renomear uma etapa, precisa atualizar as expressões que apontam para ela."
+          },
+          "output": {
+            "label": "Veja o que a etapa produziu",
+            "text": "Pressione Run e depois clique nesta etapa. O painel da direita mostra as saídas dela. Uma transformação coloca os campos mapeados sob transformed, portanto uma etapa posterior os lê com {{core:build_greeting.output.transformed.greeting}}. Omita o segmento transformed e a expressão será resolvida como vazia, silenciosamente."
+          }
+        }
+      },
+      "branchDecision": {
+        "title": "Ramificar com uma decisão",
+        "description": "Uma decisão envia a execução por exatamente um caminho, com base em uma condição que você escreve.",
+        "teaches": {
+          "0": "Uma decisão segue um ramo e apenas um",
+          "1": "Como conectar uma porta específica de uma decisão",
+          "2": "Por que o ramo não seguido é marcado como SKIPPED e não como falha"
+        },
+        "notes": {
+          "oneBranch": {
+            "label": "Um ramo, nunca dois",
+            "text": "Uma decisão avalia suas condições de cima para baixo e segue a PRIMEIRA que corresponder. Ela nunca executa dois ramos. Se você quer que vários caminhos sejam executados ao mesmo tempo, use um Fork."
+          },
+          "ports": {
+            "label": "A porta faz parte da conexão",
+            "text": "Uma decision não se conecta apenas ao próximo passo: ela sai de uma porta específica. É por isso que essas conexões aparecem como core:check_amount:if e core:check_amount:else. Cada condição extra adiciona elseif_0, depois elseif_1, e assim por diante: as portas elseif são numeradas a partir de zero, como as ramificações de um fork."
+          },
+          "elseRequired": {
+            "label": "Mantenha sempre um else",
+            "text": "Sem um ramo else, um valor que você não previu interrompe a execução naquele caminho: as etapas abaixo são marcadas como SKIPPED e nenhum erro é levantado em lugar nenhum. Ramos paralelos em outros pontos continuam normalmente. O ramo else é onde você trata o caso em que não pensou."
+          },
+          "skipped": {
+            "label": "SKIPPED não é uma falha",
+            "text": "Após uma execução, o ramo que não foi seguido aparece como SKIPPED. Esse é o resultado normal e saudável de uma decisão. Somente uma etapa vermelha marcada como FAILED indica que algo deu errado."
+          }
+        },
+        "ports": {
+          "above": "Acima de 100",
+          "belowOrEqual": "100 ou menos"
+        }
+      },
+      "forkMerge": {
+        "title": "Executar etapas em paralelo",
+        "description": "Um fork executa todos os ramos ao mesmo tempo, e um merge aguarda até que todos terminem.",
+        "teaches": {
+          "0": "Um fork executa todos os seus ramos, diferente de uma decisão",
+          "1": "Um merge aguarda cada predecessor antes de continuar",
+          "2": "Qualquer etapa com várias conexões de entrada já funciona como um merge"
+        },
+        "notes": {
+          "vsDecision": {
+            "label": "Fork não é decisão",
+            "text": "Uma decisão escolhe UM ramo. Um fork executa TODOS, ao mesmo tempo. Use um fork quando os ramos forem independentes e você quiser que a execução seja mais rápida."
+          },
+          "allBranches": {
+            "label": "Todos os ramos começam juntos",
+            "text": "Os dois ramos abaixo começam no mesmo instante. As portas deles são numeradas a partir de zero: core:fan_out:branch_0 e core:fan_out:branch_1."
+          },
+          "waitsAll": {
+            "label": "O merge espera por todos",
+            "text": "O Join não é executado até que AMBOS os ramos tenham terminado. Terminado significa concluído, com falha OU ignorado: um ramo que falhou também libera o merge, e é exatamente isso que permite que uma etapa resiliente leve a execução adiante em vez de travá-la."
+          },
+          "implicitMerge": {
+            "label": "Merges podem ser implícitos",
+            "text": "Qualquer etapa com mais de uma conexão de entrada já se comporta como um merge: ela aguarda todos os seus predecessores. A etapa Merge existe para quando você quer que essa espera fique visível e nomeada no canvas, não porque ela seja obrigatória."
+          }
+        },
+        "ports": {
+          "branchA": "Ramo A",
+          "branchB": "Ramo B"
+        }
+      },
+      "splitList": {
+        "title": "Processar uma lista",
+        "description": "Um split transforma uma lista em várias execuções paralelas, uma por item, e depois um aggregate reúne os resultados.",
+        "teaches": {
+          "0": "Um split cria um contexto paralelo por item",
+          "1": "Como ler o item atual com {{item}} e {{index}}",
+          "2": "A diferença entre um split e um loop"
+        },
+        "notes": {
+          "parallel": {
+            "label": "Uma execução por item",
+            "text": "O split pega uma lista e inicia as etapas seguintes uma vez para cada item, em paralelo. Três itens significa que as etapas abaixo são executadas três vezes, ao mesmo tempo, cada uma com o seu próprio item."
+          },
+          "vsLoop": {
+            "label": "Split não é loop",
+            "text": "O split executa N cópias em paralelo sobre os itens de uma lista. O loop repete sequencialmente, uma passagem após a outra, enquanto uma condição permanecer verdadeira. Use split para uma lista conhecida e loop para uma condição que precisa ser reavaliada."
+          },
+          "itemVar": {
+            "label": "Lendo o item atual",
+            "text": "Dentro do split, {{item}} é o elemento atual e {{index}} é a sua posição, começando em zero. Eles são resolvidos em todos os passos da região por item, incluindo uma decision ou uma loop, que simplesmente rodam uma vez por item. A região termina no passo que junta os itens de volta em um só: um aggregate, ou um merge que reúne o split."
+          },
+          "maxItems": {
+            "label": "maxItems é uma rede de segurança",
+            "text": "maxItems limita quantos itens o split vai pegar, aqui 10 (o padrão é 100). Leia esta nota com atenção: os itens acima do limite são DESCARTADOS silenciosamente, sem erro e sem nada na execução para avisar você. Defina esse valor acima da maior lista que você espera de forma realista: ele é uma rede de segurança contra uma lista fora de controle, não um ajuste de desempenho."
+          },
+          "aggregate": {
+            "label": "Reunindo os resultados",
+            "text": "Os ramos paralelos terminam aqui. O Aggregate reúne um valor de cada um deles em uma única lista, que é como você volta a ter uma execução única depois de um split."
+          }
+        }
+      },
+      "resilientSteps": {
+        "title": "Tornar uma etapa resiliente",
+        "description": "Novas tentativas, tempos limite e uma etapa de falha explícita, para que uma chamada instável não quebre toda a execução em silêncio.",
+        "teaches": {
+          "0": "Como novas tentativas, backoff e tempo limite são configurados por etapa",
+          "1": "O que continueOnFailure realmente muda",
+          "2": "Como falhar a execução de propósito, com uma mensagem clara"
+        },
+        "notes": {
+          "replaceUrl": {
+            "label": "Substitua a URL primeiro",
+            "text": "Esta etapa aponta para um endereço de exemplo. Abra a etapa e defina a sua própria URL antes de executar este fluxo de trabalho, caso contrário a chamada falha por construção."
+          },
+          "retry": {
+            "label": "Novas tentativas e backoff",
+            "text": "retryCount é 2, o que significa 3 tentativas no total: a primeira mais 2 novas tentativas. retryBackoffMs aguarda 1000 ms entre as tentativas. Entenda uma coisa antes de contar com isso: uma resposta HTTP 4xx ou 5xx NÃO é uma falha da etapa, a etapa termina bem, com success igual a false. As novas tentativas só disparam em uma falha dura, como um host inalcançável, um tempo limite esgotado ou uma URL inválida. Todo o resto é tratado pela decision do lado."
+          },
+          "timeout": {
+            "label": "Um tempo limite para a espera, não o trabalho",
+            "text": "Há dois timeouts em jogo aqui e eles são independentes. A etapa HTTP tem o próprio timeout de transporte (5000 ms), enquanto nodePolicy.timeoutMs (15000 ms) limita cada tentativa da própria chamada. Mantenha o da etapa acima do de transporte, senão o invólucro dispara primeiro e esconde o erro real. E tenha cuidado com o que um timeout significa: você para de ESPERAR pela resposta, mas o servidor remoto pode muito bem ter recebido e processado a sua requisição. Para qualquer coisa que grave dados, faça com que a chamada possa ser repetida com segurança."
+          },
+          "continueOnFailure": {
+            "label": "continueOnFailure mantém a execução viva",
+            "text": "Sem ele, uma etapa que falha marca tudo o que vem depois como ignorado. Com ele, a execução prossegue, embora a própria etapa continue aparecendo como FAILED. Em uma falha dura, a etapa NÃO produz os campos que você esperava (success e data não estão lá), portanto uma expressão que aponte para eles é resolvida como vazia e a decision abaixo cai no else. continueOnFailure é recusado em uma decision, em um switch ou em uma option: uma etapa de ramificação que falhou não escolheu nenhuma porta."
+          },
+          "stopOnError": {
+            "label": "Falhar de propósito",
+            "text": "Stop on Error encerra a execução INTEIRA, todos os ramos, e a marca como FAILED com a mensagem que você escreveu. Prefira isso a deixar uma execução terminar em verde com dados ruins: uma falha barulhenta é mais fácil de corrigir do que uma silenciosa."
+          }
+        },
+        "ports": {
+          "succeeded": "Chamada bem-sucedida",
+          "failed": "Chamada com falha"
+        },
+        "stopMessage": "A chamada da API falhou após todas as tentativas."
+      },
+      "errorHandler": {
+        "title": "Reagir a uma falha",
+        "description": "Dois fluxos de trabalho lado a lado: um que falha e outro que é acionado quando isso acontece.",
+        "teaches": {
+          "0": "Como um gatilho de erro monitora um fluxo de trabalho pai",
+          "1": "O que o payload de falha contém",
+          "2": "A única etapa de configuração que todos esquecem"
+        },
+        "notes": {
+          "pickParent": {
+            "label": "Escolha o fluxo a monitorar",
+            "text": "As duas metades estão desenhadas em uma mesma tela para que o formato fique fácil de ler, mas elas NÃO podem continuar juntas. Um fluxo de trabalho que contém um gatilho de erro nunca despacha as próprias falhas (essa é a proteção anti-loop), então este tratador nunca vai reagir à execução acima dele. Mova o DAG de cima para um fluxo de trabalho próprio, depois adicione aqui um novo gatilho Error pela paleta e escolha esse fluxo como pai. Depois disso, o fluxo monitorado não pode mais ser alterado pelo inspetor."
+          },
+          "seedRun": {
+            "label": "Execute uma vez, ou ele fica surdo",
+            "text": "Esta é a etapa que quase todo mundo esquece. Salve este fluxo de trabalho, depois execute-o manualmente uma vez e DEIXE essa execução em andamento. Um tratador só é alcançado por meio de uma execução que já está aguardando: se não houver nenhuma, as falhas do fluxo pai são ignoradas SILENCIOSAMENTE, sem erro, sem aviso e sem nada na execução do pai que avise que o tratador nunca disparou."
+          },
+          "payload": {
+            "label": "O que você recebe",
+            "text": "O gatilho entrega a você status (o estado da execução pai no momento em que ela foi despachada, nem sempre FAILED), parentWorkflowId, parentRunId, errorMessage e triggeredAt, além dos contadores failedSteps, completedSteps, totalSteps e skippedSteps quando a execução pai reportou estatísticas. A etapa ao lado desta nota copia alguns deles para que você veja o formato após uma execução."
+          },
+          "noLoop": {
+            "label": "Sem laços infinitos",
+            "text": "Um tratador de erros que falha não aciona outro tratador de erros. Você não consegue construir por acidente uma cadeia de falhas que se alimenta a si mesma."
+          },
+          "nextStep": {
+            "label": "Para onde ir a partir daqui",
+            "text": "O DAG de cima é apenas um substituto do fluxo de trabalho que você realmente quer monitorar: ele faz um pouco de trabalho e então falha de propósito. O DAG de baixo é o tratador. Troque os dois pelos de verdade assim que o formato ficar claro."
+          }
+        },
+        "noParentSelected": "Nenhum selecionado",
+        "attempted": "Fingindo fazer algo importante",
+        "stopMessage": "Falha proposital, para que o tratador ao lado tenha a que reagir."
+      },
+      "interfacePage": {
+        "title": "Mostrar uma página para o usuário",
+        "description": "Um fluxo de trabalho que monta alguns dados e os entrega a uma página web, e depois espera o usuário continuar.",
+        "teaches": {
+          "0": "O fluxo de trabalho é o backend, a interface é o frontend",
+          "1": "Como o variable_mapping alimenta a página com valores",
+          "2": "Por que a execução pausa em uma interface até o usuário agir"
+        },
+        "interfaceDescription": "Página de resultado criada a partir do modelo \"Mostrar uma página para o usuário\".",
+        "notes": {
+          "backendFrontend": {
+            "label": "Duas metades de um mesmo app",
+            "text": "Pense assim: o fluxo de trabalho é o backend e a interface é o frontend. As etapas calculam valores, a página exibe esses valores. A página nunca consulta o banco de dados sozinha, tudo o que ela mostra vem do fluxo de trabalho."
+          },
+          "variableMapping": {
+            "label": "Como os valores chegam à página",
+            "text": "O nó de interface carrega um variable_mapping: cada entrada nomeia um espaço no HTML e a expressão que o preenche. Aqui headline, who e when vêm do transform anterior, e a página os escreve como {{headline}}, {{who}} e {{when}}. A parte |default depois da barra vertical é o que aparece quando um valor está faltando."
+          },
+          "pauses": {
+            "label": "A execução para aqui, de propósito",
+            "text": "Uma etapa de interface espera. A execução fica parada neste nó até o usuário agir, e é isso que torna possíveis os apps de várias etapas. O botão da página envia __continue, a única ação que faz o fluxo de trabalho avançar. Uma ação navigate comum trocaria de página sem fazer o fluxo avançar."
+          },
+          "ownCopy": {
+            "label": "Esta página agora é sua",
+            "text": "Criar a partir deste modelo também criou uma interface de verdade, que pertence a você e aparece em Interfaces. Edite o HTML e o CSS dela à vontade: você está mudando a sua própria cópia, nunca o modelo."
+          }
+        },
+        "page": {
+          "headline": "Seu fluxo de trabalho montou esta página",
+          "meta": "Executado por",
+          "hint": "Cada valor desta página veio da etapa anterior. Mude aquela etapa, execute de novo, e a página muda junto.",
+          "cta": "Continuar o fluxo de trabalho"
+        }
+      }
+    },
+    "agent": {
+      "basicAssistant": {
+        "title": "Assistente básico",
+        "description": "Um agente conversacional simples, sem ferramentas, com um prompt de sistema escrito como exemplo comentado.",
+        "teaches": {
+          "0": "As quatro partes de um prompt de sistema que funciona",
+          "1": "Por que um agente sem ferramentas é um bom ponto de partida",
+          "2": "O que a temperatura realmente muda"
+        },
+        "systemPrompt": "Você é um assistente útil para uma equipe pequena.\n\nPapel: você responde perguntas de forma clara e breve e ajuda as pessoas a raciocinar sobre problemas.\n\nTom: direto e cordial. Frases curtas. Sem enrolação, sem bajulação.\n\nRegras:\n- Se você não souber algo, diga isso em vez de adivinhar.\n- Faça uma pergunta de esclarecimento quando o pedido for ambíguo.\n- Nunca invente fatos, nomes, números ou fontes.\n\nFormato: responda em prosa simples. Use uma lista curta com marcadores apenas quando estiver realmente enumerando coisas.\n\n(Este prompt é um ponto de partida. Os quatro blocos acima, papel, tom, regras e formato, são as partes que vale a pena manter quando você reescrevê-lo para o seu próprio uso.)"
+      },
+      "dataAnalyst": {
+        "title": "Analista de dados",
+        "description": "Um agente que pode ler as suas tabelas, em modo somente leitura, e que é instruído a sempre dizer de onde veio cada número.",
+        "teaches": {
+          "0": "Como conceder a um agente acesso a uma família de recursos",
+          "1": "Por que o acesso somente leitura é o padrão correto",
+          "2": "Pedir a um agente que cite a fonte"
+        },
+        "systemPrompt": "Você é um analista de dados que trabalha com as tabelas da equipe.\n\nPapel: responder perguntas sobre os dados lendo as tabelas às quais você tem acesso.\n\nRegras:\n- Sempre leia os dados antes de responder. Nunca estime um número de memória.\n- Informe de qual tabela e de quais colunas veio cada valor, todas as vezes.\n- Se as tabelas não contiverem a resposta, diga exatamente isso e diga o que seria necessário.\n- Se um resultado parecer surpreendente, mostre o valor e sinalize-o em vez de suavizá-lo.\n\nFormato: dê primeiro o número e depois uma explicação de uma linha sobre como você chegou a ele. Use uma tabela pequena ao comparar vários valores.\n\nVocê tem acesso somente de LEITURA. Você não pode modificar os dados e não deve se oferecer para isso."
+      },
+      "workflowConductor": {
+        "title": "Maestro de fluxos de trabalho",
+        "description": "Um agente autorizado a executar os seus fluxos de trabalho, com instruções claras sobre quando ele deve e quando não deve fazer isso.",
+        "teaches": {
+          "0": "Um agente pode acionar os fluxos de trabalho que você criou",
+          "1": "Como definir quando um agente pode agir em vez de responder",
+          "2": "Por que você pede a um agente que confirme antes de efeitos colaterais"
+        },
+        "systemPrompt": "Você coordena os fluxos de trabalho da equipe.\n\nPapel: entender o que o usuário está pedindo, decidir se um fluxo de trabalho existente faz isso e executar esse fluxo de trabalho.\n\nRegras:\n- Antes de executar qualquer coisa, diga qual fluxo de trabalho você pretende executar e por quê.\n- Peça confirmação antes de qualquer fluxo de trabalho que envie uma mensagem, grave dados ou seja de alguma forma visível fora desta conversa.\n- Se nenhum fluxo de trabalho corresponder ao pedido, diga isso. Não improvise um substituto.\n- Após uma execução, relate o que aconteceu: sucesso, falha ou sucesso parcial, e qual foi a saída.\n\nFormato: seja breve. Uma linha para a intenção, uma linha para o resultado."
+      },
+      "frugalAgent": {
+        "title": "Agente econômico",
+        "description": "Limites apertados e temperatura zero, para trabalhos repetitivos em que custo e consistência importam mais do que criatividade.",
+        "teaches": {
+          "0": "maxIterations limita quantos turnos um agente pode usar",
+          "1": "maxTokens limita o tamanho de cada resposta",
+          "2": "Temperatura zero faz a mesma entrada gerar a mesma saída"
+        },
+        "systemPrompt": "Você executa tarefas curtas e repetitivas com uma saída previsível.\n\nPapel: fazer exatamente o que foi pedido, uma vez, e parar.\n\nRegras:\n- Seja breve. Sem preâmbulo, sem resumo do pedido, sem cortesias finais.\n- Não faça perguntas de acompanhamento a menos que a tarefa seja impossível sem elas.\n- Dê a mesma resposta para a mesma entrada. Não varie a redação por questão de estilo.\n- Se a tarefa exigir mais etapas do que você tem permissão para usar, diga o que está faltando e pare.\n\nFormato: produza apenas o resultado. Sem explicação, a menos que ela tenha sido pedida.\n\n(As alavancas de custo ficam na seção Avançado: maxIterations limita quantos turnos este agente pode usar, maxTokens limita o tamanho de cada resposta e um orçamento de créditos o interrompe totalmente quando esgotado.)"
+      }
+    },
+    "table": {
+      "contacts": {
+        "title": "Contatos",
+        "description": "Uma agenda simples: quem são, como falar com eles e um espaço para anotações.",
+        "teaches": {
+          "0": "Uma tabela é um conjunto de colunas tipadas",
+          "1": "E-mail e telefone têm tipo próprio, não são texto puro",
+          "2": "Você pode adicionar ou renomear colunas a qualquer momento"
+        },
+        "columns": {
+          "name": "Nome",
+          "email": "E-mail",
+          "phone": "Telefone",
+          "company": "Empresa",
+          "notes": "Anotações"
+        }
+      },
+      "taskTracker": {
+        "title": "Controle de tarefas",
+        "description": "Tarefas com status, prazo e prioridade, prontas para um fluxo de trabalho ler e atualizar.",
+        "teaches": {
+          "0": "Uma coluna de seleção mantém os valores consistentes",
+          "1": "Datas e caixas de seleção têm editores próprios",
+          "2": "Um fluxo de trabalho pode ler e atualizar estas linhas"
+        },
+        "columns": {
+          "title": "Tarefa",
+          "status": "Status",
+          "dueDate": "Prazo",
+          "done": "Concluída",
+          "priority": "Prioridade"
+        }
+      },
+      "contentCalendar": {
+        "title": "Calendário de conteúdo",
+        "description": "O que você planeja publicar, onde e quando. Uma boa tabela para alimentar um fluxo de trabalho agendado.",
+        "teaches": {
+          "0": "Dados de planejamento ficam em uma tabela, não no fluxo de trabalho",
+          "1": "Um fluxo de trabalho agendado consegue pegar o que está previsto para hoje",
+          "2": "Uma coluna de link mantém a URL publicada ao lado do plano"
+        },
+        "columns": {
+          "topic": "Tema",
+          "channel": "Canal",
+          "publishDate": "Data de publicação",
+          "status": "Status",
+          "link": "Link"
+        }
+      }
+    }
   }
 }

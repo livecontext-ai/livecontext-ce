@@ -33,9 +33,12 @@ public class OptionalFeatureCapabilityService {
     /**
      * Availability snapshot for one tenant. {@code browserAgent} and {@code webSearch}
      * are currently the same signal (one docker profile ships both) but stay separate
-     * fields so the contract survives the day they diverge.
+     * fields so the contract survives the day they diverge. The same applies to
+     * {@code screenshotRenderer} and {@code mediaRenderer}: both live on the renderer
+     * sidecar today (one URL), but the media endpoint could move to its own component.
      */
-    public record FeatureCapabilities(boolean screenshotRenderer, boolean browserAgent, boolean webSearch) {}
+    public record FeatureCapabilities(boolean screenshotRenderer, boolean browserAgent, boolean webSearch,
+                                      boolean mediaRenderer) {}
 
     private final String rendererBaseUrl;
     private final CeWebSearchRelayGate webSearchGate;
@@ -51,7 +54,8 @@ public class OptionalFeatureCapabilityService {
     public FeatureCapabilities resolve(String tenantId) {
         // Resolve browsing ONCE (it can cost an HTTP roundtrip) and reuse for both fields.
         boolean browsing = isBrowsingAvailable(tenantId);
-        return new FeatureCapabilities(isScreenshotRendererAvailable(), browsing, browsing);
+        boolean renderer = isScreenshotRendererAvailable();
+        return new FeatureCapabilities(renderer, browsing, browsing, renderer);
     }
 
     /** Deployment-global, pure property check - never a remote call. */

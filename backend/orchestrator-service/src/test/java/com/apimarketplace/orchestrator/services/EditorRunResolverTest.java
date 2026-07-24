@@ -12,6 +12,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -281,6 +282,62 @@ class EditorRunResolverTest {
             verify(existingRun, never()).setMetadata(any());
             verify(runRepository, never()).save(any());
         }
+
+        @Test
+        @DisplayName("Regression 2026-07-20: an editor/agent fire never adopts the live production run - it gets its own run, production metadata untouched")
+        void editorFireNeverAdoptsTheProductionRun() {
+            // This test was previously the INVERSE - it characterized the hazard as
+            // current behaviour with an explicit instruction to invert it once closed.
+            // This is that inversion.
+            //
+            // Reuse is keyed on (workflowId, planVersion, mode, live status) with no
+            // notion of run ownership, so on a pinned workflow an editor or AGENT fire
+            // whose canvas equals the pinned content matches the live PRODUCTION run
+            // exactly. Adopting it applied the reuse block to production state: the
+            // mock override in particular would make the next SCHEDULED fire mock its
+            // tools. The resolver now recognises the production run via the
+            // production_run_id FK and refuses to adopt it.
+            when(versionService.resolveContentVersionForExecution(eq(WORKFLOW_ID), any(), eq(TENANT_ID))).thenReturn(17);
+
+            // A live PRODUCTION run at the pinned version, pointed at by the FK.
+            UUID productionRunId = UUID.randomUUID();
+            WorkflowRunEntity productionRun = mock(WorkflowRunEntity.class);
+            lenient().when(productionRun.getRunIdPublic()).thenReturn("run-production");
+            when(productionRun.getId()).thenReturn(productionRunId);
+            when(workflow.getProductionRunId()).thenReturn(productionRunId);
+            when(runRepository.findFirstByWorkflowIdAndPlanVersionAndExecutionModeAndStatusInOrderByStartedAtDesc(
+                    WORKFLOW_ID, 17, ExecutionMode.AUTOMATIC, REUSABLE_STATUSES))
+                    .thenReturn(Optional.of(productionRun));
+
+            WorkflowRunEntity freshRun = mock(WorkflowRunEntity.class);
+            lenient().when(freshRun.getMetadata()).thenReturn(null);
+            WorkflowExecution execution = mock(WorkflowExecution.class);
+            when(execution.getRunId()).thenReturn("run-editor-fresh");
+            when(executionService.createExecution(any(), any(), anyInt())).thenReturn(execution);
+            when(runRepository.findByRunIdPublic("run-editor-fresh")).thenReturn(Optional.of(freshRun));
+
+            // The editor/agent fires WITH a mock override - the mutation that mattered.
+            EditorRunResolver.Resolution result = resolver.findOrCreateRun(
+                    workflow, plan, Map.of(), TENANT_ID, ExecutionMode.AUTOMATIC, "all_mcp");
+
+            // A SEPARATE run is created instead of adopting production.
+            assertThat(result.reused()).isFalse();
+            assertThat(result.runEntity()).isSameAs(freshRun);
+            verify(executionService).createExecution(any(), any(), anyInt());
+
+            // THE FIX: production's metadata is never written. Pre-fix the mock
+            // override landed here and production mocked its tools on the next fire.
+            verify(productionRun, never()).setMetadata(any());
+
+            // The editor's own run carries the flags, including the mock override.
+            ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(freshRun).setMetadata(metaCaptor.capture());
+            assertThat(metaCaptor.getValue())
+                    .containsEntry("__editorRun__", true)
+                    .containsEntry(
+                            com.apimarketplace.orchestrator.execution.v2.engine.MockRunGate.MOCK_MODE_METADATA_KEY,
+                            "all_mcp");
+        }
     }
 
     /**
@@ -294,6 +351,54 @@ class EditorRunResolverTest {
      * (WAITING_TRIGGER / RUNNING / PAUSED); the fire path supports active-run fires
      * (per-trigger DAGs), as the production webhook lane already proved.
      */
+    @Nested
+    @DisplayName("Version replay - production isolation")
+    class ReplayProductionIsolationTests {
+
+        @Mock private WorkflowEntity workflow;
+        @Mock private WorkflowPlan versionedPlan;
+
+        @BeforeEach
+        void initWorkflow() {
+            lenient().when(workflow.getId()).thenReturn(WORKFLOW_ID);
+            lenient().when(versionedPlan.getOriginalPlan()).thenReturn(Map.of("name", "test"));
+        }
+
+        @Test
+        @DisplayName("Regression 2026-07-20: a version replay never adopts the live production run")
+        void replayNeverAdoptsTheProductionRun() {
+            // The replay lane is the worse half of the hazard: adopting production
+            // would re-freeze its plan to the replayed version AND stamp
+            // __versionReplay__, which makes ReusableTriggerService stop propagating
+            // workflow.plan to it - freezing production on an old version indefinitely.
+            UUID productionRunId = UUID.randomUUID();
+            WorkflowRunEntity productionRun = mock(WorkflowRunEntity.class);
+            lenient().when(productionRun.getRunIdPublic()).thenReturn("run-production");
+            when(productionRun.getId()).thenReturn(productionRunId);
+            when(workflow.getProductionRunId()).thenReturn(productionRunId);
+            when(runRepository.findFirstByWorkflowIdAndPlanVersionAndExecutionModeAndStatusInOrderByStartedAtDesc(
+                    WORKFLOW_ID, 17, ExecutionMode.AUTOMATIC, REUSABLE_STATUSES))
+                    .thenReturn(Optional.of(productionRun));
+
+            WorkflowRunEntity freshRun = mock(WorkflowRunEntity.class);
+            lenient().when(freshRun.getMetadata()).thenReturn(null);
+            WorkflowExecution execution = mock(WorkflowExecution.class);
+            when(execution.getRunId()).thenReturn("run-replay-fresh");
+            when(executionService.createExecution(any(), any(), anyInt())).thenReturn(execution);
+            when(runRepository.findByRunIdPublic("run-replay-fresh")).thenReturn(Optional.of(freshRun));
+
+            EditorRunResolver.Resolution result = resolver.findOrCreateRunForVersion(
+                    workflow, versionedPlan, 17, Map.of(), TENANT_ID, ExecutionMode.AUTOMATIC);
+
+            assertThat(result.reused()).isFalse();
+            assertThat(result.runEntity()).isSameAs(freshRun);
+            // Production keeps its plan and its metadata: neither re-frozen nor
+            // stamped __versionReplay__.
+            verify(productionRun, never()).setPlan(any());
+            verify(productionRun, never()).setMetadata(any());
+        }
+    }
+
     @Nested
     @DisplayName("Live-run reuse window (regression: duplicate same-version run on mid-epoch fire)")
     class LiveRunReuseWindowTests {

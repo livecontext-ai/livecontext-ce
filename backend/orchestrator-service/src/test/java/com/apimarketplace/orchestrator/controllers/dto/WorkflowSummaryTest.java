@@ -34,7 +34,10 @@ class WorkflowSummaryTest {
             now, now, now, 10L,
             Map.of(), plan, schedule, tokens, icons,
             pubId, now, true, "ACTIVE", null,
-            WorkflowEntity.WorkflowType.WORKFLOW, 5, true, "production");
+            WorkflowEntity.WorkflowType.WORKFLOW, 5, true, "production",
+            new java.math.BigDecimal("1000.0000"));
+
+        assertThat(summary.budgetCredits()).isEqualByComparingTo("1000.0000");
 
         assertThat(summary.id()).isEqualTo(id);
         assertThat(summary.name()).isEqualTo("My Workflow");
@@ -57,8 +60,9 @@ class WorkflowSummaryTest {
             null, "WF", null, "t1", null,
             null, null, null, 0L,
             null, null, null, null, null,
-            null, null, false, null, null, null, null, false, "draft");
+            null, null, false, null, null, null, null, false, "draft", null);
 
+        assertThat(summary.budgetCredits()).isNull();
         assertThat(summary.id()).isNull();
         assertThat(summary.description()).isNull();
         assertThat(summary.plan()).isNull();

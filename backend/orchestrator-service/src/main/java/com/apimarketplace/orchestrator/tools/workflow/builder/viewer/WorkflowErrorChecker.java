@@ -423,6 +423,102 @@ public class WorkflowErrorChecker {
                     "fix", "workflow(action='modify', node='" + label + "', params={url: 'https://...'})"));
             }
 
+            // PublicLink: file required
+            if ("public_link".equals(type) && !hasConfigField(cn, "params", "file")) {
+                errors.add(Map.of("type", "MISSING_INPUT", "node", ref,
+                    "message", "Public Link '" + label + "' requires a file (whole FileRef reference)",
+                    "fix", "workflow(action='modify', node='" + label + "', params={file: '{{core:dl.output.file}}'})"));
+            }
+
+            // Media: operation required (one of 4) + per-operation required file params
+            if ("media".equals(type)) {
+                String mediaOp = configString(cn, "params", "operation");
+                if (mediaOp != null) mediaOp = mediaOp.trim().toLowerCase(java.util.Locale.ROOT);
+                if (mediaOp == null || mediaOp.isBlank()) {
+                    errors.add(Map.of("type", "MISSING_INPUT", "node", ref,
+                        "message", "Media '" + label + "' requires an operation (probe, mux_audio, mix, extract_audio, concat, frame, overlay)",
+                        "fix", "workflow(action='modify', node='" + label + "', params={operation: 'mux_audio'})"));
+                } else switch (mediaOp) {
+                    case "probe", "extract_audio" -> {
+                        if (!hasConfigField(cn, "params", "input"))
+                            errors.add(Map.of("type", "MISSING_INPUT", "node", ref,
+                                "message", "Media '" + label + "' " + mediaOp + " requires an input (whole FileRef reference)",
+                                "fix", "workflow(action='modify', node='" + label + "', params={input: '{{core:dl.output.file}}'})"));
+                    }
+                    case "frame" -> {
+                        if (!hasConfigField(cn, "params", "input"))
+                            errors.add(Map.of("type", "MISSING_INPUT", "node", ref,
+                                "message", "Media '" + label + "' frame requires an input (whole FileRef reference of the video)",
+                                "fix", "workflow(action='modify', node='" + label + "', params={input: '{{core:dl.output.file}}'})"));
+                        Map<String, Object> frameParams = configMap(cn, "params");
+                        Double atSeconds = frameParams != null ? asLiteralNumber(frameParams.get("at_seconds")) : null;
+                        if (atSeconds != null && atSeconds < 0) {
+                            errors.add(Map.of("type", "INVALID_CONFIG", "node", ref,
+                                "message", "Media '" + label + "' frame has at_seconds " + fmtNum(atSeconds)
+                                    + " - it must be >= 0 (omit it for the middle of the video; a value past the end is clamped, never an error)",
+                                "fix", "workflow(action='modify', node='" + label + "', params={at_seconds: 0})"));
+                        }
+                    }
+                    case "concat" -> checkConcatConfig(cn, ref, label, errors);
+                    case "overlay" -> checkOverlayConfig(cn, ref, label, errors);
+                    case "mux_audio" -> {
+                        if (!hasConfigField(cn, "params", "video"))
+                            errors.add(Map.of("type", "MISSING_INPUT", "node", ref,
+                                "message", "Media '" + label + "' mux_audio requires a video (whole FileRef reference)",
+                                "fix", "workflow(action='modify', node='" + label + "', params={video: '{{interface:card.output.video}}'})"));
+                        if (!hasConfigField(cn, "params", "audio"))
+                            errors.add(Map.of("type", "MISSING_INPUT", "node", ref,
+                                "message", "Media '" + label + "' mux_audio requires an audio (whole FileRef reference)",
+                                "fix", "workflow(action='modify', node='" + label + "', params={audio: '{{core:dl.output.file}}'})"));
+                        Map<String, Object> muxParams = configMap(cn, "params");
+                        if (muxParams != null && hasLoopWithTrim(muxParams)) {
+                            errors.add(Map.of("type", "INVALID_CONFIG", "node", ref,
+                                "message", "Media '" + label + "' combines loop:true with trim_start_seconds/trim_end_seconds "
+                                    + "on the same audio - unsupported. Trim with a separate media node first, or drop one of the two",
+                                "fix", "workflow(action='modify', node='" + label + "', params={loop: false})"));
+                        }
+                    }
+                    case "mix" -> {
+                        if (!hasConfigField(cn, "params", "tracks"))
+                            errors.add(Map.of("type", "MISSING_INPUT", "node", ref,
+                                "message", "Media '" + label + "' mix requires tracks (1-8 entries, each with a source FileRef reference)",
+                                "fix", "workflow(action='modify', node='" + label + "', params={tracks: [{source: '{{core:voice.output.file}}'}]})"));
+                        Map<String, Object> mixParams = configMap(cn, "params");
+                        if (mixParams != null && mixParams.get("tracks") instanceof List<?> mixTracks && !mixTracks.isEmpty()) {
+                            boolean allLoop = true;
+                            for (int ti = 0; ti < mixTracks.size(); ti++) {
+                                if (!(mixTracks.get(ti) instanceof Map<?, ?> trackMap)) {
+                                    allLoop = false;
+                                    continue;
+                                }
+                                if (!Boolean.TRUE.equals(trackMap.get("loop"))) allLoop = false;
+                                @SuppressWarnings("unchecked")
+                                Map<String, Object> trackTyped = (Map<String, Object>) trackMap;
+                                if (hasLoopWithTrim(trackTyped)) {
+                                    errors.add(Map.of("type", "INVALID_CONFIG", "node", ref,
+                                        "message", "Media '" + label + "' track " + (ti + 1) + " combines loop:true with "
+                                            + "trim_start_seconds/trim_end_seconds - unsupported. Trim with a separate media node first, or drop one of the two",
+                                        "fix", "workflow(action='modify', node='" + label + "', params={tracks: [...]}) with loop or the trims removed on that track"));
+                                }
+                            }
+                            Object mixVideo = mixParams.get("video");
+                            // Expression string OR literal FileRef object (Files picker) both count
+                            boolean mixHasVideo = (mixVideo instanceof String mv && !mv.isBlank())
+                                || (mixVideo instanceof Map<?, ?> mvm && mvm.get("path") instanceof String);
+                            if (!mixHasVideo && allLoop) {
+                                errors.add(Map.of("type", "INVALID_CONFIG", "node", ref,
+                                    "message", "Media '" + label + "' is an audio-only mix where EVERY track loops - nothing anchors "
+                                        + "the output length. Set loop:false on at least one track, or provide a video",
+                                    "fix", "workflow(action='modify', node='" + label + "', params={tracks: [...]}) with loop:false on one track"));
+                            }
+                        }
+                    }
+                    default -> errors.add(Map.of("type", "MISSING_INPUT", "node", ref,
+                        "message", "Media '" + label + "' has unknown operation '" + mediaOp + "' (expected: probe, mux_audio, mix, extract_audio, concat, frame, overlay)",
+                        "fix", "workflow(action='modify', node='" + label + "', params={operation: 'mux_audio'})"));
+                }
+            }
+
             // SendEmail: toEmail and subject required
             if ("send_email".equals(type)) {
                 if (!hasConfigField(cn, "sendEmail", "toEmail"))
@@ -438,7 +534,16 @@ public class WorkflowErrorChecker {
             // EmailInbox: any action other than 'none' needs messageUid; move also needs targetFolder
             if ("email_inbox".equals(type)) {
                 String action = configString(cn, "emailInbox", "action");
-                if (action != null && !action.isBlank() && !"none".equals(action) && !"list_folders".equals(action)) {
+                // Normalized like Core.EmailInboxConfig does, so 'CREATE_FOLDER' is not mistaken
+                // for a per-message action and asked for a messageUid.
+                if (action != null) action = action.trim().toLowerCase(java.util.Locale.ROOT);
+                if ("create_folder".equals(action)) {
+                    // Mailbox-level action: names the folder to create, never a message.
+                    if (!hasConfigField(cn, "emailInbox", "targetFolder"))
+                        errors.add(Map.of("type", "MISSING_INPUT", "node", ref,
+                            "message", "Email Inbox '" + label + "' create_folder action requires targetFolder",
+                            "fix", "workflow(action='modify', node='" + label + "', params={targetFolder: 'INBOX.Clients'})"));
+                } else if (action != null && !action.isBlank() && !"none".equals(action) && !"list_folders".equals(action)) {
                     if (!hasConfigField(cn, "emailInbox", "messageUid"))
                         errors.add(Map.of("type", "MISSING_INPUT", "node", ref,
                             "message", "Email Inbox '" + label + "' action '" + action + "' requires messageUid",
@@ -446,7 +551,8 @@ public class WorkflowErrorChecker {
                     if ("move".equals(action) && !hasConfigField(cn, "emailInbox", "targetFolder"))
                         errors.add(Map.of("type", "MISSING_INPUT", "node", ref,
                             "message", "Email Inbox '" + label + "' move action requires targetFolder",
-                            "fix", "workflow(action='modify', node='" + label + "', params={targetFolder: 'Archive'})"));
+                            "fix", "Take a server path from a list_folders run, then workflow(action='modify', node='"
+                                + label + "', params={targetFolder: '<a name from output.folders>'})"));
                 }
             }
 
@@ -643,6 +749,151 @@ public class WorkflowErrorChecker {
             return val != null ? String.valueOf(val) : null;
         }
         return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> configMap(Map<String, Object> cn, String configKey) {
+        Object config = cn.get(configKey);
+        return config instanceof Map<?, ?> m ? (Map<String, Object>) m : null;
+    }
+
+    /** loop:true combined with trim_start/end on the same media audio/track is unsupported. */
+    private boolean hasLoopWithTrim(Map<String, Object> options) {
+        return Boolean.TRUE.equals(options.get("loop"))
+            && (options.get("trim_start_seconds") != null || options.get("trim_end_seconds") != null);
+    }
+
+    /**
+     * media concat config checks: inputs presence/size/per-clip source (MISSING_INPUT),
+     * plus the INVALID_CONFIG contract bounds: crossfade needs >= 2 inputs,
+     * transition_seconds in 0.1-5.0, per-clip trim_end > trim_start, target_width and
+     * target_height BOTH or NEITHER. Bounds only fire on LITERAL numbers: a {{...}}
+     * template is resolved at run time and cannot be judged here.
+     */
+    private void checkConcatConfig(Map<String, Object> cn, String ref, String label,
+                                   List<Map<String, Object>> errors) {
+        Map<String, Object> concatParams = configMap(cn, "params");
+        Object inputsValue = concatParams != null ? concatParams.get("inputs") : null;
+        if (!(inputsValue instanceof List<?> clips) || clips.isEmpty()) {
+            errors.add(Map.of("type", "MISSING_INPUT", "node", ref,
+                "message", "Media '" + label + "' concat requires inputs (1-8 clips, each with a source FileRef reference)",
+                "fix", "workflow(action='modify', node='" + label + "', params={inputs: [{source: '{{core:clip_a.output.file}}'}]})"));
+            return;
+        }
+        if (clips.size() > 8) {
+            errors.add(Map.of("type", "INVALID_CONFIG", "node", ref,
+                "message", "Media '" + label + "' concat accepts at most 8 inputs (got " + clips.size() + ")",
+                "fix", "workflow(action='modify', node='" + label + "', params={inputs: [...]}) with 8 clips or fewer (chain two concat nodes for more)"));
+        }
+        for (int ci = 0; ci < clips.size(); ci++) {
+            if (!(clips.get(ci) instanceof Map<?, ?> clipRaw)) {
+                errors.add(Map.of("type", "MISSING_INPUT", "node", ref,
+                    "message", "Media '" + label + "' concat inputs[" + ci + "] must be an object with a source FileRef reference",
+                    "fix", "workflow(action='modify', node='" + label + "', params={inputs: [{source: '{{core:clip_a.output.file}}'}]})"));
+                continue;
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> clip = (Map<String, Object>) clipRaw;
+            Object source = clip.get("source");
+            boolean hasSource = (source instanceof String s && !s.isBlank())
+                || (source instanceof Map<?, ?> m && m.get("path") instanceof String);
+            if (!hasSource) {
+                errors.add(Map.of("type", "MISSING_INPUT", "node", ref,
+                    "message", "Media '" + label + "' concat inputs[" + ci + "] requires a source (whole FileRef reference)",
+                    "fix", "workflow(action='modify', node='" + label + "', params={inputs: [...]}) with a source on that clip"));
+            }
+            Double trimStart = asLiteralNumber(clip.get("trim_start_seconds"));
+            Double trimEnd = asLiteralNumber(clip.get("trim_end_seconds"));
+            if (trimStart != null && trimEnd != null && trimEnd <= trimStart) {
+                errors.add(Map.of("type", "INVALID_CONFIG", "node", ref,
+                    "message", "Media '" + label + "' concat inputs[" + ci + "] has trim_end_seconds " + fmtNum(trimEnd)
+                        + " <= trim_start_seconds " + fmtNum(trimStart) + " - trim_end_seconds must be greater",
+                    "fix", "workflow(action='modify', node='" + label + "', params={inputs: [...]}) with trim_end_seconds > trim_start_seconds on that clip"));
+            }
+        }
+        Object transition = concatParams.get("transition");
+        if (transition instanceof String t && "crossfade".equalsIgnoreCase(t.trim()) && clips.size() < 2) {
+            errors.add(Map.of("type", "INVALID_CONFIG", "node", ref,
+                "message", "Media '" + label + "' uses transition 'crossfade' with " + clips.size()
+                    + " input - crossfade needs at least 2 inputs",
+                "fix", "workflow(action='modify', node='" + label + "', params={transition: 'cut'}) or add a second clip"));
+        }
+        Double transitionSeconds = asLiteralNumber(concatParams.get("transition_seconds"));
+        if (transitionSeconds != null && (transitionSeconds < 0.1 || transitionSeconds > 5.0)) {
+            errors.add(Map.of("type", "INVALID_CONFIG", "node", ref,
+                "message", "Media '" + label + "' has transition_seconds " + fmtNum(transitionSeconds)
+                    + " - it must be between 0.1 and 5.0",
+                "fix", "workflow(action='modify', node='" + label + "', params={transition_seconds: 0.5})"));
+        }
+        boolean widthPresent = isPresentValue(concatParams.get("target_width"));
+        boolean heightPresent = isPresentValue(concatParams.get("target_height"));
+        if (widthPresent != heightPresent) {
+            errors.add(Map.of("type", "INVALID_CONFIG", "node", ref,
+                "message", "Media '" + label + "' sets only " + (widthPresent ? "target_width" : "target_height")
+                    + " - target_width and target_height must be provided together (BOTH or NEITHER)",
+                "fix", "workflow(action='modify', node='" + label + "', params={target_width: 1920, target_height: 1080}) or remove the one that is set"));
+        }
+    }
+
+    /**
+     * media overlay config checks: video + image presence (MISSING_INPUT), plus the
+     * INVALID_CONFIG contract bounds: width_percent in 1-100, opacity in 0-1. Bounds
+     * only fire on LITERAL numbers (templates resolve at run time).
+     */
+    private void checkOverlayConfig(Map<String, Object> cn, String ref, String label,
+                                    List<Map<String, Object>> errors) {
+        if (!hasConfigField(cn, "params", "video"))
+            errors.add(Map.of("type", "MISSING_INPUT", "node", ref,
+                "message", "Media '" + label + "' overlay requires a video (whole FileRef reference)",
+                "fix", "workflow(action='modify', node='" + label + "', params={video: '{{core:clip.output.file}}'})"));
+        if (!hasConfigField(cn, "params", "image"))
+            errors.add(Map.of("type", "MISSING_INPUT", "node", ref,
+                "message", "Media '" + label + "' overlay requires an image (whole FileRef reference)",
+                "fix", "workflow(action='modify', node='" + label + "', params={image: '{{core:logo.output.file}}'})"));
+        Map<String, Object> overlayParams = configMap(cn, "params");
+        if (overlayParams == null) return;
+        Double widthPercent = asLiteralNumber(overlayParams.get("width_percent"));
+        if (widthPercent != null && (widthPercent < 1 || widthPercent > 100)) {
+            errors.add(Map.of("type", "INVALID_CONFIG", "node", ref,
+                "message", "Media '" + label + "' has width_percent " + fmtNum(widthPercent)
+                    + " - it must be between 1 and 100 (percent of the video width)",
+                "fix", "workflow(action='modify', node='" + label + "', params={width_percent: 15})"));
+        }
+        Double opacity = asLiteralNumber(overlayParams.get("opacity"));
+        if (opacity != null && (opacity < 0 || opacity > 1)) {
+            errors.add(Map.of("type", "INVALID_CONFIG", "node", ref,
+                "message", "Media '" + label + "' has opacity " + fmtNum(opacity) + " - it must be between 0 and 1",
+                "fix", "workflow(action='modify', node='" + label + "', params={opacity: 1})"));
+        }
+    }
+
+    /**
+     * A LITERAL number for config bounds checks: a Number, or a String that parses as
+     * one. Returns null for anything else - notably {{...}} templates, which resolve at
+     * run time and must never trip a build-time bound.
+     */
+    private Double asLiteralNumber(Object value) {
+        if (value instanceof Number n) return n.doubleValue();
+        if (value instanceof String s && !s.isBlank() && !s.contains("{{")) {
+            try {
+                return Double.parseDouble(s.trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /** Non-blank literal or expression present (BOTH-or-NEITHER dimension check). */
+    private boolean isPresentValue(Object value) {
+        return value != null && !(value instanceof String s && s.isBlank());
+    }
+
+    /** Human number formatting for messages: drop the trailing .0 of whole values. */
+    private String fmtNum(double value) {
+        return value == Math.floor(value) && !Double.isInfinite(value)
+            ? String.valueOf((long) value)
+            : String.valueOf(value);
     }
 
     private boolean hasNonBlank(Map<String, Object> cn, String key) {

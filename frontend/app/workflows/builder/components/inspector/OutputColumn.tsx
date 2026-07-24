@@ -175,6 +175,8 @@ export const OutputColumn = ({
     isTransformNode,
     isWaitNode,
     isDownloadFileNode,
+    isPublicLinkNode,
+    isMediaNode,
     isHttpRequestNode,
     isDataInputNode,
     isOptionNode,
@@ -327,6 +329,8 @@ export const OutputColumn = ({
     if (isMergeNode) return { schema: withEnvelope(getOutputSchema('MERGE')), nodePrefix: 'core' };
     if (isTransformNode) return { schema: withEnvelope(getOutputSchema('TRANSFORM')), nodePrefix: 'core' };
     if (isDownloadFileNode) return { schema: withEnvelope(getOutputSchema('DOWNLOAD_FILE')), nodePrefix: 'core' };
+    if (isPublicLinkNode) return { schema: withEnvelope(getOutputSchema('PUBLIC_LINK')), nodePrefix: 'core' };
+    if (isMediaNode) return { schema: withEnvelope(getOutputSchema('MEDIA')), nodePrefix: 'core' };
     if (isHttpRequestNode) return { schema: withEnvelope(getOutputSchema('HTTP_REQUEST')), nodePrefix: 'core' };
     if (isDataInputNode) {
       const dataInputItems = (currentNode?.data as any)?.dataInputItems;
@@ -387,7 +391,7 @@ export const OutputColumn = ({
     return { schema: [], nodePrefix: 'mcp' };
   }, [
     isDecisionNode, isSwitchNode, isForkNode, isWaitNode,
-    isLoopNode, isWhileGroupNode, isSplitNode, isAggregateNode, isExitNode, isResponseNode, isMergeNode, isTransformNode, isDownloadFileNode, isHttpRequestNode, isDataInputNode, isOptionNode, isUserApprovalNode,
+    isLoopNode, isWhileGroupNode, isSplitNode, isAggregateNode, isExitNode, isResponseNode, isMergeNode, isTransformNode, isDownloadFileNode, isPublicLinkNode, isMediaNode, isHttpRequestNode, isDataInputNode, isOptionNode, isUserApprovalNode,
     isFilterNode, isSortNode, isLimitNode, isRemoveDuplicatesNode, isSummarizeNode,
     isDateTimeNode, isCryptoJwtNode, isXmlNode, isCompressionNode, isRssNode,
     isConvertToFileNode, isExtractFromFileNode, isCompareDatasetsNode,

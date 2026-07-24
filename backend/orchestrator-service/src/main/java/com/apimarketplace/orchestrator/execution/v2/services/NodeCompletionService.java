@@ -14,6 +14,7 @@ import com.apimarketplace.orchestrator.execution.v2.state.BackEdgeState;
 import com.apimarketplace.conversation.client.ConversationClient;
 import com.apimarketplace.orchestrator.services.completion.CompletionKind;
 import com.apimarketplace.orchestrator.services.completion.StepCompletionOrchestrator;
+import com.apimarketplace.orchestrator.services.completion.StepCompletionResult;
 import com.apimarketplace.orchestrator.services.context.ReadinessContextCache;
 import com.apimarketplace.orchestrator.services.streaming.state.RunningNodeTracker;
 import com.apimarketplace.orchestrator.utils.LabelNormalizer;
@@ -152,7 +153,7 @@ public class NodeCompletionService {
      * @param itemIndex The index of the item
      * @param context The execution context
      */
-    public void emitNodeComplete(
+    public StepCompletionResult emitNodeComplete(
             WorkflowExecution execution,
             ExecutionNode node,
             NodeExecutionResult result,
@@ -160,7 +161,7 @@ public class NodeCompletionService {
             int itemIndex,
             ExecutionContext context) {
         Integer iteration = extractCurrentIteration(context, node, result);
-        emitNodeComplete(execution, node, result, item, itemIndex, context, iteration);
+        return emitNodeComplete(execution, node, result, item, itemIndex, context, iteration);
     }
 
     /**
@@ -174,7 +175,7 @@ public class NodeCompletionService {
      * @param context The execution context
      * @param explicitIteration The iteration number (can be null)
      */
-    public void emitNodeComplete(
+    public StepCompletionResult emitNodeComplete(
             WorkflowExecution execution,
             ExecutionNode node,
             NodeExecutionResult result,
@@ -182,7 +183,7 @@ public class NodeCompletionService {
             int itemIndex,
             ExecutionContext context,
             Integer explicitIteration) {
-        emitNodeComplete(execution, node, result, item, itemIndex, context,
+        return emitNodeComplete(execution, node, result, item, itemIndex, context,
             explicitIteration, CompletionKind.TERMINAL, false);
     }
 
@@ -195,7 +196,7 @@ public class NodeCompletionService {
      * {@code StepCompletionOrchestrator.recordSplitAggregateIfMissing} - exactly like
      * the split-async path.
      */
-    public void emitNodeCompletePerItem(
+    public StepCompletionResult emitNodeCompletePerItem(
             WorkflowExecution execution,
             ExecutionNode node,
             NodeExecutionResult result,
@@ -203,7 +204,7 @@ public class NodeCompletionService {
             int itemIndex,
             ExecutionContext context) {
         Integer iteration = extractCurrentIteration(context, node, result);
-        emitNodeComplete(execution, node, result, item, itemIndex, context,
+        return emitNodeComplete(execution, node, result, item, itemIndex, context,
             iteration, CompletionKind.TERMINAL, true);
     }
 
@@ -226,7 +227,7 @@ public class NodeCompletionService {
      * @param kind              disposition - see {@link CompletionKind} for the
      *                          per-branch contract
      */
-    public void emitNodeComplete(
+    public StepCompletionResult emitNodeComplete(
             WorkflowExecution execution,
             ExecutionNode node,
             NodeExecutionResult result,
@@ -235,7 +236,7 @@ public class NodeCompletionService {
             ExecutionContext context,
             Integer explicitIteration,
             CompletionKind kind) {
-        emitNodeComplete(execution, node, result, item, itemIndex, context, explicitIteration, kind, false);
+        return emitNodeComplete(execution, node, result, item, itemIndex, context, explicitIteration, kind, false);
     }
 
     /**
@@ -243,7 +244,7 @@ public class NodeCompletionService {
      * {@link #emitNodeCompletePerItem}). suppressGlobalMark only applies to the
      * TERMINAL disposition - attempts never mutate the snapshot anyway.
      */
-    public void emitNodeComplete(
+    public StepCompletionResult emitNodeComplete(
             WorkflowExecution execution,
             ExecutionNode node,
             NodeExecutionResult result,
@@ -263,7 +264,7 @@ public class NodeCompletionService {
                 logger.warn("🔁 [NodeCompletion] Skipping emitNodeFailedAttempt: execution={}, node={}, result={}",
                     execution != null, node != null, result != null);
             }
-            return;
+            return null;
         }
 
         String nodeId = node.getNodeId();
@@ -292,7 +293,7 @@ public class NodeCompletionService {
         if (result.isCollecting()) {
             logger.info("⏳ [NodeCompletion] Skipping persistence for COLLECTING status: nodeId={}, type={}, outputKeys={}",
                 nodeId, node.getType(), result.output() != null ? result.output().keySet() : "null");
-            return;
+            return null;
         }
 
         // Convert V2 result to legacy StepExecutionResult (+ error meta for failures)
@@ -303,19 +304,23 @@ public class NodeCompletionService {
         // 2. In-memory state update (TERMINAL only - see CompletionKind.mutatesSnapshotCounts)
         // 3. Streaming event emission
         // Pass epoch/triggerId from ExecutionContext for epoch-scoped snapshot mutations
+        // Capture the orchestrator's completion result: it carries the
+        // payload-lost rewrite (tier 2) that engine callers must honor for
+        // their traversal decision.
+        StepCompletionResult completion = null;
         if (kind == CompletionKind.TERMINAL) {
             if (context != null && context.triggerId() != null) {
-                stepCompletionOrchestrator.completeStep(
+                completion = stepCompletionOrchestrator.completeStepWithResult(
                     execution, nodeId, nodeLabel, stepResultWithMeta,
                     itemIndex, iteration, context.epoch(), context.triggerId(), suppressGlobalMark);
             } else if (suppressGlobalMark) {
-                stepCompletionOrchestrator.completeStep(
+                completion = stepCompletionOrchestrator.completeStepWithResult(
                     execution, nodeId, nodeLabel, stepResultWithMeta,
                     itemIndex, iteration, context != null ? context.epoch() : 0, null, true);
             } else {
-                stepCompletionOrchestrator.completeStep(
-                    execution, nodeId, nodeLabel, stepResultWithMeta,
-                    itemIndex, iteration);
+                completion = stepCompletionOrchestrator.complete(
+                    com.apimarketplace.orchestrator.services.completion.StepCompletionContext.of(
+                        execution, nodeId, nodeLabel, stepResultWithMeta, itemIndex, iteration));
             }
         } else {
             // persistRowInLoopContext divergence - loop context → WS-only (persistRow=false);
@@ -337,11 +342,11 @@ public class NodeCompletionService {
             // See CompletionKind.persistsRowInLoopContext.
             boolean persistRow = !loopContext;
             if (context != null && context.triggerId() != null) {
-                stepCompletionOrchestrator.completeAttempt(
+                completion = stepCompletionOrchestrator.completeAttempt(
                     execution, nodeId, nodeLabel, stepResultWithMeta,
                     itemIndex, iteration, context.epoch(), context.triggerId(), persistRow);
             } else {
-                stepCompletionOrchestrator.completeAttempt(
+                completion = stepCompletionOrchestrator.completeAttempt(
                     execution, nodeId, nodeLabel, stepResultWithMeta,
                     itemIndex, iteration, context != null ? context.epoch() : 0, null, persistRow);
             }
@@ -374,6 +379,8 @@ public class NodeCompletionService {
         if (kind.invalidatesReadiness() && readinessCache != null) {
             readinessCache.invalidateRun(execution.getRunId());
         }
+
+        return completion;
     }
 
     /**

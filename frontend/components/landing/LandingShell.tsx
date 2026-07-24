@@ -4,6 +4,7 @@ import SignInButton from '@/app/[locale]/_landing/SignInButton';
 import LandingNavAnchor from '@/app/[locale]/_landing/LandingNavAnchor';
 import LandingLanguageSelect from '@/components/landing/LandingLanguageSelect';
 import LandingThemeProvider from '@/components/landing/LandingThemeProvider';
+import LandingThemeToggle from '@/components/landing/LandingThemeToggle';
 
 // Shared chrome (header + footer + base CSS vars) used by the landing page
 // (`app/[locale]/page.tsx`) and the public sub-pages (`/about`, `/contact`,
@@ -22,13 +23,15 @@ import LandingThemeProvider from '@/components/landing/LandingThemeProvider';
 // palette (`--bg-*`, `--text-*`, `--border-color`, `--accent-*`, `--expression-color`)
 // AND the decorative tokens are defined here for `.landing-root` (LIGHT) and
 // `.landing-root.dark` (DARK). The `dark` class is driven by `LandingThemeProvider`
-// (DEFAULT DARK, persisted under `landing-theme`), NOT by the app-wide ThemeProvider
-// on <body>. This lets the public site default to dark for every visitor while the
-// logged-in app keeps following the user's OS/preference. Values mirror `globals.css`
-// `:root` (light) and `.dark` (dark) so the two surfaces look identical per theme.
+// (DEFAULT LIGHT, persisted under `landing-theme`), NOT by the app-wide ThemeProvider
+// on <body>. This lets the public site default to a warm light theme for every
+// visitor while the logged-in app keeps following the user's OS/preference. The
+// LIGHT palette is deliberately WARM (cream whites, amber glows) as the light
+// counterpart of the warm-neutral dark palette below; it intentionally diverges
+// from `globals.css` `:root`, which stays cool for the app.
 export const landingChromeStyles = `
   .landing-root {
-    /* light palette */
+    /* light palette - cool neutral (matches the app's light palette, no beige) */
     --bg-primary: #ffffff;
     --bg-secondary: #f5f6f8;
     --bg-tertiary: #eceff3;
@@ -43,18 +46,18 @@ export const landingChromeStyles = `
     --accent-foreground: #f6f7f9;
     --expression-color: #1d4ed8;
 
-    /* light decorative tokens */
+    /* light decorative tokens - cool neutral (no amber/beige) */
     --landing-header-bg: rgba(255, 255, 255, 0.85);
-    --landing-hero-glow: radial-gradient(ellipse 800px 400px at 50% 0%, rgba(99, 102, 241, 0.12) 0%, rgba(255, 255, 255, 0) 70%);
-    --landing-cta-glow: radial-gradient(ellipse 720px 380px at 50% 0%, rgba(99, 102, 241, 0.14) 0%, rgba(245, 246, 248, 0) 70%);
-    --landing-highlight-row: rgba(99, 102, 241, 0.08);
-    --landing-dash-track: rgba(17, 24, 39, 0.14);
-    --landing-dash-track-active: rgba(17, 24, 39, 0.22);
-    --landing-card-shadow: 0 8px 32px rgba(11, 13, 22, 0.08);
-    --landing-frame-shadow: 0 20px 60px rgba(11, 13, 22, 0.12);
-    --landing-frame-shadow-strong: 0 30px 80px rgba(11, 13, 22, 0.16), 0 8px 18px rgba(11, 13, 22, 0.10);
-    --landing-node-shadow: 0 6px 16px rgba(11, 13, 22, 0.12);
-    --landing-icon-color: #0f172a;
+    --landing-hero-glow: radial-gradient(ellipse 800px 400px at 50% 0%, rgba(17, 24, 39, 0.05) 0%, rgba(255, 255, 255, 0) 70%);
+    --landing-cta-glow: radial-gradient(ellipse 720px 380px at 50% 0%, rgba(17, 24, 39, 0.05) 0%, rgba(245, 246, 248, 0) 70%);
+    --landing-highlight-row: rgba(202, 158, 88, 0.12);
+    --landing-dash-track: rgba(28, 26, 23, 0.14);
+    --landing-dash-track-active: rgba(28, 26, 23, 0.22);
+    --landing-card-shadow: 0 8px 32px rgba(28, 26, 23, 0.07);
+    --landing-frame-shadow: 0 20px 60px rgba(28, 26, 23, 0.10);
+    --landing-frame-shadow-strong: 0 30px 80px rgba(28, 26, 23, 0.14), 0 8px 18px rgba(28, 26, 23, 0.08);
+    --landing-node-shadow: 0 6px 16px rgba(28, 26, 23, 0.10);
+    --landing-icon-color: #1c1a17;
 
     background: var(--bg-primary);
     color: var(--text-primary);
@@ -62,7 +65,8 @@ export const landingChromeStyles = `
   }
 
   .landing-root.dark {
-    /* dark palette - warm neutral (mirrors globals.css .dark) */
+    /* dark palette - the PLATFORM's dark theme (mirrors globals.css .dark, warm
+       neutral), so the public dark mode matches the app the visitor signs into */
     --bg-primary: #171614;
     --bg-secondary: #1f1e1b;
     --bg-tertiary: #2a2925;
@@ -99,23 +103,23 @@ export const landingChromeStyles = `
   }
 
   /* The cookie consent banner mounts in the locale layout, OUTSIDE .landing-root,
-     so it would otherwise follow the APP theme while the public site is dark-only.
+     so it would otherwise follow the APP theme while the public site is light-only.
      These styles only ship on public pages (landingChromeStyles): re-bind the theme
      vars it consumes (bg-theme-* / text-theme-* / border-theme / button accents) to
-     the landing dark palette so the banner matches the page. */
+     the landing light palette so the banner matches the page. */
   div.cookie-consent-banner {
-    --bg-primary: #171614;
-    --bg-secondary: #1f1e1b;
-    --bg-tertiary: #2a2925;
-    --bg-hover: #57534e;
-    --text-primary: #edecea;
-    --text-secondary: #a39f97;
-    --text-muted: #736f67;
-    --border-color: #5e5a54;
-    --accent-primary: #edecea;
-    --accent-secondary: #c7c4bd;
-    --accent-hover: #d7d4ce;
-    --accent-foreground: #171614;
+    --bg-primary: #ffffff;
+    --bg-secondary: #f8f6f2;
+    --bg-tertiary: #f0ede7;
+    --bg-hover: #e7e3da;
+    --text-primary: #1c1a17;
+    --text-secondary: #55504a;
+    --text-muted: #7d776e;
+    --border-color: #ddd7cd;
+    --accent-primary: #171614;
+    --accent-secondary: #2a2925;
+    --accent-hover: #33312c;
+    --accent-foreground: #faf9f7;
   }
 `;
 
@@ -125,6 +129,16 @@ export const landingChromeStyles = `
 // undefined → the path stays relative (unchanged behaviour).
 function withBase(base: string | undefined, path: string): string {
   return base ? `${base}${path}` : path;
+}
+
+/** The GitHub octocat mark (currentColor), shared by the header nav, the footer
+ *  social circle and the landing's Self-host CTAs so they all use the SAME icon. */
+export function GithubMark({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" />
+    </svg>
+  );
 }
 
 export function LandingHeader({ extra, siteBaseUrl }: { extra?: React.ReactNode; siteBaseUrl?: string } = {}) {
@@ -145,6 +159,16 @@ export function LandingHeader({ extra, siteBaseUrl }: { extra?: React.ReactNode;
           <Link href={withBase(siteBaseUrl, '/blog')} className="hover:opacity-80 transition-opacity">Blog</Link>
           <Link href={withBase(siteBaseUrl, '/changelog')} className="hover:opacity-80 transition-opacity">Changelog</Link>
           <Link href={siteBaseUrl ? '/' : '/docs'} prefetch={false} className="hover:opacity-80 transition-opacity">Docs</Link>
+          <a
+            href="https://github.com/livecontext-ai"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Self-hosted (GitHub)"
+            className="inline-flex items-center gap-1.5 hover:opacity-80 transition-opacity"
+          >
+            <GithubMark className="w-4 h-4" />
+            Self-hosted
+          </a>
         </nav>
         <div className="flex items-center gap-3">
           {extra}
@@ -154,7 +178,7 @@ export function LandingHeader({ extra, siteBaseUrl }: { extra?: React.ReactNode;
           <SignInButton
             variant="primary"
             baseUrl={siteBaseUrl}
-            className="inline-flex items-center gap-1 h-9 px-4 rounded-full text-sm font-medium transition-all hover:brightness-110 active:scale-[0.98] cursor-pointer"
+            className="inline-flex items-center gap-1 h-9 px-4 rounded-xl text-sm font-medium transition-colors hover:bg-[var(--accent-hover)] active:scale-[0.98] cursor-pointer"
           >
             Get started free
           </SignInButton>
@@ -167,8 +191,8 @@ export function LandingHeader({ extra, siteBaseUrl }: { extra?: React.ReactNode;
 export function LandingFooter({ siteBaseUrl }: { siteBaseUrl?: string } = {}) {
   return (
     <footer style={{ borderTop: '1px solid var(--border-color)', background: 'var(--bg-secondary)' }}>
-      <div className="max-w-6xl mx-auto px-6 py-12 grid sm:grid-cols-2 md:grid-cols-4 gap-8 text-sm">
-        <div>
+      <div className="max-w-6xl mx-auto px-6 py-14 flex flex-col gap-10 md:flex-row md:gap-12 text-sm">
+        <div className="md:w-72 md:flex-shrink-0">
           <div className="flex items-center mr-1 group/logo relative">
             <div className="relative flex items-center justify-center transition-opacity duration-300">
               <LogoAnimate size="md" className="text-theme-primary" />
@@ -177,11 +201,12 @@ export function LandingFooter({ siteBaseUrl }: { siteBaseUrl?: string } = {}) {
               LiveContext
             </span>
           </div>
-          <p className="mt-3" style={{ color: 'var(--text-muted)' }}>
-            Built for the way you work.
+          <p className="mt-3 max-w-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+            The AI automation platform. Describe a job, watch the workflow build itself, and ship it as
+            an app your team can use. Cloud or self-hosted.
           </p>
 
-          <div className="mt-5 flex flex-wrap items-center justify-start gap-1.5 sm:gap-2">
+          <div className="mt-5 flex items-center justify-start gap-2">
             <a
               href="https://www.linkedin.com/company/livecontext/"
               target="_blank"
@@ -220,7 +245,7 @@ export function LandingFooter({ siteBaseUrl }: { siteBaseUrl?: string } = {}) {
               className="w-9 h-9 rounded-full flex items-center justify-center transition-colors duration-200 hover:brightness-125"
               style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}
             >
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" /></svg>
+              <GithubMark className="w-4 h-4" />
             </a>
             <a
               href="https://www.tiktok.com/@livecontextai"
@@ -244,6 +269,7 @@ export function LandingFooter({ siteBaseUrl }: { siteBaseUrl?: string } = {}) {
             </a>
           </div>
         </div>
+        <div className="flex-1 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-8 gap-y-10">
         <div>
           <p className="text-[11px] uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>Product</p>
           <ul className="space-y-2" style={{ color: 'var(--text-secondary)' }}>
@@ -257,11 +283,25 @@ export function LandingFooter({ siteBaseUrl }: { siteBaseUrl?: string } = {}) {
                 Pricing
               </SignInButton>
             </li>
+          </ul>
+        </div>
+        {/* Everything the header nav links to, mirrored here (sim.ai-style
+            Resources column) so the footer is a full site map on its own. */}
+        <div>
+          <p className="text-[11px] uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>Resources</p>
+          <ul className="space-y-2" style={{ color: 'var(--text-secondary)' }}>
             <li><Link href={withBase(siteBaseUrl, '/blog')}>Blog</Link></li>
             <li><Link href={withBase(siteBaseUrl, '/changelog')}>Changelog</Link></li>
             <li><Link href={siteBaseUrl ? '/' : '/docs'} prefetch={false}>Docs</Link></li>
+            <li>
+              <a href="https://github.com/livecontext-ai" target="_blank" rel="noopener noreferrer">
+                Self-hosted
+              </a>
+            </li>
           </ul>
-          <p className="text-[11px] uppercase tracking-wider mb-3 mt-6" style={{ color: 'var(--text-muted)' }}>Compare</p>
+        </div>
+        <div>
+          <p className="text-[11px] uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>Compare</p>
           <ul className="space-y-2" style={{ color: 'var(--text-secondary)' }}>
             <li><Link href={withBase(siteBaseUrl, '/compare/zapier-alternative')}>Zapier alternative</Link></li>
             <li><Link href={withBase(siteBaseUrl, '/compare/n8n-alternative')}>n8n alternative</Link></li>
@@ -284,7 +324,9 @@ export function LandingFooter({ siteBaseUrl }: { siteBaseUrl?: string } = {}) {
               </span>
             </li>
             <li><Link href={withBase(siteBaseUrl, '/contact')}>Contact</Link></li>
-            <li>173 rue de Courcelles, 75017 Paris</li>
+            {/* No postal address here: a raw street line among nav links read as
+                a stray entry. The registered office stays where it is legally
+                required, on the Legal Notice / Terms / Privacy pages. */}
           </ul>
         </div>
         <div>
@@ -295,43 +337,13 @@ export function LandingFooter({ siteBaseUrl }: { siteBaseUrl?: string } = {}) {
             <li><Link href={withBase(siteBaseUrl, '/legal/mentions')}>Legal Notice</Link></li>
           </ul>
         </div>
-      </div>
-      {/* Discreet "As featured on" directory badge. Kept deliberately low-key
-          (muted, grayscale, small; brightens on hover) so it does not compete
-          with the footer. It also carries the reciprocal badge/link that the
-          Fazier launch board fetches from this page to verify the listing
-          (Launchpadly is verified by DNS, so it needs no badge here). Boards
-          parse the anchor/img markup, so the grayscale filter does not affect
-          verification. Intl-context-free like the rest of this shell (no
-          next-intl here). */}
-      <div className="max-w-6xl mx-auto px-6 pb-4">
-        <div
-          className="flex flex-wrap items-center gap-x-4 gap-y-2 opacity-40 hover:opacity-90 transition-opacity duration-300"
-          style={{ filter: 'grayscale(1)' }}
-        >
-          <span className="text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
-            As featured on
-          </span>
-          <a
-            href="https://fazier.com"
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label="LiveContext on Fazier"
-          >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="https://fazier.com/api/v1/public/badges/launch_badges.svg?badge_type=launched&theme=neutral"
-              alt="Featured on Fazier"
-              style={{ display: 'block', border: 0, height: 26, width: 'auto' }}
-              loading="lazy"
-            />
-          </a>
         </div>
       </div>
       <div className="max-w-6xl mx-auto px-6 pb-8 text-xs flex items-center justify-between gap-4" style={{ color: 'var(--text-muted)' }}>
         <p>© {new Date().getFullYear()} LIVECONTEXT SAS. All rights reserved.</p>
         <div className="flex items-center gap-2">
           <LandingLanguageSelect />
+          <LandingThemeToggle />
         </div>
       </div>
     </footer>
@@ -345,7 +357,8 @@ interface LandingShellProps {
   extraStyles?: string;
   /** Optional element rendered in the header's right cluster (e.g. the docs theme toggle). */
   headerExtra?: React.ReactNode;
-  /** Theme persistence for this surface. Defaults keep the landing/marketing pages dark-only. */
+  /** Theme persistence for this surface. The public site defaults to light on
+   *  first visit and restores the visitor's footer-toggle choice afterwards. */
   themeStorageKey?: string;
   themeRespectStored?: boolean;
   /** Prefix for the chrome's in-app links, so the header/footer target the main
@@ -354,7 +367,7 @@ interface LandingShellProps {
   siteBaseUrl?: string;
 }
 
-export function LandingShell({ children, extraStyles, headerExtra, themeStorageKey, themeRespectStored, siteBaseUrl }: LandingShellProps) {
+export function LandingShell({ children, extraStyles, headerExtra, themeStorageKey, themeRespectStored = true, siteBaseUrl }: LandingShellProps) {
   return (
     <LandingThemeProvider
       className="min-h-screen flex flex-col"

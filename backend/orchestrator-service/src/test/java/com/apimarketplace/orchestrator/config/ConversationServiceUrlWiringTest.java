@@ -9,6 +9,7 @@ import com.apimarketplace.orchestrator.services.context.RunContextService;
 import com.apimarketplace.orchestrator.trigger.ChatDispatchService;
 import com.apimarketplace.orchestrator.trigger.ProductionRunResolver;
 import com.apimarketplace.orchestrator.trigger.ReusableTriggerService;
+import com.apimarketplace.orchestrator.trigger.ShareInvocationLimiter;
 import com.apimarketplace.trigger.client.TriggerClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
@@ -135,6 +136,7 @@ class ConversationServiceUrlWiringTest {
                 .withBean(WorkflowRunRepository.class, () -> mock(WorkflowRunRepository.class))
                 .withBean(ReusableTriggerService.class, () -> mock(ReusableTriggerService.class))
                 .withBean(ProductionRunResolver.class, () -> mock(ProductionRunResolver.class))
+                .withBean(ShareInvocationLimiter.class, () -> mock(ShareInvocationLimiter.class))
                 .withBean(CreditConsumptionClient.class, () -> mock(CreditConsumptionClient.class))
                 .withBean(AgentDefaultsConfig.class, () -> mock(AgentDefaultsConfig.class))
                 .withBean(AgentClient.class, () -> mock(AgentClient.class))

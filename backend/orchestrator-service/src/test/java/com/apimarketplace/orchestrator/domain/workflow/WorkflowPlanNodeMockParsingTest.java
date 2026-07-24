@@ -85,6 +85,31 @@ class WorkflowPlanNodeMockParsingTest {
         }
 
         @Test
+        @DisplayName("durationMs survives the full plan parse and resolves on the stored mock")
+        void durationMsSurvivesPlanParse() {
+            WorkflowPlan parsed = WorkflowPlan.fromMap(
+                planWith("mcps", mcpEntry(Map.of(
+                    "output", Map.of("result_count", 0), "durationMs", 90_000))),
+                "tenant-1");
+
+            NodeMock mock = parsed.getNodeMock("mcp:fetch_emails");
+            assertThat(mock.durationMs()).isEqualTo(90_000L);
+            assertThat(mock.hasSimulatedDuration()).isTrue();
+        }
+
+        @Test
+        @DisplayName("a durationMs beyond the 10-minute cap fails the plan parse, naming the node")
+        void durationMsBeyondCapFailsParse() {
+            assertThatThrownBy(() -> WorkflowPlan.fromMap(
+                planWith("mcps", mcpEntry(Map.of(
+                    "output", Map.of(), "durationMs", NodeMock.MAX_DURATION_MS + 1))),
+                "tenant-1"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("mcp:fetch_emails")
+                .hasMessageContaining("durationMs");
+        }
+
+        @Test
         @DisplayName("table entry: static mock stored under table:<normalized label>")
         void tableMockKeyed() {
             Map<String, Object> entry = new HashMap<>(Map.of(

@@ -81,7 +81,7 @@ vi.mock('@/app/workflows/builder/components/TriggerPanel', () => ({
 vi.mock('@/app/workflows/builder/utils/interfaceHtmlUtils', () => ({
   mergeTriggerDataIntoResolved: () => ({ foo: 'bar' }),
 }));
-vi.mock('@/app/workflows/builder/utils/safeCenteringCss', () => ({ SAFE_CENTERING_CSS: '' }));
+vi.mock('@/app/workflows/builder/utils/safeCenteringCss', () => ({ SAFE_CENTERING_CSS: '', centeringCssFor: () => '' }));
 vi.mock('@/lib/utils/dateFormatters', () => ({
   parseUtcAware: (s: string) => new Date(s),
   formatUtcTime: (s: string) => s,

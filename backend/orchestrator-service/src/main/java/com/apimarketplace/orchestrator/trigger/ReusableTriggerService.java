@@ -267,6 +267,15 @@ public class ReusableTriggerService {
     @Autowired(required = false)
     private com.apimarketplace.orchestrator.services.WorkflowPlanVersionService planVersionService;
 
+    /**
+     * WS event bus, used only to push the "budget reached, new epoch refused"
+     * toast to a live viewer when a workflow budget blocks a re-fire. Optional so
+     * narrow unit tests construct cleanly; when absent the run is still reset to
+     * WAITING_TRIGGER and the refusal is logged, just without the live toast.
+     */
+    @Autowired(required = false)
+    private com.apimarketplace.orchestrator.services.streaming.bus.WorkflowEventPublisher workflowEventPublisher;
+
     public ReusableTriggerService(
             WorkflowRunRepository runRepository,
             WorkflowRepository workflowRepository,
@@ -558,9 +567,15 @@ public class ReusableTriggerService {
             // they're explicitly marked __editorRun__ and may execute against draft versions
             // for testing. The simulate path goes through TriggerController.triggerSpecific
             // → here, with isEditorRun(run) == true.
+            //
+            // EXCEPT the production run itself: pinning PROMOTES an existing run
+            // (almost always the editor run the user tested with) and never strips
+            // __editorRun__, so the flag alone exempted 100% of promoted production
+            // runs and the chokepoint was dead for exactly the runs it exists to
+            // guard. Production identity is the production_run_id FK, not the flag.
             if (workflow != null
                     && productionRunResolver != null
-                    && !isEditorRun(run)
+                    && !(isEditorRun(run) && !isProductionRunOf(workflow, run))
                     && !productionRunResolver.isAllowedForProduction(run, workflow)) {
                 // Refuse without mutating run.status: the target run may be a
                 // perfectly valid WAITING_TRIGGER that another correct dispatch
@@ -608,9 +623,16 @@ public class ReusableTriggerService {
                         resolvedPlanVersion = workflow.getPinnedVersion();
                         logger.info("[PinnedVersion] Run {} already at pinned v{}, skipping reload",
                                 runId, workflow.getPinnedVersion());
-                    } else if (isEditorRun(run)) {
+                    } else if (isEditorRun(run) && !isProductionRunOf(workflow, run)) {
                         // Run was explicitly created from the editor at a specific version.
                         // Respect the editor's version - don't override with pinned version.
+                        // The production run is excluded from this exemption (it carries
+                        // __editorRun__ from promotion). In practice a version-drifted
+                        // production run rarely reaches this point at all: the resolver's
+                        // stale-FK self-heal repairs the FK before dispatch, and the
+                        // chokepoint above refuses whatever still leaks through (hard
+                        // failure, ERROR-logged). This narrowing exists so the exemption
+                        // can never re-open that leak for the production run.
                         resolvedPlanVersion = run.getPlanVersion();
                         logger.info("[PinnedVersion] Run {} is editor-initiated at v{}, keeping as-is (pinned is v{})",
                                 runId, run.getPlanVersion(), workflow.getPinnedVersion());
@@ -794,6 +816,37 @@ public class ReusableTriggerService {
                 resetRunOnFailure(run, runId, triggerId);
                 return TriggerExecutionResult.failure(runId, triggerId, triggerType,
                         "Trigger '" + triggerId + "' no longer exists in the workflow plan");
+            }
+
+            // ─── Budget gate: refuse to open a NEW epoch once the run's accumulated
+            // cost has reached the workflow budget. The in-flight epoch (if any)
+            // finishes; only this next epoch is blocked, and the run stays reusable
+            // (resetRunOnFailure → WAITING_TRIGGER). Agent executions are the only
+            // cost source, fed live by RunCostService. A fresh run has spent=0 so
+            // the FIRST fire always passes; only later epochs get blocked. Budget
+            // null/≤0 = unlimited. Read the LIVE cost (not run.getCostCredits(),
+            // which may lag behind concurrent agent-cost increments).
+            if (workflow != null && workflow.getBudgetCredits() != null) {
+                java.math.BigDecimal spent = runRepository
+                        .findCostCreditsByRunIdPublic(runId)
+                        .orElse(java.math.BigDecimal.ZERO);
+                if (isBudgetExceeded(spent, workflow.getBudgetCredits())) {
+                    logger.warn("[ReusableTrigger] Budget reached for runId={}: spent={} >= budget={} credits. "
+                            + "Refusing to open a new epoch (in-flight epoch, if any, still finishes).",
+                            runId, spent, workflow.getBudgetCredits());
+                    if (workflowEventPublisher != null) {
+                        try {
+                            workflowEventPublisher.emitRunBudgetBlocked(runId, spent, workflow.getBudgetCredits());
+                        } catch (Exception ex) {
+                            logger.warn("[ReusableTrigger] Failed to emit budget-blocked toast for runId={}: {}",
+                                    runId, ex.getMessage());
+                        }
+                    }
+                    resetRunOnFailure(run, runId, triggerId);
+                    return TriggerExecutionResult.failure(runId, triggerId, triggerType,
+                            "Workflow budget reached (" + spent + "/" + workflow.getBudgetCredits()
+                            + " credits); no new epoch started.");
+                }
             }
 
             // 3. Epoch management: always increment epoch on every trigger fire.
@@ -989,6 +1042,24 @@ public class ReusableTriggerService {
                 || triggerType == TriggerType.CHAT
                 || triggerType == TriggerType.FORM
                 || triggerType == TriggerType.DATASOURCE;
+    }
+
+    /**
+     * Whether a run's accumulated cost has reached the workflow budget, so no new
+     * epoch may open. A null or non-positive budget means "no budget" (unlimited)
+     * and never blocks. The comparison is {@code >=}: reaching the budget exactly
+     * blocks the next epoch (the epoch that pushed the total to the cap still ran).
+     * A fresh run has {@code spent == 0} and therefore always passes its first fire.
+     *
+     * <p>Package-private + static so the gate's decision is unit-testable without
+     * standing up the full trigger pipeline.
+     */
+    static boolean isBudgetExceeded(java.math.BigDecimal spent, java.math.BigDecimal budget) {
+        if (budget == null || budget.signum() <= 0) {
+            return false;
+        }
+        java.math.BigDecimal actualSpent = spent != null ? spent : java.math.BigDecimal.ZERO;
+        return actualSpent.compareTo(budget) >= 0;
     }
 
     /**
@@ -1960,6 +2031,17 @@ public class ReusableTriggerService {
     }
 
     /**
+     * Is {@code run} the workflow's live production run? Keyed on the
+     * {@code production_run_id} FK - the only authoritative identity test, because
+     * pinning promotes an editor run and never strips {@code __editorRun__}.
+     */
+    private static boolean isProductionRunOf(WorkflowEntity workflow, WorkflowRunEntity run) {
+        return workflow != null && run != null
+                && workflow.getProductionRunId() != null
+                && workflow.getProductionRunId().equals(run.getId());
+    }
+
+    /**
      * True when the run was created by {@code EditorRunResolver.findOrCreateRunForVersion}
      * to replay a specific historical plan version ({@code __versionReplay__} metadata).
      * Such runs must never be refreshed to the live workflow plan.
@@ -1979,9 +2061,13 @@ public class ReusableTriggerService {
      * content is overwritten IN PLACE - trigger fires never mint a new version
      * number, so re-fires of the same run keep a stable version across epochs.
      * Only reached on the unpinned lane (the pinned branch resolves versions
-     * upstream), so the pinned row is never at risk here; the service still
-     * guards it defensively. Falls back to the legacy max-version stamp when
-     * the service bean is absent (narrow test wiring).
+     * upstream at {@code getPinnedVersion() != null}), so the pinned row is never
+     * at risk here; the service still guards it defensively - it resolves a plan
+     * matching the pin to the pinned number read-only, which protects the
+     * pin-blind callers ({@code WorkflowResumeService.stampPlanVersion},
+     * {@code WorkflowPersistenceService.autoArchiveExecutionPlan}). Falls back to
+     * the legacy max-version stamp when the service bean is absent (narrow test
+     * wiring).
      */
     private Integer resolveVersionForPlan(UUID workflowId, Map<String, Object> planMap, String tenantId) {
         if (planVersionService != null) {

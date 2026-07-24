@@ -62,6 +62,8 @@ export function SendEmailParametersForm({
   const cc: string = (data as any).emailCc ?? '';
   const bcc: string = (data as any).emailBcc ?? '';
   const fromName: string = (data as any).emailFromName ?? '';
+  const fromEmail: string = (data as any).emailFromEmail ?? '';
+  const replyTo: string = (data as any).emailReplyTo ?? '';
   const subject: string = (data as any).emailSubject ?? '';
   const body: string = (data as any).emailBody ?? '';
   const isHtml: string = (data as any).emailIsHtml ?? 'false';
@@ -183,6 +185,33 @@ export function SendEmailParametersForm({
           onChange={handleInputChange('emailFromName')}
           className="w-full"
           placeholder={t('fromNamePlaceholder')}
+          readOnly={isRunMode}
+        />
+      </div>
+
+      {/* From Email (optional override of the credential's sender address) */}
+      <div className="space-y-1">
+        <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('fromEmail')}</span>
+        <Input
+          type="text"
+          value={fromEmail}
+          onChange={handleInputChange('emailFromEmail')}
+          className="w-full"
+          placeholder={t('fromEmailPlaceholder')}
+          readOnly={isRunMode}
+        />
+        <p className="text-sm text-slate-400 dark:text-slate-500">{t('fromEmailHint')}</p>
+      </div>
+
+      {/* Reply-To (optional) */}
+      <div className="space-y-1">
+        <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">{t('replyTo')}</span>
+        <Input
+          type="text"
+          value={replyTo}
+          onChange={handleInputChange('emailReplyTo')}
+          className="w-full"
+          placeholder={t('replyToPlaceholder')}
           readOnly={isRunMode}
         />
       </div>

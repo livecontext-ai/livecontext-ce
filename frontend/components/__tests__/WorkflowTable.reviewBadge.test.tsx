@@ -42,7 +42,11 @@ vi.mock('@/hooks/useSelectableItems', () => ({
     selectAll: vi.fn(),
   }),
 }));
-vi.mock('@/lib/stores/current-org-store', () => ({ useCanMutateInCurrentOrg: () => true }));
+vi.mock('@/lib/stores/current-org-store', () => ({
+  useCanMutateInCurrentOrg: () => true,
+  // Consumed by the TemplateGallery banner, which scopes its collapsed pref per workspace.
+  useCurrentOrg: () => ({ currentOrgId: null }),
+}));
 vi.mock('@/lib/hooks/useOrgScopedReset', () => ({ useOrgScopedReset: () => undefined }));
 
 vi.mock('@/hooks/useResourceFavorites', () => ({

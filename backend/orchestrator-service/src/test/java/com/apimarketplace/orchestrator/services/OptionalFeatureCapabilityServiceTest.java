@@ -57,6 +57,16 @@ class OptionalFeatureCapabilityServiceTest {
     }
 
     @Test
+    @DisplayName("mediaRenderer mirrors the renderer URL verdict (same sidecar hosts the media endpoint)")
+    void mediaRendererMirrorsRendererUrl() {
+        FeatureCapabilities available = service("http://screenshot-renderer:8094", false).resolve(TENANT);
+        FeatureCapabilities unavailable = service("", false).resolve(TENANT);
+
+        assertThat(available.mediaRenderer()).isTrue();
+        assertThat(unavailable.mediaRenderer()).isFalse();
+    }
+
+    @Test
     @DisplayName("null tenant is passed through to the gate (which fail-closes) without throwing")
     void nullTenantDoesNotThrow() {
         CeWebSearchRelayGate gate = mock(CeWebSearchRelayGate.class);

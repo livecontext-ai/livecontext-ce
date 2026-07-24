@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "kind": "agent",
+  "meta": {
+    "slug": "frugal-agent",
+    "kind": "agent",
+    "order": 40,
+    "difficulty": "advanced",
+    "icon": "Gauge",
+    "runnable": true,
+    "teachesCount": 3,
+    "avatarUrl": "preset:slate"
+  },
+  "agent": {
+    "systemPromptKey": "templates.agent.frugalAgent.systemPrompt",
+    "temperature": 0,
+    "maxTokens": 4000,
+    "maxIterations": 15,
+    "avatarUrl": "preset:slate",
+    "toolsConfig": {
+      "mode": "none",
+      "webSearch": false
+    }
+  }
+}

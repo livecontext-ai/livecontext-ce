@@ -118,11 +118,20 @@ public class InterfaceNodeCreator extends CreatorBase {
 
         // 5. Add to interfaces array and finalize
         session.getInterfaces().add(node);
+        // Single-entry invariant: adding a new entry page demotes any previous one,
+        // exactly like the canvas builder does. Must run BEFORE finalizeNode persists.
+        List<String> demotedEntries = Boolean.TRUE.equals(node.get("isEntryInterface"))
+                ? session.enforceSingleEntryInterface(node)
+                : List.of();
         if (connectAfter != null) createSimpleEdge(session, connectAfter, nodeId);
         finalizeNode(session, sessionStore, NodeType.INTERFACE, nodeId, node, connectAfter);
 
         // 6. Build response with template variable mapping info
         Map<String, Object> extras = config.toExtras();
+        if (!demotedEntries.isEmpty()) {
+            extras.put("entry_interface_moved", "This interface is now the app's entry page; "
+                + "is_entry_interface was cleared on: " + demotedEntries + " (an app has ONE entry page).");
+        }
         addTemplateMappingInfo(extras, config, label, session);
 
         // 6b. Include action_mapping warnings (non-blocking) so LLM can fix later

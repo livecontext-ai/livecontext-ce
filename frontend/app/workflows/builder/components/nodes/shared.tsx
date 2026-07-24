@@ -21,7 +21,10 @@ import type { NodeVisuals, BuilderNodeData, LoopChildDescriptor, BuilderNodeKind
 import { resolveNodeIcon, NODE_ICON_REGISTRY } from '../../data/nodeVisuals';
 import { getEffectiveDefaultProvider } from '@/hooks/useModels';
 import { getProviderIconSlug } from '@/lib/ai-providers/providerIcons';
+import { normalizeIconSlug, resolveIconSlug } from '@/lib/credentials/iconSlug';
 
+import { useWorkflowLayoutDirectionSafe } from '@/contexts/WorkflowLayoutDirectionContext';
+import { getSideAttachment } from './handleGeometry';
 export type IconComponent = React.ComponentType<{ className?: string; strokeWidth?: number }>;
 
 /**
@@ -156,6 +159,8 @@ const ACTION_TO_REGISTRY_KEY: Record<string, string> = {
   add_response: 'response',
   add_http_request: 'http_request',
   add_download_file: 'download_file',
+  add_public_link: 'public_link',
+  add_media: 'media',
   add_data_input: 'data_input',
   add_approval: 'user-approval',
   add_interface: 'interface',
@@ -351,7 +356,6 @@ export function NodeIcon({
 }: NodeIconProps) {
   const { theme } = useTheme();
   const isDark = theme === 'dark';
-  const [imageError, setImageError] = React.useState(false);
   // Dynamic node icon (custom-API icon stored in object storage) - fetched with a
   // Bearer header and rendered from an in-memory blob: URL (no token in the URL).
   // A blob:/external/data URL passes through unchanged. See useAuthedObjectUrl.
@@ -367,23 +371,55 @@ export function NodeIcon({
 
   const IconToRender = fallbackIcon || resolved.icon;
 
+  // Slug for the static SVG lookup, resolved in up to two attempts.
+  //
+  // The catalog's `mcp` sentinel (COALESCE(icon_slug,'mcp')) is dropped up
+  // front: it is a truthy placeholder for "this API has no icon", and taking it
+  // at face value rendered /icons/services/mcp.svg - a generic "API" circle -
+  // on the SUCCESS path, so onError never fired and the MCP logo below was
+  // unreachable.
+  //
+  // The separator collapse is a RETRY, not the primary lookup. Most files on
+  // disk are separator-free ("googlesheets.svg"), but a handful are genuinely
+  // hyphenated ("claude-code.svg", "gemini-cli.svg", "mistral-vibe.svg",
+  // "audit-tracking.svg") and are fed verbatim by getProviderIconSlug on every
+  // Classify/Guardrail node. Normalizing up front would 404 those - trading one
+  // missing-logo class for another. So: try the slug as given, and only if that
+  // 404s fall back to the normalized form, then to the MCP logo.
+  const rawIconSlug = React.useMemo(() => resolveIconSlug(iconSlug), [iconSlug]);
+  const normalizedIconSlug = React.useMemo(() => {
+    const normalized = normalizeIconSlug(rawIconSlug);
+    return normalized && normalized !== rawIconSlug ? normalized : undefined;
+  }, [rawIconSlug]);
+
+  // 0 = slug as given, 1 = normalized retry, 2 = exhausted (no static icon).
+  // Reset DURING render (not in an effect) when the incoming slug changes: an
+  // effect-based reset paints one frame with the previous node's exhausted
+  // ladder, flashing the MCP/lucide glyph over an icon that resolves fine.
+  const [slugAttempt, setSlugAttempt] = React.useState(0);
+  const [attemptedSlug, setAttemptedSlug] = React.useState(rawIconSlug);
+  if (attemptedSlug !== rawIconSlug) {
+    setAttemptedSlug(rawIconSlug);
+    setSlugAttempt(0);
+  }
+  const effectiveIconSlug = attemptedSlug !== rawIconSlug || slugAttempt === 0
+    ? rawIconSlug
+    : slugAttempt === 1 ? normalizedIconSlug : undefined;
+
   // Determine background class - no background for service icons
   const effectiveBgClassName = React.useMemo(() => {
-    const hasVisibleIcon = (iconSlug && !imageError) || (iconUrl && !iconUrlError && authIconUrl);
+    const hasVisibleIcon = !!effectiveIconSlug || (iconUrl && !iconUrlError && authIconUrl);
     if (hasVisibleIcon) return 'rounded-full p-0.5 dark:bg-slate-100/10';
     if (bgClassName) return `${bgClassName} rounded-full overflow-hidden`;
     return `${resolved.iconBg} rounded-full overflow-hidden`;
-  }, [bgClassName, iconSlug, iconUrl, imageError, iconUrlError, authIconUrl, resolved.iconBg]);
+  }, [bgClassName, effectiveIconSlug, iconUrl, iconUrlError, authIconUrl, resolved.iconBg]);
 
-  // Handle image error - show fallback icon
+  // A 404 on the slug as given falls back to the normalized form once, then
+  // gives up so the dynamic icon / MCP logo / lucide glyph can take over.
   const handleImageError = React.useCallback(() => {
-    setImageError(true);
-  }, []);
+    setSlugAttempt((attempt) => (attempt === 0 && normalizedIconSlug ? 1 : 2));
+  }, [normalizedIconSlug]);
 
-  // Reset error state when iconSlug changes
-  React.useEffect(() => {
-    setImageError(false);
-  }, [iconSlug]);
 
   // Agent avatar takes priority over everything else
   if (avatarUrl) {
@@ -397,7 +433,8 @@ export function NodeIcon({
   const isEffectivelyMcp = isMcp || nodeId.startsWith('mcp-') || nodeKind === 'tool' || nodeKind === 'mcp';
 
   // Render service icon (from iconSlug)
-  const shouldShowServiceIcon = iconSlug && !imageError;
+  // The ladder already yields undefined once exhausted, so this is the whole test.
+  const shouldShowServiceIcon = !!effectiveIconSlug;
 
   // Render dynamic icon URL (custom API icons from S3) - fallback when static SVG not found
   const shouldShowDynamicIcon = !shouldShowServiceIcon && authIconUrl && !iconUrlError;
@@ -416,8 +453,11 @@ export function NodeIcon({
     >
       {shouldShowServiceIcon ? (
         <Image
-          src={`/icons/services/${iconSlug}.svg`}
-          alt={alt || iconSlug || ''}
+          // Keyed on the slug so the normalized retry actually remounts the
+          // <img> and re-fires onError if that 404s too.
+          key={effectiveIconSlug}
+          src={`/icons/services/${effectiveIconSlug}.svg`}
+          alt={alt || effectiveIconSlug || ''}
           width={sizeConfig.image}
           height={sizeConfig.image}
           style={{ width: sizeConfig.image, height: sizeConfig.image }}
@@ -529,6 +569,8 @@ export function NodeActionButtons({
 }: NodeActionButtonsProps) {
   const t = useTranslations('workflowBuilder.nodes');
   const { isRunMode, isPreviewOnly } = useWorkflowMode();
+  // The button row hangs off the edge the flow does not use.
+  const { direction: layoutDirection } = useWorkflowLayoutDirectionSafe();
 
   // In run or preview-only mode hide the edit buttons (delete, duplicate, preview).
   const showEditButtons = !isRunMode && !isPreviewOnly;
@@ -553,12 +595,13 @@ export function NodeActionButtons({
 
   return (
     <div
-      className="absolute left-1/2 pointer-events-none transition-opacity duration-200 ease-out flex flex-row gap-1.5"
+      className={`absolute pointer-events-none transition-opacity duration-200 ease-out flex gap-1.5 ${
+        layoutDirection === 'vertical' ? 'flex-col' : 'flex-row'
+      }`}
       style={{
         opacity: finalOpacity,
         pointerEvents: finalPointerEvents,
-        top: 'calc(100% + 8px)',
-        transform: 'translateX(-50%)',
+        ...getSideAttachment(layoutDirection, 8),
         zIndex: 10,
       }}
       onMouseEnter={onHover}

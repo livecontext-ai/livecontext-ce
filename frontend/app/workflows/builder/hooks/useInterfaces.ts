@@ -19,6 +19,8 @@ export interface Interface {
   cssTemplate?: string;
   templateVariables?: string[];
   interfaceType?: string;
+  /** Display/capture format (preset name or "WIDTHxHEIGHT"); undefined = full page at 1280x800. */
+  format?: string | null;
 }
 
 const fetchInterfaces = async (_excludeTableAttached?: boolean): Promise<Interface[]> => {
@@ -68,6 +70,11 @@ export interface InterfaceRenderResult {
   htmlTemplate: string;
   cssTemplate?: string;
   jsTemplate?: string;
+  /**
+   * The interface's declared format (preset name or "WIDTHxHEIGHT"); null/undefined = full page
+   * at 1280x800. Comes from the run snapshot when the run has one, else from the live interface.
+   */
+  format?: string | null;
   items: Array<{
     epoch: number;
     itemIndex: number;

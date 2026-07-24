@@ -356,6 +356,10 @@ public class SnapshotCloneService {
                     ? ifaceNode.get("_snapshot_jsTemplate").toString() : null);
             createReq.setInterfaceType(ifaceNode.get("_snapshot_interfaceType") != null
                     ? ifaceNode.get("_snapshot_interfaceType").toString() : "html");
+            // The format travels with the templates: an acquired copy of a vertical interface
+            // must render, capture and record vertical too.
+            createReq.setFormat(ifaceNode.get("_snapshot_format") != null
+                    ? ifaceNode.get("_snapshot_format").toString() : null);
             createReq.setIsPublic(false);
             if (hasText(organizationId)) {
                 createReq.setOrganizationId(organizationId);
@@ -422,6 +426,7 @@ public class SnapshotCloneService {
             ifaceNode.remove("_snapshot_description");
             ifaceNode.remove("_snapshot_interfaceType");
             ifaceNode.remove("_snapshot_data");
+            ifaceNode.remove("_snapshot_format");
             ifaceNode.remove("_snapshot_formFields");
             ifaceNode.remove("_snapshot_targetTable");
             ifaceNode.remove("_snapshot_dataSourceId");

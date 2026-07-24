@@ -4,6 +4,7 @@ import com.apimarketplace.auth.client.access.OrgAccessGuard;
 import com.apimarketplace.common.scope.ScopeGuard;
 import com.apimarketplace.common.storage.service.StorageBreakdownService;
 import com.apimarketplace.common.web.TenantResolver;
+import com.apimarketplace.interfaces.client.InterfaceFormat;
 import com.apimarketplace.interfaces.client.OrchestratorCascadeClient;
 import com.apimarketplace.interfaces.domain.InterfaceEntity;
 import com.apimarketplace.interfaces.repository.InterfaceListView;
@@ -93,6 +94,24 @@ public class InterfaceService {
                                               Long dataSourceId,
                                               UUID sourcePublicationId,
                                               String organizationId) {
+        return createFromSnapshot(tenantId, name, description, htmlTemplate, cssTemplate,
+                jsTemplate, interfaceType, data, dataSourceId, sourcePublicationId,
+                organizationId, null);
+    }
+
+    /** {@link #createFromSnapshot} carrying the snapshot's display format. */
+    public InterfaceEntity createFromSnapshot(String tenantId,
+                                              String name,
+                                              String description,
+                                              String htmlTemplate,
+                                              String cssTemplate,
+                                              String jsTemplate,
+                                              String interfaceType,
+                                              Map<String, Object> data,
+                                              Long dataSourceId,
+                                              UUID sourcePublicationId,
+                                              String organizationId,
+                                              String format) {
         validateCreateOrUpdate(tenantId, name);
 
         if (entitlementGuard != null) {
@@ -110,6 +129,9 @@ public class InterfaceService {
         entity.setJsTemplate(jsTemplate);
         entity.setIsPublic(false);
         entity.setIsActive(true);
+        // The format travels with the templates: an app published from a vertical interface
+        // must stay vertical once installed.
+        entity.setFormat(InterfaceFormat.normalize(format));
         if (interfaceType != null && !interfaceType.isBlank()) {
             entity.setInterfaceType(interfaceType);
         }
@@ -136,6 +158,7 @@ public class InterfaceService {
         return saved;
     }
 
+    /** Back-compat overload for callers that do not set a display format (format stays unset). */
     public InterfaceEntity createInterface(String tenantId,
                                            String name,
                                            String description,
@@ -149,6 +172,25 @@ public class InterfaceService {
                                            Boolean isPublic,
                                            Boolean isActive,
                                            String organizationId) {
+        return createInterface(tenantId, name, description, htmlTemplate, cssTemplate, jsTemplate,
+                workflowRunId, stepDataId, targetTable, dataSourceId, isPublic, isActive,
+                organizationId, null);
+    }
+
+    public InterfaceEntity createInterface(String tenantId,
+                                           String name,
+                                           String description,
+                                           String htmlTemplate,
+                                           String cssTemplate,
+                                           String jsTemplate,
+                                           UUID workflowRunId,
+                                           Long stepDataId,
+                                           String targetTable,
+                                           Long dataSourceId,
+                                           Boolean isPublic,
+                                           Boolean isActive,
+                                           String organizationId,
+                                           String format) {
         validateCreateOrUpdate(tenantId, name);
 
         // Plan resource limit check (REST + LLM tool path). Null-safe for unit tests
@@ -172,6 +214,9 @@ public class InterfaceService {
         entity.setDataSourceId(dataSourceId);
         entity.setIsPublic(isPublic != null ? isPublic : false);
         entity.setIsActive(isActive != null ? isActive : true);
+        // Store the canonical form only (preset name or "WxH"). Unknown input normalises to
+        // null = unset, which is the safe default (full-page capture).
+        entity.setFormat(InterfaceFormat.normalize(format));
 
         updateTemplateVariables(entity);
 
@@ -217,6 +262,37 @@ public class InterfaceService {
                                            Boolean isPublic,
                                            Boolean isActive,
                                            Boolean updateDataSourceId) {
+        return updateInterface(id, tenantId, orgId, orgRole, name, description, htmlTemplate,
+                cssTemplate, jsTemplate, workflowRunId, stepDataId, targetTable, dataSourceId,
+                isPublic, isActive, updateDataSourceId, null, null);
+    }
+
+    /**
+     * @param format       the new display/capture format; only applied when {@code updateFormat}
+     *                     is true. Normalised to its canonical form; unknown input becomes null.
+     * @param updateFormat "apply {@code format}, even when it is null". Mirrors
+     *                     {@code updateDataSourceId}: this merge-style update treats a null value
+     *                     as "leave unchanged", so clearing the format back to unset (full page)
+     *                     needs an explicit flag.
+     */
+    public InterfaceEntity updateInterface(UUID id,
+                                           String tenantId,
+                                           String orgId,
+                                           String orgRole,
+                                           String name,
+                                           String description,
+                                           String htmlTemplate,
+                                           String cssTemplate,
+                                           String jsTemplate,
+                                           UUID workflowRunId,
+                                           Long stepDataId,
+                                           String targetTable,
+                                           Long dataSourceId,
+                                           Boolean isPublic,
+                                           Boolean isActive,
+                                           Boolean updateDataSourceId,
+                                           String format,
+                                           Boolean updateFormat) {
         InterfaceEntity existing = findInScope(id, tenantId, orgId)
             .orElseThrow(() -> new IllegalArgumentException("Interface not found: " + id));
 
@@ -274,6 +350,11 @@ public class InterfaceService {
         }
         if (isPublic != null) existing.setIsPublic(isPublic);
         if (isActive != null) existing.setIsActive(isActive);
+        if (updateFormat != null && updateFormat) {
+            // normalize(null) is null = back to unset (full page), which is exactly what an
+            // explicit clear must do.
+            existing.setFormat(InterfaceFormat.normalize(format));
+        }
 
         InterfaceEntity saved = interfaceRepository.save(existing);
         // Size delta accrues to the row owner's storage budget, not the
@@ -661,6 +742,8 @@ public class InterfaceService {
         clone.setDataSourceId(source.getDataSourceId());
         clone.setIsPublic(source.getIsPublic());
         clone.setIsActive(source.getIsActive());
+        // The format travels with the templates: a clone of a vertical interface is vertical.
+        clone.setFormat(source.getFormat());
         // Preserve org workspace - if the source lived in an org, the clone
         // joins the same org. Personal sources clone as personal even when
         // the caller is currently in an org workspace (matches the workflow

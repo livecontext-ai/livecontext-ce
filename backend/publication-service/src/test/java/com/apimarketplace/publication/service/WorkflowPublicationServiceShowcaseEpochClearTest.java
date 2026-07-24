@@ -667,6 +667,59 @@ class WorkflowPublicationServiceShowcaseEpochClearTest {
     }
 
     @Test
+    @DisplayName("publish writes the interface's format into the plan snapshot, under the key the clone reads")
+    void interfaceEnrichmentWritesTheFormatUnderTheAgreedKey() {
+        // Producer side of the format's publish -> acquire journey. The consumer
+        // (SnapshotCloneService) is tested against a hand-written fixture, so without this the
+        // two can drift apart silently: rename the key here and every acquired app loses its
+        // shape with 1185 green tests and no error anywhere.
+        String organizationId = "org-acme";
+        Map<String, Object> interfaceNode = new HashMap<>();
+        interfaceNode.put("id", INTERFACE_ID.toString());
+        Map<String, Object> plan = new HashMap<>();
+        plan.put("interfaces", List.of(interfaceNode));
+
+        InterfaceDto owned = new InterfaceDto();
+        owned.setId(INTERFACE_ID);
+        owned.setTenantId(TENANT_ID);
+        owned.setOrganizationId(organizationId);
+        owned.setHtmlTemplate("<div>story</div>");
+        owned.setFormat("vertical");
+        when(interfaceClient.getInterfacesByIds(List.of(INTERFACE_ID), TENANT_ID, organizationId))
+                .thenReturn(List.of(owned));
+
+        service.enrichPlanWithInterfaceData(plan, TENANT_ID, organizationId, null);
+
+        // The literal key is the contract with SnapshotCloneService.cloneFromSnapshot and with
+        // PlanSnapshotSanitizer's allowlist - assert it verbatim, not via a shared constant.
+        assertThat(interfaceNode).containsEntry("_snapshot_format", "vertical");
+    }
+
+    @Test
+    @DisplayName("an interface with no declared shape publishes a null format, never a default")
+    void interfaceEnrichmentKeepsUnsetFormatNull() {
+        // Null is a real value (full-page capture). Defaulting it at publish time would crop
+        // every acquired copy of a tall page.
+        String organizationId = "org-acme";
+        Map<String, Object> interfaceNode = new HashMap<>();
+        interfaceNode.put("id", INTERFACE_ID.toString());
+        Map<String, Object> plan = new HashMap<>();
+        plan.put("interfaces", List.of(interfaceNode));
+
+        InterfaceDto owned = new InterfaceDto();
+        owned.setId(INTERFACE_ID);
+        owned.setTenantId(TENANT_ID);
+        owned.setOrganizationId(organizationId);
+        owned.setHtmlTemplate("<div>tall</div>");
+        when(interfaceClient.getInterfacesByIds(List.of(INTERFACE_ID), TENANT_ID, organizationId))
+                .thenReturn(List.of(owned));
+
+        service.enrichPlanWithInterfaceData(plan, TENANT_ID, organizationId, null);
+
+        assertThat(interfaceNode).containsEntry("_snapshot_format", null);
+    }
+
+    @Test
     @DisplayName("datasource enrichment skips out-of-scope batch rows before snapshotting items")
     void datasourceEnrichmentSkipsOutOfScopeBatchRowsBeforeSnapshottingItems() {
         String organizationId = "org-acme";

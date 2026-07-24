@@ -14,7 +14,7 @@ interface HoverEdgeOverlayProps {
     /** Whether the overlay is visible */
     isVisible: boolean;
     /** Callback when the plus button is clicked */
-    onPlusClick: (nodeId: string, handleId: string, handleType: 'source' | 'target', handlePosition: 'left' | 'right', position: { x: number; y: number }) => void;
+    onPlusClick: (nodeId: string, handleId: string, handleType: 'source' | 'target', handlePosition: 'left' | 'right' | 'top' | 'bottom', position: { x: number; y: number }) => void;
     /** Callback when mouse enters the overlay */
     onMouseEnter: () => void;
     /** Callback when mouse leaves the overlay */
@@ -261,7 +261,7 @@ export function HoverEdgeOverlay({
                         <button
                             onClick={(e) => {
                                 e.stopPropagation();
-                                onPlusClick(handle.nodeId, handle.handleId, handle.handleType, handle.position as 'left' | 'right', endPointFlow);
+                                onPlusClick(handle.nodeId, handle.handleId, handle.handleType, handle.position, endPointFlow);
                             }}
                             onMouseEnter={onMouseEnter}
                             onMouseLeave={onMouseLeave}

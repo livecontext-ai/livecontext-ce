@@ -67,7 +67,7 @@ class ExtractFromFileChunkingEngineIntegrationTest {
         workflowExecution = new WorkflowExecution("run-extract-itest", buildPlan("char"), Map.of());
         lenient().doNothing().when(eventService).initializeTotalItems(any(), anyInt());
         lenient().doNothing().when(eventService).emitNodeStart(any(), any(), any(), anyInt(), anyInt());
-        lenient().doNothing().when(eventService).emitNodeComplete(any(), any(), any(), any(), anyInt(), any());
+        lenient().doReturn(null).when(eventService).emitNodeComplete(any(), any(), any(), any(), anyInt(), any()); // emitNodeComplete now RETURNS the completion result (payload-loss fix); null = no payload-lost rewrite
         lenient().doNothing().when(eventService).emitNodeAwaitingSignal(any(), any(), any(), any(), anyInt(), any());
     }
 

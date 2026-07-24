@@ -112,6 +112,18 @@ describe('InterfaceThumbnail (centralized thumbnail primitive)', () => {
     expect(outer.style.height).toBe('100%');
   });
 
+  it('contain mode: centres the letterboxed frame on BOTH axes', () => {
+    // In contain mode the whole interface fits by construction, so top-aligning it dumps the
+    // entire letterbox margin at the bottom. Most visible on a vertical interface, which is
+    // narrow and leaves a lot of empty box around it.
+    stubBoundingRect(400, 250);
+    const { container } = render(<InterfaceThumbnail htmlTemplate="<h1>hi</h1>" fit="contain" />);
+    const outer = container.firstChild as HTMLElement;
+    expect(outer.className).toContain('items-center');
+    expect(outer.className).toContain('justify-center');
+    expect(outer.className).not.toContain('items-start');
+  });
+
   it('contain mode: zero-width box renders ref-holder only (no crash)', () => {
     stubBoundingRect(0, 0);
     const { container } = render(
@@ -215,6 +227,70 @@ describe('InterfaceThumbnail (centralized thumbnail primitive)', () => {
     const props = shadowSpy.mock.calls[0][0];
     expect(props.actionMapping).toEqual(actionMapping);
     expect(props.triggerData).toEqual(triggerData);
+  });
+
+  it('contain mode: frameClassName sizes the exact-format frame, frameStyle paints an OVERLAY above the content', () => {
+    // The frame is the ONLY element whose box is exactly the interface's declared format,
+    // so a caller decorating it (rounded clipping, status ring) hugs the real shape even
+    // when the parent box is letterboxed. The ring must be an overlay ABOVE the content:
+    // painted on the frame element itself it sits below the iframe (CSS paint order) and
+    // vanishes over any opaque interface background; painted outward it gets clipped by
+    // the overflow-hidden ancestors. Both regressions were caught by audit/e2e.
+    stubBoundingRect(400, 250);
+    const { container } = render(
+      <InterfaceThumbnail
+        htmlTemplate="<h1>hi</h1>"
+        fit="contain"
+        frameClassName="ring-frame"
+        frameStyle={{ boxShadow: 'inset 0 0 0 2px red' }}
+      />
+    );
+    const frame = container.querySelector('.ring-frame') as HTMLElement;
+    expect(frame).toBeTruthy();
+    // 1280x800 contained in 400x250 -> scale 0.3125 -> the frame IS 400x250.
+    expect(frame.style.width).toBe('400px');
+    expect(frame.style.height).toBe('250px');
+    const overlay = frame.querySelector('[data-testid="frame-ring-overlay"]') as HTMLElement;
+    expect(overlay).toBeTruthy();
+    expect(overlay.style.boxShadow).toBe('inset 0 0 0 2px red');
+    // Painted ABOVE the content: the overlay is the frame's LAST child (after the
+    // scaled content wrapper), absolutely positioned, and inert to the pointer.
+    expect(frame.lastElementChild).toBe(overlay);
+    expect(overlay.style.position).toBe('absolute');
+    expect(overlay.style.pointerEvents).toBe('none');
+    expect(overlay.style.borderRadius).toBe('inherit');
+  });
+
+  it('contain mode: no ring overlay is mounted when frameStyle is absent', () => {
+    stubBoundingRect(400, 250);
+    const { container } = render(
+      <InterfaceThumbnail htmlTemplate="<h1>hi</h1>" fit="contain" frameClassName="ring-frame" />
+    );
+    expect(container.querySelector('[data-testid="frame-ring-overlay"]')).toBeNull();
+  });
+
+  it('contain mode: a portrait viewport frame hugs the format inside a landscape box', () => {
+    stubBoundingRect(400, 250);
+    const { container } = render(
+      <InterfaceThumbnail
+        htmlTemplate="<h1>hi</h1>"
+        fit="contain"
+        viewport={{ width: 1080, height: 1920 }}
+        frameClassName="ring-frame"
+      />
+    );
+    const frame = container.querySelector('.ring-frame') as HTMLElement;
+    // scale = min(400/1080, 250/1920) = 0.13020833 -> ~140.6 x 250
+    expect(parseFloat(frame.style.width)).toBeCloseTo(1080 * (250 / 1920), 3);
+    expect(parseFloat(frame.style.height)).toBeCloseTo(250, 6);
+  });
+
+  it('width-fit mode ignores frameClassName/frameStyle (documented contain-only contract)', () => {
+    stubBoundingRect(640, 0);
+    const { container } = render(
+      <InterfaceThumbnail htmlTemplate="<h1>hi</h1>" frameClassName="ring-frame" frameStyle={{ boxShadow: '0 0 0 2px red' }} />
+    );
+    expect(container.querySelector('.ring-frame')).toBeNull();
   });
 
   it('actionMapping + triggerData default to undefined - does not poison the 8 other consumers (FlowNode, InterfacePreviewNode in edit mode, …) that never set them', () => {

@@ -4,10 +4,11 @@ import { describe, expect, it } from 'vitest';
 
 // Locks the contract of the SELF-CONTAINED public-site theme. The public site
 // (landing + /contact, /legal/*, …) owns its own light/dark palette on
-// `.landing-root` / `.landing-root.dark`, DEFAULTS TO DARK via LandingThemeProvider,
-// and is decoupled from the app-wide ThemeProvider (<body> theme) so the logged-in
-// app keeps following the OS. The footer only exposes the language selector; the
-// public theme toggle has been removed, so stale light preferences are ignored.
+// `.landing-root` / `.landing-root.dark`, DEFAULTS TO LIGHT via
+// LandingThemeProvider, and is decoupled from the app-wide ThemeProvider (<body>
+// theme) so the logged-in app keeps following the OS. The footer bottom bar
+// carries the language selector AND the public theme toggle; the visitor's
+// choice persists under 'landing-theme'.
 const shellSrc = readFileSync(path.resolve(__dirname, '../LandingShell.tsx'), 'utf8');
 const providerSrc = readFileSync(path.resolve(__dirname, '../LandingThemeProvider.tsx'), 'utf8');
 const landingPageSrc = readFileSync(
@@ -18,8 +19,8 @@ const landingPageSrc = readFileSync(
 describe('public-site self-contained theme contract', () => {
   it('defines a LIGHT palette on .landing-root and a DARK palette on .landing-root.dark', () => {
     expect(shellSrc).toMatch(/\.landing-root\s*\{[\s\S]*?--bg-primary:\s*#ffffff/i); // light default
-    expect(shellSrc).toMatch(/\.landing-root\.dark\s*\{[\s\S]*?--bg-primary:\s*#171614/i); // dark override
-    expect(shellSrc).toMatch(/--text-primary:\s*#111827/i); // light text
+    expect(shellSrc).toMatch(/\.landing-root\.dark\s*\{[\s\S]*?--bg-primary:\s*#171614/i); // dark override (the app's warm dark palette)
+    expect(shellSrc).toMatch(/--text-primary:\s*#111827/i); // light text (cool neutral, matches the app)
     expect(shellSrc).toMatch(/--text-primary:\s*#edecea/i); // dark text
   });
 
@@ -29,20 +30,22 @@ describe('public-site self-contained theme contract', () => {
     expect(shellSrc).not.toMatch(/\.dark \.landing-root/);
   });
 
-  it('defaults the public site to DARK (LandingThemeProvider)', () => {
-    // The public site is dark-only for now; stored light preferences are ignored
-    // (landing keeps respectStored=false, so it always renders the default theme).
-    expect(providerSrc).toMatch(/defaultTheme = 'dark'/);
-    // Safe fallback (no provider) is dark too.
-    expect(providerSrc).toMatch(/theme: 'dark'/);
+  it('defaults the public site to LIGHT (LandingThemeProvider)', () => {
+    // First visit renders light; the visitor's footer-toggle choice is restored
+    // afterwards (landing surfaces pass respectStored).
+    expect(providerSrc).toMatch(/defaultTheme = 'light'/);
+    // Safe fallback (no provider) is light too.
+    expect(providerSrc).toMatch(/theme: 'light'/);
+    // Both landing surfaces restore the stored choice.
+    expect(landingPageSrc).toMatch(/<LandingThemeProvider className="min-h-screen" respectStored>/);
+    expect(shellSrc).toMatch(/themeRespectStored = true/);
   });
 
-  it('renders the language select in the FOOTER, with no public theme toggle in the chrome', () => {
-    // The footer bottom bar carries the language select right after the copyright line.
+  it('renders the language select AND the public theme toggle in the FOOTER bottom bar', () => {
+    // The footer bottom bar carries both controls right after the copyright line.
     expect(shellSrc).toMatch(
-      /All rights reserved\.<\/p>\s*<div[^>]*>\s*<LandingLanguageSelect \/>/,
+      /All rights reserved\.<\/p>\s*<div[^>]*>\s*<LandingLanguageSelect \/>\s*<LandingThemeToggle \/>/,
     );
-    expect(shellSrc).not.toMatch(/LandingThemeToggle/);
     // Header right-cluster must not carry the language control.
     expect(shellSrc).not.toMatch(/<LandingLanguageSelect \/>\s*<SignInButton variant="link"/);
   });

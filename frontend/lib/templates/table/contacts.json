@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "kind": "table",
+  "meta": {
+    "slug": "contacts",
+    "kind": "table",
+    "order": 10,
+    "difficulty": "beginner",
+    "icon": "Users",
+    "runnable": true,
+    "teachesCount": 3,
+    "columnTypes": [
+      "text",
+      "email",
+      "phone",
+      "text",
+      "text"
+    ]
+  },
+  "table": {
+    "columns": [
+      {
+        "nameKey": "templates.table.contacts.columns.name",
+        "preset": "text"
+      },
+      {
+        "nameKey": "templates.table.contacts.columns.email",
+        "preset": "email"
+      },
+      {
+        "nameKey": "templates.table.contacts.columns.phone",
+        "preset": "phone"
+      },
+      {
+        "nameKey": "templates.table.contacts.columns.company",
+        "preset": "text"
+      },
+      {
+        "nameKey": "templates.table.contacts.columns.notes",
+        "preset": "text"
+      }
+    ]
+  }
+}

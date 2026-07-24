@@ -1,6 +1,7 @@
 package com.apimarketplace.orchestrator.tools.workflow.builder.creators;
 
 import com.apimarketplace.agent.tools.ToolsProvider.ToolExecutionResult;
+import com.apimarketplace.orchestrator.domain.workflow.Core;
 import com.apimarketplace.orchestrator.tools.workflow.builder.ResponseOptimizer;
 import com.apimarketplace.orchestrator.tools.workflow.builder.WorkflowBuilderSession;
 import com.apimarketplace.orchestrator.tools.workflow.builder.WorkflowBuilderSessionStore;
@@ -565,6 +566,19 @@ public class DecisionNodeCreator extends CreatorBase {
         // missing credential/chatId at validate time.
         Object delegation = sanitizeDelegation(parameters.get("delegation"));
 
+        // continuationMode: split-context continuation ('all_items' | 'per_item'), documented
+        // as an add_node param. Read like the sibling params (camelCase + snake_case alias)
+        // and store the canonical normalized value so validate/frontend/runtime all see the
+        // exact value the engine will use; unknown values collapse to the safe default
+        // (all_items) here just as they would at run time. Omitted = key absent, so the
+        // record default applies and pre-existing plans are untouched.
+        String continuationMode = safeString(parameters.get("continuationMode"));
+        if (continuationMode == null) continuationMode = safeString(parameters.get("continuation_mode"));
+        if (continuationMode != null && continuationMode.isBlank()) continuationMode = null;
+        if (continuationMode != null) {
+            continuationMode = Core.ApprovalConfig.normalizeContinuationMode(continuationMode);
+        }
+
         // 6. Build approval node
         Map<String, Object> approvalConfig = new LinkedHashMap<>();
         approvalConfig.put("approverRoles", approverRoles);
@@ -572,6 +586,7 @@ public class DecisionNodeCreator extends CreatorBase {
         approvalConfig.put("timeoutMs", timeoutMs);
         if (contextTemplate != null) approvalConfig.put("contextTemplate", contextTemplate);
         if (delegation != null) approvalConfig.put("delegation", delegation);
+        if (continuationMode != null) approvalConfig.put("continuationMode", continuationMode);
 
         Map<String, Object> approvalNode = new LinkedHashMap<>();
         approvalNode.put("id", nodeId);
@@ -613,6 +628,7 @@ public class DecisionNodeCreator extends CreatorBase {
         savedParams.put("timeoutMs", timeoutMs);
         if (contextTemplate != null) savedParams.put("contextTemplate", contextTemplate);
         if (delegation != null) savedParams.put("delegation", delegation);
+        if (continuationMode != null) savedParams.put("continuationMode", continuationMode);
         response.put("saved_params", savedParams);
 
         // NEXT pattern

@@ -59,7 +59,9 @@ public class InterfaceNodeSpec implements NodeSpec {
                     .type("object")
                     .description("FileRef to a PNG capture of the rendered interface. Only emitted when "
                         + "the generateScreenshot parameter is true AND the renderer sidecar returns a "
-                        + "successful capture. Best-effort: a failed capture leaves this field absent - "
+                        + "successful capture. Dimensions follow the interface's own format: an exact "
+                        + "WIDTHxHEIGHT frame when it declares one, otherwise a full-page capture at "
+                        + "1280x800 viewport width. Best-effort: a failed capture leaves this field absent - "
                         + "downstream consumers should null-guard or use a SpEL pipe default.")
                     .build(),
                 OutputFieldDef.builder()
@@ -77,9 +79,10 @@ public class InterfaceNodeSpec implements NodeSpec {
                     .type("object")
                     .description("FileRef to an MP4 recording of the interface's animation. Only "
                         + "emitted when the generateVideo parameter is true AND the renderer sidecar "
-                        + "returns a successful recording. Capture format follows videoPreset "
-                        + "(vertical 1080x1920 / horizontal 1920x1080 / square 1080x1080, default "
-                        + "vertical); the recording stops when the page sets window.__DONE__ = true "
+                        + "returns a successful recording. Capture dimensions follow the explicit "
+                        + "videoPreset when set (vertical 1080x1920 / horizontal 1920x1080 / square "
+                        + "1080x1080), otherwise the interface's own format, otherwise vertical; "
+                        + "the recording stops when the page sets window.__DONE__ = true "
                         + "or after videoMaxDurationSeconds (default 30, max 120). Best-effort: a "
                         + "failed recording leaves this field absent - map the whole FileRef into a "
                         + "file-accepting param (social upload, Telegram send_video, email "

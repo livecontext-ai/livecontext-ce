@@ -301,12 +301,31 @@ class ShowcaseSnapshotReaderTest {
     }
 
     @Test
+    @DisplayName("readInterfaceRender carries the published format through to the marketplace preview")
+    void readInterfaceRenderCarriesTheFormat() {
+        // The shape travels with the templates: without it the marketplace card renders a
+        // vertical publication at the default 1280x800.
+        Map<String, Object> defaultRender = new LinkedHashMap<>();
+        defaultRender.put("htmlTemplate", "<h1>x</h1>");
+        defaultRender.put("format", "vertical");
+        defaultRender.put("items", List.of());
+        Map<String, Object> ifaceRenders = Map.of("iface_a", Map.of("defaultRender", defaultRender));
+        WorkflowPublicationEntity pub = pubWithSnapshot(Map.of("interfaceRenders", ifaceRenders));
+
+        Optional<Map<String, Object>> result = reader.readInterfaceRender(pub, "iface_a", 0, 10, null);
+
+        assertThat(result).isPresent();
+        assertThat(result.get()).containsEntry("format", "vertical");
+    }
+
+    @Test
     @DisplayName("readInterfaceRender slices items[] by page/size and computes pagination")
     void readInterfaceRenderPagination() {
         Map<String, Object> defaultRender = new LinkedHashMap<>();
         defaultRender.put("htmlTemplate", "<h1>{{title}}</h1>");
         defaultRender.put("cssTemplate", ".x{}");
         defaultRender.put("jsTemplate", "");
+        defaultRender.put("format", "vertical");
         defaultRender.put("actionMappings", Map.of());
         List<Map<String, Object>> items = List.of(
                 Map.of("epoch", 0, "itemIndex", 0),

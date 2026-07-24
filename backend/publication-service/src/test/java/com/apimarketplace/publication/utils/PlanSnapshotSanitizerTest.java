@@ -469,6 +469,52 @@ class PlanSnapshotSanitizerTest {
             // Unknown / non-whitelisted keys still stripped.
             assertThat(interfaces.get(0)).doesNotContainKey("internalSecret");
         }
+
+        @Test
+        @DisplayName("keeps _snapshot_format - regression: an app published from a vertical interface was acquired as 1280x800")
+        void keepsSnapshotFormat() {
+            // This whitelist is a strip-by-default allowlist, so a key absent from it vanishes
+            // silently: the acquired interface would render, capture and record at the default
+            // shape with nothing in the response to hint why.
+            Map<String, Object> iface = new LinkedHashMap<>();
+            iface.put("id", "interface:story");
+            iface.put("_snapshot_htmlTemplate", "<div>story</div>");
+            iface.put("_snapshot_format", "vertical");
+
+            Map<String, Object> plan = Map.of("interfaces", List.of(iface));
+            Map<String, Object> result = PlanSnapshotSanitizer.sanitizeForPreview(plan);
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> interfaces = (List<Map<String, Object>>) result.get("interfaces");
+            assertThat(interfaces.get(0)).containsEntry("_snapshot_format", "vertical");
+        }
+
+        @Test
+        @DisplayName("keeps the PDF + video toggles - regression: publishing silently dropped the publisher's choices")
+        void keepsPdfAndVideoToggles() {
+            // Same allowlist bug as _snapshot_format, pre-existing: these node params were never
+            // whitelisted, so a published workflow lost its pdf/video outputs on clone.
+            Map<String, Object> iface = new LinkedHashMap<>();
+            iface.put("id", "interface:report");
+            iface.put("_snapshot_htmlTemplate", "<div>report</div>");
+            iface.put("generatePdf", true);
+            iface.put("pdfFormat", "Letter");
+            iface.put("pdfLandscape", true);
+            iface.put("generateVideo", true);
+            iface.put("videoPreset", "horizontal");
+            iface.put("videoMaxDurationSeconds", 45);
+            iface.put("videoMode", "smooth");
+            iface.put("videoFps", 60);
+
+            Map<String, Object> plan = Map.of("interfaces", List.of(iface));
+            Map<String, Object> result = PlanSnapshotSanitizer.sanitizeForPreview(plan);
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> interfaces = (List<Map<String, Object>>) result.get("interfaces");
+            assertThat(interfaces.get(0)).containsKeys(
+                    "generatePdf", "pdfFormat", "pdfLandscape",
+                    "generateVideo", "videoPreset", "videoMaxDurationSeconds", "videoMode", "videoFps");
+        }
     }
 
     @Nested
@@ -592,6 +638,44 @@ class PlanSnapshotSanitizerTest {
             var edges = (List<Map<String, Object>>) result.get("edges");
             assertThat(edges).hasSize(2);
             assertThat(edges.get(0)).containsOnlyKeys("from", "to");
+        }
+    }
+
+    @Nested
+    @DisplayName("layoutDirection (scalar passthrough)")
+    class LayoutDirection {
+        @Test
+        @DisplayName("keeps a vertical layoutDirection so the preview canvas renders it")
+        void keepsVertical() {
+            Map<String, Object> plan = new LinkedHashMap<>();
+            plan.put("layoutDirection", "vertical");
+            plan.put("triggers", List.of(Map.of("id", "trigger:start", "label", "Start")));
+
+            Map<String, Object> result = PlanSnapshotSanitizer.sanitizeForPreview(plan);
+
+            assertThat(result).containsEntry("layoutDirection", "vertical");
+        }
+
+        @Test
+        @DisplayName("keeps a horizontal layoutDirection")
+        void keepsHorizontal() {
+            Map<String, Object> plan = new LinkedHashMap<>();
+            plan.put("layoutDirection", "horizontal");
+
+            Map<String, Object> result = PlanSnapshotSanitizer.sanitizeForPreview(plan);
+
+            assertThat(result).containsEntry("layoutDirection", "horizontal");
+        }
+
+        @Test
+        @DisplayName("absent layoutDirection yields no key (legacy plans stay unchanged)")
+        void absentStaysAbsent() {
+            Map<String, Object> plan = Map.of(
+                    "triggers", List.of(Map.of("id", "trigger:start", "label", "Start")));
+
+            Map<String, Object> result = PlanSnapshotSanitizer.sanitizeForPreview(plan);
+
+            assertThat(result).doesNotContainKey("layoutDirection");
         }
     }
 }

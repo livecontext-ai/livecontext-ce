@@ -79,7 +79,7 @@ export interface WorkflowPlan {
   }>;
   cores?: Array<{
     id: string;
-    type: 'decision' | 'switch' | 'loop' | 'split' | 'merge' | 'fork' | 'transform' | 'filter' | 'sort' | 'limit' | 'remove_duplicates' | 'summarize' | 'compare_datasets' | 'date_time' | 'crypto_jwt' | 'xml' | 'compression' | 'rss' | 'convert_to_file' | 'extract_from_file' | 'wait' | 'download_file' | 'aggregate' | 'exit' | 'response' | 'option' | 'http_request' | 'approval' | 'data_input' | 'sub_workflow' | 'respond_to_webhook' | 'send_email' | 'email_inbox' | 'code' | 'set' | 'html_extract';
+    type: 'decision' | 'switch' | 'loop' | 'split' | 'merge' | 'fork' | 'transform' | 'filter' | 'sort' | 'limit' | 'remove_duplicates' | 'summarize' | 'compare_datasets' | 'date_time' | 'crypto_jwt' | 'xml' | 'compression' | 'rss' | 'convert_to_file' | 'extract_from_file' | 'wait' | 'download_file' | 'public_link' | 'media' | 'aggregate' | 'exit' | 'response' | 'option' | 'http_request' | 'approval' | 'data_input' | 'sub_workflow' | 'respond_to_webhook' | 'send_email' | 'email_inbox' | 'code' | 'set' | 'html_extract';
     label?: string;
     position?: { x: number; y: number };
     params?: Record<string, any>;

@@ -73,6 +73,71 @@ class OptionalComponentValidatorTest {
         return node;
     }
 
+    private Map<String, Object> mediaNode(String label) {
+        Map<String, Object> node = new LinkedHashMap<>();
+        node.put("id", "id-" + label);
+        node.put("type", "media");
+        node.put("label", label);
+        node.put("params", Map.of("operation", "mux_audio"));
+        return node;
+    }
+
+    @Test
+    @DisplayName("media node + renderer unavailable → MEDIA_RENDERER_UNAVAILABLE warning saying the node WILL fail")
+    void mediaNodeWithoutRendererWarns() {
+        session.getCores().add(mediaNode("Add Music"));
+        when(capabilityService.isScreenshotRendererAvailable()).thenReturn(false);
+
+        validator.validate(session, result);
+
+        assertThat(result.getErrors()).isEmpty();
+        assertThat(result.getWarnings()).hasSize(1);
+        assertThat(result.getWarnings().get(0).code()).isEqualTo("MEDIA_RENDERER_UNAVAILABLE");
+        assertThat(result.getWarnings().get(0).nodeId()).isEqualTo("core:add_music");
+        // Unlike the best-effort interface renders, this must announce a run-time FAILURE.
+        assertThat(result.getWarnings().get(0).message()).contains("WILL fail at run time");
+    }
+
+    @Test
+    @DisplayName("media node + renderer available → no warning")
+    void mediaNodeWithRendererIsSilent() {
+        session.getCores().add(mediaNode("Add Music"));
+        when(capabilityService.isScreenshotRendererAvailable()).thenReturn(true);
+
+        validator.validate(session, result);
+
+        assertThat(result.getWarnings()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("non-media core node alone → renderer verdict never consulted (no wasted resolution)")
+    void nonMediaCoreSkipsResolution() {
+        Map<String, Object> transform = new LinkedHashMap<>();
+        transform.put("id", "id-t");
+        transform.put("type", "transform");
+        transform.put("label", "Shape");
+        session.getCores().add(transform);
+
+        validator.validate(session, result);
+
+        assertThat(result.getWarnings()).isEmpty();
+        verify(capabilityService, never()).isScreenshotRendererAvailable();
+    }
+
+    @Test
+    @DisplayName("media node AND interface toggle + renderer unavailable → one warning EACH with distinct codes")
+    void mediaAndInterfaceWarnSeparately() {
+        session.getCores().add(mediaNode("Add Music"));
+        session.getInterfaces().add(interfaceNode("Results UI", true, null));
+        when(capabilityService.isScreenshotRendererAvailable()).thenReturn(false);
+
+        validator.validate(session, result);
+
+        assertThat(result.getWarnings()).extracting(w -> w.code()).containsExactlyInAnyOrder(
+                "INTERFACE_RENDERER_UNAVAILABLE",
+                "MEDIA_RENDERER_UNAVAILABLE");
+    }
+
     @Test
     @DisplayName("browser_agent node + browsing unavailable → one WARNING addressed by the normalized agent key, never an error")
     void browserAgentUnavailableWarns() {

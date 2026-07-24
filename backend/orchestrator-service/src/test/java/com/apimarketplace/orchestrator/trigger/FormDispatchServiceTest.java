@@ -215,39 +215,77 @@ class FormDispatchServiceTest {
         }
 
         @Test
-        @DisplayName("Should return accepted when pinned but no production run exists")
-        void shouldReturnAcceptedWhenNoRun() {
-            // PINNED (version 1) but no production run yet -> NO_PRODUCTION_RUN, which still
-            // returns "accepted" (only NOT_PINNED now refuses - see F8 regression test). The
-            // pinned-version run lookup returns Optional.empty() by Mockito default.
+        @DisplayName("Regression 2026-07-21 (inverts the old silent-success): pinned but NO production run -> clear refusal")
+        void noProductionRunRefusesInsteadOfSilentSuccess() {
+            // PINNED (version 1) but no dispatchable production run -> NO_PRODUCTION_RUN.
+            // Pre-fix this fell through to a green "accepted" while the submission fired
+            // nothing (same F8 class as NOT_PINNED) - and under the FK-first resolver the
+            // state is deterministic, not a transient race, so every submission was lost.
+            // Now it must surface via the 409 path.
             StandaloneFormEndpointDto endpoint = createEndpoint(TRIGGER_ID);
             WorkflowEntity workflow = createWorkflow(1);
 
             when(triggerClient.findFormEndpointByToken(TOKEN)).thenReturn(endpoint);
             when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(workflow));
 
-            Map<String, Object> result = service.submitForm(TOKEN, FORM_DATA, IP_ADDRESS);
+            assertThatThrownBy(() -> service.submitForm(TOKEN, FORM_DATA, IP_ADDRESS))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("temporarily not accepting submissions");
 
-            assertThat(result.get("status")).isEqualTo("accepted");
-            assertThat(result.get("workflowsTriggered")).isEqualTo(0);
+            verify(triggerClient).logFormSubmission(endpoint.getId(), FORM_DATA, "no_production_run", 0, IP_ADDRESS);
+            verify(triggerService, never()).executeTrigger(any(), any(), any(), any());
         }
 
         @Test
-        @DisplayName("Should return accepted when run is terminal")
-        void shouldReturnAcceptedWhenRunTerminal() {
+        @DisplayName("Regression 2026-07-21 (inverts the old silent-success): terminal production run = deliberate stop -> clear refusal")
+        void terminalProductionRunRefusesInsteadOfSilentSuccess() {
+            // A FOUND terminal run means the production run was deliberately stopped.
+            // Fixture fidelity (round-5 audit): PINNED workflow + COMPLETED run is the
+            // exact combination the REAL resolver can produce here (FOUND requires a
+            // pin; COMPLETED is the only terminal TRUSTED status; non-COMPLETED
+            // terminals are healed by the rearm backstop before FOUND is returned).
+            // Pre-fix the submitter saw a green "accepted", data dropped forever.
             StandaloneFormEndpointDto endpoint = createEndpoint(TRIGGER_ID);
-            WorkflowEntity workflow = createWorkflow(null);
-            WorkflowRunEntity run = createRun(RunStatus.CANCELLED);
+            WorkflowEntity workflow = createWorkflow(1);
+            WorkflowRunEntity run = createRun(RunStatus.COMPLETED);
 
             when(triggerClient.findFormEndpointByToken(TOKEN)).thenReturn(endpoint);
             when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(workflow));
-            when(runRepository.findFirstByWorkflowIdOrderByStartedAtDesc(WORKFLOW_ID))
+            when(runRepository.findFirstByWorkflowIdAndPlanVersionOrderByStartedAtDesc(WORKFLOW_ID, 1))
                     .thenReturn(Optional.of(run));
 
-            Map<String, Object> result = service.submitForm(TOKEN, FORM_DATA, IP_ADDRESS);
+            assertThatThrownBy(() -> service.submitForm(TOKEN, FORM_DATA, IP_ADDRESS))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("no longer accepting submissions");
 
-            assertThat(result.get("status")).isEqualTo("accepted");
-            assertThat(result.get("workflowsTriggered")).isEqualTo(0);
+            verify(triggerClient).logFormSubmission(endpoint.getId(), FORM_DATA, "production_run_stopped", 0, IP_ADDRESS);
+            verify(triggerService, never()).executeTrigger(any(), any(), any(), any());
+        }
+
+        /**
+         * Regression 2026-07-21 (round-5 audit): the C5 widening from
+         * isNoProductionRun() to !isFound() exists FOR the WORKFLOW_MISSING outcome
+         * (workflow deleted between our load and the resolve) - without this test a
+         * revert to isNoProductionRun() kept the whole suite green while re-opening
+         * the silent-accept F8 class for that outcome.
+         */
+        @Test
+        @DisplayName("WORKFLOW_MISSING resolver outcome refuses too - never the silent green success")
+        void workflowMissingOutcomeRefusesInsteadOfSilentSuccess() {
+            StandaloneFormEndpointDto endpoint = createEndpoint(TRIGGER_ID);
+            WorkflowEntity workflow = createWorkflow(1);
+
+            when(triggerClient.findFormEndpointByToken(TOKEN)).thenReturn(endpoint);
+            when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(workflow));
+            when(productionRunResolver.resolve(eq(WORKFLOW_ID), any())).thenReturn(
+                    new ProductionRunResolver.Resolution(
+                            Optional.empty(), ProductionRunResolver.Outcome.WORKFLOW_MISSING, null));
+
+            assertThatThrownBy(() -> service.submitForm(TOKEN, FORM_DATA, IP_ADDRESS))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("temporarily not accepting submissions");
+
+            verify(triggerClient).logFormSubmission(endpoint.getId(), FORM_DATA, "no_production_run", 0, IP_ADDRESS);
             verify(triggerService, never()).executeTrigger(any(), any(), any(), any());
         }
 
@@ -293,8 +331,8 @@ class FormDispatchServiceTest {
         }
 
         @Test
-        @DisplayName("Should return accepted when pinned run not found")
-        void shouldReturnAcceptedWhenPinnedRunNotFound() {
+        @DisplayName("Regression 2026-07-21: pinned v5 with no run at that version refuses (was silent success)")
+        void pinnedRunNotFoundRefuses() {
             StandaloneFormEndpointDto endpoint = createEndpoint(TRIGGER_ID);
             WorkflowEntity workflow = createWorkflow(5);
 
@@ -303,10 +341,10 @@ class FormDispatchServiceTest {
             when(runRepository.findFirstByWorkflowIdAndPlanVersionOrderByStartedAtDesc(WORKFLOW_ID, 5))
                     .thenReturn(Optional.empty());
 
-            Map<String, Object> result = service.submitForm(TOKEN, FORM_DATA, IP_ADDRESS);
-
-            assertThat(result.get("status")).isEqualTo("accepted");
-            assertThat(result.get("workflowsTriggered")).isEqualTo(0);
+            assertThatThrownBy(() -> service.submitForm(TOKEN, FORM_DATA, IP_ADDRESS))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("temporarily not accepting submissions");
+            verify(triggerClient).logFormSubmission(endpoint.getId(), FORM_DATA, "no_production_run", 0, IP_ADDRESS);
         }
 
         @Test
@@ -396,15 +434,23 @@ class FormDispatchServiceTest {
         }
 
         @Test
-        @DisplayName("Should log no_waiting_run when pinned but no production run fires")
-        void shouldLogNoWaitingRunWhenNotTriggered() {
-            // PINNED (version 1), no production run -> NO_PRODUCTION_RUN -> falls through to
-            // the no_waiting_run log (NOT_PINNED would instead refuse - see F8 regression).
+        @DisplayName("Should log no_waiting_run when the trigger execution itself fails (dispatch attempted, 0 fired)")
+        void shouldLogNoWaitingRunWhenExecutionFails() {
+            // The no_waiting_run outcome remains for the "found + dispatched + did not
+            // fire" case; the no-run cases now refuse loudly (no_production_run above).
+            // Fixture fidelity: PINNED workflow + WAITING_TRIGGER run at the pin is the
+            // combination the REAL resolver produces for FOUND (unpinned would be
+            // NOT_PINNED and never reach dispatch).
             StandaloneFormEndpointDto endpoint = createEndpoint(TRIGGER_ID);
             WorkflowEntity workflow = createWorkflow(1);
+            WorkflowRunEntity run = createRun(RunStatus.WAITING_TRIGGER);
 
             when(triggerClient.findFormEndpointByToken(TOKEN)).thenReturn(endpoint);
             when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(workflow));
+            when(runRepository.findFirstByWorkflowIdAndPlanVersionOrderByStartedAtDesc(WORKFLOW_ID, 1))
+                    .thenReturn(Optional.of(run));
+            when(triggerService.executeTrigger(eq(run), eq(TRIGGER_ID), eq(TriggerType.FORM), any()))
+                    .thenReturn(TriggerExecutionResult.failure(RUN_ID, TRIGGER_ID, TriggerType.FORM, "boom"));
 
             service.submitForm(TOKEN, FORM_DATA, IP_ADDRESS);
 

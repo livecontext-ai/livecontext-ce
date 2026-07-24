@@ -12,6 +12,7 @@ import { favoritesFirst, type ListSortKey, type VisibilityFilter } from '@/lib/u
 import { useResourceFavorites } from '@/hooks/useResourceFavorites';
 import { FavoriteStarButton } from '@/components/ui/FavoriteStarButton';
 import LoadingSpinner from '@/components/LoadingSpinner';
+import { resolveInterfaceFormat } from '@/lib/interfaces/interfaceFormats';
 import { CreateInterfaceModal } from '@/components/chat/CreateInterfaceModal';
 import { orchestratorApi } from '@/lib/api';
 import { interfaceService } from '@/lib/api/orchestrator/interface.service';
@@ -38,6 +39,7 @@ export interface InterfaceRow {
   htmlTemplate?: string;
   cssTemplate?: string;
   jsTemplate?: string;
+  format?: string | null;
   isPublic: boolean;
   isActive: boolean;
   createdAt?: string;
@@ -79,6 +81,9 @@ function InterfaceCard({ intf, isSelected, isShared, isPendingReview, isRejected
   const t = useTranslations();
   const hasTemplate = !!intf.htmlTemplate;
   const isWebSearch = intf.interfaceType === 'web_search';
+  // The interface's own shape. Kept on the light list payload precisely so the card can size
+  // its thumbnail instead of assuming 1280x800.
+  const formatViewport = resolveInterfaceFormat(intf.format);
 
   // Parse web search data for browser-chrome preview
   const webSearchPreview = useMemo(() => {
@@ -199,15 +204,31 @@ function InterfaceCard({ intf, isSelected, isShared, isPendingReview, isRejected
           </div>
         </div>
       ) : hasTemplate ? (
-        <div className="pointer-events-none rounded-xl overflow-hidden">
-          <InterfaceThumbnail
-            htmlTemplate={intf.htmlTemplate!}
-            mode="edit"
-            customCss={intf.cssTemplate || undefined}
-            jsTemplate={intf.jsTemplate || undefined}
-            maxHeight={400}
-          />
-        </div>
+        // A declared format gives the card a real shape: render the interface at its own
+        // viewport and letterbox it, instead of width-fitting a 1080x1920 page and cropping
+        // everything past the first 400px.
+        formatViewport ? (
+          <div className="pointer-events-none rounded-xl overflow-hidden" style={{ height: 400 }}>
+            <InterfaceThumbnail
+              htmlTemplate={intf.htmlTemplate!}
+              mode="edit"
+              customCss={intf.cssTemplate || undefined}
+              jsTemplate={intf.jsTemplate || undefined}
+              fit="contain"
+              viewport={formatViewport}
+            />
+          </div>
+        ) : (
+          <div className="pointer-events-none rounded-xl overflow-hidden">
+            <InterfaceThumbnail
+              htmlTemplate={intf.htmlTemplate!}
+              mode="edit"
+              customCss={intf.cssTemplate || undefined}
+              jsTemplate={intf.jsTemplate || undefined}
+              maxHeight={400}
+            />
+          </div>
+        )
       ) : (
         <div className="rounded-xl overflow-hidden bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-800 dark:to-slate-900">
           <div className="relative flex items-center justify-center overflow-hidden" style={{ aspectRatio: '16 / 10' }}>

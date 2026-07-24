@@ -10,6 +10,7 @@
 
 import type { BuilderNodeData } from '../../types';
 import { orchestratorApi, apiClient, type DataSource } from '@/lib/api';
+import { resolveIconSlug } from '@/lib/credentials/iconSlug';
 
 export interface ToolDataResult {
   toolData?: BuilderNodeData['toolData'];
@@ -174,7 +175,10 @@ export class ToolDataService {
       for (const [slug, data] of Object.entries(response)) {
         if (!data) continue;
 
-        const iconSlug = data.iconSlug || data.apiSlug || slug;
+        // resolveIconSlug (not `||`) so the catalog's `mcp` sentinel - a truthy
+        // placeholder for "this API has no icon_slug" - falls through to the
+        // real apiSlug instead of pinning the node to the generic API glyph.
+        const iconSlug = resolveIconSlug(data.iconSlug, data.apiSlug, slug);
 
         const toolDataResult: ToolDataResult = {
           apiData: data.apiSlug ? {
@@ -270,8 +274,8 @@ export class ToolDataService {
           toolData = await apiClient.get<any>(`/workflow-inspector/tools/${encodeURIComponent(toolSlug)}`);
         }
 
-        // Use iconSlug from toolData if available, otherwise use apiSlug as fallback
-        const iconSlug = toolData.iconSlug || apiSlug;
+        // Use iconSlug from toolData if resolvable, otherwise use apiSlug as fallback
+        const iconSlug = resolveIconSlug(toolData.iconSlug, apiSlug);
 
         return {
           apiData: {
@@ -340,8 +344,8 @@ export class ToolDataService {
           toolData = await apiClient.get<any>(`/workflow-inspector/tools/${encodeURIComponent(toolSlug)}`);
         }
 
-        // Use iconSlug from toolData if available, otherwise use apiSlug as fallback
-        const iconSlug = toolData.iconSlug || toolData.apiSlug || toolSlug;
+        // Use iconSlug from toolData if resolvable, otherwise use apiSlug as fallback
+        const iconSlug = resolveIconSlug(toolData.iconSlug, toolData.apiSlug, toolSlug);
 
         return {
           apiData: toolData.apiSlug ? {

@@ -53,9 +53,10 @@ identity.
 
 ## License of contributions
 
-LiveContext CE is licensed under the LiveContext Sustainable Use License 1.0
-(see LICENSE). By contributing, you agree that your contributions are provided
-under that same license.
+LiveContext CE is licensed under the GNU Affero General Public License v3.0
+(AGPL-3.0), see [LICENSE](LICENSE). By contributing, you agree that your
+contributions are submitted under that same license (AGPL-3.0), and you confirm
+this with the DCO sign-off described above.
 
 ## Reporting security issues
 

@@ -23,6 +23,7 @@ import { usePopoverPosition } from '../../../hooks/ui/usePopoverPosition';
 import { scheduleSettingsService } from '@/lib/api/orchestrator';
 import type { ScheduleOverview, ScheduleConfig } from '@/lib/api/orchestrator';
 import { buildStandaloneSourceNodeId } from '../../../utils/standaloneSourceNodeId';
+import { findAdoptableSchedule } from '../../../utils/findAdoptableSchedule';
 import Link from 'next/link';
 import { formatUtcDateTime } from '@/lib/utils/dateFormatters';
 
@@ -339,6 +340,26 @@ export function ScheduleTriggerParametersForm({
       return;
     }
     if (existingScheduleId === '__pending__') return;
+
+    // Adopt an existing schedule for this node/trigger instead of minting a
+    // duplicate (see findAdoptableSchedule). Reopening a saved trigger whose
+    // row the builder didn't know about used to spawn a SECOND standalone
+    // schedule that never fires, cluttered the Triggers bell, and burned the
+    // per-user schedule quota.
+    const existing = findAdoptableSchedule(allSchedules, {
+      nodeId: nodeDataId,
+      workflowId,
+      triggerId,
+    });
+    if (existing) {
+      pendingOrCreatedSchedules.set(nodeDataId, existing.id);
+      onUpdateRef.current({
+        ...dataRef.current,
+        standaloneScheduleId: existing.id,
+      } as BuilderNodeData);
+      return;
+    }
+
     if (scheduleConfig && scheduleConfig.currentCount >= scheduleConfig.maxPerUser) {
       setAutoCreateFailed(true);
       return;

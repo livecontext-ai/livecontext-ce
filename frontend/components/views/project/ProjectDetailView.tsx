@@ -23,6 +23,7 @@ import { ProjectMultiStepModal, getProjectIcon } from '@/components/project/Proj
 import { WorkflowNodeIcons } from '@/components/WorkflowNodeIcons';
 import { AvatarDisplay } from '@/components/agents';
 import { InterfaceThumbnail } from '@/app/workflows/builder/components/interface/InterfaceThumbnail';
+import { resolveInterfaceFormat } from '@/lib/interfaces/interfaceFormats';
 import { formatRelativeDate } from '@/lib/utils/dateFormatters';
 import { useSidePanel } from '@/contexts/SidePanelContext';
 import { WorkflowBuilderPanelContent } from '@/components/app/WorkflowBuilderPanelContent';
@@ -552,13 +553,17 @@ function InterfacesGrid({
                 </div>
               </div>
             ) : hasTemplate ? (
-              <div className="pointer-events-none">
+              <div className="pointer-events-none" style={resolveInterfaceFormat(intf.format) ? { height: 400 } : undefined}>
                 <InterfaceThumbnail
                   htmlTemplate={intf.htmlTemplate}
                   mode="edit"
                   customCss={intf.cssTemplate || undefined}
                   jsTemplate={intf.jsTemplate || undefined}
-                  maxHeight={400}
+                  {...(resolveInterfaceFormat(intf.format)
+                    // A declared shape: render at it and letterbox, so a 1080x1920 interface is
+                    // not width-fitted and cropped at 400px.
+                    ? { fit: 'contain' as const, viewport: resolveInterfaceFormat(intf.format)! }
+                    : { maxHeight: 400 })}
                 />
               </div>
             ) : (

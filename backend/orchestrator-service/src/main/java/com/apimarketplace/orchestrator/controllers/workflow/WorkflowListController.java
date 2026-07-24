@@ -307,6 +307,22 @@ public class WorkflowListController {
             Object desc = request.get("description");
             workflow.setDescription(desc == null ? null : desc.toString());
         }
+        // Cost budget (Advanced). Always in CREDITS on the wire (1 credit =
+        // $0.001); the frontend converts the CE dollar input to credits before
+        // sending. null / 0 / negative clears the budget (= unlimited).
+        if (request.containsKey("budgetCredits")) {
+            Object budgetVal = request.get("budgetCredits");
+            if (budgetVal == null || (budgetVal instanceof String s && s.isBlank())) {
+                workflow.setBudgetCredits(null);
+            } else {
+                try {
+                    java.math.BigDecimal b = new java.math.BigDecimal(budgetVal.toString());
+                    workflow.setBudgetCredits(b.signum() <= 0 ? null : b);
+                } catch (NumberFormatException e) {
+                    return ResponseEntity.badRequest().body(Map.of("error", "budget must be a number"));
+                }
+            }
+        }
         workflow.setUpdatedAt(Instant.now());
         workflowRepository.save(workflow);
 
@@ -498,7 +514,8 @@ public class WorkflowListController {
             entity.getWorkflowType(),
             entity.getPinnedVersion(),
             hasActiveRun,
-            boardColumn
+            boardColumn,
+            entity.getBudgetCredits()
         );
     }
 }

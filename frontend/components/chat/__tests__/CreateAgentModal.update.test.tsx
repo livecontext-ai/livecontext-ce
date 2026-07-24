@@ -253,6 +253,8 @@ describe('CreateAgentModal - EDIT clears systemPrompt / description', () => {
 describe('CreateAgentModal - EDIT inactivity timeout payload (0 = disabled, sent verbatim)', () => {
   it('sends inactivityTimeout: 0 verbatim (disabled), NOT coerced to the 300 default', async () => {
     renderModal({ id: 'agent-1', name: 'A', inactivityTimeout: 90 }, 2); // step 2 = Configuration
+    // The tuning knobs (incl. inactivity timeout) live behind the collapsed Advanced section.
+    fireEvent.click(await screen.findByText('modals.createAgent.advancedModeLabel'));
     const input = await screen.findByDisplayValue('90');
     fireEvent.change(input, { target: { value: '0' } });
     next(); // → step 3 (Integration)
@@ -267,6 +269,7 @@ describe('CreateAgentModal - EDIT inactivity timeout payload (0 = disabled, sent
 
   it('sends a custom inactivityTimeout verbatim', async () => {
     renderModal({ id: 'agent-1', name: 'A', inactivityTimeout: 90 }, 2);
+    fireEvent.click(await screen.findByText('modals.createAgent.advancedModeLabel'));
     const input = await screen.findByDisplayValue('90');
     fireEvent.change(input, { target: { value: '120' } });
     next();

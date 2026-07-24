@@ -13,7 +13,9 @@ public sealed interface WorkflowEvent permits StepStatusEvent,
     MergeEvent,
     DebugLogEvent,
     RetryEvent,
-    AgentToolCallEvent {
+    AgentToolCallEvent,
+    RunCostEvent,
+    RunBudgetBlockedEvent {
 
     String runId();
 

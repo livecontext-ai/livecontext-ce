@@ -1,0 +1,194 @@
+{
+  "schemaVersion": 1,
+  "kind": "workflow",
+  "meta": {
+    "slug": "split-list",
+    "kind": "workflow",
+    "order": 40,
+    "difficulty": "intermediate",
+    "icon": "List",
+    "runnable": true,
+    "teachesCount": 3,
+    "nodeKinds": [
+      "manual",
+      "transform",
+      "split",
+      "transform",
+      "aggregate"
+    ]
+  },
+  "plan": {
+    "triggers": [
+      {
+        "id": "trigger-1",
+        "type": "manual",
+        "label": "Start",
+        "position": {
+          "x": 120,
+          "y": 320
+        },
+        "params": {}
+      }
+    ],
+    "mcps": [],
+    "cores": [
+      {
+        "id": "core-list",
+        "type": "transform",
+        "label": "Make list",
+        "position": {
+          "x": 440,
+          "y": 320
+        },
+        "transform": {
+          "mappings": [
+            {
+              "label": "items",
+              "expression": "{{{'alpha', 'beta', 'gamma'}}}"
+            }
+          ]
+        }
+      },
+      {
+        "id": "core-split",
+        "type": "split",
+        "label": "For each item",
+        "position": {
+          "x": 780,
+          "y": 320
+        },
+        "list": "{{core:make_list.output.transformed.items}}",
+        "maxItems": 10
+      },
+      {
+        "id": "core-handle",
+        "type": "transform",
+        "label": "Handle item",
+        "position": {
+          "x": 1120,
+          "y": 320
+        },
+        "transform": {
+          "mappings": [
+            {
+              "label": "label",
+              "expression": "Item {{index}}: {{item}}"
+            }
+          ]
+        }
+      },
+      {
+        "id": "core-collect",
+        "type": "aggregate",
+        "label": "Collect",
+        "position": {
+          "x": 1460,
+          "y": 320
+        },
+        "aggregate": {
+          "fields": [
+            {
+              "label": "all_labels",
+              "expression": "{{core:handle_item.output.transformed.label}}"
+            }
+          ]
+        }
+      }
+    ],
+    "notes": [
+      {
+        "id": "note-parallel",
+        "type": "note",
+        "label": "templates.workflow.splitList.notes.parallel.label",
+        "text": "templates.workflow.splitList.notes.parallel.text",
+        "color": "#fef3c7",
+        "borderColor": "#fbbf24",
+        "textColor": "#92400e",
+        "width": 330,
+        "height": 180,
+        "position": {
+          "x": 720,
+          "y": 40
+        }
+      },
+      {
+        "id": "note-vs-loop",
+        "type": "note",
+        "label": "templates.workflow.splitList.notes.vsLoop.label",
+        "text": "templates.workflow.splitList.notes.vsLoop.text",
+        "color": "#e9d5ff",
+        "borderColor": "#a855f7",
+        "textColor": "#6b21a8",
+        "width": 350,
+        "height": 200,
+        "position": {
+          "x": 720,
+          "y": 600
+        }
+      },
+      {
+        "id": "note-item-var",
+        "type": "note",
+        "label": "templates.workflow.splitList.notes.itemVar.label",
+        "text": "templates.workflow.splitList.notes.itemVar.text",
+        "color": "#dbeafe",
+        "borderColor": "#3b82f6",
+        "textColor": "#1e40af",
+        "width": 340,
+        "height": 190,
+        "position": {
+          "x": 1100,
+          "y": 40
+        }
+      },
+      {
+        "id": "note-max-items",
+        "type": "note",
+        "label": "templates.workflow.splitList.notes.maxItems.label",
+        "text": "templates.workflow.splitList.notes.maxItems.text",
+        "color": "#fed7aa",
+        "borderColor": "#f97316",
+        "textColor": "#9a3412",
+        "width": 330,
+        "height": 180,
+        "position": {
+          "x": 1100,
+          "y": 600
+        }
+      },
+      {
+        "id": "note-aggregate",
+        "type": "note",
+        "label": "templates.workflow.splitList.notes.aggregate.label",
+        "text": "templates.workflow.splitList.notes.aggregate.text",
+        "color": "#d1fae5",
+        "borderColor": "#10b981",
+        "textColor": "#065f46",
+        "width": 330,
+        "height": 180,
+        "position": {
+          "x": 1480,
+          "y": 40
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "trigger:start",
+        "to": "core:make_list"
+      },
+      {
+        "from": "core:make_list",
+        "to": "core:for_each_item"
+      },
+      {
+        "from": "core:for_each_item",
+        "to": "core:handle_item"
+      },
+      {
+        "from": "core:handle_item",
+        "to": "core:collect"
+      }
+    ]
+  }
+}

@@ -2015,6 +2015,10 @@ public class WorkflowPublicationController {
                     landing.put("htmlTemplate", plan.get("htmlTemplate"));
                     landing.put("cssTemplate", plan.get("cssTemplate"));
                     landing.put("jsTemplate", plan.get("jsTemplate"));
+                    // The format travels with the templates (the snapshot carries it, see
+                    // InterfaceResourceStrategy): without it the marketplace card shapes a
+                    // vertical publication as 1280x800.
+                    landing.put("format", plan.get("format"));
                     landing.put("interfaceType", plan.get("interfaceType"));
                     landing.put("data", plan.get("data"));
                 }

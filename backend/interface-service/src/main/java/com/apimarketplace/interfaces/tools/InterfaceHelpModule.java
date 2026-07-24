@@ -47,9 +47,24 @@ public class InterfaceHelpModule implements ToolModule {
               - Multiple interfaces in a workflow = multiple pages of an app""");
 
         result.put("2_create", Map.of(
-            "syntax", "interface(action='create', name='...', html_template='...', css_template='...', js_template='...')",
+            "syntax", "interface(action='create', name='...', format='...', html_template='...', css_template='...', js_template='...')",
             "rule", "ALWAYS provide html_template, css_template, js_template (even if empty string).",
-            "example", "interface(action='create', name='Dashboard', html_template='<h1>{{title|Dashboard}}</h1><form id=\"search\"><input name=\"query\"/><button type=\"submit\">Search</button></form><button id=\"refresh\">Refresh</button><div id=\"results\">{{results|No data}}</div>', css_template='body { font-family: sans-serif; padding: 16px; }', js_template='// optional dynamic logic')"
+            "format", "OPTIONAL - the shape this interface is designed for. It drives the dimensions of every "
+                + "screenshot, video and preview of this interface, everywhere it is shown. Set it in the SAME call "
+                + "that writes html_template, and match your `<meta name=\"viewport\" content=\"width=...\">` and layout "
+                + "to it (see 3c_iframe_and_responsive). Presets: classic (1280x800) | widescreen (1920x1080) | "
+                + "vertical (1080x1920, TikTok/Reels/Shorts) | square (1080x1080) | portrait (1080x1350) | "
+                + "mobile (390x844) | tablet (820x1180) | desktop (1440x900) | banner (1500x500) | "
+                + "social_card (1200x630) | a4_portrait (794x1123) | a4_landscape (1123x794). Aliases accepted: "
+                + "landscape=classic, horizontal=16:9=widescreen, story=reel=9:16=vertical, 1:1=square, 4:5=portrait, "
+                + "og=social_card. Or a custom \"WIDTHxHEIGHT\" with each side 16-2160 (e.g. '1080x1920'). "
+                + "OMIT IT for a tall page you want captured whole (a long dashboard, a report): with no format the "
+                + "screenshot is a FULL-PAGE capture at 1280 wide, however tall the content is. Note format='classic' "
+                + "is NOT the same as omitting it: classic is an exact 1280x800 frame and crops anything below the "
+                + "fold. An invalid value is rejected with an error listing the presets, never silently ignored. "
+                + "create/update/get responses echo the stored `format`, normalized to its canonical value "
+                + "(alias 'story' comes back as 'vertical'; absent = none set); clear it with format=''.",
+            "example", "interface(action='create', name='Story Card', format='vertical', html_template='<meta name=\"viewport\" content=\"width=1080\"><h1>{{title|My Story}}</h1>', css_template='body { font-family: sans-serif; }', js_template='')"
         ));
 
         result.put("3_template_syntax", Map.of(
@@ -80,9 +95,16 @@ public class InterfaceHelpModule implements ToolModule {
         // renders inside an iframe with no inherited theme.)
         // ═══════════════════════════════════════════════════════════════
         result.put("3c_iframe_and_responsive", Map.of(
-            "viewport_meta", "MANDATORY: include `<meta name=\"viewport\" content=\"width=1280\">` in html_template. " +
+            "viewport_meta", "MANDATORY: include a FIXED-width `<meta name=\"viewport\" content=\"width=<W>\">` in html_template. " +
                 "The host iframe does NOT pass device width - `width=device-width` will misrender. " +
-                "1280 keeps a stable internal coordinate space; the host scales it for the actual viewport.",
+                "<W> = the width of THIS interface's own `format` param (pass it in the same create/update call): " +
+                "1280 for 'classic' or when you set no format, 1920 for 'widescreen', 1080 for 'vertical' " +
+                "(1080x1920) / 'square' (1080x1080) / 'portrait' (1080x1350), 390 for 'mobile', 820 for 'tablet', " +
+                "1440 for 'desktop', 1500 for 'banner', 1200 for 'social_card', 794 for 'a4_portrait', " +
+                "1123 for 'a4_landscape', or the WIDTH you gave in a custom \"WIDTHxHEIGHT\". A fixed width keeps a " +
+                "stable internal coordinate space; the host scales it for the actual viewport. Design the layout for " +
+                "that width and, for portrait formats, for the format's height as the visible fold (a screenshot or " +
+                "video of this interface crops below it).",
             "body_theme", "MANDATORY in css_template: `body { background-color: #ffffff; color: #111827; }` for light, " +
                 "or `body { background-color: #171614; color: #edecea; }` for dark. " +
                 "There is NO inherited theme - without these, body falls back to transparent + browser default text color.",
@@ -142,11 +164,14 @@ public class InterfaceHelpModule implements ToolModule {
             "workflow(action='help', topics=['interface'])");
 
         Map<String, String> actions = new LinkedHashMap<>();
-        actions.put("create", "interface(action='create', name='...', description='...', html_template='...', css_template='...', js_template='...')");
-        actions.put("get", "interface(action='get', interface_id='<uuid>')");
+        actions.put("create", "interface(action='create', name='...', description='...', format='...', html_template='...', css_template='...', js_template='...')");
+        actions.put("get", "interface(action='get', interface_id='<uuid>') - returns name, description, format (absent when none is set) and the stored templates.");
         actions.put("list", "interface(action='list', limit=25, offset=0)");
         actions.put("update", "interface(action='update', interface_id='<uuid>', html_template='...') - REPLACES the whole template. " +
-            "For a small change (a label, a color, one block), prefer 'patch' instead of re-sending everything.");
+            "For a small change (a label, a color, one block), prefer 'patch' instead of re-sending everything. " +
+            "Re-shape an existing interface with format='vertical' (see 2_create for the preset list); " +
+            "format='' clears it back to no declared shape (full-page capture at 1280 wide). Any field you omit is " +
+            "left untouched.");
         actions.put("patch", "interface(action='patch', interface_id='<uuid>', target='html'|'css'|'js', " +
             "edits=[{old:'<exact current text>', new:'<replacement>'}]) - surgical search/replace, like a coding agent. " +
             "Patches ONE template per call: 'target' picks which stored template (html, css, or js); to edit two of them, " +

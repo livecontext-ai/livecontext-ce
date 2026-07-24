@@ -82,6 +82,20 @@ export function ApplicationCarousel({
   }, [activeInterfaceIndex, configs, setCarouselIndex]);
 
 
+  // --- Open on the ENTRY interface (isEntryInterface) ---
+  // Page ORDER stays canvas x-order (multi-page apps read left to right); only the
+  // INITIAL page honors the entry flag. One-shot per mount, and only while nothing
+  // else has navigated: the index is still the untouched default and no run activity
+  // has auto-navigated. A user's remembered position or an auto-nav always wins.
+  const didInitEntryIndexRef = React.useRef(false);
+  React.useEffect(() => {
+    if (didInitEntryIndexRef.current || configs.length === 0) return;
+    didInitEntryIndexRef.current = true;
+    if (carouselIndex !== 0 || lastAutoNavNodeId.current) return;
+    const entryIdx = configs.findIndex(c => c.isEntryInterface);
+    if (entryIdx > 0) setCarouselIndex(entryIdx);
+  }, [configs, carouselIndex, setCarouselIndex]);
+
   // --- External navigation request (from workflowOpenApplicationTab event) ---
   React.useEffect(() => {
     if (!targetInterfaceId) return;

@@ -17,7 +17,7 @@ public class EmailInboxNodeSpec implements NodeSpec {
             .label("Email Inbox")
             .category("core")
             .variablePrefix("core")
-            .description("Reads messages and performs mailbox actions (mark read/unread, flag, move, delete) over IMAP")
+            .description("Reads messages and performs mailbox actions (mark read/unread, flag, move, delete, create folder) over IMAP")
             .outputs(List.of(
                 OutputFieldDef.builder()
                     .key("messages")
@@ -27,28 +27,39 @@ public class EmailInboxNodeSpec implements NodeSpec {
                 OutputFieldDef.builder()
                     .key("count")
                     .type("number")
-                    .description("Number of messages returned (READ mode), or folder count (list_folders)")
+                    .description("Number of live messages returned (READ mode; messages flagged deleted and awaiting expunge are excluded), or folder count (list_folders)")
                     .defaultValue(0)
                     .build(),
                 OutputFieldDef.builder()
                     .key("folders")
                     .type("array")
-                    .description("Mailbox folder names (list_folders action)")
+                    .description("Mailbox folder names, as server paths (list_folders and create_folder actions)")
                     .build(),
                 OutputFieldDef.builder()
                     .key("folder")
                     .type("string")
-                    .description("The mailbox folder that was read or acted on")
+                    .description("The mailbox folder that was read, acted on, or created")
+                    .build(),
+                OutputFieldDef.builder()
+                    .key("created")
+                    .type("boolean")
+                    .description("create_folder action: true when the folder was created, false when it already existed")
+                    .defaultValue(false)
                     .build(),
                 OutputFieldDef.builder()
                     .key("action")
                     .type("string")
-                    .description("The mailbox action performed (ACTION mode): mark_read, mark_unread, flag, unflag, move, delete")
+                    .description("The mailbox action performed (ACTION mode): mark_read, mark_unread, flag, unflag, move, delete, create_folder")
                     .build(),
                 OutputFieldDef.builder()
                     .key("messageUid")
                     .type("number")
-                    .description("IMAP UID of the message acted on (ACTION mode)")
+                    .description("IMAP UID of the message acted on (ACTION mode). For move this is the SOURCE uid, which is invalid after the move; use newMessageUid when present")
+                    .build(),
+                OutputFieldDef.builder()
+                    .key("newMessageUid")
+                    .type("number")
+                    .description("move only: UID of the message in the target folder, present only when the IMAP server supports UIDPLUS/COPYUID. Absent otherwise (re-read the target folder to find the message)")
                     .build(),
                 OutputFieldDef.builder()
                     .key("success")

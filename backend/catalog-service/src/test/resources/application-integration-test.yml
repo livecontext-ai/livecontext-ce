@@ -34,6 +34,25 @@ spring:
     exclude:
       - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
       - org.springframework.boot.autoconfigure.data.redis.RedisReactiveAutoConfiguration
+      # The mocked RedisConnectionFactory satisfies this auto-config's @ConditionalOnBean,
+      # so it would create eventBusListenerContainer and NPE connecting at startup.
+      # Excluding it lets EventBusAutoConfiguration supply the in-memory EventBus/KeyValueStore.
+      - com.apimarketplace.common.event.RedisEventBusConfiguration
+
+# Monolith mode: drops RedisConfig's pub/sub beans (RedisMessageListenerContainer,
+# RedisEventBus, RedisKeyValueStore) so the context never opens a Redis subscription
+# against the mocked connection factory (NPE / registration timeout at startup).
+# EventBusAutoConfiguration then supplies the in-memory EventBus/KeyValueStore.
+# Side effects to be aware of (GatewayWebAutoConfiguration keys off this flag too):
+# - the servlet filter chain swaps GatewayAuthenticationFilter for
+#   MonolithSecurityFilter + ServicePrefixRewriteFilter; MockMvc requests stay
+#   authenticated only because their default remoteAddr is 127.0.0.1 and the
+#   filter trusts loopback callers that present X-User-ID. A test that sets a
+#   non-loopback remote address will have its identity headers stripped.
+# - microservice-only beans (ServiceToolsController, RedisConfig's pub/sub trio)
+#   are not instantiated in this context; nothing in this suite targets them.
+deployment:
+  mode: monolith
 
 # Disable AI features for integration tests
 ai:

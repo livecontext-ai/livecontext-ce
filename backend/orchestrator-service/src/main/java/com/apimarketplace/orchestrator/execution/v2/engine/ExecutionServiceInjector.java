@@ -19,6 +19,7 @@ import com.apimarketplace.orchestrator.services.agent.AgentConversationManager;
 import com.apimarketplace.agent.client.AgentClient;
 import com.apimarketplace.orchestrator.services.agent.ConversationEventPublisher;
 import com.apimarketplace.orchestrator.services.file.FileDownloader;
+import com.apimarketplace.orchestrator.services.file.PublicLinkService;
 import com.apimarketplace.orchestrator.services.file.FileStorageService;
 import com.apimarketplace.orchestrator.services.InterfaceRenderService;
 import com.apimarketplace.orchestrator.services.interfaces.InterfaceScreenshotService;
@@ -72,6 +73,12 @@ public class ExecutionServiceInjector {
 
     @Autowired(required = false)
     private FileDownloader fileDownloader;
+
+    @Autowired(required = false)
+    private PublicLinkService publicLinkService;
+
+    @Autowired(required = false)
+    private com.apimarketplace.orchestrator.services.media.MediaRenderService mediaRenderService;
 
     @Autowired(required = false)
     private MimeTypeRegistry mimeTypeRegistry;
@@ -228,6 +235,8 @@ public class ExecutionServiceInjector {
             .templateAdapter(templateAdapter)
             .fileStorageService(fileStorageService)
             .fileDownloader(fileDownloader)
+            .publicLinkService(publicLinkService)
+            .mediaRenderService(mediaRenderService)
             .mimeTypeRegistry(mimeTypeRegistry)
             .eventPublisher(eventPublisher)
             .restTemplate(restTemplate)

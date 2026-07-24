@@ -21,7 +21,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ getWorkflowsPage: vi.fn() }));
 
-vi.mock('next-intl', () => ({ useTranslations: () => (key: string) => key }));
+vi.mock('next-intl', () => ({
+  // .raw mirrors the real next-intl API: template copy is read verbatim through it
+  // so workflow expressions like {{item}} are not parsed as ICU arguments.
+  useTranslations: () => Object.assign((key: string) => key, { raw: (key: string) => key }),
+}));
 vi.mock('@/i18n/navigation', () => ({ useRouter: () => ({ push: () => undefined }) }));
 vi.mock('@/lib/api', () => ({ orchestratorApi: mocks }));
 vi.mock('@/components/WorkflowNodeIcons', () => ({ WorkflowNodeIcons: () => null }));
@@ -45,7 +49,11 @@ vi.mock('@/hooks/useDebouncedValue', () => ({ useDebouncedValue: (v: unknown) =>
 vi.mock('@/hooks/useSelectableItems', () => ({
   useSelectableItems: () => ({ selectedIds: new Set<string>(), toggle: vi.fn(), clear: vi.fn(), selectAll: vi.fn() }),
 }));
-vi.mock('@/lib/stores/current-org-store', () => ({ useCanMutateInCurrentOrg: () => true }));
+vi.mock('@/lib/stores/current-org-store', () => ({
+  useCanMutateInCurrentOrg: () => true,
+  // Consumed by the TemplateGallery banner, which scopes its collapsed pref per workspace.
+  useCurrentOrg: () => ({ currentOrgId: null }),
+}));
 vi.mock('@/lib/hooks/useOrgScopedReset', () => ({ useOrgScopedReset: () => undefined }));
 
 // Native-<select> stand-in for the Radix select: collects the trigger's aria-label and the

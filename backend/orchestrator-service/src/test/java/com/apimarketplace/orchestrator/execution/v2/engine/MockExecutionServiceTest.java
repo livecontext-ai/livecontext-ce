@@ -108,6 +108,21 @@ class MockExecutionServiceTest {
     }
 
     @Test
+    @DisplayName("a PARKED mock with a durationMs never reaches the factory: no simulated wait for real executions")
+    void parkedMockWithDurationNeverSleeps() {
+        NodeMock parked = NodeMock.fromMap(Map.of(
+            "enabled", false, "output", Map.of("x", 1), "durationMs", 600_000), NODE_ID);
+        when(mockRunGate.mode(RUN_ID)).thenReturn(MockRunGate.MockRunMode.DEFAULT);
+        when(context.plan()).thenReturn(planWithMock(NODE_ID, parked));
+
+        long before = System.currentTimeMillis();
+        assertThat(service.tryMock(mcpStepNode("gmail/list", false), context)).isNull();
+
+        assertThat(System.currentTimeMillis() - before).isLessThan(1_000L);
+        verifyNoInteractions(factory);
+    }
+
+    @Test
     @DisplayName("DEFAULT mode + no block = real execution (granular hybrid runs)")
     void noBlockInDefaultModePassthrough() {
         when(mockRunGate.mode(RUN_ID)).thenReturn(MockRunGate.MockRunMode.DEFAULT);

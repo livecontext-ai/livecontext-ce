@@ -24,6 +24,9 @@ export const PreviewColumn = ({ node, embedded = false }: PreviewColumnProps) =>
 
   // Fallback chain: node data → DB
   const cssTemplate = interfaceData.cssTemplate || interfaceDetails?.cssTemplate || '';
+  // The interface's own shape: this is the surface where the author WRITES the HTML, so it must
+  // show the frame that HTML is being written for.
+  const format = interfaceDetails?.format;
 
   // If embedded (inside output column flex container), use flex-1 to fill available space
   if (embedded) {
@@ -42,6 +45,7 @@ export const PreviewColumn = ({ node, embedded = false }: PreviewColumnProps) =>
             cssTemplate={cssTemplate || undefined}
             className="w-full flex-1 min-h-0"
             autoFit={false}
+            format={format}
           />
         </div>
       </div>
@@ -61,6 +65,7 @@ export const PreviewColumn = ({ node, embedded = false }: PreviewColumnProps) =>
             <InterfacePreview
               htmlTemplate={editorExpression}
               cssTemplate={cssTemplate || undefined}
+              format={format}
               className="w-full h-full"
               autoFit={false}
             />

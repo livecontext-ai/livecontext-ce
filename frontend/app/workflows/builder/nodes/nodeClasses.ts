@@ -51,6 +51,8 @@ export type InspectorTemplate =
   | 'fork'
   | 'wait'
   | 'download_file'
+  | 'public_link'
+  | 'media'
   | 'http_request'
   | 'data_input'
   | 'while-group'
@@ -469,6 +471,28 @@ export const NODE_CLASSES: BuilderNodeClass[] = [
     aliases: ['download', 'file-download'],
     palette: { category: 'core', quickGroup: 'Data', quickBg: QUICK_COLOR.data },
     inspector: 'download_file',
+  }),
+  new BuilderNodeClass({
+    id: 'public_link',
+    label: 'Public Link',
+    description: 'Turn a file into a public, time-limited signed URL',
+    kind: 'public_link',
+    nodeType: 'flowNode',
+    family: 'core',
+    aliases: ['public-link', 'share-link'],
+    palette: { category: 'core', quickGroup: 'Data', quickBg: QUICK_COLOR.data },
+    inspector: 'public_link',
+  }),
+  new BuilderNodeClass({
+    id: 'media',
+    label: 'Media',
+    description: 'Probe, mux, mix, or extract audio and video files',
+    kind: 'media',
+    nodeType: 'flowNode',
+    family: 'core',
+    aliases: ['audio', 'mux'],
+    palette: { category: 'core', quickGroup: 'Data', quickBg: QUICK_COLOR.data },
+    inspector: 'media',
   }),
   new BuilderNodeClass({
     id: 'http-request',

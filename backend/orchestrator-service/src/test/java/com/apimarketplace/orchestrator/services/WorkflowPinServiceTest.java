@@ -371,6 +371,112 @@ class WorkflowPinServiceTest {
             verify(triggerSyncService, never()).syncAllTriggersFromPinnedVersion(any());
         }
 
+        /**
+         * Regression 2026-07-21 (round-4 audit): the plain newest-TRUSTED election
+         * could pick a newer COMPLETED run over a live WAITING_TRIGGER one, turning a
+         * FAILED/CANCELLED termination into a permanent deliberate-stop stall (a
+         * COMPLETED production FK resolves EMPTY on the schedule lane forever).
+         */
+        @Test
+        @DisplayName("rearm prefers a LIVE run over a newer COMPLETED one (no deliberate-stop conversion)")
+        void rearmPrefersLiveRunOverNewerCompleted() {
+            WorkflowEntity wf = workflow(TENANT_ID, 5);
+            wf.setProductionRunId(UUID.randomUUID());
+            UUID liveRunId = UUID.randomUUID();
+            WorkflowRunEntity liveRun = new WorkflowRunEntity();
+            setRunId(liveRun, liveRunId);
+            when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(wf));
+            when(workflowRunRepository
+                    .findFirstProductionRunByWorkflowIdAndPlanVersionAndStatusIn(
+                            eq(WORKFLOW_ID), eq(5),
+                            eq(List.of(RunStatus.WAITING_TRIGGER, RunStatus.RUNNING, RunStatus.PAUSED))))
+                    .thenReturn(Optional.of(liveRun));
+
+            boolean result = service.rearm(WORKFLOW_ID);
+
+            assertThat(result).isTrue();
+            assertThat(wf.getProductionRunId()).isEqualTo(liveRunId);
+            // The full-TRUSTED (COMPLETED-including) election is never consulted when a live run exists.
+            verify(workflowRunRepository, never())
+                    .findFirstProductionRunByWorkflowIdAndPlanVersionAndStatusIn(
+                            eq(WORKFLOW_ID), eq(5),
+                            eq(List.of(RunStatus.COMPLETED, RunStatus.WAITING_TRIGGER,
+                                    RunStatus.RUNNING, RunStatus.PAUSED)));
+        }
+
+        /**
+         * Regression 2026-07-21 (round-5 audit, HIGH): with the only live run parked
+         * AWAITING_SIGNAL (routine for approval workflows), the COMPLETED fallback
+         * froze the FK on a deliberate-stop identity nothing ever heals (COMPLETED is
+         * exempt from the resolver heal; the listener never fires for it again).
+         * Rearm must clear the FK instead: the FK-null bootstrap scan then SERVES the
+         * signal run once its approval resolves and it parks WAITING_TRIGGER (the FK
+         * itself stays NULL until a later pin/rearm/termination re-points it).
+         */
+        @Test
+        @DisplayName("rearm clears the FK (never elects COMPLETED) when the only live run is AWAITING_SIGNAL")
+        void rearmClearsFkWhenOnlyAwaitingSignalRunSurvives() {
+            WorkflowEntity wf = workflow(TENANT_ID, 5);
+            wf.setProductionRunId(UUID.randomUUID());
+            WorkflowRunEntity awaitingRun = new WorkflowRunEntity();
+            setRunId(awaitingRun, UUID.randomUUID());
+            when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(wf));
+            when(workflowRunRepository
+                    .findFirstProductionRunByWorkflowIdAndPlanVersionAndStatusIn(
+                            eq(WORKFLOW_ID), eq(5),
+                            eq(List.of(RunStatus.WAITING_TRIGGER, RunStatus.RUNNING, RunStatus.PAUSED))))
+                    .thenReturn(Optional.empty());
+            when(workflowRunRepository
+                    .findFirstProductionRunByWorkflowIdAndPlanVersionAndStatusIn(
+                            eq(WORKFLOW_ID), eq(5), eq(List.of(RunStatus.AWAITING_SIGNAL))))
+                    .thenReturn(Optional.of(awaitingRun));
+
+            boolean result = service.rearm(WORKFLOW_ID);
+
+            assertThat(result).isFalse();
+            assertThat(wf.getProductionRunId()).isNull();
+            verify(workflowRepository).save(wf);
+            // The COMPLETED-including election is never consulted - it is exactly
+            // what must not win here.
+            verify(workflowRunRepository, never())
+                    .findFirstProductionRunByWorkflowIdAndPlanVersionAndStatusIn(
+                            eq(WORKFLOW_ID), eq(5),
+                            eq(List.of(RunStatus.COMPLETED, RunStatus.WAITING_TRIGGER,
+                                    RunStatus.RUNNING, RunStatus.PAUSED)));
+        }
+
+        @Test
+        @DisplayName("rearm falls back to a COMPLETED survivor when no live run exists (pre-existing contract kept)")
+        void rearmFallsBackToCompletedWhenNoLiveRun() {
+            WorkflowEntity wf = workflow(TENANT_ID, 5);
+            wf.setProductionRunId(UUID.randomUUID());
+            UUID completedId = UUID.randomUUID();
+            WorkflowRunEntity completedRun = new WorkflowRunEntity();
+            setRunId(completedRun, completedId);
+            when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(wf));
+            when(workflowRunRepository
+                    .findFirstProductionRunByWorkflowIdAndPlanVersionAndStatusIn(
+                            eq(WORKFLOW_ID), eq(5),
+                            eq(List.of(RunStatus.WAITING_TRIGGER, RunStatus.RUNNING, RunStatus.PAUSED))))
+                    .thenReturn(Optional.empty());
+            // No run parked on a blocking signal either - the COMPLETED fallback applies.
+            when(workflowRunRepository
+                    .findFirstProductionRunByWorkflowIdAndPlanVersionAndStatusIn(
+                            eq(WORKFLOW_ID), eq(5), eq(List.of(RunStatus.AWAITING_SIGNAL))))
+                    .thenReturn(Optional.empty());
+            when(workflowRunRepository
+                    .findFirstProductionRunByWorkflowIdAndPlanVersionAndStatusIn(
+                            eq(WORKFLOW_ID), eq(5),
+                            eq(List.of(RunStatus.COMPLETED, RunStatus.WAITING_TRIGGER,
+                                    RunStatus.RUNNING, RunStatus.PAUSED))))
+                    .thenReturn(Optional.of(completedRun));
+
+            boolean result = service.rearm(WORKFLOW_ID);
+
+            assertThat(result).isTrue();
+            assertThat(wf.getProductionRunId()).isEqualTo(completedId);
+        }
+
         @Test
         @DisplayName("rearm on unpinned workflow → no-op, returns false")
         void rearmNoOpOnUnpinned() {

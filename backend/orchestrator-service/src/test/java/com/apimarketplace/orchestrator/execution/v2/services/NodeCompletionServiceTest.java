@@ -131,7 +131,15 @@ class NodeCompletionServiceTest {
 
             service.emitNodeComplete(execution, node, result, triggerItem, 0, context, null);
 
-            verify(stepCompletionOrchestrator).completeStep(eq(execution), eq("mcp:step1"), eq("step1"), any(), eq(0), isNull());
+            // Payload-loss fix: the legacy no-trigger branch now calls complete(ctx)
+            // directly so the returned StepCompletionResult (payload-lost rewrite)
+            // reaches the engine caller.
+            verify(stepCompletionOrchestrator).complete(argThat(
+                (com.apimarketplace.orchestrator.services.completion.StepCompletionContext c) ->
+                    c.execution() == execution
+                        && "mcp:step1".equals(c.nodeId())
+                        && "step1".equals(c.nodeLabel())
+                        && c.itemIndex() == 0));
         }
 
         @Test
@@ -143,8 +151,9 @@ class NodeCompletionServiceTest {
 
             service.emitNodeComplete(execution, node, result, triggerItem, 0, context, null);
 
-            verify(stepCompletionOrchestrator).completeStep(eq(execution), any(), any(), argThat(r ->
-                r.output() != null && r.output().containsKey("error")), anyInt(), any());
+            verify(stepCompletionOrchestrator).complete(argThat(
+                (com.apimarketplace.orchestrator.services.completion.StepCompletionContext c) ->
+                    c.result().output() != null && c.result().output().containsKey("error")));
         }
 
         @Test
@@ -161,10 +170,11 @@ class NodeCompletionServiceTest {
 
             service.emitNodeComplete(execution, node, result, triggerItem, 0, context, null);
 
-            verify(stepCompletionOrchestrator).completeStep(eq(execution), any(), any(), argThat(r ->
-                r.output() != null
-                    && "failed".equals(r.output().get("status"))
-                    && "Blocked route".equals(r.output().get("error"))), anyInt(), any());
+            verify(stepCompletionOrchestrator).complete(argThat(
+                (com.apimarketplace.orchestrator.services.completion.StepCompletionContext c) ->
+                    c.result().output() != null
+                        && "failed".equals(c.result().output().get("status"))
+                        && "Blocked route".equals(c.result().output().get("error"))));
         }
 
         @Test
@@ -323,10 +333,11 @@ class NodeCompletionServiceTest {
             service.emitNodeComplete(execution, node, result, triggerItem, 0, context, null);
 
             // Verify that StepCompletionOrchestrator receives a SKIPPED result, NOT FAILED
-            verify(stepCompletionOrchestrator).completeStep(
-                eq(execution), eq("core:sync_1"), eq("sync_1"),
-                argThat(r -> r.status() == NodeStatus.SKIPPED),
-                eq(0), isNull());
+            verify(stepCompletionOrchestrator).complete(argThat(
+                (com.apimarketplace.orchestrator.services.completion.StepCompletionContext c) ->
+                    "core:sync_1".equals(c.nodeId())
+                        && "sync_1".equals(c.nodeLabel())
+                        && c.result().status() == NodeStatus.SKIPPED));
         }
 
         @Test
@@ -342,13 +353,12 @@ class NodeCompletionServiceTest {
             // SKIPPED results should be treated as non-error: isSuccess() is false but
             // the output should NOT contain "error" and "status":"error" metadata
             // because the node intentionally skipped, it didn't fail
-            verify(stepCompletionOrchestrator).completeStep(
-                any(), any(), any(),
-                argThat(r -> r.status() == NodeStatus.SKIPPED
-                    && r.output() != null
-                    && !r.output().containsKey("error")
-                    && !"error".equals(r.output().get("status"))),
-                anyInt(), any());
+            verify(stepCompletionOrchestrator).complete(argThat(
+                (com.apimarketplace.orchestrator.services.completion.StepCompletionContext c) ->
+                    c.result().status() == NodeStatus.SKIPPED
+                        && c.result().output() != null
+                        && !c.result().output().containsKey("error")
+                        && !"error".equals(c.result().output().get("status"))));
         }
     }
 
@@ -710,7 +720,7 @@ class NodeCompletionServiceTest {
 
             service.emitNodeCompletePerItem(execution, node, result, triggerItem, 2, context);
 
-            verify(stepCompletionOrchestrator).completeStep(
+            verify(stepCompletionOrchestrator).completeStepWithResult(
                 eq(execution), eq("mcp:step1"), eq("step1"), any(),
                 eq(2), isNull(), eq(3), eq("trigger:start"), eq(true));
         }
@@ -728,7 +738,7 @@ class NodeCompletionServiceTest {
 
             service.emitNodeComplete(execution, node, result, triggerItem, 2, context, null);
 
-            verify(stepCompletionOrchestrator).completeStep(
+            verify(stepCompletionOrchestrator).completeStepWithResult(
                 eq(execution), eq("mcp:step1"), eq("step1"), any(),
                 eq(2), isNull(), eq(3), eq("trigger:start"), eq(false));
         }
@@ -744,7 +754,7 @@ class NodeCompletionServiceTest {
 
             service.emitNodeCompletePerItem(execution, node, result, triggerItem, 0, null);
 
-            verify(stepCompletionOrchestrator).completeStep(
+            verify(stepCompletionOrchestrator).completeStepWithResult(
                 eq(execution), eq("mcp:step1"), eq("step1"), any(),
                 eq(0), isNull(), eq(0), isNull(), eq(true));
         }

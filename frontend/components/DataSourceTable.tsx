@@ -17,6 +17,7 @@ import { orchestratorApi, DataSource } from '@/lib/api';
 import { dataSourceService } from '@/lib/api/orchestrator/datasource.service';
 import { publicationService } from '@/lib/api/orchestrator/publication.service';
 import { CreateDataSourceModal } from './chat/CreateDataSourceModal';
+import { TemplateGallery } from '@/components/templates/TemplateGallery';
 import { useTranslations } from 'next-intl';
 import { useCanMutateInCurrentOrg } from '@/lib/stores/current-org-store';
 import { useOrgScopedReset } from '@/lib/hooks/useOrgScopedReset';
@@ -373,15 +374,41 @@ export default function DataSourceTable({
           <h1 className="text-lg font-semibold text-theme-primary">{t('data.title')}</h1>
           <p className="text-sm text-theme-secondary mt-0.5">{t('data.subtitle')}</p>
         </div>
-        {canMutate && !loading && (totalCount > 0 || debouncedSearch.trim().length > 0) && (
-          <Button
-            variant="default"
-            size="sm"
-            onClick={() => setShowCreateDataModal(true)}
-          >
-            <Plus className="h-4 w-4 mr-1.5" />
-            {t('data.createTable')}
-          </Button>
+        {canMutate && !loading && (
+          <div className="flex shrink-0 items-center gap-2">
+            {/* Templates behind a button rather than a permanent banner. Shown even
+                when the list is empty, which is when a starting point helps most. */}
+            <TemplateGallery
+              kind="table"
+              canMutate={canMutate}
+              existingNames={dataSources.map((d) => d.name).filter(Boolean) as string[]}
+              onTableCreated={(dataSourceId, skippedColumns) => {
+                if (skippedColumns.length > 0) {
+                  // Say what is missing rather than letting the user discover a
+                  // half-built table on their own.
+                  addToast({
+                    type: 'error',
+                    title: t('data.errorCreatingDataSource'),
+                    message: skippedColumns.join(', '),
+                  });
+                }
+                router.push(`/app/tables/${dataSourceId}`);
+              }}
+              onError={(message) =>
+                addToast({ type: 'error', title: t('data.errorCreatingDataSource'), message })
+              }
+            />
+            {(totalCount > 0 || debouncedSearch.trim().length > 0) && (
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => setShowCreateDataModal(true)}
+              >
+                <Plus className="h-4 w-4 mr-1.5" />
+                {t('data.createTable')}
+              </Button>
+            )}
+          </div>
         )}
       </div>
 

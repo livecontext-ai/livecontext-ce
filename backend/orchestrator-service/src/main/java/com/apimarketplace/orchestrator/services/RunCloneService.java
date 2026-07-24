@@ -109,7 +109,17 @@ public class RunCloneService {
         clone.setDurationMs(sourceRun.getDurationMs());
         clone.setTotalNodes(sourceRun.getTotalNodes());
         clone.setTriggerPayload(sourceRun.getTriggerPayload());
-        clone.setMetadata(sourceRun.getMetadata());
+        // COPY, never alias: sharing the map with the source entity would let a later
+        // mutation on either side silently edit the other. And strip __mockMode__ -
+        // a showcase clone published to the marketplace must not embed the
+        // publisher's editor mock override.
+        Map<String, Object> cloneMetadata = sourceRun.getMetadata() != null
+                ? new java.util.HashMap<>(sourceRun.getMetadata()) : null;
+        if (cloneMetadata != null) {
+            cloneMetadata.remove(
+                    com.apimarketplace.orchestrator.execution.v2.engine.MockRunGate.MOCK_MODE_METADATA_KEY);
+        }
+        clone.setMetadata(cloneMetadata);
         clone.setPlan(sourceRun.getPlan());
         clone.setStateSnapshot(sourceRun.getStateSnapshot());
         // A2 Phase 4 (audit Opus 2026-05-09 M2): mirror the seq column too,

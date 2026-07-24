@@ -151,6 +151,14 @@ export function ValidationProvider({
     const backendErrorsRef = React.useRef(backendErrors);
     backendErrorsRef.current = backendErrors;
 
+    // Data-driven warnings only make sense when there is something to validate.
+    // An empty canvas short-circuits runValidation, so its providers (agent fleet
+    // canvas with nodes=[], marketplace snapshot previews, a not-yet-loaded
+    // builder) must not fire tenant fetches: snapshot preview pages assert that
+    // NO live tenant endpoint is called (CE-MARKETPLACE-PREVIEW-020 caught
+    // /workflows/capabilities leaking from exactly this mount).
+    const hasNodesToValidate = nodes.length > 0;
+
     // Credential-driven warnings. NOTE: useOrgScopedQuery rewrites the effective
     // cache key to ['org', <orgId>, 'user-credentials'] - a DIFFERENT entry from
     // CredentialSection's plain ['user-credentials'] query. They are NOT shared.
@@ -161,6 +169,7 @@ export function ValidationProvider({
     const { data: userCredentials } = useOrgScopedQuery<Credential[]>({
         queryKey: ['user-credentials'] as const,
         queryFn: () => orchestratorApi.getAllCredentials(),
+        enabled: hasNodesToValidate,
         staleTime: 30_000,
         refetchOnMount: false,
         refetchOnWindowFocus: false,
@@ -170,7 +179,7 @@ export function ValidationProvider({
 
     // Optional-component availability (renderer sidecar, browser agent). null while
     // unknown - rules then emit NO availability warning (never a false positive).
-    const { capabilities: featureCapabilities } = useFeatureCapabilities();
+    const { capabilities: featureCapabilities } = useFeatureCapabilities({ enabled: hasNodesToValidate });
     const featureCapabilitiesRef = React.useRef<FeatureCapabilities | null>(featureCapabilities);
     featureCapabilitiesRef.current = featureCapabilities;
 

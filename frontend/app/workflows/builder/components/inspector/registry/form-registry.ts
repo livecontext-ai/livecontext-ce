@@ -32,6 +32,8 @@ import {
   WhileGroupFormAdapter,
   AggregateFormAdapter,
   DownloadFileFormAdapter,
+  PublicLinkFormAdapter,
+  MediaFormAdapter,
   HttpRequestFormAdapter,
   DataInputFormAdapter,
   ResponseFormAdapter,
@@ -222,6 +224,16 @@ export const formRegistry: Record<InspectorNodeType, FormDefinition> = {
   'download_file': {
     component: DownloadFileFormAdapter,
     displayName: 'Download File',
+    hasExpressions: true,
+  },
+  'public_link': {
+    component: PublicLinkFormAdapter,
+    displayName: 'Public Link',
+    hasExpressions: true,
+  },
+  'media': {
+    component: MediaFormAdapter,
+    displayName: 'Media',
     hasExpressions: true,
   },
   'http_request': {

@@ -281,7 +281,7 @@ class WorkflowPlanVersionServiceTest {
 
             when(versionRepository.getMaxVersion(WORKFLOW_ID)).thenReturn(Optional.of(21));
             when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 21)).thenReturn(Optional.of(latest));
-            when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(unpinnedWorkflow()));
+            when(workflowRepository.findPinnedVersionById(WORKFLOW_ID)).thenReturn(Optional.empty());
             when(versionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
             int version = service.resolveContentVersionForExecution(WORKFLOW_ID, executing, USER_ID);
@@ -304,12 +304,19 @@ class WorkflowPlanVersionServiceTest {
 
             when(versionRepository.getMaxVersion(WORKFLOW_ID)).thenReturn(Optional.of(7));
             when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 7)).thenReturn(Optional.of(latest));
+            // Stub an UNPINNED workflow explicitly: without it Mockito returns
+            // Optional.empty() and the test would silently exercise "workflow row
+            // absent" instead of the unpinned case it claims to cover.
+            when(workflowRepository.findPinnedVersionById(WORKFLOW_ID)).thenReturn(Optional.empty());
 
             int version = service.resolveContentVersionForExecution(WORKFLOW_ID, plan, USER_ID);
 
             assertThat(version).isEqualTo(7);
+            // Read-only: the pin lookup runs (it decides whether this run executes the
+            // pinned plan) but no version row is ever written, and the workflow row is
+            // read at most once - the pin check must not add repeated lookups here.
             verify(versionRepository, never()).save(any());
-            verify(workflowRepository, never()).findById(any());
+            verify(workflowRepository, times(1)).findPinnedVersionById(WORKFLOW_ID);
         }
 
         @Test
@@ -324,7 +331,7 @@ class WorkflowPlanVersionServiceTest {
 
             when(versionRepository.getMaxVersion(WORKFLOW_ID)).thenReturn(Optional.of(5));
             when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 5)).thenReturn(Optional.of(pinnedRow));
-            when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(workflow));
+            when(workflowRepository.findPinnedVersionById(WORKFLOW_ID)).thenReturn(Optional.ofNullable(workflow.getPinnedVersion()));
             when(versionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
             when(versionRepository.countByWorkflowId(WORKFLOW_ID)).thenReturn(6L);
 
@@ -340,9 +347,12 @@ class WorkflowPlanVersionServiceTest {
         void pinnedNotLatestStillOverwritesLatestInPlace() {
             // Exactness guard: the immutability check must be pinned == max, not <=.
             // Pinned v3 with drafts up to v5: executing drifted content overwrites
-            // the v5 draft in place; the pinned v3 row is never involved.
+            // the v5 draft in place; the pinned v3 row is read (to rule out a pinned
+            // production fire) but never written.
+            Map<String, Object> storedV3 = Map.of("name", "WF", "mcps", List.of(Map.of("label", "PINNED")));
             Map<String, Object> storedV5 = Map.of("name", "WF", "mcps", List.of(Map.of("label", "A")));
             Map<String, Object> executing = Map.of("name", "WF", "mcps", List.of(Map.of("label", "A", "params", Map.of("k", "v"))));
+            WorkflowPlanVersionEntity pinnedRow = new WorkflowPlanVersionEntity(WORKFLOW_ID, 3, new HashMap<>(storedV3), USER_ID);
             WorkflowPlanVersionEntity latestDraft = new WorkflowPlanVersionEntity(WORKFLOW_ID, 5, new HashMap<>(storedV5), USER_ID);
 
             WorkflowEntity workflow = unpinnedWorkflow();
@@ -350,15 +360,568 @@ class WorkflowPlanVersionServiceTest {
 
             when(versionRepository.getMaxVersion(WORKFLOW_ID)).thenReturn(Optional.of(5));
             when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 5)).thenReturn(Optional.of(latestDraft));
-            when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(workflow));
+            // Stub the pinned row explicitly: without it Mockito answers empty and the
+            // test would silently traverse the missing-pinned-row WARN branch instead
+            // of the "pin exists, content differs" path it claims to cover.
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 3)).thenReturn(Optional.of(pinnedRow));
+            when(workflowRepository.findPinnedVersionById(WORKFLOW_ID)).thenReturn(Optional.ofNullable(workflow.getPinnedVersion()));
             when(versionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
             int version = service.resolveContentVersionForExecution(WORKFLOW_ID, executing, USER_ID);
 
             assertThat(version).isEqualTo(5);
             assertThat(latestDraft.getPlan()).isEqualTo(executing);
+            // The pinned row was consulted but must come out untouched.
+            assertThat(pinnedRow.getPlan()).isEqualTo(storedV3);
             // No new row minted (save was the in-place overwrite of the v5 entity).
             verify(versionRepository).save(latestDraft);
+        }
+
+        @Test
+        @DisplayName("Regression 2026-07-20: a production run of a PINNED workflow resolves to the pinned number and never overwrites the newer draft")
+        void pinnedProductionRunResolvesToPinnedVersionAndSparesTheDraft() {
+            // Prod incident (workflow "Pro Mail Filter"): pinned v17, draft v18 saved
+            // later with different content. Resolution only compared against the
+            // LATEST row, so the executing v17 plan looked like drifted canvas
+            // content: it overwrote the v18 draft in place and the run was stamped
+            // v18. Symptom: the draft was silently destroyed and no run ever showed
+            // "v17" again (two runs both displaying "v18" with different plans).
+            //
+            // Reached via the pin-blind callers of this method - WorkflowResumeService
+            // .stampPlanVersion (writes run.planVersion) and WorkflowPersistenceService
+            // .autoArchiveExecutionPlan (overwrites the draft). NOT via a scheduled
+            // fire: ReusableTriggerService's pinned lane resolves the version upstream
+            // and never calls this method. Fixing it here covers every caller.
+            Map<String, Object> pinnedContent = Map.of("name", "WF", "cores", List.of(Map.of("label", "snapshot")));
+            Map<String, Object> draftContent = Map.of("name", "WF", "cores", List.of(Map.of("label", "other")));
+            WorkflowPlanVersionEntity pinnedRow = new WorkflowPlanVersionEntity(WORKFLOW_ID, 17, new HashMap<>(pinnedContent), USER_ID);
+            WorkflowPlanVersionEntity draftRow = new WorkflowPlanVersionEntity(WORKFLOW_ID, 18, new HashMap<>(draftContent), USER_ID);
+
+            WorkflowEntity workflow = unpinnedWorkflow();
+            workflow.setPinnedVersion(17);
+
+            when(versionRepository.getMaxVersion(WORKFLOW_ID)).thenReturn(Optional.of(18));
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 18)).thenReturn(Optional.of(draftRow));
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 17)).thenReturn(Optional.of(pinnedRow));
+            when(workflowRepository.findPinnedVersionById(WORKFLOW_ID)).thenReturn(Optional.ofNullable(workflow.getPinnedVersion()));
+
+            // The scheduled production fire executes the pinned v17 content.
+            int version = service.resolveContentVersionForExecution(WORKFLOW_ID, pinnedContent, USER_ID);
+
+            // The run must be stamped with the version it actually executes.
+            assertThat(version).isEqualTo(17);
+            // The user's newer draft must survive untouched, and nothing is written.
+            assertThat(draftRow.getPlan()).isEqualTo(draftContent);
+            verify(versionRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("Pinned workflow: an editor run whose content matches NEITHER pin nor draft still overwrites the draft in place")
+        void pinnedWorkflowEditorDriftStillOverwritesDraft() {
+            // Guard against over-correcting: only content that IS the pinned plan
+            // short-circuits. A genuine editor edit on a pinned workflow keeps the
+            // established in-place-overwrite semantics so drafts do not inflate.
+            Map<String, Object> pinnedContent = Map.of("name", "WF", "cores", List.of(Map.of("label", "pinned")));
+            Map<String, Object> draftContent = Map.of("name", "WF", "cores", List.of(Map.of("label", "draft")));
+            Map<String, Object> editing = Map.of("name", "WF", "cores", List.of(Map.of("label", "edited")));
+            WorkflowPlanVersionEntity pinnedRow = new WorkflowPlanVersionEntity(WORKFLOW_ID, 17, new HashMap<>(pinnedContent), USER_ID);
+            WorkflowPlanVersionEntity draftRow = new WorkflowPlanVersionEntity(WORKFLOW_ID, 18, new HashMap<>(draftContent), USER_ID);
+
+            WorkflowEntity workflow = unpinnedWorkflow();
+            workflow.setPinnedVersion(17);
+
+            when(versionRepository.getMaxVersion(WORKFLOW_ID)).thenReturn(Optional.of(18));
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 18)).thenReturn(Optional.of(draftRow));
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 17)).thenReturn(Optional.of(pinnedRow));
+            when(workflowRepository.findPinnedVersionById(WORKFLOW_ID)).thenReturn(Optional.ofNullable(workflow.getPinnedVersion()));
+            when(versionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            int version = service.resolveContentVersionForExecution(WORKFLOW_ID, editing, USER_ID);
+
+            assertThat(version).isEqualTo(18);
+            assertThat(draftRow.getPlan()).isEqualTo(editing);
+            assertThat(pinnedRow.getPlan()).isEqualTo(pinnedContent);
+        }
+
+        @Test
+        @DisplayName("Pinned row missing (purged/deleted): WARNs and falls through to the legacy lane instead of resolving blind")
+        void missingPinnedRowFallsThroughToLegacyLane() {
+            // purgeOldVersions protects the pin, so this is only reachable through a
+            // manual delete or a botched restore. The pin cannot be verified, so the
+            // legacy overwrite lane runs - asserted here so the residual data-loss
+            // exposure is explicit and reviewed rather than accidental.
+            Map<String, Object> draftContent = Map.of("name", "WF", "cores", List.of(Map.of("label", "draft")));
+            Map<String, Object> executing = Map.of("name", "WF", "cores", List.of(Map.of("label", "executing")));
+            WorkflowPlanVersionEntity draftRow = new WorkflowPlanVersionEntity(WORKFLOW_ID, 18, new HashMap<>(draftContent), USER_ID);
+
+            WorkflowEntity workflow = unpinnedWorkflow();
+            workflow.setPinnedVersion(17);
+
+            when(versionRepository.getMaxVersion(WORKFLOW_ID)).thenReturn(Optional.of(18));
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 18)).thenReturn(Optional.of(draftRow));
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 17)).thenReturn(Optional.empty());
+            when(workflowRepository.findPinnedVersionById(WORKFLOW_ID)).thenReturn(Optional.ofNullable(workflow.getPinnedVersion()));
+            when(versionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            ch.qos.logback.classic.Logger serviceLogger =
+                    (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(WorkflowPlanVersionService.class);
+            ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                    new ch.qos.logback.core.read.ListAppender<>();
+            appender.start();
+            serviceLogger.addAppender(appender);
+            try {
+                int version = service.resolveContentVersionForExecution(WORKFLOW_ID, executing, USER_ID);
+
+                assertThat(version).isEqualTo(18);
+                assertThat(draftRow.getPlan()).isEqualTo(executing);
+                // The WARN is the only signal that a pin could not be honoured, so it
+                // is part of the contract, not decoration: without it the fall-through
+                // is indistinguishable from a normal unpinned resolve.
+                assertThat(appender.list)
+                        .anySatisfy(event -> {
+                            assertThat(event.getLevel()).isEqualTo(ch.qos.logback.classic.Level.WARN);
+                            assertThat(event.getFormattedMessage())
+                                    .contains("Pinned version 17")
+                                    .contains("is missing");
+                        });
+            } finally {
+                serviceLogger.detachAppender(appender);
+            }
+        }
+
+        @Test
+        @DisplayName("Regression 2026-07-20: a mis-stamped pinned run would be REFUSED by the production chokepoint, so the resolver must answer the pinned number")
+        void pinnedRunKeepsAVersionThatPassesTheProductionChokepoint() {
+            // ProductionRunResolver.isAllowedForProduction gates the next production
+            // fire on Objects.equals(run.getPlanVersion(), workflow.getPinnedVersion()).
+            // Pre-fix this resolver answered 18 for a run executing pinned v17, so the
+            // stamped run no longer matched the pin and production fires were refused
+            // at the chokepoint - the mislabel breaks execution, it is not cosmetic.
+            // This test asserts the resolver's answer satisfies that equality.
+            Map<String, Object> pinnedContent = Map.of("name", "WF", "cores", List.of(Map.of("label", "snapshot")));
+            Map<String, Object> draftContent = Map.of("name", "WF", "cores", List.of(Map.of("label", "draft")));
+            WorkflowPlanVersionEntity pinnedRow = new WorkflowPlanVersionEntity(WORKFLOW_ID, 17, new HashMap<>(pinnedContent), USER_ID);
+            WorkflowPlanVersionEntity draftRow = new WorkflowPlanVersionEntity(WORKFLOW_ID, 18, new HashMap<>(draftContent), USER_ID);
+
+            WorkflowEntity workflow = unpinnedWorkflow();
+            workflow.setPinnedVersion(17);
+
+            when(versionRepository.getMaxVersion(WORKFLOW_ID)).thenReturn(Optional.of(18));
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 18)).thenReturn(Optional.of(draftRow));
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 17)).thenReturn(Optional.of(pinnedRow));
+            when(workflowRepository.findPinnedVersionById(WORKFLOW_ID)).thenReturn(Optional.ofNullable(workflow.getPinnedVersion()));
+
+            int stamped = service.resolveContentVersionForExecution(WORKFLOW_ID, pinnedContent, USER_ID);
+
+            // Feed the answer through the REAL chokepoint rather than re-implementing
+            // its comparison here, so a change to ProductionRunResolver's semantics
+            // breaks this test instead of silently invalidating it.
+            com.apimarketplace.orchestrator.domain.WorkflowRunEntity run =
+                    new com.apimarketplace.orchestrator.domain.WorkflowRunEntity();
+            run.setPlanVersion(stamped);
+            assertThat(new com.apimarketplace.orchestrator.trigger.ProductionRunResolver(null, null)
+                    .isAllowedForProduction(run, workflow))
+                    .as("a run stamped v%s must be accepted for production on a workflow pinned to v%s",
+                            stamped, workflow.getPinnedVersion())
+                    .isTrue();
+        }
+
+        @Test
+        @DisplayName("Restored pinned version: standalone trigger refs stripped by the restore still resolve to the PINNED number")
+        void restoredPinnedPlanMissingTriggerRefsStillMatchesThePin() {
+            // Restoring a version writes the historical plan through
+            // PlanStripUtils.deepCopyAndStrip, which removes scheduleId/webhookId/
+            // chatEndpointId/formEndpointId from triggers[].params. Restoring the
+            // PINNED version onto a pinned workflow thus yields a live plan equal to
+            // the pinned row MINUS those refs. On a plain equality check the pin is
+            // missed and the legacy lane overwrites the newer draft - the same data
+            // loss, reached through the restore path.
+            Map<String, Object> pinnedStored = Map.of("name", "WF", "triggers",
+                    List.of(new HashMap<>(Map.of("label", "Daily", "params",
+                            new HashMap<>(Map.of("cron", "0 8 * * *", "scheduleId", "sched-abc"))))));
+            Map<String, Object> restoredLive = Map.of("name", "WF", "triggers",
+                    List.of(new HashMap<>(Map.of("label", "Daily", "params",
+                            new HashMap<>(Map.of("cron", "0 8 * * *"))))));
+            Map<String, Object> draftContent = Map.of("name", "WF", "triggers", List.of(), "cores", List.of(Map.of("label", "draft")));
+            WorkflowPlanVersionEntity pinnedRow = new WorkflowPlanVersionEntity(WORKFLOW_ID, 17, new HashMap<>(pinnedStored), USER_ID);
+            WorkflowPlanVersionEntity draftRow = new WorkflowPlanVersionEntity(WORKFLOW_ID, 18, new HashMap<>(draftContent), USER_ID);
+
+            WorkflowEntity workflow = unpinnedWorkflow();
+            workflow.setPinnedVersion(17);
+
+            when(versionRepository.getMaxVersion(WORKFLOW_ID)).thenReturn(Optional.of(18));
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 18)).thenReturn(Optional.of(draftRow));
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 17)).thenReturn(Optional.of(pinnedRow));
+            when(workflowRepository.findPinnedVersionById(WORKFLOW_ID)).thenReturn(Optional.ofNullable(workflow.getPinnedVersion()));
+
+            int version = service.resolveContentVersionForExecution(WORKFLOW_ID, restoredLive, USER_ID);
+
+            assertThat(version).isEqualTo(17);
+            assertThat(draftRow.getPlan()).isEqualTo(draftContent);
+            // Normalization must not mutate either operand.
+            assertThat(((Map<?, ?>) ((List<?>) pinnedRow.getPlan().get("triggers")).get(0)))
+                    .extracting("params").asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
+                    .containsEntry("scheduleId", "sched-abc");
+            verify(versionRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("Regression 2026-07-20: UNPINNED version replay must not overwrite the latest version with the historical plan")
+        void unpinnedVersionReplayDoesNotClobberTheLatestVersion() {
+            // Sibling of the pinned incident, on an UNPINNED workflow. Replaying an
+            // old version goes findOrCreateRunForVersion -> createExecution ->
+            // recordWorkflowStart -> autoArchiveExecutionPlan, which hands the
+            // HISTORICAL plan to this resolver. With no pin, both pin branches are
+            // skipped and the legacy lane overwrites the LATEST version row with the
+            // old plan: replaying v3 silently destroys v9's stored content. The other
+            // replay paths carve this out (ReusableTriggerService diverts replays,
+            // stampPlanVersion uses createVersion for __versionReplay__);
+            // autoArchiveExecutionPlan has no such carve-out.
+            Map<String, Object> historicalV3 = Map.of("name", "WF", "cores", List.of(Map.of("label", "old_step")));
+            Map<String, Object> latestV9 = Map.of("name", "WF", "cores", List.of(Map.of("label", "current_step")));
+            WorkflowPlanVersionEntity latestRow = new WorkflowPlanVersionEntity(WORKFLOW_ID, 9, new HashMap<>(latestV9), USER_ID);
+            WorkflowPlanVersionEntity historicalRow = new WorkflowPlanVersionEntity(WORKFLOW_ID, 3, new HashMap<>(historicalV3), USER_ID);
+
+            when(versionRepository.getMaxVersion(WORKFLOW_ID)).thenReturn(Optional.of(9));
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 9)).thenReturn(Optional.of(latestRow));
+            lenient().when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 3)).thenReturn(Optional.of(historicalRow));
+            // The history the resolver scans before overwriting anything.
+            when(versionRepository.findByWorkflowIdOrderByVersionDesc(WORKFLOW_ID))
+                    .thenReturn(List.of(latestRow, historicalRow));
+            // Unpinned.
+            when(workflowRepository.findPinnedVersionById(WORKFLOW_ID)).thenReturn(Optional.empty());
+            lenient().when(versionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            int version = service.resolveContentVersionForExecution(WORKFLOW_ID, historicalV3, USER_ID);
+
+            // The run replays v3, so v3 is the content-true answer.
+            assertThat(version)
+                    .as("replaying v3 must resolve to v3, not to the latest number")
+                    .isEqualTo(3);
+            // And v9's stored content must survive untouched - this is the data loss.
+            assertThat(latestRow.getPlan())
+                    .as("the latest version's stored plan must not be clobbered by the replayed plan")
+                    .isEqualTo(latestV9);
+            // Read-only resolve: nothing is written at all.
+            verify(versionRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("Pinned workflow, editor run on the CURRENT DRAFT: exact draft match beats a normalized pin match")
+        void editorRunOnDraftIsNotStampedWithThePinWhenOnlyTriggerRefsDiffer() {
+            // The pin branch matches with trigger refs normalized away, so a draft
+            // that differs from the pin by nothing but a re-armed scheduleId (what a
+            // schedule re-arm + save produces) would otherwise make an editor run on
+            // that DRAFT resolve to the PIN. A run at the pinned version can then
+            // adopt the live production run and write its mock override onto it
+            // (EditorRunResolver). The plan here is byte-exactly the draft, so the
+            // draft number is the truthful answer.
+            Map<String, Object> pinnedV17 = Map.of("name", "WF", "triggers",
+                    List.of(new HashMap<>(Map.of("label", "Daily", "params",
+                            new HashMap<>(Map.of("cron", "0 8 * * *", "scheduleId", "sched-OLD"))))));
+            Map<String, Object> draftV18 = Map.of("name", "WF", "triggers",
+                    List.of(new HashMap<>(Map.of("label", "Daily", "params",
+                            new HashMap<>(Map.of("cron", "0 8 * * *", "scheduleId", "sched-NEW"))))));
+            WorkflowPlanVersionEntity pinnedRow = new WorkflowPlanVersionEntity(WORKFLOW_ID, 17, new HashMap<>(pinnedV17), USER_ID);
+            WorkflowPlanVersionEntity draftRow = new WorkflowPlanVersionEntity(WORKFLOW_ID, 18, new HashMap<>(draftV18), USER_ID);
+
+            WorkflowEntity workflow = unpinnedWorkflow();
+            workflow.setPinnedVersion(17);
+
+            when(versionRepository.getMaxVersion(WORKFLOW_ID)).thenReturn(Optional.of(18));
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 18)).thenReturn(Optional.of(draftRow));
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 17)).thenReturn(Optional.of(pinnedRow));
+            when(workflowRepository.findPinnedVersionById(WORKFLOW_ID)).thenReturn(Optional.ofNullable(workflow.getPinnedVersion()));
+
+            // The editor canvas IS the draft, byte for byte.
+            int version = service.resolveContentVersionForExecution(WORKFLOW_ID, draftV18, USER_ID);
+
+            assertThat(version)
+                    .as("an editor run on the draft must stay on the draft number, not be stamped with the pin")
+                    .isEqualTo(18);
+            verify(versionRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("History scan failure degrades to the legacy lane instead of breaking the fire")
+        void historyScanFailureDegradesToTheLegacyLane() {
+            // The scan runs on every drifted resolve, i.e. inside trigger fires. A
+            // repository failure there must not propagate: the documented degrade is
+            // "fall back to the pre-existing overwrite behaviour".
+            Map<String, Object> latestV9 = Map.of("name", "WF", "cores", List.of(Map.of("label", "current")));
+            Map<String, Object> executing = Map.of("name", "WF", "cores", List.of(Map.of("label", "edited")));
+            WorkflowPlanVersionEntity latestRow = new WorkflowPlanVersionEntity(WORKFLOW_ID, 9, new HashMap<>(latestV9), USER_ID);
+
+            when(versionRepository.getMaxVersion(WORKFLOW_ID)).thenReturn(Optional.of(9));
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 9)).thenReturn(Optional.of(latestRow));
+            when(workflowRepository.findPinnedVersionById(WORKFLOW_ID)).thenReturn(Optional.empty());
+            when(versionRepository.findByWorkflowIdOrderByVersionDesc(WORKFLOW_ID))
+                    .thenThrow(new org.springframework.dao.DataAccessResourceFailureException("db down"));
+            when(versionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            int version = service.resolveContentVersionForExecution(WORKFLOW_ID, executing, USER_ID);
+
+            assertThat(version).isEqualTo(9);
+            assertThat(latestRow.getPlan()).isEqualTo(executing);
+        }
+
+        @Test
+        @DisplayName("KNOWN LIMIT (mirror of the draft-wins rule): when the draft IS the restored pinned plan, the run is stamped with the draft, not the pin")
+        void restoredPinThatAlsoEqualsTheDraftResolvesToTheDraft() {
+            // Genuine ambiguity: the executing plan is byte-exact BOTH the draft and
+            // (after ref normalization) the pin. The draft-wins rule sends it to 18,
+            // which ProductionRunResolver then refuses for production.
+            //
+            // Deliberate: the demonstrated prod incident is an editor run on the draft
+            // being stamped with the pin and then mutating the live production run.
+            // Preferring the pin here would reopen it for every re-armed pinned
+            // workflow, to close a case that needs a restore AND a draft that happens
+            // to equal the restored plan. Characterized so the trade-off is visible
+            // and cannot flip silently.
+            Map<String, Object> restoredNoRefs = Map.of("name", "WF", "triggers",
+                    List.of(new HashMap<>(Map.of("label", "Daily", "params",
+                            new HashMap<>(Map.of("cron", "0 8 * * *"))))));
+            Map<String, Object> pinnedWithRef = Map.of("name", "WF", "triggers",
+                    List.of(new HashMap<>(Map.of("label", "Daily", "params",
+                            new HashMap<>(Map.of("cron", "0 8 * * *", "scheduleId", "sched-abc"))))));
+            WorkflowPlanVersionEntity pinnedRow = new WorkflowPlanVersionEntity(WORKFLOW_ID, 17, new HashMap<>(pinnedWithRef), USER_ID);
+            WorkflowPlanVersionEntity draftRow = new WorkflowPlanVersionEntity(WORKFLOW_ID, 18, new HashMap<>(restoredNoRefs), USER_ID);
+
+            WorkflowEntity workflow = unpinnedWorkflow();
+            workflow.setPinnedVersion(17);
+
+            when(versionRepository.getMaxVersion(WORKFLOW_ID)).thenReturn(Optional.of(18));
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 18)).thenReturn(Optional.of(draftRow));
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 17)).thenReturn(Optional.of(pinnedRow));
+            when(workflowRepository.findPinnedVersionById(WORKFLOW_ID)).thenReturn(Optional.ofNullable(workflow.getPinnedVersion()));
+
+            int version = service.resolveContentVersionForExecution(WORKFLOW_ID, restoredNoRefs, USER_ID);
+
+            assertThat(version)
+                    .as("draft-wins: the plan is byte-exact the draft, so the draft number is returned")
+                    .isEqualTo(18);
+            verify(versionRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("KNOWN LIMIT: replaying a version that differs from the latest ONLY by trigger refs refreshes the latest instead of resolving to the replayed version")
+        void replayOfARefOnlyDifferentVersionFallsBackToTheRefreshLane() {
+            // Characterization, not an endorsement. The re-arm gate cannot tell
+            // "latest, re-bound" from "an older version whose only difference from
+            // latest is its refs" - both are normalized-equal to latest. The gate
+            // resolves it as a re-bind: the latest row is refreshed in place and the
+            // run is stamped with the latest number rather than the replayed one.
+            // Damage is bounded to the infra ref regressing to the older value (the
+            // plan logic is identical by construction); the alternative would break
+            // the far more common re-arm path. Revisit if version rows ever gain a
+            // content hash that survives ref rebinding.
+            Map<String, Object> historicalV3 = Map.of("name", "WF", "triggers",
+                    List.of(new HashMap<>(Map.of("label", "Daily", "params",
+                            new HashMap<>(Map.of("cron", "0 8 * * *", "scheduleId", "sched-OLD"))))));
+            Map<String, Object> latestV9 = Map.of("name", "WF", "triggers",
+                    List.of(new HashMap<>(Map.of("label", "Daily", "params",
+                            new HashMap<>(Map.of("cron", "0 8 * * *", "scheduleId", "sched-NEW"))))));
+            WorkflowPlanVersionEntity historicalRow = new WorkflowPlanVersionEntity(WORKFLOW_ID, 3, new HashMap<>(historicalV3), USER_ID);
+            WorkflowPlanVersionEntity latestRow = new WorkflowPlanVersionEntity(WORKFLOW_ID, 9, new HashMap<>(latestV9), USER_ID);
+
+            when(versionRepository.getMaxVersion(WORKFLOW_ID)).thenReturn(Optional.of(9));
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 9)).thenReturn(Optional.of(latestRow));
+            when(workflowRepository.findPinnedVersionById(WORKFLOW_ID)).thenReturn(Optional.empty());
+            when(versionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            int version = service.resolveContentVersionForExecution(WORKFLOW_ID, historicalV3, USER_ID);
+
+            assertThat(version).isEqualTo(9);
+            assertThat(latestRow.getPlan()).isEqualTo(historicalV3);
+            assertThat(historicalRow.getPlan()).isEqualTo(historicalV3);
+        }
+
+        @Test
+        @DisplayName("Unpinned re-arm: a re-bound scheduleId refreshes the LATEST row, never resolves to an older same-logic version")
+        void unpinnedRearmRefreshesLatestInsteadOfMatchingAnOlderVersion() {
+            // Guard on the history scan's blast radius. The caller rules `latest` out
+            // with a PLAIN comparison, but the scan matches with trigger refs
+            // normalized away - so a plan that is `latest` with a re-armed scheduleId
+            // would skip `latest` (excluded from the scan) and match an older
+            // same-logic version, stamping the run with a stale number. This is the
+            // unpinned refresh lane's normal traffic (ReusableTriggerService hands it
+            // workflow.getPlan(), carrying the CURRENT refs).
+            Map<String, Object> sameLogicOldRef = Map.of("name", "WF", "triggers",
+                    List.of(new HashMap<>(Map.of("label", "Daily", "params",
+                            new HashMap<>(Map.of("cron", "0 8 * * *", "scheduleId", "sched-OLD"))))));
+            Map<String, Object> liveRearmed = Map.of("name", "WF", "triggers",
+                    List.of(new HashMap<>(Map.of("label", "Daily", "params",
+                            new HashMap<>(Map.of("cron", "0 8 * * *", "scheduleId", "sched-NEW"))))));
+            // v3 and v9 carry the same logic; only v9 is the canvas' lineage.
+            WorkflowPlanVersionEntity oldRow = new WorkflowPlanVersionEntity(WORKFLOW_ID, 3, new HashMap<>(sameLogicOldRef), USER_ID);
+            WorkflowPlanVersionEntity latestRow = new WorkflowPlanVersionEntity(WORKFLOW_ID, 9, new HashMap<>(sameLogicOldRef), USER_ID);
+
+            when(versionRepository.getMaxVersion(WORKFLOW_ID)).thenReturn(Optional.of(9));
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 9)).thenReturn(Optional.of(latestRow));
+            lenient().when(versionRepository.findByWorkflowIdOrderByVersionDesc(WORKFLOW_ID))
+                    .thenReturn(List.of(latestRow, oldRow));
+            when(workflowRepository.findPinnedVersionById(WORKFLOW_ID)).thenReturn(Optional.empty());
+            when(versionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            int version = service.resolveContentVersionForExecution(WORKFLOW_ID, liveRearmed, USER_ID);
+
+            assertThat(version)
+                    .as("a re-armed schedule must stay on the latest version, not fall back to v3")
+                    .isEqualTo(9);
+            // And the row is refreshed in place so the stored ref stops being stale.
+            assertThat(latestRow.getPlan()).isEqualTo(liveRearmed);
+            assertThat(oldRow.getPlan()).isEqualTo(sameLogicOldRef);
+        }
+
+        @Test
+        @DisplayName("Pinned == latest: replaying an older version resolves to it instead of minting a spurious draft")
+        void pinnedLatestVersionReplayResolvesToTheHistoricalVersion() {
+            // The pin == max lane has its own write (createVersion). A replay reaching
+            // it must resolve to the replayed version rather than mint a draft, same
+            // as the unpinned lane.
+            Map<String, Object> historicalV3 = Map.of("name", "WF", "cores", List.of(Map.of("label", "old_step")));
+            Map<String, Object> pinnedLatestV9 = Map.of("name", "WF", "cores", List.of(Map.of("label", "current_step")));
+            WorkflowPlanVersionEntity pinnedLatest = new WorkflowPlanVersionEntity(WORKFLOW_ID, 9, new HashMap<>(pinnedLatestV9), USER_ID);
+            WorkflowPlanVersionEntity historicalRow = new WorkflowPlanVersionEntity(WORKFLOW_ID, 3, new HashMap<>(historicalV3), USER_ID);
+
+            WorkflowEntity workflow = unpinnedWorkflow();
+            workflow.setPinnedVersion(9);
+
+            when(versionRepository.getMaxVersion(WORKFLOW_ID)).thenReturn(Optional.of(9));
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 9)).thenReturn(Optional.of(pinnedLatest));
+            when(versionRepository.findByWorkflowIdOrderByVersionDesc(WORKFLOW_ID))
+                    .thenReturn(List.of(pinnedLatest, historicalRow));
+            when(workflowRepository.findPinnedVersionById(WORKFLOW_ID)).thenReturn(Optional.ofNullable(workflow.getPinnedVersion()));
+
+            int version = service.resolveContentVersionForExecution(WORKFLOW_ID, historicalV3, USER_ID);
+
+            assertThat(version).isEqualTo(3);
+            // Neither a new row minted nor the pinned row touched.
+            assertThat(pinnedLatest.getPlan()).isEqualTo(pinnedLatestV9);
+            verify(versionRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("Trigger re-arm: a CHANGED scheduleId still matches the pin (normalization is symmetric, not restore-only)")
+        void changedStandaloneTriggerRefStillMatchesThePin() {
+            // The strip is applied to both operands, so it covers more than restore:
+            // re-arming a schedule or re-issuing a webhook rewrites these refs on the
+            // live plan. Same plan, different infrastructure binding - it must keep
+            // resolving to the pin so the run's stamp stays equal to pinned_version
+            // across a re-arm, instead of drifting one above it.
+            Map<String, Object> pinnedStored = Map.of("name", "WF", "triggers",
+                    List.of(new HashMap<>(Map.of("label", "Daily", "params",
+                            new HashMap<>(Map.of("cron", "0 8 * * *", "scheduleId", "sched-OLD"))))));
+            Map<String, Object> rearmedLive = Map.of("name", "WF", "triggers",
+                    List.of(new HashMap<>(Map.of("label", "Daily", "params",
+                            new HashMap<>(Map.of("cron", "0 8 * * *", "scheduleId", "sched-NEW"))))));
+            Map<String, Object> draftContent = Map.of("name", "WF", "triggers", List.of(), "cores", List.of(Map.of("label", "draft")));
+            WorkflowPlanVersionEntity pinnedRow = new WorkflowPlanVersionEntity(WORKFLOW_ID, 17, new HashMap<>(pinnedStored), USER_ID);
+            WorkflowPlanVersionEntity draftRow = new WorkflowPlanVersionEntity(WORKFLOW_ID, 18, new HashMap<>(draftContent), USER_ID);
+
+            WorkflowEntity workflow = unpinnedWorkflow();
+            workflow.setPinnedVersion(17);
+
+            when(versionRepository.getMaxVersion(WORKFLOW_ID)).thenReturn(Optional.of(18));
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 18)).thenReturn(Optional.of(draftRow));
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 17)).thenReturn(Optional.of(pinnedRow));
+            when(workflowRepository.findPinnedVersionById(WORKFLOW_ID)).thenReturn(Optional.ofNullable(workflow.getPinnedVersion()));
+
+            int version = service.resolveContentVersionForExecution(WORKFLOW_ID, rearmedLive, USER_ID);
+
+            assertThat(version).isEqualTo(17);
+            assertThat(draftRow.getPlan()).isEqualTo(draftContent);
+            verify(versionRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("A non-stripped field difference (cron) does NOT match the pin - normalization must not create false positives")
+        void differingCronDoesNotMatchThePin() {
+            // Guard on the normalization's blast radius: only the four infrastructure
+            // refs are ignored. A load-bearing field must still count as different,
+            // otherwise the pin check would swallow real plan changes.
+            Map<String, Object> pinnedStored = Map.of("name", "WF", "triggers",
+                    List.of(new HashMap<>(Map.of("label", "Daily", "params",
+                            new HashMap<>(Map.of("cron", "0 8 * * *", "scheduleId", "sched-abc"))))));
+            Map<String, Object> editedLive = Map.of("name", "WF", "triggers",
+                    List.of(new HashMap<>(Map.of("label", "Daily", "params",
+                            new HashMap<>(Map.of("cron", "0 20 * * *"))))));
+            Map<String, Object> draftContent = Map.of("name", "WF", "triggers", List.of(), "cores", List.of(Map.of("label", "draft")));
+            WorkflowPlanVersionEntity pinnedRow = new WorkflowPlanVersionEntity(WORKFLOW_ID, 17, new HashMap<>(pinnedStored), USER_ID);
+            WorkflowPlanVersionEntity draftRow = new WorkflowPlanVersionEntity(WORKFLOW_ID, 18, new HashMap<>(draftContent), USER_ID);
+
+            WorkflowEntity workflow = unpinnedWorkflow();
+            workflow.setPinnedVersion(17);
+
+            when(versionRepository.getMaxVersion(WORKFLOW_ID)).thenReturn(Optional.of(18));
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 18)).thenReturn(Optional.of(draftRow));
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 17)).thenReturn(Optional.of(pinnedRow));
+            when(workflowRepository.findPinnedVersionById(WORKFLOW_ID)).thenReturn(Optional.ofNullable(workflow.getPinnedVersion()));
+            when(versionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            int version = service.resolveContentVersionForExecution(WORKFLOW_ID, editedLive, USER_ID);
+
+            // Not the pin: falls through to the legacy lane and overwrites the draft.
+            assertThat(version).isEqualTo(18);
+            assertThat(pinnedRow.getPlan()).isEqualTo(pinnedStored);
+        }
+
+        @Test
+        @DisplayName("Restored pinned version when the pin IS the latest: resolves to the pin, no spurious draft minted")
+        void restoredPinnedPlanWhenPinIsLatestDoesNotMintASpuriousVersion() {
+            // Sibling of the pin-trails-draft case: restoreVersion strips standalone
+            // trigger refs regardless of where the pin sits. With pin == max the
+            // dedicated pin branch is skipped (it is gated on pinned != max), so the
+            // restored plan misses the byte comparison and would mint v18 - stamping
+            // the run one above the pin, which ProductionRunResolver then refuses.
+            Map<String, Object> pinnedStored = Map.of("name", "WF", "triggers",
+                    List.of(new HashMap<>(Map.of("label", "Daily", "params",
+                            new HashMap<>(Map.of("cron", "0 8 * * *", "scheduleId", "sched-abc"))))));
+            Map<String, Object> restoredLive = Map.of("name", "WF", "triggers",
+                    List.of(new HashMap<>(Map.of("label", "Daily", "params",
+                            new HashMap<>(Map.of("cron", "0 8 * * *"))))));
+            WorkflowPlanVersionEntity pinnedLatest = new WorkflowPlanVersionEntity(WORKFLOW_ID, 17, new HashMap<>(pinnedStored), USER_ID);
+
+            WorkflowEntity workflow = unpinnedWorkflow();
+            workflow.setPinnedVersion(17);
+
+            when(versionRepository.getMaxVersion(WORKFLOW_ID)).thenReturn(Optional.of(17));
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 17)).thenReturn(Optional.of(pinnedLatest));
+            when(workflowRepository.findPinnedVersionById(WORKFLOW_ID)).thenReturn(Optional.ofNullable(workflow.getPinnedVersion()));
+
+            int version = service.resolveContentVersionForExecution(WORKFLOW_ID, restoredLive, USER_ID);
+
+            assertThat(version).isEqualTo(17);
+            // The pinned row stays immutable and no v18 row is minted - the latter is
+            // where this test really bites, since pre-fix the createVersion lane is
+            // what produced the above-the-pin stamp.
+            assertThat(pinnedLatest.getPlan()).isEqualTo(pinnedStored);
+            verify(versionRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("Pinned content identical to the newer draft still resolves to the PINNED number (semantic truth, not just content truth)")
+        void pinnedContentEqualToDraftResolvesToPinnedNumber() {
+            // Decides the ordering of the pin check: both numbers are content-true
+            // here, but the run executes the PIN. Labelling it with the draft number
+            // is exactly what erased "v17" from the prod run history. This is the case
+            // that justifies paying one indexed lookup before the latest comparison.
+            Map<String, Object> sharedContent = Map.of("name", "WF", "cores", List.of(Map.of("label", "snapshot")));
+            WorkflowPlanVersionEntity pinnedRow = new WorkflowPlanVersionEntity(WORKFLOW_ID, 17, new HashMap<>(sharedContent), USER_ID);
+            WorkflowPlanVersionEntity draftRow = new WorkflowPlanVersionEntity(WORKFLOW_ID, 18, new HashMap<>(sharedContent), USER_ID);
+
+            WorkflowEntity workflow = unpinnedWorkflow();
+            workflow.setPinnedVersion(17);
+
+            when(versionRepository.getMaxVersion(WORKFLOW_ID)).thenReturn(Optional.of(18));
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 18)).thenReturn(Optional.of(draftRow));
+            when(versionRepository.findByWorkflowIdAndVersion(WORKFLOW_ID, 17)).thenReturn(Optional.of(pinnedRow));
+            when(workflowRepository.findPinnedVersionById(WORKFLOW_ID)).thenReturn(Optional.ofNullable(workflow.getPinnedVersion()));
+
+            int version = service.resolveContentVersionForExecution(WORKFLOW_ID, sharedContent, USER_ID);
+
+            assertThat(version).isEqualTo(17);
+            verify(versionRepository, never()).save(any());
         }
 
         @Test

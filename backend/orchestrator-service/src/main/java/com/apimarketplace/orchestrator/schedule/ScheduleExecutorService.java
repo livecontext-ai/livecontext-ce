@@ -566,8 +566,12 @@ public class ScheduleExecutorService {
 
     /**
      * Execute a single schedule.
-     * Accumulation pattern: finds existing run in WAITING_TRIGGER and triggers it.
-     * If no run found, disables the schedule (user must start a new run from UI).
+     * Accumulation pattern: resolves the workflow's PRODUCTION run (the
+     * {@code workflow.production_run_id} FK, via ProductionRunResolver) in
+     * WAITING_TRIGGER and triggers it. If production is not fireable this tick the
+     * tick is skipped and the schedule stays armed; a user-started editor run never
+     * takes a production tick. A deliberately stopped production run (COMPLETED)
+     * resumes only via reactivating that run, re-pinning, or admin rearm.
      *
      * <p><b>Optimistic advance</b>: {@code recordScheduleExecution} is called BEFORE
      * the workflow executes. This guarantees that even if execution is slow or throws,
@@ -855,8 +859,10 @@ public class ScheduleExecutorService {
                     "Pin a production version to enable automatic execution.",
                     workflowId, schedule.getId());
                 case NO_PRODUCTION_RUN -> logger.warn(
-                    "[Schedule] Workflow {} pinned but no WAITING_TRIGGER run at that version - " +
-                    "schedule {} skipped this tick (will retry next tick).",
+                    "[Schedule] Workflow {} pinned but its production run is not in WAITING_TRIGGER - " +
+                    "schedule {} skipped this tick. Self-resolves when the run cycles back between epochs; " +
+                    "if the production run was deliberately stopped (COMPLETED), it must be reactivated " +
+                    "(or the workflow re-pinned/rearmed) before the schedule can fire again.",
                     workflowId, schedule.getId());
                 case WORKFLOW_MISSING -> logger.warn(
                     "[Schedule] Workflow {} not found - schedule {} skipped this tick.",

@@ -845,6 +845,9 @@ public class InternalPublicationSupportController {
         body.put("htmlTemplate", result.htmlTemplate());
         body.put("cssTemplate", result.cssTemplate());
         body.put("jsTemplate", result.jsTemplate());
+        // The format travels with the templates - and this response documents itself as having
+        // the same shape as the interface render, which carries it.
+        body.put("format", result.format());
         body.put("actionMappings", result.actionMappings());
         List<Map<String, Object>> items = new ArrayList<>();
         for (ItemRenderData item : result.items()) {

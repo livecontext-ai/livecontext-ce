@@ -10,6 +10,7 @@ import { useAuth } from "@/lib/providers/smart-providers";
 import { useUserProfile } from "@/hooks/useUserProfile";
 import { useTheme, type ThemePreference } from "@/components/ThemeProvider";
 import { useSidePanelLayoutSafe, type SidePanelBottomMode, type SidePanelDefaultPosition } from "@/contexts/SidePanelLayoutContext";
+import { useWorkflowLayoutDirection, type WorkflowLayoutDirection } from "@/contexts/WorkflowLayoutDirectionContext";
 import { useSubscription } from "@/lib/hooks/smart-hooks-complete";
 import { OverviewPageSkeleton } from "@/components/skeletons";
 import { ScheduledChangeAlert } from "@/components/billing";
@@ -125,6 +126,13 @@ export default function SettingsOverviewPage() {
     bottomMode: sidePanelBottomMode,
     setBottomMode: setSidePanelBottomMode,
   } = useSidePanelLayoutSafe();
+
+  // Workflow canvas reading direction. The THROWING hook on purpose: this page is
+  // mounted under WorkflowLayoutDirectionProvider (app/[locale]/app/layout.tsx), so
+  // a missing provider is a bug we want loud. The safe variant would degrade the
+  // select into a no-op that silently discards the user's choice.
+  const { direction: workflowLayoutDirection, setDirection: setWorkflowLayoutDirection } =
+    useWorkflowLayoutDirection();
 
   // All useState hooks first
   const [activeTab, setActiveTab] = useState("profile");
@@ -847,6 +855,36 @@ export default function SettingsOverviewPage() {
                     <SelectContent>
                       <SelectItem value="right">{t('preferences.sidePanelDefaultPositionRight')}</SelectItem>
                       <SelectItem value="bottom">{t('preferences.sidePanelDefaultPositionBottom')}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Workflow reading direction - persisted client-side (localStorage),
+                    scoped per workspace like the dock preference above. Drives the
+                    builder canvas as a whole: which edges of a node its connections
+                    leave from, which side its buttons hang off, and the direction the
+                    auto-layout button arranges the graph in. Existing workflows keep
+                    their saved node positions; the choice applies to how the canvas
+                    is wired and to any layout it computes from then on. */}
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-4">
+                  <div>
+                    <h4 className="font-medium text-theme-primary">
+                      {t('preferences.workflowLayoutDirection')}
+                    </h4>
+                    <p className="text-sm text-theme-secondary">
+                      {t('preferences.workflowLayoutDirectionDescription')}
+                    </p>
+                  </div>
+                  <Select
+                    value={workflowLayoutDirection}
+                    onValueChange={(value) => setWorkflowLayoutDirection(value as WorkflowLayoutDirection)}
+                  >
+                    <SelectTrigger className="w-full sm:w-[200px]" data-testid="workflow-layout-direction-select">
+                      <SelectValue placeholder={t('preferences.workflowLayoutDirection')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="horizontal">{t('preferences.workflowLayoutDirectionHorizontal')}</SelectItem>
+                      <SelectItem value="vertical">{t('preferences.workflowLayoutDirectionVertical')}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>

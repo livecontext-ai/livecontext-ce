@@ -151,6 +151,33 @@ class ExecutionNodeFactoryTest {
             assertNull(iface.getVideoPreset());
             assertNull(iface.getVideoMaxDurationSeconds());
         }
+
+        @Test
+        @DisplayName("an interface node is built with no display format (it lives on the interface)")
+        void interfaceNodeCarriesNoFormat() {
+            // The plan no longer carries a shape for the node, and the node exposes no getter
+            // for one: the screenshot/video path resolves it from the interface itself. This
+            // pins that the factory still builds a working node without it.
+            InterfaceDef def = new InterfaceDef(
+                "11111111-2222-3333-4444-555555555555", "Format Card",
+                Map.of(), Map.of(), true, Map.of(),
+                /* isEntryInterface */ false, /* generateScreenshot */ true,
+                /* exposeRenderedSource */ false, /* generatePdf */ false,
+                /* pdfFormat */ null, /* pdfLandscape */ false,
+                /* generateVideo */ false, /* videoPreset */ null,
+                /* videoMaxDurationSeconds */ null, /* videoMode */ null,
+                /* videoFps */ null);
+
+            WorkflowPlan plan = org.mockito.Mockito.mock(WorkflowPlan.class);
+            when(plan.getInterfaces()).thenReturn(List.of(def));
+            Map<String, ExecutionNode> nodeMap = new HashMap<>();
+
+            factory.createInterfaceNodes(nodeMap, plan);
+
+            InterfaceNode iface = (InterfaceNode) nodeMap.get("interface:format_card");
+            assertNotNull(iface, "interface node must be registered under its normalized key");
+            assertTrue(iface.isGenerateScreenshot());
+        }
     }
 
     @Nested

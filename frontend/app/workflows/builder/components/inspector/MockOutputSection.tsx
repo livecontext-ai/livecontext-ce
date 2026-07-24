@@ -19,6 +19,7 @@ import {
   ensureMockPort,
   isMcpCatalogToolNode,
   isPortSelectingNode,
+  MOCK_MAX_DURATION_MS,
   nodePortOptions,
   sanitizeNodeMock,
 } from '../../utils/nodeMock';
@@ -83,6 +84,25 @@ function extractDefaultExample(responses: unknown): Record<string, unknown> | un
     }
   }
   return isPlainObject(raw) ? (raw as Record<string, unknown>) : { result: raw };
+}
+
+/**
+ * Parses the "simulated duration" input (SECONDS, decimals allowed) into the
+ * plan's `durationMs`. Empty / non-numeric / non-positive input = no simulated
+ * duration (`undefined`); values beyond the backend cap are clamped.
+ */
+export function parseDurationSecondsToMs(text: string): number | undefined {
+  const trimmed = text.trim();
+  if (trimmed === '') return undefined;
+  const seconds = Number(trimmed);
+  if (!Number.isFinite(seconds) || seconds <= 0) return undefined;
+  return Math.min(Math.round(seconds * 1000), MOCK_MAX_DURATION_MS);
+}
+
+/** Formats a committed `durationMs` back into the seconds input ('' when absent). */
+function formatDurationSeconds(durationMs: number | undefined): string {
+  if (durationMs === undefined || durationMs <= 0) return '';
+  return String(durationMs / 1000);
 }
 
 function modeOfMock(mock: NodeMock | undefined): MockMode {
@@ -222,6 +242,12 @@ export function MockOutputSection({
   const [jsonText, setJsonText] = React.useState<string>(committedOutputText ?? prefillText);
   const [jsonError, setJsonError] = React.useState(false);
   const [errorMessage, setErrorMessage] = React.useState<string>(mock?.error?.message ?? '');
+  // Simulated duration input, in SECONDS. Kept locally until a commit path
+  // writes it (its own blur when a mock exists, or riding the next JSON /
+  // error / source / port commit when nothing is committed yet).
+  const [durationText, setDurationText] = React.useState<string>(
+    formatDurationSeconds(mock?.durationMs)
+  );
 
   // Re-seed local editors when the node changes or the committed mock changes
   // externally (import, Use-as-mock, removal).
@@ -231,6 +257,13 @@ export function MockOutputSection({
     setErrorMessage(mock?.error?.message ?? '');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [node.id, committedOutputText, prefillText]);
+
+  // The duration input re-seeds on its OWN dependency: keying the main effect
+  // on mock.durationMs would reset an uncommitted JSON draft every time the
+  // duration commits.
+  React.useEffect(() => {
+    setDurationText(formatDurationSeconds(mock?.durationMs));
+  }, [node.id, mock?.durationMs]);
 
   // ---------- Writes ----------
 
@@ -249,6 +282,17 @@ export function MockOutputSection({
     [isRunMode, data, onUpdate]
   );
 
+  // The not-yet-committed duration, included by every commit path so the value
+  // typed before the first commit is never lost.
+  const pendingDurationMs = React.useMemo(
+    () => parseDurationSecondsToMs(durationText),
+    [durationText]
+  );
+  const durationSpread = React.useMemo(
+    () => (pendingDurationMs !== undefined ? { durationMs: pendingDurationMs } : {}),
+    [pendingDurationMs]
+  );
+
   const handleModeChange = React.useCallback(
     (value: string) => {
       const nextMode = value as MockMode;
@@ -257,13 +301,14 @@ export function MockOutputSection({
         writeMock({
           source: 'catalog_example',
           ...(mock?.enabled === false ? { enabled: false } : {}),
+          ...durationSpread,
         });
         return;
       }
       // custom / error commit later (JSON blur / message input) - only flip the UI.
       setPendingMode(nextMode);
     },
-    [writeMock, mock?.enabled]
+    [writeMock, mock?.enabled, durationSpread]
   );
 
   const commitJson = React.useCallback(() => {
@@ -288,11 +333,12 @@ export function MockOutputSection({
           output: parsed as Record<string, unknown>,
           ...(mock?.port ? { port: mock.port } : {}),
           ...(mock?.enabled === false ? { enabled: false } : {}),
+          ...durationSpread,
         },
         node
       )
     );
-  }, [isRunMode, jsonText, writeMock, mock?.port, mock?.enabled, node]);
+  }, [isRunMode, jsonText, writeMock, mock?.port, mock?.enabled, durationSpread, node]);
 
   const handleResetToExample = React.useCallback(() => {
     setJsonText(prefillText);
@@ -305,9 +351,10 @@ export function MockOutputSection({
         port,
         ...(mock?.output ? { output: mock.output } : {}),
         ...(mock?.enabled === false ? { enabled: false } : {}),
+        ...durationSpread,
       });
     },
-    [writeMock, mock?.output, mock?.enabled]
+    [writeMock, mock?.output, mock?.enabled, durationSpread]
   );
 
   const commitErrorMessage = React.useCallback(() => {
@@ -321,8 +368,21 @@ export function MockOutputSection({
     writeMock({
       error: { message },
       ...(mock?.enabled === false ? { enabled: false } : {}),
+      ...durationSpread,
     });
-  }, [isRunMode, errorMessage, derivedMode, writeMock, mock?.enabled]);
+  }, [isRunMode, errorMessage, derivedMode, writeMock, mock?.enabled, durationSpread]);
+
+  const commitDuration = React.useCallback(() => {
+    if (isRunMode || !mock) return;
+    // undefined removes the key: sanitizeNodeMock never keeps an absent duration.
+    const next: NodeMock = { ...mock };
+    if (pendingDurationMs !== undefined) {
+      next.durationMs = pendingDurationMs;
+    } else {
+      delete next.durationMs;
+    }
+    writeMock(next);
+  }, [isRunMode, mock, pendingDurationMs, writeMock]);
 
   const handleMasterToggle = React.useCallback(
     (checked: boolean) => {
@@ -476,6 +536,33 @@ export function MockOutputSection({
               />
             </div>
           ) : null}
+
+          {/* Simulated duration - applies to every source */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-sm font-medium text-slate-500 dark:text-slate-400">
+              {t('durationLabel')}
+            </label>
+            <div className="flex items-center gap-2">
+              <Input
+                type="number"
+                min={0}
+                max={600}
+                step={0.1}
+                value={durationText}
+                onChange={(e) => setDurationText(e.target.value)}
+                onBlur={commitDuration}
+                readOnly={isRunMode}
+                placeholder="0"
+                className="w-28"
+                aria-label={t('durationLabel')}
+                data-testid="mock-duration-input"
+              />
+              <span className="text-sm text-slate-400 dark:text-slate-500">
+                {t('durationUnit')}
+              </span>
+            </div>
+            <p className="text-sm text-slate-400 dark:text-slate-500">{t('durationHelp')}</p>
+          </div>
 
         </div>
       ) : null}

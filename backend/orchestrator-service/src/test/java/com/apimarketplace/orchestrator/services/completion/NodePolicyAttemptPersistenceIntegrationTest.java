@@ -164,7 +164,7 @@ class NodePolicyAttemptPersistenceIntegrationTest {
                     persistedRowsInOrder.add(key);
                     return StepPersistenceResult.success(UUID.randomUUID());
                 }
-                return StepPersistenceResult.notPersisted(); // ON CONFLICT DO NOTHING
+                return StepPersistenceResult.duplicate(); // ON CONFLICT DO NOTHING
             });
 
         orchestrator = new StepCompletionOrchestrator(

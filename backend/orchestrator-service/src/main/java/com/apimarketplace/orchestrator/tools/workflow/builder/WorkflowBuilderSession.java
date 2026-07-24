@@ -447,6 +447,36 @@ public class WorkflowBuilderSession {
                 .findFirst();
     }
 
+    /**
+     * Single-entry invariant: an application has ONE entry page. When the interface
+     * node {@code keepNode} becomes the entry, clear the flag on every other
+     * interface node - mirroring the canvas builder's enforcement and matching the
+     * showcase resolver's findFirst() semantics, so what the author set is what the
+     * application opens on.
+     *
+     * <p>The kept node is identified by MAP IDENTITY, not by id: a plan interface
+     * entry's {@code id} is the interface ENTITY UUID while callers resolve node
+     * references to {@code interface:<label>} keys - an id comparison silently
+     * demotes the very node that was just flagged (caught live in e2e).
+     *
+     * @return the labels (fallback: ids) of the interfaces whose flag was cleared
+     */
+    public List<String> enforceSingleEntryInterface(Map<String, Object> keepNode) {
+        List<String> cleared = new ArrayList<>();
+        for (Map<String, Object> iface : interfaces) {
+            if (iface == keepNode) continue;
+            boolean flagged = Boolean.TRUE.equals(iface.get("isEntryInterface"))
+                    || Boolean.TRUE.equals(iface.get("is_entry_interface"));
+            if (flagged) {
+                iface.put("isEntryInterface", false);
+                iface.remove("is_entry_interface");
+                Object label = iface.get("label");
+                cleared.add(String.valueOf(label != null ? label : iface.get("id")));
+            }
+        }
+        return cleared;
+    }
+
     // ==================== Credentials Tracking ====================
 
     public void trackMissingCredential(String nodeId, String serviceType, String serviceName, String iconSlug) {

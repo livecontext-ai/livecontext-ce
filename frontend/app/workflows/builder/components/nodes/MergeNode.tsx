@@ -15,6 +15,8 @@ import { NodePlayButton } from '../NodePlayButton';
 import { useNodeExecutionStatus } from '../../contexts/StepByStepContext';
 import { NodeBottomBar } from './NodeBottomBar';
 
+import { useWorkflowLayoutDirectionSafe } from '@/contexts/WorkflowLayoutDirectionContext';
+import { getSourceHandleGeometry, getBranchHandleGeometry, getBranchHandleGeometryAt, getBranchRowFlow } from './handleGeometry';
 export interface MergeInputRow {
   id: string;
   label: string;
@@ -30,6 +32,12 @@ export function createDefaultMergeInputs(nodeId: string): MergeInputRow[] {
 
 
 export function MergeNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
+  // Handle sides follow the canvas reading direction. Safe variant: nodes also
+  // render on provider-less surfaces (marketplace preview, snapshots).
+  const { direction: layoutDirection } = useWorkflowLayoutDirectionSafe();
+  const sourceHandle = getSourceHandleGeometry(layoutDirection);
+  const branchIn = getBranchHandleGeometry(layoutDirection, false);
+
   const visuals = getNodeVisual('merge');
   // Use mergeInputs like DecisionNode uses decisionConditions
   const inputs: MergeInputRow[] =
@@ -129,7 +137,11 @@ export function MergeNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
       />
 
       {/* Input handles list - show connected source labels */}
-      <div className="mt-4 space-y-2 text-[11px] text-slate-500" style={{ paddingBottom: effectiveStatus && effectiveStatus !== 'pending' ? '10px' : '0' }}>
+      <div className={`mt-4 ${getBranchRowFlow(layoutDirection)} text-[11px] text-slate-500`} style={
+          layoutDirection === 'vertical'
+            ? { paddingRight: effectiveStatus && effectiveStatus !== 'pending' ? '10px' : '0' }
+            : { paddingBottom: effectiveStatus && effectiveStatus !== 'pending' ? '10px' : '0' }
+        }>
         {inputs.map((input, index) => {
           const connectedLabel = inputLabels.get(input.id);
           return (
@@ -142,24 +154,48 @@ export function MergeNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
                   {connectedLabel || 'Not connected'}
                 </span>
               </div>
-              <Handle
-                type="target"
-                id={input.id}
-                position={Position.Left}
-                className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
-                style={{
-                  left: -27,
-                  top: '50%',
-                  transform: 'translateY(-50%)',
-                  backgroundColor: 'var(--border-color)',
-                  opacity: isRunMode ? 0 : 1,
-                  pointerEvents: isRunMode ? 'none' : 'auto'
-                }}
-              />
+              {/* Horizontal: the input handle pins to the LEFT of its own row (the
+                  rows are on the target edge). Vertical rows sit BELOW the header, so
+                  the top-edge handles are hoisted to node level below instead. */}
+              {layoutDirection !== 'vertical' && (
+                <Handle
+                  type="target"
+                  id={input.id}
+                  position={branchIn.position}
+                  className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
+                  style={{
+                    ...branchIn.style,
+                    backgroundColor: 'var(--border-color)',
+                    opacity: isRunMode ? 0 : 1,
+                    pointerEvents: isRunMode ? 'none' : 'auto'
+                  }}
+                />
+              )}
             </div>
           );
         })}
       </div>
+
+      {/* Vertical: input handles spread along the node's TOP border, one above each
+          input column, since a row-pinned top handle would land inside the header. */}
+      {layoutDirection === 'vertical' && inputs.map((input, index) => {
+        const geo = getBranchHandleGeometryAt(layoutDirection, false, index, inputs.length);
+        return (
+          <Handle
+            key={`top-${input.id}`}
+            type="target"
+            id={input.id}
+            position={geo.position}
+            className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
+            style={{
+              ...geo.style,
+              backgroundColor: 'var(--border-color)',
+              opacity: isRunMode ? 0 : 1,
+              pointerEvents: isRunMode ? 'none' : 'auto',
+            }}
+          />
+        );
+      })}
 
       {/* Status badge */}
       {effectiveStatus && effectiveStatus !== 'pending' && (
@@ -194,13 +230,11 @@ export function MergeNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
       {/* Single output handle on the right */}
       <Handle
         type="source"
-        position={Position.Right}
+        position={sourceHandle.position}
         id="source-right"
         className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
         style={{
-          right: -6,
-          top: '50%',
-          transform: 'translateY(-50%)',
+          ...sourceHandle.style,
           backgroundColor: 'var(--border-color)',
           opacity: isRunMode ? 0 : 1,
           pointerEvents: isRunMode ? 'none' : 'auto'

@@ -1,16 +1,23 @@
 package com.apimarketplace.orchestrator.services.interfaces;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.apimarketplace.orchestrator.domain.file.FileRef;
 import com.apimarketplace.orchestrator.repository.WorkflowRunRepository;
 import com.apimarketplace.orchestrator.services.InterfaceRenderService;
 import com.apimarketplace.orchestrator.services.InterfaceRenderService.ResolvedTemplateSnapshot;
 import com.apimarketplace.orchestrator.services.file.FileStorageService;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -84,11 +91,21 @@ class InterfaceScreenshotServiceImplTest {
         // Reflects what InterfaceRenderService.resolveTemplateSnapshot would return for an
         // interface with template "<h1>{{title|placeholder}}</h1>" and items[0].data={title=Hello}
         // - i.e. the {{var|default}} substitution has already been applied.
+        return sampleSnapshotWithFormat(null);
+    }
+
+    /**
+     * Same snapshot, carrying the interface's declared format. This is where the format reaches
+     * the service: it is a property of the INTERFACE, resolved with its templates, never a
+     * capture argument.
+     */
+    private ResolvedTemplateSnapshot sampleSnapshotWithFormat(String format) {
         return new ResolvedTemplateSnapshot(
             "<h1>Hello</h1>",
             "h1 { color: blue }",
             "",
-            Map.of("title", "Hello")
+            Map.of("title", "Hello"),
+            format
         );
     }
 
@@ -287,6 +304,163 @@ class InterfaceScreenshotServiceImplTest {
     }
 
     @Nested
+    @DisplayName("Screenshot body - global format viewport")
+    class ScreenshotFormatBody {
+
+        private ArgumentCaptor<HttpEntity<Map<String, Object>>> stubSuccessfulScreenshotFlow() {
+            return stubSuccessfulScreenshotFlow(null);
+        }
+
+        /** @param format the format the INTERFACE declares (null = none), as seen by the service. */
+        private ArgumentCaptor<HttpEntity<Map<String, Object>>> stubSuccessfulScreenshotFlow(String format) {
+            byte[] png = "png".getBytes();
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+                .thenReturn(Optional.of(sampleSnapshotWithFormat(format)));
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor =
+                ArgumentCaptor.forClass(HttpEntity.class);
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), bodyCaptor.capture(), eq(byte[].class)))
+                .thenReturn(new ResponseEntity<>(png, HttpStatus.OK));
+            stubWorkflowLookup();
+            when(fileStorageService.upload(any(), anyString(), any(), any(), anyString(), anyString(),
+                any(InputStream.class), anyLong(), anyInt(), anyInt(), nullable(Integer.class), anyString()))
+                .thenReturn(FileRef.of("p", "f.png", "image/png", png.length));
+            return bodyCaptor;
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> viewportOf(Map<String, Object> body) {
+            return (Map<String, Object>) body.get("viewport");
+        }
+
+        @Test
+        @DisplayName("No format → classic 1280x800 viewport + fullPage=true (pins the historical behaviour)")
+        void noFormatKeepsClassicFullPageCapture() {
+            ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor = stubSuccessfulScreenshotFlow();
+
+            newService(RENDERER_URL)
+                .capture(TENANT, RUN_ID, EPOCH, 0, null, NODE_ID, INTERFACE_UUID);
+
+            Map<String, Object> sent = bodyCaptor.getValue().getBody();
+            assertEquals(1280, viewportOf(sent).get("width"));
+            assertEquals(800, viewportOf(sent).get("height"));
+            assertEquals(Boolean.TRUE, sent.get("fullPage"),
+                "without a format the whole scrollable interface must be captured");
+        }
+
+        @Test
+        @DisplayName("interface declares 'vertical' → 1080x1920 viewport + fullPage=false (exact frame, matches the video)")
+        void verticalFormatDrivesExactFrameCapture() {
+            ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor = stubSuccessfulScreenshotFlow("vertical");
+
+            newService(RENDERER_URL)
+                .capture(TENANT, RUN_ID, EPOCH, 0, null, NODE_ID, INTERFACE_UUID);
+
+            Map<String, Object> sent = bodyCaptor.getValue().getBody();
+            assertEquals(1080, viewportOf(sent).get("width"));
+            assertEquals(1920, viewportOf(sent).get("height"));
+            assertEquals(Boolean.FALSE, sent.get("fullPage"),
+                "with a format the capture must be the exact WxH frame, not full-page");
+        }
+
+        @Test
+        @DisplayName("Interface declares an unresolvable format → falls back to 1280x800 + fullPage=true")
+        void unresolvableFormatFallsBackToClassicFullPage() {
+            ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor = stubSuccessfulScreenshotFlow("garbage");
+
+            newService(RENDERER_URL)
+                .capture(TENANT, RUN_ID, EPOCH, 0, null, NODE_ID, INTERFACE_UUID);
+
+            Map<String, Object> sent = bodyCaptor.getValue().getBody();
+            assertEquals(1280, viewportOf(sent).get("width"));
+            assertEquals(800, viewportOf(sent).get("height"));
+            assertEquals(Boolean.TRUE, sent.get("fullPage"),
+                "an unknown format must keep the historical full-page capture, never break the render");
+        }
+    }
+
+    @Nested
+    @DisplayName("Assembled HTML - platform base CSS contract (fragments only)")
+    class AssembledHtmlBaseCss {
+
+        @SuppressWarnings("unchecked")
+        private ArgumentCaptor<HttpEntity<Map<String, Object>>> stubFlowWithSnapshot(ResolvedTemplateSnapshot snapshot) {
+            byte[] png = "png".getBytes();
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+                .thenReturn(Optional.of(snapshot));
+            ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor =
+                ArgumentCaptor.forClass(HttpEntity.class);
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), bodyCaptor.capture(), eq(byte[].class)))
+                .thenReturn(new ResponseEntity<>(png, HttpStatus.OK));
+            stubWorkflowLookup();
+            when(fileStorageService.upload(any(), anyString(), any(), any(), anyString(), anyString(),
+                any(InputStream.class), anyLong(), anyInt(), anyInt(), nullable(Integer.class), anyString()))
+                .thenReturn(FileRef.of("p", "f.png", "image/png", png.length));
+            return bodyCaptor;
+        }
+
+        private String sentHtml(ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor) {
+            return (String) bodyCaptor.getValue().getBody().get("html");
+        }
+
+        @Test
+        @DisplayName("Fragment template: the scaffold injects the platform base CSS BEFORE the author's cssTemplate")
+        void fragmentScaffoldInjectsBaseCssBeforeAuthorCss() {
+            ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor = stubFlowWithSnapshot(
+                new ResolvedTemplateSnapshot("<h1>Hello</h1>", "body { padding: 0 }", "", Map.of(), null));
+
+            newService(RENDERER_URL).capture(TENANT, RUN_ID, EPOCH, 0, null, NODE_ID, INTERFACE_UUID);
+
+            String html = sentHtml(bodyCaptor);
+            int baseIdx = html.indexOf("padding: 8px");
+            int authorIdx = html.indexOf("body { padding: 0 }");
+            assertTrue(baseIdx > -1, "fragment scaffold must carry the platform base CSS");
+            assertTrue(html.contains("box-sizing: border-box"));
+            assertTrue(authorIdx > baseIdx,
+                "the author's cssTemplate must come AFTER the base so every base rule stays overridable");
+        }
+
+        // Regression for the 2026-07-16 preview/video parity report: the frontend preview
+        // injected base CSS into complete documents while this renderer path injected
+        // nothing. The contract is now identical on both sides: complete documents
+        // inherit NOTHING, fragments inherit the shared base.
+        @Test
+        @DisplayName("Complete document: NO platform base CSS is injected (author owns the page, matches the preview)")
+        void completeDocumentGetsNoBaseCss() {
+            ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor = stubFlowWithSnapshot(
+                new ResolvedTemplateSnapshot(
+                    "<!DOCTYPE html><html><head><style>body{margin:0;padding:0}</style></head><body>Hi</body></html>",
+                    "h1 { color: blue }", "", Map.of(), null));
+
+            newService(RENDERER_URL).capture(TENANT, RUN_ID, EPOCH, 0, null, NODE_ID, INTERFACE_UUID);
+
+            String html = sentHtml(bodyCaptor);
+            assertFalse(html.contains("padding: 8px"),
+                "a complete document must never inherit the platform base CSS");
+            assertFalse(html.contains("box-sizing: border-box"));
+            assertTrue(html.contains("h1 { color: blue }"),
+                "the author's cssTemplate is still injected into the head");
+        }
+
+        // Byte-parity contract with the frontend preview: the SAME literal is pinned in
+        // interfaceHtmlUtils.test.ts ("the injected base is the exact shared platform
+        // literal"). Editing the base on either side without the other fails one suite.
+        @Test
+        @DisplayName("FRAGMENT_BASE_CSS is byte-identical to the frontend preview base (full-string pin)")
+        void fragmentBaseCssPinsSharedRules() {
+            String sharedFragmentBaseCss =
+                "* { box-sizing: border-box; }\n"
+                    + "body {\n"
+                    + "  margin: 0;\n"
+                    + "  padding: 8px;\n"
+                    + "  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;\n"
+                    + "}";
+            assertEquals(sharedFragmentBaseCss, InterfaceScreenshotServiceImpl.FRAGMENT_BASE_CSS,
+                "keep byte-identical to BASE_IFRAME_CSS in interfaceHtmlUtils.ts");
+        }
+    }
+
+    @Nested
     @DisplayName("PDF render (capturePdf)")
     class PdfRender {
 
@@ -384,6 +558,176 @@ class InterfaceScreenshotServiceImplTest {
     @Nested
     @DisplayName("Video render (captureVideo)")
     class VideoRender {
+
+        /**
+         * Regression pack for the silent-truncation bug: the sidecar finalises a SHORTER but
+         * perfectly valid mp4 when its wall-clock budget runs out and still answers 200, so a
+         * 20s clip shipped as 9s with nothing in the response, the output or the logs to say
+         * why. `X-Render-Truncated` is the only signal; these pin that we read it, that we say
+         * so at WARN, and - critically - that a truncated clip is still UPLOADED (it is a
+         * degraded result, never a failure).
+         */
+        @Nested
+        @DisplayName("Wall-clock truncation signal (X-Render-Truncated)")
+        class TruncationSignal {
+
+            private Logger serviceLogger;
+            private Level previousLevel;
+            private ListAppender<ILoggingEvent> appender;
+
+            @BeforeEach
+            void attachAppender() {
+                serviceLogger = (Logger) LoggerFactory.getLogger(InterfaceScreenshotServiceImpl.class);
+                previousLevel = serviceLogger.getLevel();
+                appender = new ListAppender<>();
+                appender.start();
+                serviceLogger.addAppender(appender);
+                serviceLogger.setLevel(Level.WARN);
+            }
+
+            @AfterEach
+            void detachAppender() {
+                serviceLogger.detachAppender(appender);
+                serviceLogger.setLevel(previousLevel);
+            }
+
+            private Optional<FileRef> renderWithHeaders(HttpHeaders headers) {
+                byte[] mp4 = "fake-mp4-bytes".getBytes();
+                when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+                    .thenReturn(Optional.of(sampleSnapshot()));
+                when(videoRestTemplate.exchange(anyString(), eq(HttpMethod.POST), any(), eq(byte[].class)))
+                    .thenReturn(new ResponseEntity<>(mp4, headers, HttpStatus.OK));
+                stubWorkflowLookup();
+                lenient().when(fileStorageService.upload(eq(TENANT), anyString(), eq(RUN_ID), eq(NODE_ID),
+                        anyString(), eq("video/mp4"), any(InputStream.class), anyLong(),
+                        anyInt(), anyInt(), nullable(Integer.class), anyString()))
+                    .thenReturn(FileRef.of("k", "n.mp4", "video/mp4", mp4.length));
+
+                return newService(RENDERER_URL)
+                    .captureVideo(TENANT, RUN_ID, EPOCH, 0, null, NODE_ID, INTERFACE_UUID,
+                        "vertical", 20, "smooth", 60);
+            }
+
+            private String warnings() {
+                return appender.list.stream()
+                    .filter(e -> e.getLevel() == Level.WARN)
+                    .map(ILoggingEvent::getFormattedMessage)
+                    .reduce("", (a, b) -> a + "\n" + b);
+            }
+
+            @Test
+            @DisplayName("X-Render-Truncated=true → WARNs with the frame count and the resulting seconds, and STILL uploads the short clip")
+            void truncatedRenderWarnsAndStillUploads() {
+                HttpHeaders headers = new HttpHeaders();
+                headers.set("X-Render-Truncated", "true");
+                headers.set("X-Render-Frames", "540");
+
+                Optional<FileRef> result = renderWithHeaders(headers);
+
+                assertTrue(result.isPresent(),
+                    "a truncated clip is a valid, shorter mp4 - it must still be uploaded, never dropped");
+                String warned = warnings();
+                assertTrue(warned.contains("TRUNCATED"), "truncation must be surfaced at WARN, got: " + warned);
+                assertTrue(warned.contains("540"), "the WARN must carry the frame count: " + warned);
+                assertTrue(warned.contains("9.0"),
+                    "the WARN must state the DELIVERED seconds (540 frames / 60fps = 9.0s), which is the "
+                        + "number the user actually sees: " + warned);
+            }
+
+            @Test
+            @DisplayName("X-Render-Truncated=false → no truncation WARN (a clip ended by the page's own done flag is normal)")
+            void completeRenderDoesNotWarn() {
+                HttpHeaders headers = new HttpHeaders();
+                headers.set("X-Render-Truncated", "false");
+                headers.set("X-Render-Frames", "1200");
+
+                assertTrue(renderWithHeaders(headers).isPresent());
+                assertFalse(warnings().contains("TRUNCATED"),
+                    "a complete clip must stay silent, or the WARN becomes noise nobody reads");
+            }
+
+            @Test
+            @DisplayName("Headers absent (live mode / older sidecar) → treated as not truncated, no WARN, render unaffected")
+            void missingHeadersAreBackCompatible() {
+                assertTrue(renderWithHeaders(new HttpHeaders()).isPresent(),
+                    "a sidecar that does not send the header must keep working unchanged");
+                assertFalse(warnings().contains("TRUNCATED"));
+            }
+
+            @Test
+            @DisplayName("Production video-max-bytes default carries a full 20s@60fps clip (47.4MB measured) - under it the clip is DROPPED, not shortened")
+            void videoMaxBytesDefaultFitsAFullLengthClip() {
+                // The wall-budget fix lets a busy 1080x1920@60fps clip run its full 20s instead of
+                // being cut at 9s, which grows it ~2.2x. A MEASURED prod render of such a page is
+                // 47.4MB. Over the cap, render() returns Optional.empty() - i.e. raising the budget
+                // without raising this turns "short video" into NO video. Pinned as a value so the
+                // two numbers can never drift apart unnoticed.
+                Constructor<?> autowired = Arrays.stream(InterfaceScreenshotServiceImpl.class.getConstructors())
+                    .filter(c -> c.isAnnotationPresent(Autowired.class))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError("no @Autowired constructor"));
+                String declared = Arrays.stream(autowired.getParameters())
+                    .filter(p -> p.isAnnotationPresent(org.springframework.beans.factory.annotation.Value.class))
+                    .map(p -> p.getAnnotation(org.springframework.beans.factory.annotation.Value.class).value())
+                    .filter(v -> v.contains("video-max-bytes"))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError("video-max-bytes @Value not found"));
+
+                long defaultBytes = Long.parseLong(declared.substring(declared.indexOf(':') + 1, declared.indexOf('}')));
+                long measuredFullLengthClipBytes = 47_400_000L;
+                assertTrue(defaultBytes > measuredFullLengthClipBytes,
+                    "video-max-bytes default (" + defaultBytes + ") must exceed the measured 20s@60fps clip ("
+                        + measuredFullLengthClipBytes + "), or the fix ships no video at all");
+                assertEquals(104857600L, defaultBytes, "100MB: measured worst case + margin, 2 concurrent within the heap");
+            }
+
+            @Test
+            @DisplayName("A clip over video-max-bytes is dropped (Optional.empty) rather than uploaded")
+            void oversizedClipIsDropped() {
+                byte[] huge = new byte[64];
+                when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+                    .thenReturn(Optional.of(sampleSnapshot()));
+                when(videoRestTemplate.exchange(anyString(), eq(HttpMethod.POST), any(), eq(byte[].class)))
+                    .thenReturn(new ResponseEntity<>(huge, HttpStatus.OK));
+
+                Optional<FileRef> result = newService(RENDERER_URL, /* videoMaxBytes */ 32L)
+                    .captureVideo(TENANT, RUN_ID, EPOCH, 0, null, NODE_ID, INTERFACE_UUID,
+                        "vertical", 20, "smooth", 60);
+
+                assertTrue(result.isEmpty(),
+                    "over the cap the clip is discarded entirely - this is why the cap must exceed a full-length clip");
+                verifyNoInteractions(fileStorageService);
+            }
+
+            @Test
+            @DisplayName("Header names mirror the sidecar's exported literals (cross-layer contract)")
+            void headerNamesMatchTheSidecarContract() {
+                // The sidecar pins the same two literals (lib.js RENDER_HEADER_*). Renaming a
+                // header on ONE side alone is invisible at runtime - a truncated clip simply
+                // answers 200 with a short mp4 again - so both sides pin them independently.
+                HttpHeaders headers = new HttpHeaders();
+                headers.set("X-Render-Truncated", "true");
+                headers.set("X-Render-Frames", "540");
+
+                assertTrue(renderWithHeaders(headers).isPresent());
+                assertTrue(warnings().contains("TRUNCATED"),
+                    "the service must read exactly 'X-Render-Truncated'/'X-Render-Frames' as emitted by the sidecar");
+            }
+
+            @Test
+            @DisplayName("Unparseable X-Render-Frames → still WARNs about truncation, never throws on the frame count")
+            void unparseableFrameCountDoesNotBreakTheRender() {
+                HttpHeaders headers = new HttpHeaders();
+                headers.set("X-Render-Truncated", "true");
+                headers.set("X-Render-Frames", "not-a-number");
+
+                Optional<FileRef> result = renderWithHeaders(headers);
+
+                assertTrue(result.isPresent(), "an informational header must never fail a good render");
+                assertTrue(warnings().contains("TRUNCATED"),
+                    "the truncation itself is still worth reporting even with an unusable frame count");
+            }
+        }
 
         @Test
         @DisplayName("Successful recording → uploads <label>_video_epoch_N_spawn_M.mp4 with mime video/mp4 and sourceType INTERFACE_VIDEO, via the LONG-TIMEOUT RestTemplate")
@@ -625,6 +969,123 @@ class InterfaceScreenshotServiceImplTest {
             assertEquals("vertical", InterfaceScreenshotServiceImpl.normalizeVideoPresetOrDefault("cinema"));
             assertEquals("horizontal", InterfaceScreenshotServiceImpl.normalizeVideoPresetOrDefault("Horizontal"));
             assertEquals("square", InterfaceScreenshotServiceImpl.normalizeVideoPresetOrDefault("SQUARE "));
+        }
+
+        @Test
+        @DisplayName("normalizeVideoPresetOrNull: null/blank/unknown → null, supported preset lowercased")
+        void normalizeVideoPresetOrNullBounds() {
+            assertNull(InterfaceScreenshotServiceImpl.normalizeVideoPresetOrNull(null));
+            assertNull(InterfaceScreenshotServiceImpl.normalizeVideoPresetOrNull("  "));
+            assertNull(InterfaceScreenshotServiceImpl.normalizeVideoPresetOrNull("weird"));
+            assertEquals("square", InterfaceScreenshotServiceImpl.normalizeVideoPresetOrNull("SQUARE"));
+            assertEquals("vertical", InterfaceScreenshotServiceImpl.normalizeVideoPresetOrNull(" Vertical "));
+        }
+
+        @SuppressWarnings("unchecked")
+        private ArgumentCaptor<HttpEntity<Map<String, Object>>> stubSuccessfulVideoFlow() {
+            return stubSuccessfulVideoFlow(null);
+        }
+
+        /** @param format the format the INTERFACE declares (null = none), as seen by the service. */
+        private ArgumentCaptor<HttpEntity<Map<String, Object>>> stubSuccessfulVideoFlow(String format) {
+            byte[] mp4 = "mp4".getBytes();
+            when(renderService.resolveTemplateSnapshot(any(), any(), any(), anyInt()))
+                .thenReturn(Optional.of(sampleSnapshotWithFormat(format)));
+            ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor =
+                ArgumentCaptor.forClass(HttpEntity.class);
+            when(videoRestTemplate.exchange(anyString(), eq(HttpMethod.POST), bodyCaptor.capture(), eq(byte[].class)))
+                .thenReturn(new ResponseEntity<>(mp4, HttpStatus.OK));
+            stubWorkflowLookup();
+            when(fileStorageService.upload(any(), anyString(), any(), any(), anyString(), anyString(),
+                any(InputStream.class), anyLong(), anyInt(), anyInt(), nullable(Integer.class), anyString()))
+                .thenReturn(FileRef.of("p", "f.mp4", "video/mp4", mp4.length));
+            return bodyCaptor;
+        }
+
+        @Test
+        @DisplayName("format + NO preset → body carries an explicit viewport {1080,1920} and NO preset key")
+        void formatWithoutPresetSendsViewportInsteadOfPreset() {
+            ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor = stubSuccessfulVideoFlow("vertical");
+
+            newService(RENDERER_URL)
+                .captureVideo(TENANT, RUN_ID, EPOCH, 0, null, NODE_ID, INTERFACE_UUID,
+                    /* videoPreset */ null, 30, null, null);
+
+            Map<String, Object> sent = bodyCaptor.getValue().getBody();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> viewport = (Map<String, Object>) sent.get("viewport");
+            assertNotNull(viewport, "the interface's own format must drive the recording viewport");
+            assertEquals(1080, viewport.get("width"));
+            assertEquals(1920, viewport.get("height"));
+            assertFalse(sent.containsKey("preset"),
+                "an explicit viewport must replace the preset key, not accompany it");
+        }
+
+        @Test
+        @DisplayName("explicit preset 'square' + format 'vertical' → preset wins: body has preset=square and NO viewport")
+        void explicitPresetWinsOverFormat() {
+            // The interface DECLARES vertical: the preset must beat it, otherwise there is no
+            // precedence to prove. Stubbing no format here makes the assertions below trivially
+            // true and lets an inverted rule (format beating the preset) pass unnoticed.
+            ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor = stubSuccessfulVideoFlow("vertical");
+
+            newService(RENDERER_URL)
+                .captureVideo(TENANT, RUN_ID, EPOCH, 0, null, NODE_ID, INTERFACE_UUID,
+                    /* videoPreset */ "square", 30, null, null);
+
+            Map<String, Object> sent = bodyCaptor.getValue().getBody();
+            assertEquals("square", sent.get("preset"),
+                "an explicit valid videoPreset is a per-video override that beats the interface's format");
+            assertFalse(sent.containsKey("viewport"),
+                "when the preset wins the interface's format viewport must not be sent");
+        }
+
+        @Test
+        @DisplayName("unknown preset + valid format → format drives the viewport (invalid preset does not block the fallback)")
+        void unknownPresetLetsFormatDriveViewport() {
+            ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor = stubSuccessfulVideoFlow("square");
+
+            newService(RENDERER_URL)
+                .captureVideo(TENANT, RUN_ID, EPOCH, 0, null, NODE_ID, INTERFACE_UUID,
+                    /* videoPreset */ "cinema", 30, null, null);
+
+            Map<String, Object> sent = bodyCaptor.getValue().getBody();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> viewport = (Map<String, Object>) sent.get("viewport");
+            assertNotNull(viewport, "an unknown preset counts as 'no explicit preset', so the format applies");
+            assertEquals(1080, viewport.get("width"));
+            assertEquals(1080, viewport.get("height"));
+            assertFalse(sent.containsKey("preset"));
+        }
+
+        @Test
+        @DisplayName("no preset + unresolvable format → falls back to preset=vertical (historical default, no viewport)")
+        void unresolvableFormatFallsBackToVerticalPreset() {
+            // The interface declares a format that resolves to nothing: the recording must not
+            // break, it falls back to the vertical default (the third rung of the precedence).
+            ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor = stubSuccessfulVideoFlow("garbage");
+
+            newService(RENDERER_URL)
+                .captureVideo(TENANT, RUN_ID, EPOCH, 0, null, NODE_ID, INTERFACE_UUID,
+                    /* videoPreset */ null, 30, null, null);
+
+            Map<String, Object> sent = bodyCaptor.getValue().getBody();
+            assertEquals("vertical", sent.get("preset"));
+            assertFalse(sent.containsKey("viewport"));
+        }
+
+        @Test
+        @DisplayName("No preset and no declared format → vertical default (pins the bottom rung)")
+        void noPresetAndNoFormatFallsBackToVerticalPreset() {
+            ArgumentCaptor<HttpEntity<Map<String, Object>>> bodyCaptor = stubSuccessfulVideoFlow();
+
+            newService(RENDERER_URL)
+                .captureVideo(TENANT, RUN_ID, EPOCH, 0, null, NODE_ID, INTERFACE_UUID,
+                    /* videoPreset */ null, 30, null, null);
+
+            Map<String, Object> sent = bodyCaptor.getValue().getBody();
+            assertEquals("vertical", sent.get("preset"));
+            assertFalse(sent.containsKey("viewport"));
         }
 
         @Test

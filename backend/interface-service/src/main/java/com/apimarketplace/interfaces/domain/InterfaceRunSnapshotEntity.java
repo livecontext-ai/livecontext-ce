@@ -47,6 +47,15 @@ public class InterfaceRunSnapshotEntity {
     @Column(name = "js_template")
     private String jsTemplate;
 
+    /**
+     * Frozen copy of the interface's display/capture format (see
+     * {@link com.apimarketplace.interfaces.client.InterfaceFormat}). The render path prefers a
+     * run snapshot over the live interface, so without this the run would silently fall back to
+     * the 1280x800 default even when the interface declares a format. Null = full page.
+     */
+    @Column(name = "format")
+    private String format;
+
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "variable_mappings", columnDefinition = "jsonb")
     private Map<String, String> variableMappings;
@@ -92,6 +101,10 @@ public class InterfaceRunSnapshotEntity {
         );
         snapshot.setCssTemplate(iface.getCssTemplate());
         snapshot.setJsTemplate(iface.getJsTemplate());
+        // The format travels with the templates: the render path reads the snapshot in
+        // preference to the live interface, so dropping it here silently reverts the run
+        // to the 1280x800 default.
+        snapshot.setFormat(iface.getFormat());
         return snapshot;
     }
 
@@ -143,6 +156,9 @@ public class InterfaceRunSnapshotEntity {
 
     public String getJsTemplate() { return jsTemplate; }
     public void setJsTemplate(String jsTemplate) { this.jsTemplate = jsTemplate; }
+
+    public String getFormat() { return format; }
+    public void setFormat(String format) { this.format = format; }
 
     public Map<String, String> getVariableMappings() { return variableMappings; }
     public void setVariableMappings(Map<String, String> variableMappings) { this.variableMappings = variableMappings; }

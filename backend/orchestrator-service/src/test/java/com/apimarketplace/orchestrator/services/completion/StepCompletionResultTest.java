@@ -55,15 +55,41 @@ class StepCompletionResultTest {
         @Test
         @DisplayName("Should return true when not persisted")
         void shouldReturnTrueWhenNotPersisted() {
-            StepCompletionResult result = new StepCompletionResult(false, null, null);
+            StepCompletionResult result = new StepCompletionResult(false, null, null, false, null);
             assertTrue(result.isDuplicate());
         }
 
         @Test
         @DisplayName("Should return false when persisted")
         void shouldReturnFalseWhenPersisted() {
-            StepCompletionResult result = new StepCompletionResult(true, null, null);
+            StepCompletionResult result = new StepCompletionResult(true, null, null, false, null);
             assertFalse(result.isDuplicate());
+        }
+    }
+
+    @Nested
+    @DisplayName("persistedPayloadLost()")
+    class PayloadLostFactoryTests {
+
+        @Test
+        @DisplayName("Payload-lost result is persisted (a FAILED row landed) and carries the loss message")
+        void payloadLostIsPersistedAndCarriesMessage() {
+            StepCompletionResult result = StepCompletionResult.persistedPayloadLost(
+                    Map.of("failed", 1), Map.of("type", "step_executed"),
+                    "[storage] Output payload lost: storage write failed after retries");
+
+            assertTrue(result.persisted(), "a payload-lost row DID land (as FAILED)");
+            assertTrue(result.payloadLost());
+            assertEquals("[storage] Output payload lost: storage write failed after retries",
+                    result.payloadLostMessage());
+        }
+
+        @Test
+        @DisplayName("persisted()/duplicate() factories report payloadLost=false with null message")
+        void otherFactoriesReportNoPayloadLoss() {
+            assertFalse(StepCompletionResult.persisted(Map.of(), Map.of()).payloadLost());
+            assertNull(StepCompletionResult.persisted(Map.of(), Map.of()).payloadLostMessage());
+            assertFalse(StepCompletionResult.duplicate(Map.of(), Map.of()).payloadLost());
         }
     }
 

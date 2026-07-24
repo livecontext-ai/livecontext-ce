@@ -39,6 +39,22 @@ public interface WorkflowRepository extends JpaRepository<WorkflowEntity, UUID> 
     Optional<String> findOrganizationIdById(@Param("id") UUID id);
 
     /**
+     * Scalar projection of the pin, for the execution-time version resolver.
+     *
+     * <p>{@code findById} would hydrate the whole {@link WorkflowEntity}, including
+     * several {@code @JdbcTypeCode(SqlTypes.JSON)} columns (the full plan among
+     * them). On the resolver's {@code REQUIRES_NEW} call sites that is a real JSONB
+     * fetch + deserialize per fire, epoch and step, with no L1 cache to absorb it.
+     * On the call sites that already hold a managed entity this projection is
+     * instead one extra round-trip; only the pin number is ever needed.
+     *
+     * <p>Returns empty both when the workflow does not exist and when it is
+     * unpinned; the resolver treats the two identically (no pin to honour).
+     */
+    @Query("SELECT w.pinnedVersion FROM WorkflowEntity w WHERE w.id = :id")
+    Optional<Integer> findPinnedVersionById(@Param("id") UUID id);
+
+    /**
      * Phase 2b - batch (id, name) pairs for a set of workflow ids. Used by the Storage Explorer
      * controller to resolve the display name of VIRTUAL workflow folders without hydrating the full
      * entity (no plan JSONB load). Each row is an {@code Object[]} of {@code [UUID id, String name]}.

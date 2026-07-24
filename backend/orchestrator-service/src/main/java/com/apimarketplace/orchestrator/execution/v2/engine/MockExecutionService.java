@@ -34,7 +34,7 @@ public class MockExecutionService {
 
     /** Implicit block applied to mcp catalog tools in ALL_MCP mode. */
     private static final NodeMock ALL_MCP_FALLBACK =
-            new NodeMock(true, NodeMock.SOURCE_CATALOG_EXAMPLE, null, null, null);
+            new NodeMock(true, NodeMock.SOURCE_CATALOG_EXAMPLE, null, null, null, null);
 
     private final MockRunGate mockRunGate;
     private final MockNodeResultFactory mockNodeResultFactory;

@@ -91,6 +91,7 @@ class LandingInterfaceSnapshotterTest {
             iface.setCssTemplate("h1 { color: red; }");
             iface.setJsTemplate("console.log('hi')");
             iface.setInterfaceType("CUSTOM");
+            iface.setFormat("vertical");
             iface.setData(Map.of("ctaLabel", "Buy"));
             when(interfaceClient.getInterface(interfaceId, TENANT_ID)).thenReturn(iface);
 
@@ -104,6 +105,9 @@ class LandingInterfaceSnapshotterTest {
                     .containsEntry("cssTemplate", "h1 { color: red; }")
                     .containsEntry("jsTemplate", "console.log('hi')")
                     .containsEntry("interfaceType", "CUSTOM")
+                    // The shape is a presentation field like the templates: the marketplace card
+                    // and the landing preview size their iframe from it.
+                    .containsEntry("format", "vertical")
                     .containsEntry("data", Map.of("ctaLabel", "Buy"));
         }
 

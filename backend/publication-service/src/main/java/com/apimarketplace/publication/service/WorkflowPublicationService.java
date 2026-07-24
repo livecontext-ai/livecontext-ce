@@ -2773,6 +2773,7 @@ public class WorkflowPublicationService {
                 ifaceNode.put("_snapshot_description", null);
                 ifaceNode.put("_snapshot_interfaceType", null);
                 ifaceNode.put("_snapshot_data", null);
+                ifaceNode.put("_snapshot_format", null);
                 ifaceNode.put("_snapshot_variableMappings", variableMappings);
                 ifaceNode.put("_snapshot_actionMappings", actionMappings);
                 continue;
@@ -2785,6 +2786,9 @@ public class WorkflowPublicationService {
             ifaceNode.put("_snapshot_description", entity.getDescription());
             ifaceNode.put("_snapshot_interfaceType", entity.getInterfaceType());
             ifaceNode.put("_snapshot_data", entity.getData());
+            // The format travels with the templates: an app published from a vertical interface
+            // must still be vertical once acquired.
+            ifaceNode.put("_snapshot_format", entity.getFormat());
             ifaceNode.put("_snapshot_variableMappings", variableMappings);
             ifaceNode.put("_snapshot_actionMappings", actionMappings);
             // FORM-typed interface bindings - without these, an acquired

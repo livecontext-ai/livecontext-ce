@@ -128,8 +128,26 @@ public class NodeParamsValidator {
             Map.entry("expose_rendered_source", "exposeRenderedSource"),
             Map.entry("generate_pdf", "generatePdf"),
             Map.entry("pdf_format", "pdfFormat"),
-            Map.entry("pdf_landscape", "pdfLandscape")
+            Map.entry("pdf_landscape", "pdfLandscape"),
+            Map.entry("generate_video", "generateVideo"),
+            Map.entry("video_preset", "videoPreset"),
+            Map.entry("video_max_duration_seconds", "videoMaxDurationSeconds"),
+            Map.entry("video_mode", "videoMode"),
+            Map.entry("video_fps", "videoFps")
         ))
+    );
+
+    /**
+     * Params that a node type no longer accepts but must not reject: they were valid in an earlier
+     * version, so plans written back then still carry them. They are accepted and ignored rather
+     * than erroring - the alternative is an existing workflow that suddenly fails validation.
+     *
+     * <p>{@code format} moved from the interface node to the interface entity itself (an
+     * interface's HTML is authored for one fixed viewport width, so its shape is intrinsic to it).
+     * Set it with {@code interface(action='update', interface_id='<uuid>', format='vertical')}.
+     */
+    private static final Map<String, java.util.Set<String>> DEPRECATED_IGNORED_PARAMS = Map.of(
+        "interface", java.util.Set.of("format", "interface_format", "interfaceFormat")
     );
 
     public NodeParamsValidator(NodeLibraryService nodeLibraryService,
@@ -181,6 +199,8 @@ public class NodeParamsValidator {
 
         // Get aliases for this node type (if any)
         Map<String, String> aliases = PARAM_ALIASES.getOrDefault(nodeType, Map.of());
+        java.util.Set<String> deprecatedIgnored =
+            DEPRECATED_IGNORED_PARAMS.getOrDefault(nodeType, java.util.Set.of());
 
         // Check required parameters - skip if an alias is present
         for (Map.Entry<String, Object> entry : schemaParams.entrySet()) {
@@ -228,6 +248,9 @@ public class NodeParamsValidator {
 
             // Accept if it's a known alias
             if (aliases.containsKey(paramName)) continue;
+
+            // Accept-and-ignore a param this node type used to support (see the field's javadoc).
+            if (deprecatedIgnored.contains(paramName)) continue;
 
             if (!schemaParams.containsKey(paramName)) {
                 errors.add(new ValidationError(

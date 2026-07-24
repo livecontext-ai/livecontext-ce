@@ -5,9 +5,21 @@ import { useTranslations } from 'next-intl';
 import { Panel, type Node, type Edge } from 'reactflow';
 import { X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from '@/components/ui/select';
 import { ConnectionTypeSelector, type ConnectionType } from './ConnectionTypeSelector';
 import { WorkflowPlanGenerator } from './WorkflowPlanGenerator';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
+import {
+  useWorkflowLayoutDirectionSafe,
+  type WorkflowLayoutDirection,
+} from '@/contexts/WorkflowLayoutDirectionContext';
+import { applyDagreLayout, layoutConfigForDirection } from '../services/LayoutService';
 import type { BuilderNodeData } from '../types';
 
 interface CanvasSettingsPanelProps {
@@ -35,6 +47,26 @@ export function CanvasSettingsPanel({
 }: CanvasSettingsPanelProps) {
   const t = useTranslations('workflowBuilder.canvas');
   const { isPreviewOnly } = useWorkflowMode();
+  const { direction, setWorkflowDirection } = useWorkflowLayoutDirectionSafe();
+
+  // The in-canvas toggle changes THIS workflow's direction (saved into its plan on
+  // save), NOT the user's global default - so it uses setWorkflowDirection, not
+  // setDirection. It also re-flows the graph here: this is the ONE place a direction
+  // change should move nodes (the user asked for it). The loader's seed on load must
+  // NOT re-flow (it would trash saved positions), which is why the auto-layout lives
+  // here and not in the shared handle-sync effect. Handle re-measure is handled by
+  // DirectionHandleSync for both paths.
+  const changeDirection = React.useCallback(
+    (next: WorkflowLayoutDirection) => {
+      if (next === direction) return;
+      setWorkflowDirection(next);
+      if (onForceNodesUpdate && nodes.length > 0) {
+        onForceNodesUpdate(applyDagreLayout(nodes, edges, layoutConfigForDirection(next)));
+      }
+    },
+    [direction, setWorkflowDirection, onForceNodesUpdate, nodes, edges],
+  );
+
   if (!isOpen) return null;
 
   return (
@@ -67,6 +99,33 @@ export function CanvasSettingsPanel({
               />
             )}
           </div>
+
+          {/* Layout direction - reachable from the canvas, not only account settings.
+              Writes the same per-workspace preference; changing it re-measures the
+              handles and re-flows the graph (BuilderCanvas' direction effect). Same
+              Select control as Connection Style above. Hidden in the read-only preview
+              (its layout is frozen). */}
+          {!isPreviewOnly && (
+            <div className="space-y-3">
+              <span className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 block">
+                {t('layoutDirection')}
+              </span>
+              <Select value={direction} onValueChange={(v) => changeDirection(v as WorkflowLayoutDirection)}>
+                <SelectTrigger
+                  className="h-9 min-h-[36px] py-0 rounded-xl text-sm"
+                  data-testid="layout-direction-select"
+                  onClick={(e) => e.stopPropagation()}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="horizontal">{t('layoutHorizontal')}</SelectItem>
+                  <SelectItem value="vertical">{t('layoutVertical')}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
           {/* Developer Tools Section - hidden in marketplace preview (read-only snapshot) */}
           {!isPreviewOnly && (

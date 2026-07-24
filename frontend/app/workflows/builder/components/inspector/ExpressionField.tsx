@@ -155,15 +155,25 @@ export function ExpressionField({
   const valueIsExpression = !!value && EXPRESSION_RE.test(value);
 
   const [forceExpression, setForceExpression] = React.useState<boolean>(valueIsExpression);
+  /**
+   * Explicit "I want the picker" intent. An expression value pins {@link mode} to
+   * 'expression', so without this flag the picker switch is a dead button on any param
+   * wired to {{...}} (the common case: a file ID chained from an upstream node). The flag
+   * also fences the effect below, which would otherwise re-force expression mode on the
+   * render between onChange('') and the parent echoing the cleared value back.
+   */
+  const [pickerRequested, setPickerRequested] = React.useState<boolean>(false);
   React.useEffect(() => {
-    // If a parent later writes an expression value, route to expression mode.
-    if (valueIsExpression && !forceExpression) {
+    // If a parent later writes an expression value, route to expression mode - unless the
+    // user just asked for the picker.
+    if (valueIsExpression && !forceExpression && !pickerRequested) {
       setForceExpression(true);
     }
-  }, [valueIsExpression, forceExpression]);
+  }, [valueIsExpression, forceExpression, pickerRequested]);
 
   type Mode = 'select' | 'input' | 'expression' | 'picker';
   const mode: Mode = (() => {
+    if (pickerRequested && hasPicker) return 'picker';
     if (forceExpression || valueIsExpression) return 'expression';
     if (hasPicker) return 'picker';
     if (hasAllowed) return 'select';
@@ -171,13 +181,23 @@ export function ExpressionField({
     return 'expression';
   })();
 
-  const switchToExpression = () => setForceExpression(true);
+  const switchToExpression = () => {
+    setPickerRequested(false);
+    setForceExpression(true);
+  };
   const switchBackToPicker = () => {
     const currentMatchesAllowed = hasAllowed && allowedValues!.includes(value);
     // Never wipe a picked file ID when returning from expression mode (a picker value
     // is a freeform string, not a closed enum); only reset for select/input defaults.
     if (!currentMatchesAllowed && !hasPicker) {
       onChange(hasDefault ? (defaultValue as string) : '');
+    } else if (hasPicker && valueIsExpression) {
+      // An expression is not a file ID, and picking a file overwrites it anyway. Drop it so
+      // the picker field starts empty instead of showing a {{...}} string as a file ID.
+      onChange('');
+    }
+    if (hasPicker) {
+      setPickerRequested(true);
     }
     setForceExpression(false);
   };

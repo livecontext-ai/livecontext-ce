@@ -433,6 +433,142 @@ class WorkflowBuilderModifierMergeTest {
                     .containsEntry("delete", "{{trigger:delete}}")
                     .containsEntry("export", "{{trigger:export}}");
         }
+
+        private WorkflowBuilderSession sessionWithInterfaceNode() {
+            WorkflowBuilderSession session = createSession();
+            Map<String, Object> ifaceNode = new LinkedHashMap<>();
+            ifaceNode.put("id", "interface:dashboard");
+            ifaceNode.put("type", "interface");
+            ifaceNode.put("label", "Dashboard");
+            session.getInterfaces().add(ifaceNode);
+            return session;
+        }
+
+        private Map<String, Object> modifyDashboard(WorkflowBuilderSession session,
+                                                    String key, Object value) {
+            Map<String, Object> args = new LinkedHashMap<>();
+            args.put("node", "Dashboard");
+            Map<String, Object> params = new LinkedHashMap<>();
+            params.put(key, value);
+            args.put("params", params);
+            modifier.executeModifyNode(session, args);
+            return session.getInterfaces().stream()
+                    .filter(i -> "interface:dashboard".equals(i.get("id")))
+                    .findFirst().orElseThrow();
+        }
+
+        @Test
+        @DisplayName("a legacy format key is dropped from the node instead of being harmonised onto it")
+        void legacyFormatKeyDropped() {
+            // The shape belongs to the interface now. Harmonising the key back onto the node
+            // would resurrect a param the engine ignores, so modify must delete it - for the
+            // bare key and both aliases.
+            for (String key : new String[] { "format", "interface_format", "interfaceFormat" }) {
+                WorkflowBuilderSession session = sessionWithInterfaceNode();
+
+                Map<String, Object> modified = modifyDashboard(session, key, "vertical");
+
+                assertThat(modified).doesNotContainKey("format");
+                assertThat(modified).doesNotContainKey(key);
+            }
+        }
+
+        @Test
+        @DisplayName("modifying a legacy format key leaves the rest of the node untouched")
+        void legacyFormatModifyIsOtherwiseANoOp() {
+            // Pre-refactor plans carry the key; an agent that still sends it must not lose the
+            // node's real params as collateral.
+            WorkflowBuilderSession session = sessionWithInterfaceNode();
+
+            Map<String, Object> modified = modifyDashboard(session, "format", "vertical");
+
+            assertThat(modified).containsEntry("id", "interface:dashboard");
+        }
+
+        @Test
+        @DisplayName("'generate_pdf' routes to canonical 'generatePdf'")
+        void generatePdfSnakeCaseRouted() {
+            WorkflowBuilderSession session = sessionWithInterfaceNode();
+
+            Map<String, Object> modified = modifyDashboard(session, "generate_pdf", true);
+
+            assertThat(modified).containsEntry("generatePdf", true);
+            assertThat(modified).doesNotContainKey("generate_pdf");
+        }
+
+        @Test
+        @DisplayName("'pdf_format' routes to canonical 'pdfFormat'")
+        void pdfFormatSnakeCaseRouted() {
+            WorkflowBuilderSession session = sessionWithInterfaceNode();
+
+            Map<String, Object> modified = modifyDashboard(session, "pdf_format", "Letter");
+
+            assertThat(modified).containsEntry("pdfFormat", "Letter");
+            assertThat(modified).doesNotContainKey("pdf_format");
+        }
+
+        @Test
+        @DisplayName("'pdf_landscape' routes to canonical 'pdfLandscape'")
+        void pdfLandscapeSnakeCaseRouted() {
+            WorkflowBuilderSession session = sessionWithInterfaceNode();
+
+            Map<String, Object> modified = modifyDashboard(session, "pdf_landscape", true);
+
+            assertThat(modified).containsEntry("pdfLandscape", true);
+            assertThat(modified).doesNotContainKey("pdf_landscape");
+        }
+
+        @Test
+        @DisplayName("'generate_video' routes to canonical 'generateVideo'")
+        void generateVideoSnakeCaseRouted() {
+            WorkflowBuilderSession session = sessionWithInterfaceNode();
+
+            Map<String, Object> modified = modifyDashboard(session, "generate_video", true);
+
+            assertThat(modified).containsEntry("generateVideo", true);
+            assertThat(modified).doesNotContainKey("generate_video");
+        }
+
+        @Test
+        @DisplayName("'video_preset' routes to canonical 'videoPreset'")
+        void videoPresetSnakeCaseRouted() {
+            WorkflowBuilderSession session = sessionWithInterfaceNode();
+
+            Map<String, Object> modified = modifyDashboard(session, "video_preset", "square");
+
+            assertThat(modified).containsEntry("videoPreset", "square");
+            assertThat(modified).doesNotContainKey("video_preset");
+        }
+
+        @Test
+        @DisplayName("'video_max_duration_seconds' routes to canonical 'videoMaxDurationSeconds'")
+        void videoMaxDurationSnakeCaseRouted() {
+            WorkflowBuilderSession session = sessionWithInterfaceNode();
+
+            Map<String, Object> modified = modifyDashboard(session, "video_max_duration_seconds", 45);
+
+            assertThat(modified).containsEntry("videoMaxDurationSeconds", 45);
+            assertThat(modified).doesNotContainKey("video_max_duration_seconds");
+        }
+
+        @Test
+        @DisplayName("video snake_case keys (video_mode / video_fps) route to camelCase on the interface node")
+        void videoModeAndFpsSnakeCaseRouted() {
+            WorkflowBuilderSession session = sessionWithInterfaceNode();
+
+            Map<String, Object> args = new LinkedHashMap<>();
+            args.put("node", "Dashboard");
+            args.put("params", Map.of("video_mode", "live", "video_fps", 60));
+            modifier.executeModifyNode(session, args);
+
+            Map<String, Object> modified = session.getInterfaces().stream()
+                    .filter(i -> "interface:dashboard".equals(i.get("id")))
+                    .findFirst().orElseThrow();
+            assertThat(modified).containsEntry("videoMode", "live");
+            assertThat(modified).containsEntry("videoFps", 60);
+            assertThat(modified).doesNotContainKey("video_mode");
+            assertThat(modified).doesNotContainKey("video_fps");
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -958,6 +1094,89 @@ class WorkflowBuilderModifierMergeTest {
         }
 
         /**
+         * Regression for the public_link builder bug: {@code public_link} was
+         * absent from NESTED_CONFIG_KEYS, so modify deposited flat params like
+         * {ttl_minutes: 60} at the node's TOP level while
+         * {@code CoreNodeBuilder.createPublicLinkNodes} reads exclusively from
+         * the nested {@code params} map - the patch silently never reached
+         * execution.
+         */
+        @Test
+        @DisplayName("public_link node: ttl_minutes routes into params.ttl_minutes (where CoreNodeBuilder reads it)")
+        void publicLinkNodeRoutesIntoNestedParamsSlot() {
+            WorkflowBuilderSession session = createSession();
+            Map<String, Object> node = new LinkedHashMap<>();
+            node.put("id", "core:share_video");
+            node.put("type", "public_link");
+            node.put("label", "Share Video");
+            Map<String, Object> linkParams = new LinkedHashMap<>();
+            linkParams.put("file", "{{core:dl.output.file}}");
+            node.put("params", linkParams);
+            session.getCores().add(node);
+
+            Map<String, Object> args = new LinkedHashMap<>();
+            args.put("node", "Share Video");
+            args.put("params", Map.of("ttl_minutes", 60));
+
+            ToolExecutionResult result = modifier.executeModifyNode(session, args);
+            assertThat(result.success()).isTrue();
+
+            Map<String, Object> modified = findCore(session, "Share Video");
+            assertThat(modified)
+                    .as("flat ttl_minutes must NOT land at top level - the engine reads params.* only")
+                    .doesNotContainKey("ttl_minutes");
+            @SuppressWarnings("unchecked")
+            Map<String, Object> nestedParams = (Map<String, Object>) modified.get("params");
+            assertThat(nestedParams)
+                    .containsEntry("ttl_minutes", 60)
+                    .as("untouched file expression must be preserved by the merge")
+                    .containsEntry("file", "{{core:dl.output.file}}");
+        }
+
+        /**
+         * Same regression class as public_link: without the {@code media -> params}
+         * NESTED_CONFIG_KEYS entry, modify would deposit flat params like
+         * {volume: 80} at the node's TOP level while
+         * {@code CoreNodeBuilder.createMediaNodes} reads exclusively from the nested
+         * {@code params} map - the patch would silently never reach execution.
+         */
+        @Test
+        @DisplayName("media node: volume routes into params.volume, untouched operation/files preserved")
+        void mediaNodeRoutesIntoNestedParamsSlot() {
+            WorkflowBuilderSession session = createSession();
+            Map<String, Object> node = new LinkedHashMap<>();
+            node.put("id", "core:add_music");
+            node.put("type", "media");
+            node.put("label", "Add Music");
+            Map<String, Object> mediaParams = new LinkedHashMap<>();
+            mediaParams.put("operation", "mux_audio");
+            mediaParams.put("video", "{{interface:card.output.video}}");
+            mediaParams.put("audio", "{{core:dl.output.file}}");
+            node.put("params", mediaParams);
+            session.getCores().add(node);
+
+            Map<String, Object> args = new LinkedHashMap<>();
+            args.put("node", "Add Music");
+            args.put("params", Map.of("volume", 80));
+
+            ToolExecutionResult result = modifier.executeModifyNode(session, args);
+            assertThat(result.success()).isTrue();
+
+            Map<String, Object> modified = findCore(session, "Add Music");
+            assertThat(modified)
+                    .as("flat volume must NOT land at top level - the engine reads params.* only")
+                    .doesNotContainKey("volume");
+            @SuppressWarnings("unchecked")
+            Map<String, Object> nestedParams = (Map<String, Object>) modified.get("params");
+            assertThat(nestedParams)
+                    .containsEntry("volume", 80)
+                    .containsEntry("operation", "mux_audio")
+                    .as("untouched file expressions must be preserved by the merge")
+                    .containsEntry("video", "{{interface:card.output.video}}")
+                    .containsEntry("audio", "{{core:dl.output.file}}");
+        }
+
+        /**
          * Contract guard for the {@code NESTED_CONFIG_KEYS} routing table.
          * For every entry, sending a flat scalar param under any inner-field
          * name must land inside the nested slot - not at top level. If
@@ -1012,6 +1231,8 @@ class WorkflowBuilderModifierMergeTest {
                     Arguments.of("transform", "input", "transform", "{{x}}"),
                     Arguments.of("wait", "duration", "wait", "PT10S"),
                     Arguments.of("download_file", "url", "download", "https://a.example/x"),
+                    Arguments.of("public_link", "file", "params", "{{core:dl.output.file}}"),
+                    Arguments.of("media", "operation", "params", "mux_audio"),
                     Arguments.of("http_request", "url", "httpRequest", "https://a.example/y"),
                     Arguments.of("response", "message", "response", "ok"),
                     Arguments.of("aggregate", "strategy", "aggregate", "concat"),

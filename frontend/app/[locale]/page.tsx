@@ -1,24 +1,37 @@
 import { redirect } from 'next/navigation';
 import {
-  ArrowRight,
+  Bot,
   Workflow,
   Store,
   Sparkles,
-  Coins,
   ShieldCheck,
   Eye,
   Gauge,
   Lock,
   Server,
   SlidersHorizontal,
-  Github,
   ChevronDown,
+  MessageSquare,
+  Share2,
+  Quote,
+  Users,
+  UserCheck,
 } from 'lucide-react';
-import { LandingFooter, LandingHeader, landingChromeStyles } from '@/components/landing/LandingShell';
+import { GithubMark, LandingFooter, LandingHeader, landingChromeStyles } from '@/components/landing/LandingShell';
 import PricingSection from './_landing/PricingSection';
 import SignInButton from './_landing/SignInButton';
 import MarketplacePreview from './_landing/MarketplacePreview';
 import HeroPhotoStack from './_landing/HeroPhotoStack';
+import HeroFlowShowcase from './_landing/HeroFlowShowcase';
+import AgentsShowcase from './_landing/AgentsShowcase';
+import PersonaTabs, { type Persona } from './_landing/PersonaTabs';
+import {
+  CUSTOMER_LOGOS,
+  LANDING_METRICS,
+  TESTIMONIALS,
+  metricsReady,
+  testimonialsReady,
+} from './_landing/socialProof';
 import HashScroller from './_landing/HashScroller';
 import { isMonoDarkIconSlug } from '@/lib/credentials/monoIconSlugs';
 import { SELF_HOSTED_GITHUB_URL } from '@/lib/billing/pricing-constants';
@@ -33,7 +46,7 @@ const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://livecontext.ai';
 export const metadata = {
   title: { absolute: 'LiveContext: The AI automation platform. Chat, workflows, agents, apps.' },
   description:
-    'The AI automation platform: describe the job in chat and LiveContext builds the workflow in front of you, runs it with agents that have scoped access and credit budgets, and ships it as an app for your team. Full audit, SAML SSO and workspaces.',
+    'Describe the job in chat and LiveContext builds the automation and its app in front of you, runs it on schedule, and lets you share the result as a link, a PDF or an export. Every step visible, budgets per agent, cloud or self-hosted.',
   // The landing content is hardcoded English on every locale URL (/, /fr, /es, ...),
   // so all locale variants canonicalize to the apex: Google indexes ONE landing
   // page instead of flagging 5 duplicates. Give each locale its own canonical +
@@ -136,24 +149,24 @@ const HERO_PHOTOS = [
   },
   {
     url: 'livecontext.ai/app/workflow',
-    src: '/landing/hero-stack/mechanism-workflow.webp',
-    alt: 'LiveContext workflow builder',
-    label: 'Workflow',
-    description: 'The same automation, drawn. Branch on a classification, fan out into parallel paths, count, notify. Every node, every connection, every iteration visible at once on one readable graph.',
-  },
-  {
-    url: 'livecontext.ai/app/interface',
-    src: '/landing/hero-stack/mechanism-app.webp',
-    alt: 'LiveContext generated app interface',
-    label: 'App',
-    description: 'Wrap the automation in a real interface. Search, filters, cards, action buttons, all fully interactive. Share the link with your team or customers, or let an agent open it and click on its own.',
+    src: '/landing/hero-stack/workflow-app.webp',
+    alt: 'LiveContext workflow builder and the app it drives',
+    label: 'Workflow + App',
+    description: 'The workflow and the app it drives, in one view. Draw the automation as a readable graph, then wrap it in a real interface: forms, dashboards and live approval screens your team or an agent can act on.',
   },
   {
     url: 'livecontext.ai/app/agent',
-    src: '/landing/hero-stack/mechanism-agent.webp',
-    alt: 'LiveContext agent dashboard',
+    src: '/landing/hero-stack/agent.webp',
+    alt: 'LiveContext agent roster',
     label: 'Agent',
     description: 'A roster of always-on agents, one per job. Each gets its own model, its own workflow, a scoped set of tools and files you can restrict at any time, a credit budget it cannot exceed, and a full audit trail. Schedule them, call them from the chat, or let them delegate.',
+  },
+  {
+    url: 'livecontext.ai/app/tables',
+    src: '/landing/hero-stack/table.webp',
+    alt: 'LiveContext data tables',
+    label: 'Table',
+    description: 'Built-in data tables your workflows and agents read, write and enrich. Filter, search and export straight from the grid, with no external database to wire up.',
   },
   {
     url: 'livecontext.ai/app/agents/metrics',
@@ -173,7 +186,7 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
   }
 
   return (
-    <LandingThemeProvider className="min-h-screen">
+    <LandingThemeProvider className="min-h-screen" respectStored>
       {/* ONE string child: React 19 only renders <style> content when it is a
           single string. Two expression children ({a}{b}) render an EMPTY style
           tag server-side and the full text client-side - a hydration mismatch
@@ -186,12 +199,12 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
       <main>
         <HashScroller />
         <Hero />
+        <SocialProofStrip />
         <TrustStrip />
         <MarketplaceSection />
-        <BuilderSection />
-        <ComparisonStrip />
+        <AgentsSection />
+        <TestimonialsSection />
         <PricingBlock />
-        <FaqSection />
         <FinalCta />
       </main>
 
@@ -202,58 +215,64 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
 
 function Hero() {
   return (
+    // No .hero-glow halo here: the radial read as a stray shadow behind the
+    // showcase (same reason it was dropped from the agents section).
     <section className="relative overflow-visible">
-      <div className="hero-glow" aria-hidden="true" />
-      <div className="max-w-7xl mx-auto px-6 pt-24 pb-40 md:pt-32 md:pb-52">
+      <div className="max-w-7xl mx-auto px-6 pt-14 pb-12 md:pt-20 md:pb-16">
         <div className="max-w-3xl mx-auto text-center">
-          <span className="eyebrow">The AI automation platform</span>
+          <span className="eyebrow">The AI Automation platform</span>
           <h1 className="hero-h1 mt-4">
             One message <span className="underline underline-offset-8">in</span>.<br />
             A working automation <span className="underline underline-offset-8">out</span>.
           </h1>
-          <div className="mt-8 flex flex-wrap justify-center gap-2">
-            {[
-              { Icon: SlidersHorizontal, label: 'You keep control' },
-              { Icon: Gauge, label: 'Per-agent credit budgets' },
-              { Icon: ShieldCheck, label: 'Scoped access, full audit' },
-              { Icon: Eye, label: 'Per-agent metrics, no black box' },
-              { Icon: Lock, label: 'SAML SSO & RBAC' },
-              { Icon: Server, label: 'Cloud or self-hosted' },
-              { Icon: Coins, label: 'Far fewer tokens' },
-              { Icon: Store, label: 'Ready-to-use apps' },
-            ].map(({ Icon, label }) => (
-              <span
-                key={label}
-                className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs"
-                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-              >
-                <Icon className="w-3.5 h-3.5" aria-hidden="true" /> {label}
-              </span>
-            ))}
-          </div>
-          <p className="mt-3 text-xs" style={{ color: 'var(--text-muted)' }}>
-            Free tier · No credit card · Cancel any time
+          <p className="mt-6 text-lg max-w-2xl mx-auto leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+            600+ integrations and every major LLM, cloud or self-hosted. Build, deploy, and run
+            your agents visually, in chat, or with code, and add a human in the loop wherever you want.
           </p>
-          <div className="mt-6 flex flex-wrap justify-center gap-3">
+          <div className="mt-7 flex flex-wrap justify-center gap-3">
             <SignInButton
               variant="primary"
-              className="inline-flex items-center gap-2 h-12 px-6 rounded-full text-sm font-semibold transition-all hover:brightness-110 active:scale-[0.98] cursor-pointer"
+              className="inline-flex items-center justify-center h-9 px-4 rounded-xl text-sm font-medium transition-colors hover:bg-[var(--accent-hover)] active:scale-[0.98] cursor-pointer"
             >
-              Start free <ArrowRight className="w-4 h-4" />
+              Start free
             </SignInButton>
             <a
               href={SELF_HOSTED_GITHUB_URL}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 h-12 px-6 rounded-full text-sm font-semibold transition-all cursor-pointer hover:brightness-110 bg-[var(--bg-tertiary)]"
-              style={{ color: 'var(--text-primary)' }}
+              className="inline-flex items-center gap-2 h-9 px-4 rounded-xl text-sm font-medium border transition-colors hover:bg-[var(--bg-secondary)] cursor-pointer"
+              style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
             >
-              <Github className="w-4 h-4" /> Self-host
+              <GithubMark className="w-4 h-4" /> Self-host
             </a>
           </div>
         </div>
+        <div className="mt-8">
+          <HeroFlowShowcase />
+        </div>
+      </div>
+    </section>
+  );
+}
 
-        <div className="mt-10 md:mt-12">
+// Proof section: real screenshots + the live build recording, complementing
+// the hero's looping replay with full-size product footage. The photo stack's
+// focus tray hangs below the cards (position:absolute top:100%), hence the
+// extra bottom padding.
+function RealProductSection() {
+  return (
+    <section id="real-product" style={{ background: 'var(--bg-primary)' }}>
+      <div className="max-w-6xl mx-auto px-6 pt-24 md:pt-32 pb-44 md:pb-52">
+        <div className="text-center">
+          <SectionEyebrow icon={Eye}>Real footage</SectionEyebrow>
+          <SectionH2>This is the actual product.</SectionH2>
+          <p className="mt-6 text-lg max-w-3xl mx-auto leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+            No mockups here. Watch a support workflow build itself from one chat
+            message, then flip through the generated app, the agents, the data
+            tables and the run metrics.
+          </p>
+        </div>
+        <div className="mt-12">
           <HeroPhotoStack photos={HERO_PHOTOS} />
         </div>
       </div>
@@ -261,68 +280,278 @@ function Hero() {
   );
 }
 
-function ComparisonStrip() {
-  const surfaces = ['Chat', 'Workflow', 'App', 'Agent'];
-  const competitors = [
-    { name: 'Zapier', has: [false, true, false, false] },
-    { name: 'n8n', has: [false, true, false, false] },
-    { name: 'Lindy', has: [true, false, false, true] },
-    { name: 'Bubble', has: [false, false, true, false] },
-    { name: 'LiveContext', has: [true, true, true, true], highlight: true },
-  ];
+// Renders only when the marketing owner has filled `socialProof.ts` with real,
+// authorized customer data (see the SAMPLE kill switch there): an unedited file
+// ships a landing WITHOUT this strip rather than one with fake numbers.
+function SocialProofStrip() {
+  const hasLogos = CUSTOMER_LOGOS.length > 0;
+  const hasMetrics = metricsReady(LANDING_METRICS);
+  if (!hasLogos && !hasMetrics) return null;
+
   return (
-    <section style={{ background: 'var(--bg-secondary)', borderTop: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)' }}>
-      <div className="max-w-5xl mx-auto px-6 py-16">
-        <p className="text-center text-[11px] uppercase tracking-wider mb-2" style={{ color: 'var(--text-muted)' }}>
-          Why most teams stitch their whole stack together
-        </p>
-        <h3 className="text-center text-2xl md:text-3xl font-bold mb-10" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-outfit), Outfit, sans-serif', letterSpacing: '-0.02em' }}>
-          Get all four. Stitch nothing.
-        </h3>
-
-        <div className="rounded-2xl overflow-hidden" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)' }}>
-          <table className="w-full text-sm">
-            <thead>
-              <tr style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)' }}>
-                <th className="text-left p-4 text-[11px] uppercase tracking-wider font-semibold" style={{ color: 'var(--text-muted)' }}>Tool</th>
-                {surfaces.map((s) => (
-                  <th key={s} className="p-4 text-[11px] uppercase tracking-wider font-semibold" style={{ color: 'var(--text-muted)' }}>{s}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {competitors.map((c, idx) => (
-                <tr key={c.name} style={{
-                  borderBottom: idx < competitors.length - 1 ? '1px solid var(--border-color)' : 'none',
-                  background: c.highlight ? 'var(--landing-highlight-row)' : 'transparent',
-                }}>
-                  <td className="p-4 font-semibold" style={{ color: c.highlight ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
-                    {c.name}
-                  </td>
-                  {c.has.map((ok, i) => (
-                    <td key={i} className="p-4 text-center text-lg" style={{ color: ok ? (c.highlight ? 'var(--text-primary)' : 'var(--text-secondary)') : 'var(--text-muted)' }}>
-                      {ok ? '✓' : '-'}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        <p className="mt-6 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
-          Build it once. It runs as all four, with every agent scoped, budgeted and audited.
-        </p>
-        <p className="mt-3 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
-          Full comparisons:{' '}
-          <Link href="/compare/zapier-alternative" className="underline underline-offset-2 hover:opacity-80">vs Zapier</Link>
-          {' · '}
-          <Link href="/compare/n8n-alternative" className="underline underline-offset-2 hover:opacity-80">vs n8n</Link>
-          {' · '}
-          <Link href="/compare/make-alternative" className="underline underline-offset-2 hover:opacity-80">vs Make</Link>
-        </p>
+    <section style={{ background: 'var(--bg-secondary)', borderTop: '1px solid var(--border-color)' }}>
+      <div className="max-w-6xl mx-auto px-6 py-12">
+        {hasLogos && (
+          <>
+            <p className="text-center text-[11px] uppercase tracking-wider mb-6" style={{ color: 'var(--text-muted)' }}>
+              They automate with LiveContext
+            </p>
+            <div className="flex flex-wrap items-center justify-center gap-x-10 gap-y-6">
+              {CUSTOMER_LOGOS.map((logo) =>
+                logo.src ? (
+                  <img key={logo.name} src={logo.src} alt={logo.name} loading="lazy" height={24} className="h-6 w-auto logo-color" />
+                ) : (
+                  <span key={logo.name} className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>
+                    {logo.name}
+                  </span>
+                ),
+              )}
+            </div>
+          </>
+        )}
+        {hasMetrics && (
+          <div className={`${hasLogos ? 'mt-10' : ''} grid grid-cols-1 sm:grid-cols-3 gap-6 text-center`}>
+            {LANDING_METRICS.map((metric) => (
+              <div key={metric.label}>
+                <p className="metric-value">{metric.value}</p>
+                <p className="mt-1 text-sm" style={{ color: 'var(--text-muted)' }}>{metric.label}</p>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </section>
+  );
+}
+
+function HowItWorksSection() {
+  const steps = [
+    {
+      Icon: MessageSquare,
+      title: 'Describe the job',
+      desc: 'Tell the chat what you want done, in plain words. No blank canvas, no node jargon: start from your own sentence or fork a marketplace automation that already works.',
+    },
+    {
+      Icon: Eye,
+      title: 'Watch it build itself',
+      desc: 'The workflow and its interface appear in front of you, step by step. Refine by chatting. Everything the AI builds stays visible and editable, so you always know exactly what will run.',
+    },
+    {
+      Icon: Share2,
+      title: 'Share the result',
+      desc: 'Open it as an app, send a public link, export a PDF, an image or a spreadsheet. Put it on a schedule and the result keeps arriving, for you, your team or your customers.',
+    },
+  ];
+  return (
+    <Section alt id="how-it-works">
+      <div className="text-center">
+        <SectionEyebrow icon={Sparkles}>How it works</SectionEyebrow>
+        <SectionH2>From a sentence to something you can share.</SectionH2>
+      </div>
+      <div className="mt-12 grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6">
+        {steps.map(({ Icon, title, desc }, index) => (
+          <div
+            key={title}
+            className="p-6 rounded-2xl"
+            style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', boxShadow: 'var(--landing-card-shadow)' }}
+          >
+            <div className="flex items-center gap-3">
+              <span className="step-number">{index + 1}</span>
+              <Icon className="w-5 h-5" style={{ color: 'var(--text-primary)' }} aria-hidden="true" />
+            </div>
+            <h3 className="mt-4 text-base font-semibold" style={{ color: 'var(--text-primary)' }}>{title}</h3>
+            <p className="mt-2 text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>{desc}</p>
+          </div>
+        ))}
+      </div>
+    </Section>
+  );
+}
+
+const PERSONAS: Persona[] = [
+  {
+    key: 'ops',
+    icon: 'ops',
+    label: 'Operations',
+    intro: 'The repetitive backbone of the business, running itself: intake, sync, reporting, with a page your team actually opens.',
+    examples: [
+      {
+        title: 'Onboard every new client the same way',
+        desc: 'An intake form kicks off account setup, task assignments and the kickoff email. Nothing forgotten, nobody chasing a checklist.',
+        output: 'A checklist app your team opens',
+        outputKind: 'app',
+      },
+      {
+        title: 'Keep orders and inventory in sync',
+        desc: 'New orders update the stock table as they land, and you get pinged before anything runs out.',
+        output: 'A live stock table, always current',
+        outputKind: 'table',
+      },
+      {
+        title: 'The weekly ops report, written for you',
+        desc: 'It pulls the week’s numbers, drafts the summary and sends it before your Monday meeting.',
+        output: 'A PDF in your inbox every Monday',
+        outputKind: 'pdf',
+      },
+    ],
+  },
+  {
+    key: 'marketing',
+    icon: 'marketing',
+    label: 'Marketing',
+    intro: 'Watching, producing and reporting on autopilot, while you keep final approval on everything that goes out.',
+    examples: [
+      {
+        title: 'Watch competitors so you don’t have to',
+        desc: 'It browses competitor pages and pricing, spots what changed and writes the digest.',
+        output: 'A digest link you can forward',
+        outputKind: 'link',
+      },
+      {
+        title: 'Turn one idea into a week of content',
+        desc: 'Drafts per channel from a single brief, then waits for your approval before anything is published.',
+        output: 'An approval page with one-click publish',
+        outputKind: 'app',
+      },
+      {
+        title: 'Campaign reporting without the copy-paste',
+        desc: 'Metrics gathered across channels into one live view your whole team can read.',
+        output: 'A dashboard app for the team',
+        outputKind: 'app',
+      },
+    ],
+  },
+  {
+    key: 'sales',
+    icon: 'sales',
+    label: 'Sales',
+    intro: 'Every lead qualified, followed up and reported on, without a rep touching a spreadsheet.',
+    examples: [
+      {
+        title: 'Qualify and route every lead',
+        desc: 'Leads from forms and webhooks get enriched, scored and routed to the right person, CRM updated on the way.',
+        output: 'A shared lead table, always current',
+        outputKind: 'table',
+      },
+      {
+        title: 'The pipeline review, pre-written',
+        desc: 'A weekly summary of what moved, what stalled and which deals are at risk.',
+        output: 'A PDF before your Monday meeting',
+        outputKind: 'pdf',
+      },
+      {
+        title: 'Follow up before leads go cold',
+        desc: 'Drafts the follow-up for every quiet lead and queues it for your sign-off.',
+        output: 'Approve each email from one page',
+        outputKind: 'app',
+      },
+    ],
+  },
+  {
+    key: 'support',
+    icon: 'support',
+    label: 'Support',
+    intro: 'The inbox triaged, the known answers drafted, the edge cases escalated to a human, with full visibility.',
+    examples: [
+      {
+        title: 'Triage the support inbox',
+        desc: 'Every email classified, a ticket logged, refunds prepped and waiting for your approval.',
+        output: 'A queue app with approve buttons',
+        outputKind: 'app',
+      },
+      {
+        title: 'Answer the FAQs, escalate the rest',
+        desc: 'Drafts answers from your own docs and hands anything unusual to a person.',
+        output: 'Every answer logged in a table',
+        outputKind: 'table',
+      },
+      {
+        title: 'Spot recurring issues early',
+        desc: 'Tickets clustered weekly so a spike shows up as a trend, not a surprise.',
+        output: 'A trends report as a shareable link',
+        outputKind: 'link',
+      },
+    ],
+  },
+  {
+    key: 'founders',
+    icon: 'founders',
+    label: 'Founders & agencies',
+    intro: 'Client-facing tools and back-office chores, shipped in an afternoon instead of a sprint.',
+    examples: [
+      {
+        title: 'Ship a client tool in an afternoon',
+        desc: 'Describe the tool, watch it build, send the link. Bill the value, not the hours.',
+        output: 'A working app under a public link',
+        outputKind: 'link',
+      },
+      {
+        title: 'One dashboard per client',
+        desc: 'Each client’s data collected on schedule into its own page, ready before the check-in call.',
+        output: 'A page you can send to each client',
+        outputKind: 'app',
+      },
+      {
+        title: 'Invoices and reminders on autopilot',
+        desc: 'Invoices generated from your records and chased politely until they are paid.',
+        output: 'PDFs generated and sent for you',
+        outputKind: 'pdf',
+      },
+    ],
+  },
+];
+
+function PersonasSection() {
+  return (
+    <Section alt id="use-cases">
+      <div className="text-center">
+        <SectionEyebrow icon={Users}>Made for your job</SectionEyebrow>
+        <SectionH2>What will you automate first?</SectionH2>
+        <p className="mt-6 text-lg max-w-3xl mx-auto leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+          Real jobs, described in one message. Every one of them ends with something you
+          can open, send or forward, not a log file.
+        </p>
+      </div>
+      <div className="mt-12">
+        <PersonaTabs personas={PERSONAS} />
+      </div>
+    </Section>
+  );
+}
+
+// Renders only when `socialProof.ts` holds real customer quotes (see the SAMPLE
+// kill switch there).
+function TestimonialsSection() {
+  if (!testimonialsReady(TESTIMONIALS)) return null;
+
+  return (
+    <Section id="testimonials">
+      <div className="text-center">
+        <SectionEyebrow icon={Quote}>Customer stories</SectionEyebrow>
+        <SectionH2>Teams already run on it.</SectionH2>
+      </div>
+      <div className="mt-12 grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6">
+        {TESTIMONIALS.map((t, index) => (
+          <figure
+            key={`${index}-${t.name}`}
+            className="p-6 rounded-2xl flex flex-col"
+            style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', boxShadow: 'var(--landing-card-shadow)' }}
+          >
+            <Quote className="w-5 h-5" style={{ color: 'var(--text-muted)' }} aria-hidden="true" />
+            <blockquote className="mt-3 text-sm leading-relaxed flex-1" style={{ color: 'var(--text-primary)' }}>
+              {t.quote}
+            </blockquote>
+            <figcaption className="mt-4 pt-4 text-sm" style={{ borderTop: '1px solid var(--border-color)' }}>
+              <span className="font-semibold" style={{ color: 'var(--text-primary)' }}>{t.name}</span>
+              <span style={{ color: 'var(--text-muted)' }}>
+                {' '}· {t.role}
+                {t.company ? `, ${t.company}` : ''}
+              </span>
+            </figcaption>
+          </figure>
+        ))}
+      </div>
+    </Section>
   );
 }
 
@@ -360,7 +589,7 @@ function TrustStrip() {
     'shopify', 'googledrive', 'airtable', 'openai', 'anthropic',
   ];
   return (
-    <section style={{ borderTop: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-primary)' }}>
+    <section style={{ borderTop: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-secondary)' }}>
       <div className="max-w-6xl mx-auto px-6 py-10">
         <p className="text-center text-[11px] uppercase tracking-wider mb-6" style={{ color: 'var(--text-muted)' }}>
           Connects to the tools your team already uses
@@ -388,7 +617,7 @@ function TrustStrip() {
 
 function BuilderSection() {
   return (
-    <Section id="features">
+    <Section alt id="features">
       <SectionEyebrow icon={Workflow}>The builder, in depth</SectionEyebrow>
       <SectionH2>As deep as your stack needs. Still readable at 50 steps.</SectionH2>
       <SectionLead wide>
@@ -475,9 +704,49 @@ function BuilderSection() {
   );
 }
 
+// The agents showcase: clean hero-like bg-primary background (no glow, it read
+// as a stray shadow behind the floating window), with the section text on the
+// left and a live interactive replica of the real /app/agent window on the
+// right, both directly in the section (no wrapping card). The top border marks
+// the seam with the marketplace section (also bg-primary), the same border
+// idiom TrustStrip uses between same-color neighbors.
+function AgentsSection() {
+  return (
+    <section
+      id="agents"
+      className="relative overflow-hidden"
+      style={{ background: 'var(--bg-primary)', borderTop: '1px solid var(--border-color)' }}
+    >
+      <div className="relative max-w-6xl mx-auto px-6 py-24 md:py-32">
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,400px)_1fr] gap-10 lg:gap-14 items-center">
+          <div>
+            <SectionEyebrow icon={Bot}>The agent workforce</SectionEyebrow>
+            <SectionH2>Your whole agent team, on one screen.</SectionH2>
+            <SectionLead>
+              Every agent gets a face, a model you choose, a scoped set of tools, and
+              a credit budget it cannot exceed. This is the real agents view, live:
+              star a favorite, select a few cards.
+            </SectionLead>
+            <div className="mt-7">
+              <SignInButton
+                variant="primary"
+                returnTo="/app/agent"
+                className="inline-flex items-center justify-center h-9 px-4 rounded-xl text-sm font-medium transition-colors hover:bg-[var(--accent-hover)] active:scale-[0.98] cursor-pointer"
+              >
+                Create your first agent
+              </SignInButton>
+            </div>
+          </div>
+          <AgentsShowcase />
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function MarketplaceSection() {
   return (
-    <Section alt id="marketplace">
+    <Section id="marketplace">
       <SectionEyebrow icon={Store}>Community marketplace</SectionEyebrow>
       <SectionH2>Fork what others built. Ship yours in a click.</SectionH2>
       <SectionLead>
@@ -501,7 +770,7 @@ function MarketplaceSection() {
 
 function PricingBlock() {
   return (
-    <Section id="pricing">
+    <Section alt id="pricing">
       <SectionEyebrow icon={Sparkles}>Pricing</SectionEyebrow>
       <SectionH2>Simple pricing. Cap the spend per agent.</SectionH2>
       <SectionLead>
@@ -518,7 +787,7 @@ function PricingBlock() {
 
 function FinalCta() {
   return (
-    <section className="relative overflow-hidden" style={{ background: 'var(--bg-secondary)', borderTop: '1px solid var(--border-color)' }}>
+    <section className="relative overflow-hidden" style={{ background: 'var(--bg-primary)', borderTop: '1px solid var(--border-color)' }}>
       <div className="cta-glow" aria-hidden="true" />
       <div className="relative max-w-4xl mx-auto px-6 py-24 text-center">
         <h2
@@ -533,18 +802,18 @@ function FinalCta() {
         <div className="mt-8 flex flex-wrap justify-center gap-3">
           <SignInButton
             variant="primary"
-            className="inline-flex items-center gap-2 h-12 px-6 rounded-full text-sm font-semibold transition-all hover:brightness-110 active:scale-[0.98] cursor-pointer"
+            className="inline-flex items-center justify-center h-9 px-4 rounded-xl text-sm font-medium transition-colors hover:bg-[var(--accent-hover)] active:scale-[0.98] cursor-pointer"
           >
-            Start free <ArrowRight className="w-4 h-4" />
+            Start free
           </SignInButton>
           <a
             href={SELF_HOSTED_GITHUB_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-2 h-12 px-6 rounded-full text-sm font-semibold transition-all cursor-pointer hover:brightness-110 bg-[var(--bg-tertiary)]"
-            style={{ color: 'var(--text-primary)' }}
+            className="inline-flex items-center gap-2 h-9 px-4 rounded-xl text-sm font-medium border transition-colors hover:bg-[var(--bg-secondary)] cursor-pointer"
+            style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
           >
-            <Github className="w-4 h-4" /> Self-host
+            <GithubMark className="w-4 h-4" /> Self-host
           </a>
         </div>
       </div>
@@ -708,8 +977,8 @@ const landingStyles = `
   .landing-root .hero-h1 {
     font-family: var(--font-outfit), 'Outfit', sans-serif;
     font-weight: 700;
-    font-size: clamp(40px, 6vw, 64px);
-    line-height: 1.05;
+    font-size: clamp(32px, 4.4vw, 50px);
+    line-height: 1.08;
     letter-spacing: -0.025em;
     color: var(--text-primary);
   }
@@ -719,6 +988,1721 @@ const landingStyles = `
     inset: 0;
     pointer-events: none;
     background: var(--landing-hero-glow);
+  }
+
+  .landing-root .hero-prompt-caret {
+    display: inline-block;
+    width: 1.5px;
+    height: 1.05em;
+    margin-left: 2px;
+    vertical-align: text-bottom;
+    background: var(--text-primary);
+    animation: hero-prompt-blink 1.05s steps(1) infinite;
+  }
+
+  @keyframes hero-prompt-blink {
+    0%, 55% { opacity: 1; }
+    56%, 100% { opacity: 0; }
+  }
+
+  /* ---- Persona showcase: the animated build-and-run scene in the hero. ---- */
+  .landing-root .pshow-shell {
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+
+  /* ---- "You, augmented": the agent squad + the selected agent's profile ---- */
+  .landing-root .augment-squad {
+    display: flex;
+    justify-content: center;
+    align-items: flex-end;
+    padding: 26px 0 18px;
+  }
+
+  /* A stylised agent figure (head + shoulders bust), not a photo. The selected
+     agent steps forward in colour; the others recede and grey out, so it reads
+     as a squad standing behind you. */
+  .landing-root .squad-bust {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 118px;
+    margin: 0 -10px;
+    padding: 10px 8px 12px;
+    border-radius: 18px;
+    border: 1px solid transparent;
+    background: transparent;
+    cursor: pointer;
+    transform: rotate(var(--squad-rot, 0deg)) translateY(var(--squad-drop, 0px)) scale(0.9);
+    transform-origin: 50% 120%;
+    filter: grayscale(1);
+    opacity: 0.55;
+    transition: transform 340ms cubic-bezier(0.22, 1, 0.36, 1), filter 340ms ease,
+      opacity 340ms ease, background 340ms ease, border-color 340ms ease;
+  }
+
+  .landing-root .squad-bust:hover {
+    opacity: 0.82;
+    filter: grayscale(0.4);
+  }
+
+  .landing-root .squad-bust.active {
+    transform: rotate(0deg) translateY(-14px) scale(1.12);
+    filter: none;
+    opacity: 1;
+    border-color: var(--border-color);
+    background: var(--bg-primary);
+    box-shadow: var(--landing-frame-shadow);
+  }
+
+  .landing-root .squad-figure {
+    position: relative;
+    width: 78px;
+    height: 78px;
+    margin-bottom: 8px;
+  }
+
+  .landing-root .squad-figure-head {
+    position: absolute;
+    top: 2px;
+    left: 50%;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    transform: translateX(-50%);
+    background: linear-gradient(160deg, var(--bg-tertiary), var(--bg-hover));
+  }
+
+  .landing-root .squad-figure-body {
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    width: 68px;
+    height: 46px;
+    border-radius: 34px 34px 14px 14px;
+    transform: translateX(-50%);
+    background: linear-gradient(160deg, var(--bg-tertiary), var(--bg-hover));
+  }
+
+  .landing-root .squad-figure-badge {
+    position: absolute;
+    bottom: 6px;
+    left: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    transform: translateX(-50%);
+    color: var(--text-muted);
+    background: var(--bg-primary);
+    box-shadow: var(--landing-card-shadow);
+  }
+
+  .landing-root .squad-bust.active .squad-figure-head,
+  .landing-root .squad-bust.active .squad-figure-body {
+    background: var(--accent-primary);
+  }
+
+  .landing-root .squad-bust.active .squad-figure-badge {
+    color: var(--accent-primary);
+  }
+
+  .landing-root .squad-label {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .landing-root .squad-role {
+    font-size: 10px;
+    color: var(--text-muted);
+    opacity: 0;
+    transition: opacity 220ms ease;
+  }
+
+  .landing-root .squad-bust.active .squad-role {
+    opacity: 1;
+  }
+
+  @media (max-width: 640px) {
+    .landing-root .augment-squad { flex-wrap: wrap; gap: 6px; }
+    .landing-root .squad-bust { margin: 0; transform: scale(0.9); }
+    .landing-root .squad-bust.active { transform: translateY(-4px) scale(1.02); }
+  }
+
+  /* The selected agent's profile: story on the left, live app (the star) on the
+     right. Fixed columns so the layout is stable. */
+  .landing-root .augment-stage {
+    display: grid;
+    grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr);
+    gap: 22px;
+    align-items: stretch;
+    max-width: 1000px;
+    margin: 8px auto 0;
+  }
+
+  @media (max-width: 899px) {
+    .landing-root .augment-stage { grid-template-columns: 1fr; gap: 16px; }
+  }
+
+  .landing-root .augment-brief {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-width: 0;
+  }
+
+  .landing-root .augment-line {
+    font-size: 15px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+  }
+
+  .landing-root .augment-line-you {
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .landing-root .augment-access {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px 16px;
+    border-radius: 16px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    box-shadow: var(--landing-card-shadow);
+  }
+
+  .landing-root .augment-access-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .landing-root .augment-access-logos {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  /* Each tool chip lights up (grey -> colour, scale) as the agent connects. */
+  .landing-root .access-chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    filter: grayscale(1);
+    opacity: 0.4;
+    transform: scale(0.9);
+    transition: filter 320ms ease, opacity 320ms ease,
+      transform 320ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 320ms ease,
+      border-color 320ms ease;
+  }
+
+  .landing-root .access-chip img {
+    width: 22px;
+    height: 22px;
+    display: block;
+  }
+
+  .landing-root .access-chip.on {
+    filter: none;
+    opacity: 1;
+    transform: scale(1);
+    border-color: rgba(16, 185, 129, 0.45);
+    box-shadow: 0 4px 12px -6px rgba(16, 185, 129, 0.4);
+  }
+
+  .landing-root .augment-app {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  /* The app card (reuses .pflow-inode chrome) fills the column and is the star. */
+  .landing-root .augment-app .pflow-inode {
+    height: 360px;
+  }
+
+  .landing-root .augment-underhood {
+    font-size: 12px;
+    text-align: center;
+    color: var(--text-muted);
+  }
+
+  @media (max-width: 899px) {
+    .landing-root .augment-app .pflow-inode { height: 320px; }
+  }
+
+  /* ---- "Meet your agents": cartoon roster + focused agent spotlight ---- */
+  .landing-root .agentverse {
+    max-width: 1080px;
+    margin: 0 auto;
+  }
+
+  /* Your team: cartoon agents in a row, the focused one lifted, plus a "+1k"
+     tile showing the team scales without limit. */
+  .landing-root .roster-row {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 4px;
+    padding: 6px 0 8px;
+  }
+
+  .landing-root .roster {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+  }
+
+  .landing-root .roster-agent {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 6px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    opacity: 0.6;
+    filter: grayscale(0.55);
+    transition: opacity 260ms ease, filter 260ms ease,
+      transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .landing-root .roster-avatar {
+    display: block;
+    width: 62px;
+    height: 62px;
+    border-radius: 50%;
+    overflow: hidden;
+    background: var(--bg-tertiary);
+    border: 2px solid transparent;
+    box-shadow: var(--landing-card-shadow);
+  }
+
+  .landing-root .roster-avatar img {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  .landing-root .roster-name {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+
+  .landing-root .roster-agent:hover {
+    opacity: 0.9;
+    filter: none;
+  }
+
+  .landing-root .roster-agent.active {
+    opacity: 1;
+    filter: none;
+    transform: translateY(-4px) scale(1.12);
+  }
+
+  .landing-root .roster-agent.active .roster-avatar {
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.16), var(--landing-frame-shadow);
+  }
+
+  .landing-root .roster-agent.active .roster-name {
+    color: var(--text-primary);
+    font-weight: 700;
+  }
+
+  /* "+1k and more" tile: the agent team scales without limit. */
+  .landing-root .roster-more {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 6px;
+    align-self: center;
+  }
+
+  .landing-root .roster-more-stack {
+    position: relative;
+    display: flex;
+    align-items: center;
+    height: 62px;
+  }
+
+  .landing-root .roster-more-face {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    border: 2px solid var(--bg-primary);
+    background: var(--bg-tertiary);
+    margin-left: -18px;
+    filter: grayscale(1);
+    opacity: 0.6;
+  }
+
+  .landing-root .roster-more-face:first-child {
+    margin-left: 0;
+  }
+
+  .landing-root .roster-more-plus {
+    margin-left: -12px;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 36px;
+    height: 34px;
+    padding: 0 9px;
+    border-radius: 999px;
+    background: var(--accent-primary);
+    color: var(--accent-foreground);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .landing-root .roster-caption {
+    max-width: 540px;
+    margin: 0 auto 16px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .landing-root .spotlight {
+    display: grid;
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+    gap: 22px;
+    align-items: start;
+    max-width: 1000px;
+    margin: 0 auto;
+  }
+
+  @media (max-width: 899px) {
+    .landing-root .spotlight { grid-template-columns: 1fr; gap: 18px; }
+  }
+
+  /* The focused agent + its possibilities. */
+  .landing-root .agent-profile {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 20px;
+    border-radius: 18px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    box-shadow: var(--landing-card-shadow);
+  }
+
+  .landing-root .agent-hero {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .landing-root .agent-hero-avatar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 84px;
+    height: 84px;
+    border-radius: 50%;
+    overflow: hidden;
+    flex: none;
+  }
+
+  .landing-root .agent-hero-avatar img {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  .landing-root .agent-hero-id {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .landing-root .agent-hero-name {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .landing-root .agent-hero-role {
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+
+  .landing-root .agent-hero-model {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 2px;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .landing-root .agent-hero-augment {
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+  }
+
+  .landing-root .agent-hero-you {
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  /* Customize affordance: a dashed, editable-looking button that says the whole
+     agent is yours to shape. */
+  .landing-root .agent-customize-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .landing-root .agent-customize {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    align-self: flex-start;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent-primary);
+    background: var(--bg-secondary);
+    border: 1px dashed var(--accent-primary);
+    border-radius: 10px;
+    padding: 8px 14px;
+    cursor: pointer;
+    transition: background 200ms ease, transform 200ms ease;
+  }
+
+  .landing-root .agent-customize:hover {
+    background: var(--bg-tertiary);
+    transform: translateY(-1px);
+  }
+
+  .landing-root .agent-customize-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .landing-root .agent-kit {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-color);
+  }
+
+  .landing-root .agent-kit-section {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+
+  .landing-root .agent-kit-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .landing-root .agent-kit-resources {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .landing-root .agent-kit-resource {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 9px;
+    padding: 4px 9px;
+  }
+
+  .landing-root .agent-kit-tools {
+    display: flex;
+    gap: 8px;
+  }
+
+  .landing-root .agent-kit-tool {
+    width: 26px;
+    height: 26px;
+  }
+
+  .landing-root .agent-kit-foot {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .landing-root .agent-kit-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    background: var(--bg-tertiary);
+    border-radius: 999px;
+    padding: 4px 10px;
+  }
+
+  .landing-root .agent-credit {
+    margin-top: 14px;
+    text-align: center;
+    font-size: 10px;
+    color: var(--text-muted);
+    opacity: 0.7;
+  }
+
+  /* The workpanel avatar now holds the cartoon avatar image. */
+  .landing-root .workpanel-avatar {
+    overflow: hidden;
+    background: var(--bg-tertiary);
+  }
+
+  .landing-root .workpanel-avatar img {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .landing-root .roster-agent { transition: none; }
+  }
+
+  .landing-root .agentverse-stage {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 24px;
+    align-items: center;
+  }
+
+  @media (max-width: 899px) {
+    .landing-root .agentverse-stage { grid-template-columns: 1fr; gap: 18px; }
+  }
+
+  /* You in the middle, agents around you on a ring. */
+  .landing-root .constellation {
+    position: relative;
+    width: 100%;
+    max-width: 470px;
+    margin: 0 auto;
+    aspect-ratio: 1 / 0.92;
+  }
+
+  .landing-root .constellation-links {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+
+  .landing-root .constellation-link {
+    stroke: var(--border-color);
+    stroke-width: 0.4;
+    stroke-dasharray: 1.4 1.6;
+    opacity: 0.7;
+  }
+
+  .landing-root .constellation-link.active {
+    stroke: #10b981;
+    stroke-width: 0.6;
+    opacity: 1;
+    animation: constellation-flow 1s linear infinite;
+  }
+
+  @keyframes constellation-flow {
+    to { stroke-dashoffset: -6; }
+  }
+
+  .landing-root .you-figure {
+    position: absolute;
+    left: 50%;
+    top: 52%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    z-index: 2;
+    pointer-events: none;
+  }
+
+  .landing-root .you-svg {
+    width: 58px;
+    height: 58px;
+  }
+
+  .landing-root .you-svg circle,
+  .landing-root .you-svg path {
+    fill: none;
+    stroke: var(--text-muted);
+    stroke-width: 2;
+    stroke-dasharray: 3 3;
+    stroke-linecap: round;
+    opacity: 0.6;
+  }
+
+  .landing-root .you-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .landing-root .agent-node {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    z-index: 3;
+    opacity: 0.72;
+    transition: transform 280ms cubic-bezier(0.22, 1, 0.36, 1), opacity 280ms ease;
+  }
+
+  .landing-root .agent-node-avatar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 54px;
+    height: 54px;
+    border-radius: 50%;
+    background: var(--bg-primary);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    box-shadow: var(--landing-card-shadow);
+    transition: background 260ms ease, color 260ms ease, border-color 260ms ease,
+      box-shadow 260ms ease;
+  }
+
+  .landing-root .agent-node-name {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+
+  .landing-root .agent-node:hover,
+  .landing-root .agent-node.hovered {
+    opacity: 1;
+  }
+
+  .landing-root .agent-node:hover .agent-node-avatar,
+  .landing-root .agent-node.hovered .agent-node-avatar {
+    border-color: var(--accent-primary);
+  }
+
+  .landing-root .agent-node.active {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.14);
+    z-index: 6;
+  }
+
+  .landing-root .agent-node.active .agent-node-avatar {
+    background: var(--accent-primary);
+    color: var(--accent-foreground);
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.18), var(--landing-frame-shadow);
+  }
+
+  .landing-root .agent-node.active .agent-node-name {
+    color: var(--text-primary);
+    font-weight: 700;
+  }
+
+  /* Hover profile card, anchored above the agent. */
+  .landing-root .agent-fiche-anchor {
+    position: absolute;
+    transform: translate(var(--fiche-shift, -50%), calc(-100% - 14px));
+    z-index: 20;
+    pointer-events: none;
+  }
+
+  .landing-root .agent-fiche {
+    width: 226px;
+    padding: 12px;
+    border-radius: 14px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    box-shadow: var(--landing-frame-shadow);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    animation: fiche-in 180ms ease;
+  }
+
+  @keyframes fiche-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: none; }
+  }
+
+  .landing-root .agent-fiche-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .landing-root .agent-fiche-name {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .landing-root .agent-fiche-model {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 10px;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
+  .landing-root .agent-fiche-section {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .landing-root .agent-fiche-label {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .landing-root .agent-fiche-resources {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+
+  .landing-root .agent-fiche-resource {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 3px 7px;
+  }
+
+  .landing-root .agent-fiche-tools {
+    display: flex;
+    gap: 6px;
+  }
+
+  .landing-root .agent-fiche-tool {
+    width: 20px;
+    height: 20px;
+  }
+
+  .landing-root .agent-fiche-foot {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+
+  .landing-root .agent-fiche-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    color: var(--text-secondary);
+    background: var(--bg-tertiary);
+    border-radius: 999px;
+    padding: 3px 8px;
+  }
+
+  /* The focused agent at work. */
+  .landing-root .agentverse-work {
+    min-width: 0;
+  }
+
+  .landing-root .workpanel {
+    display: flex;
+    flex-direction: column;
+    border-radius: 18px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    box-shadow: var(--landing-card-shadow);
+    overflow: hidden;
+  }
+
+  .landing-root .workpanel-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 13px 16px;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+  }
+
+  .landing-root .workpanel-avatar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--accent-primary);
+    color: var(--accent-foreground);
+    flex: none;
+  }
+
+  .landing-root .workpanel-title {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .landing-root .workpanel-name {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .landing-root .workpanel-sub {
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .landing-root .workpanel-you {
+    color: var(--text-secondary);
+    font-weight: 600;
+  }
+
+  .landing-root .workpanel-status {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #3b82f6;
+    background: rgba(59, 130, 246, 0.12);
+    border-radius: 999px;
+    padding: 3px 9px;
+    flex: none;
+  }
+
+  .landing-root .workpanel-status.done {
+    color: #059669;
+    background: rgba(16, 185, 129, 0.14);
+  }
+
+  .landing-root .workpanel-body {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .landing-root .workpanel-timeline {
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .landing-root .work-step {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    animation: work-step-in 280ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  @keyframes work-step-in {
+    from { opacity: 0; transform: translateX(-6px); }
+    to { opacity: 1; transform: none; }
+  }
+
+  .landing-root .work-step-glyph {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    flex: none;
+  }
+
+  .landing-root .agentverse-step-logo {
+    width: 16px;
+    height: 16px;
+    display: block;
+  }
+
+  .landing-root .work-step-text {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .landing-root .work-step-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .landing-root .work-step-detail {
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .landing-root .work-step.is-reason .work-step-text {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-style: italic;
+  }
+
+  .landing-root .work-step.is-reason .work-step-glyph {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+  }
+
+  .landing-root .work-step-status {
+    flex: none;
+    color: #059669;
+    display: flex;
+    align-items: center;
+  }
+
+  .landing-root .work-step.running .work-step-status {
+    color: #3b82f6;
+  }
+
+  .landing-root .work-spinner {
+    display: block;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: 2px solid rgba(59, 130, 246, 0.25);
+    border-top-color: #3b82f6;
+    animation: pshow-spin 720ms linear infinite;
+  }
+
+  /* The delivered interface, revealed at the very end like a generated image,
+     shown as the content of a browser-style tab (no info header). */
+  .landing-root .work-canvas {
+    margin: 6px 14px 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--bg-secondary);
+    box-shadow: var(--landing-node-shadow);
+    animation: work-step-in 300ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .landing-root .work-canvas-tabs {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    padding: 6px 8px 0;
+  }
+
+  .landing-root .work-canvas-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-primary);
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-bottom: none;
+    border-radius: 9px 9px 0 0;
+    padding: 6px 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .landing-root .work-canvas-body {
+    height: 150px;
+    overflow: hidden;
+    background: #fbfaf8;
+    border-top: 1px solid var(--border-color);
+  }
+
+  /* Image-generation reveal: blur -> sharp with a scan sweep. The iframe is
+     rendered tall (fully laid out, no inner scroll / autofocus jump) and clipped
+     by the body so the recognisable top of the app shows. */
+  .landing-root .work-gen {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    animation: work-gen-clear 1000ms ease-out;
+  }
+
+  .landing-root .work-gen .pshow-app-iframe {
+    width: 100%;
+    height: 460px;
+    border: 0;
+    display: block;
+  }
+
+  .landing-root .work-gen-scan {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(120deg, transparent 34%, rgba(16, 185, 129, 0.3) 50%, transparent 66%);
+    background-size: 300% 100%;
+    animation: work-gen-scan 1000ms ease-out forwards;
+  }
+
+  @keyframes work-gen-clear {
+    0% { filter: blur(16px) saturate(0.7); opacity: 0; transform: scale(1.03); }
+    55% { filter: blur(5px); opacity: 1; }
+    100% { filter: blur(0); opacity: 1; transform: none; }
+  }
+
+  @keyframes work-gen-scan {
+    0% { background-position: 120% 0; opacity: 1; }
+    100% { background-position: -140% 0; opacity: 0; }
+  }
+
+  /* Sub-agent avatars in the resource chips and the activity timeline. */
+  .landing-root .agent-kit-resource-avatar {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--bg-tertiary);
+    display: block;
+  }
+
+  .landing-root .agentverse-step-avatar {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--bg-tertiary);
+    display: block;
+  }
+
+  /* Bare delivered-app content (no header / no tab): the whole app, scaled down
+     to fit so nothing is cropped. */
+  .landing-root .work-view {
+    margin: 8px 14px 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    overflow: hidden;
+    background: #fbfaf8;
+    box-shadow: var(--landing-node-shadow);
+  }
+
+  .landing-root .work-view-scale {
+    position: relative;
+    width: 100%;
+    overflow: hidden;
+  }
+
+  .landing-root .work-view-iframe {
+    border: 0;
+    display: block;
+    transform-origin: top left;
+    background: #fbfaf8;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .landing-root .work-canvas,
+    .landing-root .work-gen { animation: none; filter: none; }
+    .landing-root .work-gen-scan { display: none; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .landing-root .constellation-link.active,
+    .landing-root .work-step,
+    .landing-root .work-spinner,
+    .landing-root .agent-fiche {
+      animation: none;
+    }
+    .landing-root .agent-node { transition: none; }
+  }
+
+  /* Fixed-size conversation card: constant height and width, so it never grows
+     or shrinks with the message content (the prompt and the agent's status line
+     always sit in the same box). */
+  .landing-root .pshow-chat {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 10px;
+    height: 128px;
+    padding: 16px 18px;
+    border-radius: 16px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    box-shadow: var(--landing-card-shadow);
+  }
+
+  .landing-root .pshow-agent-line {
+    min-width: 0;
+  }
+
+  /* Persona fan: cards spread like a hand of cards, active card lifted upright.
+     Extra top padding gives the rotated cards room so nothing clips against the
+     section above. */
+  .landing-root .pshow-fan {
+    display: flex;
+    justify-content: center;
+    align-items: flex-end;
+    padding: 22px 0 16px;
+  }
+
+  .landing-root .pshow-fan-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 120px;
+    margin: 0 -9px;
+    padding: 8px 8px 10px;
+    border-radius: 16px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    box-shadow: var(--landing-card-shadow);
+    cursor: pointer;
+    transform: rotate(var(--fan-rot, 0deg)) translateY(var(--fan-drop, 0px));
+    transform-origin: 50% 130%;
+    transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 320ms ease, border-color 320ms ease;
+  }
+
+  .landing-root .pshow-fan-card:hover {
+    transform: rotate(var(--fan-rot, 0deg)) translateY(calc(var(--fan-drop, 0px) - 8px));
+  }
+
+  .landing-root .pshow-fan-card.active {
+    z-index: 2;
+    border-color: var(--accent-primary);
+    box-shadow: var(--landing-frame-shadow);
+    transform: rotate(0deg) translateY(-14px) scale(1.06);
+  }
+
+  /* On the fanned (inactive) cards the role line would collide with the
+     neighbour card; show it only on the lifted active card. */
+  .landing-root .pshow-fan-role {
+    opacity: 0;
+    transition: opacity 220ms ease;
+  }
+
+  .landing-root .pshow-fan-card.active .pshow-fan-role {
+    opacity: 1;
+  }
+
+  .landing-root .pshow-fan-media {
+    position: relative;
+    display: block;
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--bg-tertiary);
+  }
+
+  .landing-root .pshow-fan-img {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: opacity 240ms ease;
+  }
+
+  .landing-root .pshow-fan-fallback {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    background: linear-gradient(135deg, var(--bg-tertiary) 0%, var(--bg-hover) 100%);
+  }
+
+  .landing-root .pshow-fan-label {
+    margin-top: 8px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .landing-root .pshow-fan-role {
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+
+  @media (max-width: 640px) {
+    .landing-root .pshow-fan {
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .landing-root .pshow-fan-card {
+      width: 96px;
+      margin: 0;
+      transform: none;
+    }
+
+    .landing-root .pshow-fan-card.active {
+      transform: translateY(-4px) scale(1.04);
+    }
+  }
+
+  .landing-root .pshow-stage {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    max-width: 980px;
+    margin: 16px auto 0;
+  }
+
+  /* Work row: the builder canvas on the left, a handoff arrow, and the interface
+     card on the right. The columns are fixed so the layout is stable; the
+     interface card fills in when the run reaches it. */
+  .landing-root .pshow-work {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 28px 344px;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .landing-root .pshow-handoff {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    opacity: 0.5;
+    transition: color 320ms ease, opacity 320ms ease;
+  }
+
+  .landing-root .pshow-work.showapp .pshow-handoff {
+    color: #10b981;
+    opacity: 1;
+  }
+
+  .landing-root .pshow-side {
+    min-width: 0;
+    height: 340px;
+  }
+
+  /* The interface app, revealed inside the card when the run completes. */
+  .landing-root .pshow-app-reveal {
+    width: 100%;
+    height: 100%;
+    animation: pshow-reveal 440ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  @media (max-width: 899px) {
+    .landing-root .pshow-work {
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
+
+    .landing-root .pshow-handoff {
+      transform: rotate(90deg);
+    }
+
+    .landing-root .pshow-side {
+      height: 300px;
+    }
+  }
+
+  /* The live builder canvas frame: a fixed-height, self-contained box that holds
+     the read-only ReactFlow. Its height stays constant across every phase, so
+     the whole scene has a stable footprint. */
+  .landing-root .pflow-frame {
+    position: relative;
+    width: 100%;
+    height: 340px;
+    border-radius: 16px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    box-shadow: var(--landing-card-shadow);
+    overflow: hidden;
+  }
+
+  .landing-root .pflow-frame-skeleton {
+    width: 100%;
+    height: 100%;
+    background: var(--bg-secondary);
+    animation: pshow-breathe 2.4s ease-in-out infinite;
+  }
+
+  /* ReactFlow root: transparent so the frame surface and dotted Background show
+     through. */
+  .landing-root .pflow-canvas {
+    width: 100%;
+    height: 100%;
+    background: transparent;
+  }
+
+  @media (max-width: 640px) {
+    .landing-root .pflow-frame {
+      height: 300px;
+    }
+  }
+
+  .landing-root .showcase-bubble {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    max-width: 92%;
+    padding: 10px 14px;
+    border-radius: 14px;
+    font-size: 13px;
+    line-height: 1.45;
+    text-align: left;
+  }
+
+  .landing-root .showcase-bubble-user {
+    align-self: flex-end;
+    min-height: 40px;
+    background: var(--accent-primary);
+    color: var(--accent-foreground);
+    border-bottom-right-radius: 4px;
+  }
+
+  .landing-root .showcase-bubble-user .hero-prompt-caret {
+    background: var(--accent-foreground);
+  }
+
+  .landing-root .showcase-bubble-agent {
+    align-self: flex-start;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    border-bottom-left-radius: 4px;
+    animation: pshow-pop 320ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  /* Real builder node card on the ReactFlow canvas: same shell the builder
+     renders (rounded, border-2, ~190px, surface, p-3) + the real NodeHeader
+     inside. The border color comes from the platform's own getStatusBorderColor,
+     so pending/running/completed match a live run exactly. */
+  .landing-root .pflow-node {
+    position: relative;
+    width: 190px;
+    padding: 12px;
+    border-radius: 16px;
+    border: 2px solid var(--border-color);
+    background: var(--bg-primary);
+    box-shadow: var(--landing-node-shadow);
+    /* Entrance: each node slides up + scales in as the workflow creates it. */
+    opacity: 0;
+    transform: translateY(16px) scale(0.92);
+    transition: border-color 200ms ease, box-shadow 200ms ease,
+      opacity 340ms cubic-bezier(0.22, 1, 0.36, 1),
+      transform 340ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .landing-root .pflow-node.is-visible {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+
+  .landing-root .pflow-node[data-status='running'] {
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15), var(--landing-node-shadow);
+  }
+
+  /* ReactFlow handles as round dots, same look as the builder (dot in the border
+     color, ring in the surface color). */
+  .landing-root .pflow-handle.react-flow__handle {
+    width: 10px;
+    height: 10px;
+    min-width: 0;
+    min-height: 0;
+    border-radius: 999px;
+    background: var(--border-color);
+    border: 2px solid var(--bg-primary);
+  }
+
+  /* Blue running "scan" overlay, identical to the canvas node's shimmer. */
+  .landing-root .pshow-node-shimmer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    border-radius: 16px;
+    background: linear-gradient(90deg, transparent 0%, rgba(59, 130, 246, 0.15) 50%, transparent 100%);
+    background-size: 200% 100%;
+    animation: shimmer-scan 2.5s ease-in-out infinite;
+    z-index: 5;
+  }
+
+  /* Run-status chip, bottom-right like the builder's NodeStatusBadge. */
+  .landing-root .pshow-node-status {
+    position: absolute;
+    bottom: 8px;
+    right: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    color: #059669;
+    z-index: 6;
+  }
+
+  .landing-root .pflow-node[data-status='completed'] .pshow-node-status {
+    background: rgba(16, 185, 129, 0.14);
+  }
+
+  .landing-root .pshow-spinner {
+    width: 12px;
+    height: 12px;
+    border-radius: 999px;
+    border: 2px solid rgba(59, 130, 246, 0.25);
+    border-top-color: #3b82f6;
+    animation: pshow-spin 720ms linear infinite;
+  }
+
+  /* The interface NODE on the canvas: same shell as the builder's
+     InterfacePreviewNode (rounded, status border-2, node header on top, the live
+     interface filling the body). Fixed size so the ReactFlow layout is stable. */
+  .landing-root .pflow-inode {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    border-radius: 16px;
+    border: 2px solid var(--border-color);
+    background: var(--bg-primary);
+    box-shadow: var(--landing-node-shadow);
+    overflow: hidden;
+    transition: border-color 300ms ease;
+  }
+
+  .landing-root .pshow-work.showapp .pflow-inode {
+    animation: pshow-card-pop 440ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .landing-root .pshow-inode-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+  }
+
+  .landing-root .pshow-inode-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+  }
+
+  .landing-root .pshow-inode-url {
+    flex: 1;
+    min-width: 0;
+    text-align: right;
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .landing-root .pshow-inode-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    background: rgba(16, 185, 129, 0.14);
+    color: #059669;
+    flex: none;
+  }
+
+  .landing-root .pshow-inode-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+  }
+
+  /* The live interface iframe (real HTML/CSS/JS, sandboxed). */
+  .landing-root .pshow-app-iframe {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    border: 0;
+    display: block;
+    background: #fbfaf8;
+  }
+
+  /* Placeholder shown in the interface node body until the run completes. */
+  .landing-root .pflow-inode-wait {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-secondary);
+  }
+
+  .landing-root .pshow-placeholder-label {
+    font-size: 13px;
+    color: var(--text-muted);
+    animation: pshow-breathe 2.4s ease-in-out infinite;
+  }
+
+  @keyframes pshow-pop {
+    0% { opacity: 0; transform: translateY(8px) scale(0.97); }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  @keyframes pshow-grow {
+    0% { transform: scaleY(0); }
+    100% { transform: scaleY(1); }
+  }
+
+  @keyframes pshow-flow {
+    0% { background-position: 0 -100%; }
+    100% { background-position: 0 100%; }
+  }
+
+  @keyframes pshow-spin {
+    to { transform: rotate(360deg); }
+  }
+
+  @keyframes pshow-breathe {
+    0%, 100% { opacity: 0.55; }
+    50% { opacity: 1; }
+  }
+
+  @keyframes pshow-reveal {
+    0% { opacity: 0; transform: translateY(10px) scale(0.98); }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  @keyframes pshow-card-pop {
+    0% { transform: scale(0.985); }
+    55% { transform: scale(1.012); }
+    100% { transform: scale(1); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .landing-root .showcase-bubble-agent,
+    .landing-root .pshow-placeholder-label,
+    .landing-root .pshow-spinner,
+    .landing-root .pshow-app-reveal,
+    .landing-root .pshow-work.showapp .pflow-inode {
+      animation: none;
+    }
+
+    /* Nodes appear in place, no slide. */
+    .landing-root .pflow-node {
+      opacity: 1;
+      transform: none;
+      transition: none;
+    }
+  }
+
+  /* Aggregate counters (SocialProofStrip). */
+  .landing-root .metric-value {
+    font-family: var(--font-outfit), 'Outfit', sans-serif;
+    font-weight: 700;
+    font-size: clamp(28px, 3.4vw, 38px);
+    letter-spacing: -0.02em;
+    color: var(--text-primary);
+  }
+
+  /* HowItWorks step badges. */
+  .landing-root .step-number {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 700;
+    background: var(--accent-primary);
+    color: var(--accent-foreground);
+  }
+
+  /* Persona tabs. */
+  .landing-root .persona-tab-row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+  }
+
+  .landing-root .persona-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 16px;
+    border-radius: 999px;
+    font-size: 14px;
+    font-weight: 600;
+    border: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 180ms ease, color 180ms ease, border-color 180ms ease;
+  }
+
+  .landing-root .persona-tab:hover {
+    color: var(--text-primary);
+    border-color: var(--text-muted);
+  }
+
+  .landing-root .persona-tab.active {
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+    color: var(--accent-foreground);
+  }
+
+  .landing-root .persona-card {
+    transition: transform 300ms ease, box-shadow 300ms ease;
+  }
+
+  .landing-root .persona-card:hover {
+    transform: translateY(-2px);
   }
 
   .landing-root .cta-glow {

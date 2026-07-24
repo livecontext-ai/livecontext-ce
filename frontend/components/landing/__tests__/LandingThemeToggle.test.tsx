@@ -10,7 +10,7 @@ import LandingThemeProvider from '../LandingThemeProvider';
 import LandingThemeToggle from '../LandingThemeToggle';
 
 // LandingThemeToggle reads the SELF-CONTAINED public-site theme from
-// LandingThemeProvider (default dark), decoupled from the app theme. It lives in
+// LandingThemeProvider (default light), decoupled from the app theme. It lives in
 // the shared LandingFooter, which also renders on the non-localized public pages
 // (no NextIntlClientProvider), so it must stay intl-context-free.
 beforeEach(() => {
@@ -31,24 +31,24 @@ function renderInProvider() {
 }
 
 describe('LandingThemeToggle', () => {
-  it('defaults to dark → shows the Sun glyph and offers to switch to light', () => {
+  it('defaults to light → shows the Moon glyph and offers to switch to dark', () => {
     const { container } = renderInProvider();
-    expect(screen.getByRole('button', { name: /switch to light theme/i })).toBeInTheDocument();
-    expect(container.querySelector('svg')?.getAttribute('class')).toMatch(/sun/i);
-  });
-
-  it('click flips to light → Moon glyph, offers to switch to dark, persists `landing-theme`', () => {
-    const { container } = renderInProvider();
-    fireEvent.click(screen.getByRole('button', { name: /switch to light theme/i }));
-
     expect(screen.getByRole('button', { name: /switch to dark theme/i })).toBeInTheDocument();
     expect(container.querySelector('svg')?.getAttribute('class')).toMatch(/moon/i);
-    expect(localStorage.getItem('landing-theme')).toBe('light');
   });
 
-  it('without a provider, falls back to the dark default and does not throw', () => {
-    expect(() => render(<LandingThemeToggle />)).not.toThrow();
+  it('click flips to dark → Sun glyph, offers to switch to light, persists `landing-theme`', () => {
+    const { container } = renderInProvider();
+    fireEvent.click(screen.getByRole('button', { name: /switch to dark theme/i }));
+
     expect(screen.getByRole('button', { name: /switch to light theme/i })).toBeInTheDocument();
+    expect(container.querySelector('svg')?.getAttribute('class')).toMatch(/sun/i);
+    expect(localStorage.getItem('landing-theme')).toBe('dark');
+  });
+
+  it('without a provider, falls back to the light default and does not throw', () => {
+    expect(() => render(<LandingThemeToggle />)).not.toThrow();
+    expect(screen.getByRole('button', { name: /switch to dark theme/i })).toBeInTheDocument();
   });
 
   it('does not import any intl context (shared footer has no NextIntlClientProvider)', () => {

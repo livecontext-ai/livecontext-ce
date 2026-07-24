@@ -2,6 +2,8 @@ package com.apimarketplace.common.storage.domain;
 
 import com.apimarketplace.common.scope.OrgScopedEntity;
 import com.apimarketplace.common.scope.OrgScopedEntityListener;
+import com.apimarketplace.common.storage.exception.StorageSerializationException;
+import com.apimarketplace.common.storage.util.JsonNulSanitizer;
 import jakarta.persistence.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -523,19 +525,47 @@ public class StorageEntity implements OrgScopedEntity {
     }
     
     /**
-     * Serialise un objet en JSON
+     * Serialise un objet en JSON.
+     *
+     * <p>This is one of the two serialization funnels feeding PostgreSQL
+     * {@code jsonb} columns (the other is the orchestrator's step-row native
+     * repository). Two hardening rules apply here:
+     * <ul>
+     *   <li><b>U+0000 strip (detect-then-clean):</b> PG rejects the NUL
+     *       codepoint in jsonb with SQLSTATE 22P05, which used to poison the
+     *       enclosing transaction and silently cost a step its whole output
+     *       blob. We serialize once, probe the produced text for the
+     *       backslash-u0000 escape (one {@code indexOf} on the hit-free hot
+     *       path), and only on detection deep-strip the actual codepoint from
+     *       the decoded strings and re-serialize - never a regex over the
+     *       serialized text, so a LITERAL backslash-u0000 in the data is
+     *       preserved. See {@link JsonNulSanitizer}.</li>
+     *   <li><b>No {@code toString()} fallback:</b> on Jackson failure this
+     *       method used to write {@code data.toString()} (non-JSON garbage)
+     *       into a JSONB column - a separate silent-corruption vector. It now
+     *       throws {@link StorageSerializationException} so callers handle
+     *       the failure honestly.</li>
+     * </ul>
+     *
+     * @throws StorageSerializationException when the payload cannot be
+     *         serialized to JSON
      */
     private String serializeToJson(Object data) {
         if (data == null) {
             return null;
         }
-        
+
         try {
             ObjectMapper mapper = new ObjectMapper();
-            return mapper.writeValueAsString(data);
+            String json = mapper.writeValueAsString(data);
+            if (JsonNulSanitizer.containsNulEscape(json)) {
+                json = JsonNulSanitizer.stripNulCodepoints(json);
+            }
+            return json;
         } catch (Exception e) {
-            // In case of error, use toString() as fallback
-            return data.toString();
+            throw new StorageSerializationException(
+                    "Unable to serialize payload to JSON for storage: ["
+                            + e.getClass().getSimpleName() + "] " + e.getMessage(), e);
         }
     }
     

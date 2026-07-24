@@ -129,6 +129,24 @@ public class EditorRunResolver {
         // canvas content matching the latest version is a read-only resolve; drifted
         // content overwrites the latest version in place (same number). New numbers
         // come from explicit save paths only.
+        //
+        // On a pinned workflow, canvas content equal to the PINNED version resolves to
+        // the pinned number (read-only) rather than the latest draft's. Step 2 then
+        // looks for a live run at that number, so an editor canvas sitting on the
+        // pinned content can collide with the live production run - the same collision
+        // that already existed when the pin IS the latest version, now also reachable
+        // when the pin trails a draft (e.g. after restoring the pinned version into
+        // the canvas). Two shapes, both pre-existing and both widened here:
+        //   - ADOPTED: reuse is mode-filtered, but an editor AUTOMATIC fire matches a
+        //     production AUTOMATIC run exactly. The adopted run then has
+        //     __versionReplay__ stripped and reconcileMockMode applied below, so an
+        //     editor fire carrying a mock override leaves the production run mocking
+        //     its tools on its next scheduled fire.
+        //   - CREATED: when reuse is refused (mode mismatch, topology guard), a NEW
+        //     editor run is created AT the pinned version. ProductionRunResolver
+        //     .lookupByPolicy selects on (workflowId, pinnedVersion, status) ordered
+        //     by started_at DESC with no __editorRun__ exclusion, so that fresh run
+        //     can shadow the real production run for the next trigger fire.
         int planVersion = versionService.resolveContentVersionForExecution(
                 workflowId, plan.getOriginalPlan(), tenantId);
         log.info("[EditorRunResolver] Resolved planVersion={} for workflow={}, requestedMode={}",
@@ -144,6 +162,20 @@ public class EditorRunResolver {
         Optional<WorkflowRunEntity> reusable = runRepository
                 .findFirstByWorkflowIdAndPlanVersionAndExecutionModeAndStatusInOrderByStartedAtDesc(
                         workflowId, planVersion, requestedMode, REUSABLE_STATUSES);
+
+        if (reusable.isPresent() && isProductionRun(workflow, reusable.get())) {
+            // Never adopt the live PRODUCTION run into an editor/agent fire. Reuse is
+            // keyed on (workflowId, planVersion, mode, live status) with no notion of
+            // who owns the run, so on a pinned workflow an editor canvas sitting on
+            // the pinned content matches production exactly. Adopting it would apply
+            // the block below to production state: the mock override in particular
+            // would then make the next SCHEDULED fire mock its tools. Fall through to
+            // a fresh editor run instead.
+            log.info("[EditorRunResolver] Run {} at planVersion={} is the live production run - not adopting it "
+                    + "for an editor fire on workflow={}; creating a separate run",
+                    reusable.get().getRunIdPublic(), planVersion, workflowId);
+            reusable = Optional.empty();
+        }
 
         if (reusable.isPresent()) {
             WorkflowRunEntity existing = reusable.get();
@@ -233,6 +265,27 @@ public class EditorRunResolver {
     }
 
     /**
+     * Is {@code run} the workflow's live production run?
+     *
+     * <p>Identified by the {@code production_run_id} FK, the same pointer
+     * {@code ProductionRunResolver.BY_PRODUCTION_RUN_ID} follows, so editor reuse and
+     * production selection agree on which run belongs to production. Only meaningful
+     * on a pinned workflow: the FK is set when a version is pinned.
+     *
+     * <p>Deliberately NOT metadata-based. A production run carries no positive marker
+     * (the absence of {@code __editorRun__} is not proof - a run created before the
+     * flag existed has no metadata either), so keying on the FK is the only
+     * unambiguous test.
+     */
+    private static boolean isProductionRun(WorkflowEntity workflow, WorkflowRunEntity run) {
+        if (workflow == null || run == null) {
+            return false;
+        }
+        UUID productionRunId = workflow.getProductionRunId();
+        return productionRunId != null && productionRunId.equals(run.getId());
+    }
+
+    /**
      * Reconciles {@code __mockMode__} on the run metadata to the requested state.
      *
      * @return true when the metadata map was changed
@@ -297,6 +350,18 @@ public class EditorRunResolver {
         Optional<WorkflowRunEntity> reusable = runRepository
                 .findFirstByWorkflowIdAndPlanVersionAndExecutionModeAndStatusInOrderByStartedAtDesc(
                         workflowId, planVersion, requestedMode, REUSABLE_STATUSES);
+
+        if (reusable.isPresent() && isProductionRun(workflow, reusable.get())) {
+            // Same rule as findOrCreateRun, and it bites harder here: a replay
+            // re-freezes the run's plan to the stored version content and stamps
+            // __versionReplay__, which tells ReusableTriggerService to stop
+            // propagating workflow.plan to that run. Doing that to the production run
+            // would freeze production on a replayed version indefinitely.
+            log.info("[EditorRunResolver] Run {} at planVersion={} is the live production run - not adopting it "
+                    + "for a version replay on workflow={}; creating a separate run",
+                    reusable.get().getRunIdPublic(), planVersion, workflowId);
+            reusable = Optional.empty();
+        }
 
         if (reusable.isPresent()) {
             WorkflowRunEntity existing = reusable.get();

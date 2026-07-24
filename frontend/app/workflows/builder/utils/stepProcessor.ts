@@ -10,6 +10,8 @@ import {
   isTransformNode,
   isWaitNode,
   isDownloadFileNode,
+  isPublicLinkNode,
+  isMediaNode,
   isHttpRequestNode,
   isDataInputNode,
   isMergeNode,
@@ -44,6 +46,7 @@ import {
   isSftpNode,
   isDatabaseNode,
 } from './planHelpers';
+import { buildMediaPlanParams } from './mediaParams';
 import { nodeRegistry } from '../registry/nodeRegistry';
 
 /**
@@ -224,6 +227,8 @@ export function processTransformAndWaitNodes(ctx: PlanGeneratorContext): void {
   const transformNodes = ctx.nodes.filter((node) => isTransformNode(node));
   const waitNodes = ctx.nodes.filter((node) => isWaitNode(node));
   const downloadFileNodes = ctx.nodes.filter((node) => isDownloadFileNode(node));
+  const publicLinkNodes = ctx.nodes.filter((node) => isPublicLinkNode(node));
+  const mediaNodes = ctx.nodes.filter((node) => isMediaNode(node));
   const httpRequestNodes = ctx.nodes.filter((node) => isHttpRequestNode(node));
   const dataInputNodes = ctx.nodes.filter((node) => isDataInputNode(node));
   const aggregateNodes = ctx.nodes.filter((node) => isAggregateNode(node));
@@ -334,6 +339,66 @@ export function processTransformAndWaitNodes(ctx: PlanGeneratorContext): void {
     if (hasKeys(params)) {
       core.params = params;
     }
+
+    const nodePosition = getNodePosition(node);
+    if (nodePosition) {
+      core.position = nodePosition;
+    }
+
+    ctx.plan.cores!.push(core);
+    ctx.stepPlanByNodeId.set(node.id, core);
+  });
+
+  // Process public link nodes.
+  // Unlike download_file (dedicated `download` config key), public_link's config
+  // lives in the generic `params` map: { file, ttl_minutes, disposition }.
+  publicLinkNodes.forEach((node) => {
+    const label = node.data.label || node.id;
+    const normalizedLabel = normalizeLabel(label);
+    ctx.stepLabelMap.set(node.id, normalizedLabel);
+
+    const core: any = {
+      id: node.id,  // Use node.id directly to avoid prefix doubling on reload
+      graphNodeId: node.id,
+      type: 'public_link',
+      label: label,
+    };
+
+    const d = node.data as any;
+    const params: any = convertParamExpressionsToInputs(node.data.paramExpressions) || {};
+    params.file = d.publicLinkFile || '';
+    if (typeof d.publicLinkTtlMinutes === 'number') params.ttl_minutes = d.publicLinkTtlMinutes;
+    if (d.publicLinkDisposition) params.disposition = d.publicLinkDisposition;
+    core.params = params;
+
+    const nodePosition = getNodePosition(node);
+    if (nodePosition) {
+      core.position = nodePosition;
+    }
+
+    ctx.plan.cores!.push(core);
+    ctx.stepPlanByNodeId.set(node.id, core);
+  });
+
+  // Process media nodes.
+  // Like public_link, the media config lives in the generic `params` map with
+  // the EXACT contract field names ({ operation, input/video/audio/tracks, ...options }).
+  // The params are rebuilt from mediaOperation + mediaParams (NOT from
+  // paramExpressions, which stringify numbers/booleans) so types survive the roundtrip.
+  mediaNodes.forEach((node) => {
+    const label = node.data.label || node.id;
+    const normalizedLabel = normalizeLabel(label);
+    ctx.stepLabelMap.set(node.id, normalizedLabel);
+
+    const core: any = {
+      id: node.id,  // Use node.id directly to avoid prefix doubling on reload
+      graphNodeId: node.id,
+      type: 'media',
+      label: label,
+    };
+
+    const d = node.data as any;
+    core.params = buildMediaPlanParams(d.mediaOperation, d.mediaParams);
 
     const nodePosition = getNodePosition(node);
     if (nodePosition) {
@@ -1188,6 +1253,8 @@ export function processTransformAndWaitNodes(ctx: PlanGeneratorContext): void {
     if (d.emailCc) config.ccEmail = d.emailCc;
     if (d.emailBcc) config.bccEmail = d.emailBcc;
     if (d.emailFromName) config.fromName = d.emailFromName;
+    if (d.emailFromEmail) config.fromEmail = d.emailFromEmail;
+    if (d.emailReplyTo) config.replyTo = d.emailReplyTo;
     if (d.emailSubject) config.subject = d.emailSubject;
     if (d.emailBody != null && d.emailBody !== '') config.body = d.emailBody;
     if (d.emailIsHtml === 'true' || d.emailIsHtml === true) config.isHtml = true;
@@ -1230,6 +1297,7 @@ export function processTransformAndWaitNodes(ctx: PlanGeneratorContext): void {
     if (d.emailAction) config.action = d.emailAction;
     if (d.emailMessageUid) config.messageUid = d.emailMessageUid;
     if (d.emailTargetFolder) config.targetFolder = d.emailTargetFolder;
+    if (d.emailCreateTargetIfMissing === 'true' || d.emailCreateTargetIfMissing === true) config.createTargetIfMissing = true;
     if (d.emailFromContains) config.fromContains = d.emailFromContains;
     if (d.emailSubjectContains) config.subjectContains = d.emailSubjectContains;
     if (d.emailBodyContains) config.bodyContains = d.emailBodyContains;

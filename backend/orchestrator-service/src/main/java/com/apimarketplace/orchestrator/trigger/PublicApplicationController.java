@@ -83,6 +83,9 @@ public class PublicApplicationController {
             response.put("htmlTemplate", result.htmlTemplate());
             response.put("cssTemplate", result.cssTemplate());
             response.put("jsTemplate", result.jsTemplate());
+            // The format travels with the templates: a consumer of this public render cannot
+            // learn the interface's shape from anywhere else.
+            response.put("format", result.format());
             response.put("items", result.items().stream().map(item -> {
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("epoch", item.epoch());

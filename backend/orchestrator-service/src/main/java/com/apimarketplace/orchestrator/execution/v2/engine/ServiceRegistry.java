@@ -46,6 +46,8 @@ public class ServiceRegistry {
     private final V2TemplateAdapter templateAdapter;
     private final FileStorageService fileStorageService;
     private final FileDownloader fileDownloader;
+    private final com.apimarketplace.orchestrator.services.file.PublicLinkService publicLinkService;
+    private final com.apimarketplace.orchestrator.services.media.MediaRenderService mediaRenderService;
     private final MimeTypeRegistry mimeTypeRegistry;
     private final WorkflowEventPublisher eventPublisher;
     private final RestTemplate restTemplate;
@@ -83,6 +85,8 @@ public class ServiceRegistry {
         this.templateAdapter = builder.templateAdapter;
         this.fileStorageService = builder.fileStorageService;
         this.fileDownloader = builder.fileDownloader;
+        this.publicLinkService = builder.publicLinkService;
+        this.mediaRenderService = builder.mediaRenderService;
         this.mimeTypeRegistry = builder.mimeTypeRegistry;
         this.eventPublisher = builder.eventPublisher;
         this.restTemplate = builder.restTemplate;
@@ -136,6 +140,14 @@ public class ServiceRegistry {
 
     public FileDownloader getFileDownloader() {
         return fileDownloader;
+    }
+
+    public com.apimarketplace.orchestrator.services.file.PublicLinkService getPublicLinkService() {
+        return publicLinkService;
+    }
+
+    public com.apimarketplace.orchestrator.services.media.MediaRenderService getMediaRenderService() {
+        return mediaRenderService;
     }
 
     public MimeTypeRegistry getMimeTypeRegistry() {
@@ -288,6 +300,8 @@ public class ServiceRegistry {
         private V2TemplateAdapter templateAdapter;
         private FileStorageService fileStorageService;
         private FileDownloader fileDownloader;
+        private com.apimarketplace.orchestrator.services.file.PublicLinkService publicLinkService;
+        private com.apimarketplace.orchestrator.services.media.MediaRenderService mediaRenderService;
         private MimeTypeRegistry mimeTypeRegistry;
         private WorkflowEventPublisher eventPublisher;
         private RestTemplate restTemplate;
@@ -337,6 +351,16 @@ public class ServiceRegistry {
 
         public Builder fileDownloader(FileDownloader downloader) {
             this.fileDownloader = downloader;
+            return this;
+        }
+
+        public Builder publicLinkService(com.apimarketplace.orchestrator.services.file.PublicLinkService service) {
+            this.publicLinkService = service;
+            return this;
+        }
+
+        public Builder mediaRenderService(com.apimarketplace.orchestrator.services.media.MediaRenderService service) {
+            this.mediaRenderService = service;
             return this;
         }
 

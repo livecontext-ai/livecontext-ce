@@ -97,12 +97,16 @@ export function GoogleDrivePickerField({
     }
     setBusy(true);
     try {
-      const resp = await apiClient.post<{ access_token: string }>(
+      const resp = await apiClient.post<{ access_token: string; app_id?: string }>(
         '/credentials/oauth2/picker-token',
         { integration: target.integration, credential_name: target.credentialName },
       );
       const token = resp?.access_token;
       if (!token) throw new Error('no token');
+      // Cloud project number of the OAuth client the token was minted from. Google REQUIRES it on
+      // the Picker for the drive.file scope: it is what records the per-file grant against this
+      // app. Derived server-side so platform / BYOK / CE each get their own.
+      const appId = resp?.app_id;
 
       await loadScript(GAPI_SRC);
       const gapi = (window as unknown as { gapi: any }).gapi;
@@ -112,10 +116,18 @@ export function GoogleDrivePickerField({
 
       const google = (window as unknown as { google: any }).google;
       const view = new google.picker.DocsView().setMimeTypes(mimeType);
-      const picker = new google.picker.PickerBuilder()
+      const builder = new google.picker.PickerBuilder()
         .setOAuthToken(token)
         .setDeveloperKey(apiKey)
-        .addView(view)
+        .addView(view);
+      // Without setAppId, a drive.file pick grants nothing: the Picker still returns a file ID, but
+      // every later API call on that file answers 404 "Requested entity was not found" (Drive never
+      // 403s, so it cannot leak the file's existence). Skipped when the backend could not resolve
+      // it - a wrong App ID would break the Picker outright, which is worse.
+      if (appId) {
+        builder.setAppId(appId);
+      }
+      const picker = builder
         .setCallback((data: any) => {
           if (data[google.picker.Response.ACTION] === google.picker.Action.PICKED) {
             const doc = data[google.picker.Response.DOCUMENTS]?.[0];

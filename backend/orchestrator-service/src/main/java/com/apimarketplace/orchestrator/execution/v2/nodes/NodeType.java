@@ -16,6 +16,8 @@ public enum NodeType {
     WAIT,      // Wait/delay - pauses execution for specified duration
     TRANSFORM, // Transform - applies data mappings
     DOWNLOAD_FILE, // Download file from URL and store in S3/MinIO
+    PUBLIC_LINK, // Mint a public, time-limited signed URL for a stored file
+    MEDIA,     // Audio/video processing: probe, mux_audio, mix, extract_audio (renderer component)
     END,
     AGENT,  // AI Agent with LLM + tool calling capabilities
     EXIT,   // Exit - ends execution along this branch (other parallel branches continue)

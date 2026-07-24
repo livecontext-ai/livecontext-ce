@@ -41,7 +41,7 @@ public final class ConceptsHelpProvider {
         result.put("nodeCategories", Map.ofEntries(
             Map.entry("triggers", "Entry points: manual, schedule, webhook, chat, form, table, workflow, error"),
             Map.entry("agents", "AI nodes: agent, classify, guardrail"),
-            Map.entry("cores", "Control flow: decision, switch, loop, split, fork, merge, transform, aggregate, filter, sort, code, approval, wait, exit, stop_on_error, response, http_request, data_input, download_file, sub_workflow, respond_to_webhook, send_email, email_inbox, limit, remove_duplicates, summarize, date_time, crypto_jwt, xml, compression, rss, convert_to_file, extract_from_file, compare_datasets, set, html_extract, task, ssh, sftp, database"),
+            Map.entry("cores", "Control flow: decision, switch, loop, split, fork, merge, transform, aggregate, filter, sort, code, approval, wait, exit, stop_on_error, response, http_request, data_input, download_file, public_link, media, sub_workflow, respond_to_webhook, send_email, email_inbox, limit, remove_duplicates, summarize, date_time, crypto_jwt, xml, compression, rss, convert_to_file, extract_from_file, compare_datasets, set, html_extract, task, ssh, sftp, database"),
             Map.entry("mcps", "External tools via catalog(action='search')"),
             Map.entry("tables", "CRUD: insert_row, find_rows, read_rows, update_row, delete_row. " +
                 "find_rows supports vector similarity search (RAG) via similarity={column, queryVector, topK?, threshold?}"),
@@ -142,6 +142,7 @@ public final class ConceptsHelpProvider {
             "catalog_example", "workflow(action='modify', node='Fetch Tweets', mock={source: 'catalog_example'}) - mcp catalog-tool nodes only: serves the tool's default example response projected to its output schema. No credentials needed, always up to date, nothing to paste.",
             "branch_selection", "workflow(action='modify', node='Check Status', mock={port: 'if'}) - decision/switch/option/approval cores and classify agents take a port instead of (or combined with) an output. Ports: decision if/elseif_N/else, switch case_N/default, option choice_N, approval approved/rejected/timeout, classify category_N.",
             "simulated_failure", "workflow(action='modify', node='Send Email', mock={error: {message: 'Rate limit exceeded', output: {error_code: 429}}}) - marks the node FAILED to exercise error branches, retry policies and continueOnFailure paths.",
+            "simulated_duration", "Add durationMs to ANY mock form (workflow(action='modify', node='Slow Agent', mock={output: {...}, durationMs: 90000})) - the mocked node takes that long before returning, like the real call would, and the run report's execution time reflects it. Milliseconds, 0 to 600000 (10 minutes max). Omit or 0 = instant.",
             "park", "Add enabled=false inside the mock to PARK it (kept but not applied) without deleting it.",
             "clear", "workflow(action='modify', node='Fetch Tweets', mock={}) - removes the mock; the node executes for real again.",
             "inspect", "workflow(action='describe', node='...') shows the node's current mock block."));

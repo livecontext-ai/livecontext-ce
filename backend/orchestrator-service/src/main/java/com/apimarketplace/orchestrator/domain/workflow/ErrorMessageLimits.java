@@ -41,18 +41,23 @@ public final class ErrorMessageLimits {
      */
     public static final int MAX_LENGTH = 16_384;
 
+    /** The U+0000 codepoint - PostgreSQL rejects it in TEXT columns (22P05 class). */
+    private static final char NUL_CHAR = (char) 0;
+    private static final String NUL_STRING = String.valueOf(NUL_CHAR);
+
     private ErrorMessageLimits() {}
 
     /**
      * Truncate a diagnostic message to {@link #MAX_LENGTH} characters when it
      * exceeds the cap, appending a {@code …[truncated, was N chars]} suffix
-     * so the original length stays auditable.
+     * so the original length stays auditable. Also strips the U+0000
+     * codepoint, which PostgreSQL rejects in the TEXT error_message column.
      *
      * <p>Optimised hot path:
      * <ul>
      *   <li>{@code null} → returns {@code null} (no work).</li>
      *   <li>{@code length() <= MAX_LENGTH} → returns the input reference
-     *       unchanged (no allocation, no scan).</li>
+     *       unchanged (no allocation, one indexOf scan for the NUL probe).</li>
      *   <li>Otherwise → single {@link StringBuilder} allocation pre-sized to
      *       {@code MAX_LENGTH} (no growth), one substring copy, one concat.
      *       Total work is bounded by {@code MAX_LENGTH}.</li>
@@ -63,6 +68,14 @@ public final class ErrorMessageLimits {
      */
     public static String truncate(String message) {
         if (message == null) return null;
+        // U+0000 strip: PG can never store NUL in the TEXT error_message column -
+        // a diagnostic that happens to embed the byte (e.g. raw upstream bytes
+        // interpolated into an exception message) would otherwise collapse the
+        // whole step-row INSERT. One indexOf on the hit-free hot path; stripping
+        // is a no-op relative to any achievable persisted state.
+        if (message.indexOf(NUL_CHAR) >= 0) {
+            message = message.replace(NUL_STRING, "");
+        }
         int len = message.length();
         if (len <= MAX_LENGTH) return message;
 

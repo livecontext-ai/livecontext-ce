@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "kind": "table",
+  "meta": {
+    "slug": "task-tracker",
+    "kind": "table",
+    "order": 20,
+    "difficulty": "beginner",
+    "icon": "ListChecks",
+    "runnable": true,
+    "teachesCount": 3,
+    "columnTypes": [
+      "text",
+      "select",
+      "date",
+      "checkbox",
+      "rating"
+    ]
+  },
+  "table": {
+    "columns": [
+      {
+        "nameKey": "templates.table.taskTracker.columns.title",
+        "preset": "text"
+      },
+      {
+        "nameKey": "templates.table.taskTracker.columns.status",
+        "preset": "select"
+      },
+      {
+        "nameKey": "templates.table.taskTracker.columns.dueDate",
+        "preset": "date"
+      },
+      {
+        "nameKey": "templates.table.taskTracker.columns.done",
+        "preset": "checkbox"
+      },
+      {
+        "nameKey": "templates.table.taskTracker.columns.priority",
+        "preset": "rating"
+      }
+    ]
+  }
+}

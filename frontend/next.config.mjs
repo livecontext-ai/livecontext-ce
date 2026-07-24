@@ -145,6 +145,20 @@ const nextConfig = {
         destination: '/not-found',
         permanent: true,
       },
+      // Retired blog slugs, 301 to the post that absorbed them. The blog is
+      // served at /blog (English, canonical) and /<locale>/blog for the five
+      // translated locales, so each retirement needs both shapes. `:locale`
+      // is constrained so this cannot swallow an unrelated path segment.
+      {
+        source: '/blog/small-data-sharp-decisions',
+        destination: '/blog/the-niche-data-advantage',
+        permanent: true,
+      },
+      {
+        source: '/:locale(fr|es|de|pt|zh)/blog/small-data-sharp-decisions',
+        destination: '/:locale/blog/the-niche-data-advantage',
+        permanent: true,
+      },
     ];
   },
 };

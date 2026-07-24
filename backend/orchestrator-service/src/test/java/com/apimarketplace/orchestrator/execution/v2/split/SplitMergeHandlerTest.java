@@ -299,6 +299,80 @@ class SplitMergeHandlerTest {
                 .isEqualTo(1);
         }
 
+        /**
+         * Regression for the root fix (2026-07-16): the merge-scoping ancestor walk used to cap
+         * at a CONSTANT 50 processed nodes, so a split body longer than 50 nodes made the
+         * eligible set PARTIAL and every ancestor beyond the cap was silently excluded from the
+         * durable backfill (its per-item values lost from the aggregate, WARN only). The walk is
+         * now bounded by the actual graph size, so the complete eligible set is computed and no
+         * ancestor goes missing. Fails on the pre-fix constant-50 code (core:n0..core:n9 absent,
+         * nodes_executed 50).
+         */
+        @Test
+        @DisplayName("Regression: a 60-node split body backfills EVERY ancestor from durable - no per-item node silently dropped beyond a 50-node cap")
+        @SuppressWarnings("unchecked")
+        void durableBackfillCoversSplitBodyBeyondFiftyAncestors() {
+            // trigger:manual -> core:split1 -> core:n0 -> ... -> core:n59 -> core:merge1
+            BaseNode trigger = new TestNode("trigger:manual", NodeType.MCP);
+            BaseNode split = new TestNode("core:split1", NodeType.SPLIT);
+            split.addPredecessor("trigger:manual");
+            nodeMap.put("trigger:manual", trigger);
+            nodeMap.put("core:split1", split);
+            int chainLength = 60;
+            for (int i = 0; i < chainLength; i++) {
+                BaseNode n = new TestNode("core:n" + i, NodeType.MCP);
+                n.addPredecessor(i == 0 ? "core:split1" : "core:n" + (i - 1));
+                nodeMap.put("core:n" + i, n);
+            }
+            BaseNode merge = new TestNode("core:merge1", NodeType.MERGE);
+            merge.addPredecessor("core:n" + (chainLength - 1));
+            nodeMap.put("core:merge1", merge);
+
+            // In-memory resultsByNode EMPTY (cross-pod / restart state): EVERY per-item value
+            // must come from the durable store, so an ancestor missing from the eligible set is
+            // observably absent from the aggregate.
+            SplitContext splitContext = SplitContext.create("core:split1:0", List.of("a", "b"));
+
+            com.apimarketplace.orchestrator.services.StepOutputService stepOutputService =
+                org.mockito.Mockito.mock(com.apimarketplace.orchestrator.services.StepOutputService.class);
+            SplitMergeHandler handlerWithDurable = new SplitMergeHandler(contextManager);
+            handlerWithDurable.setStepOutputService(stepOutputService);
+
+            when(contextManager.findActiveContext(eq("run1"), eq("core:merge1"), eq(WORKFLOW_ITEM_INDEX), any()))
+                .thenReturn(Optional.of(splitContext));
+            when(context.itemIndex()).thenReturn(0);
+            when(context.itemId()).thenReturn("item1");
+            when(context.runId()).thenReturn("run1");
+            when(context.epoch()).thenReturn(0);
+            when(context.tenantId()).thenReturn("tenant1");
+
+            Map<String, Map<Integer, Object>> durable = new HashMap<>();
+            for (int i = 0; i < chainLength; i++) {
+                durable.put("core:n" + i, Map.of(
+                    0, Map.of("v", i + "-0"),
+                    1, Map.of("v", i + "-1")));
+            }
+            when(stepOutputService.loadPerItemOutputsByStepKey("run1", 0, "tenant1")).thenReturn(durable);
+
+            NodeExecutionResult result =
+                handlerWithDurable.handleMerge("run1", "core:merge1", WORKFLOW_ITEM_INDEX, context, nodeMap);
+
+            Map<String, Object> aggregated = (Map<String, Object>) result.output().get("aggregated_results");
+            for (int i = 0; i < chainLength; i++) {
+                assertThat(aggregated)
+                    .as("every split-subgraph ancestor must be in the aggregate; core:n" + i
+                      + " missing means the walk bound silently dropped it")
+                    .containsKey("core:n" + i);
+            }
+            // The node FURTHEST from the merge is the one a truncated merge walk loses first.
+            assertThat((List<Object>) aggregated.get("core:n0"))
+                .as("core:n0 keeps its own per-item values, recovered from the durable store")
+                .containsExactly(Map.of("v", "0-0"), Map.of("v", "0-1"));
+            assertThat(aggregated.get("nodes_executed"))
+                .as("all 60 split-subgraph nodes folded in, none dropped beyond a cap")
+                .isEqualTo(60);
+        }
+
         @Test
         @DisplayName("should include original items in output")
         void shouldIncludeOriginalItems() {
@@ -419,6 +493,36 @@ class SplitMergeHandlerTest {
             nodeMap.put("core:merge", mergeNode);
 
             assertThat(handler.isBranchRejoinMerge("core:merge", nodeMap)).isTrue();
+        }
+
+        /**
+         * Latent bug fixed in passing by the 2026-07-15 ancestor-walk refactor: the BFS used to
+         * resolve a null predecessor id to null and ADD it to the ancestor set. Two predecessors
+         * each carrying a null pred therefore "shared" null as a common ancestor, and the
+         * split-node filter could not drop it (nodeMap.get(null) is null, so the removeIf guard
+         * `ancestorNode != null` is false and null survives) - yielding a bogus branch-rejoin for
+         * two genuinely unrelated paths. The walk now skips null ids at the source.
+         */
+        @Test
+        @DisplayName("Regression: a null predecessor id is not collected as a common ancestor (no bogus branch-rejoin)")
+        void shouldNotTreatNullPredecessorAsCommonAncestor() {
+            // Two unrelated paths, each with a null predecessor id and no real shared ancestor.
+            BaseNode stepA = new TestNode("mcp:a", NodeType.MCP);
+            stepA.addPredecessor(null);
+            BaseNode stepB = new TestNode("mcp:b", NodeType.MCP);
+            stepB.addPredecessor(null);
+
+            BaseNode mergeNode = new TestNode("core:merge", NodeType.MERGE);
+            mergeNode.addPredecessor("mcp:a");
+            mergeNode.addPredecessor("mcp:b");
+
+            nodeMap.put("mcp:a", stepA);
+            nodeMap.put("mcp:b", stepB);
+            nodeMap.put("core:merge", mergeNode);
+
+            assertThat(handler.isBranchRejoinMerge("core:merge", nodeMap))
+                .as("null is not a real shared ancestor: these paths do not rejoin a branch")
+                .isFalse();
         }
 
         @Test
@@ -565,6 +669,43 @@ class SplitMergeHandlerTest {
             assertThat(handler.isBranchRejoinMerge("core:merge", nodeMap)).isTrue();
         }
 
+        /**
+         * Regression pin for the third consumer of the graph-size walk bound (2026-07-16):
+         * classification of a merge as branch-rejoin vs split-aggregation intersects the ancestor
+         * CLOSURES of its predecessors. With the old constant 50-node cap, a common ancestor
+         * deeper than 50 nodes in each branch was never reached, the closures intersected to
+         * empty, and a genuine branch-rejoin was MISCLASSIFIED as a split-aggregation. The
+         * graph-size bound walks the full closure, so the deep common ancestor is found and the
+         * classification is topologically correct on plans of any size. Fails on the pre-fix
+         * constant-50 code (returns false).
+         */
+        @Test
+        @DisplayName("Regression: a common ancestor 60 nodes deep in BOTH branches is still found -> branch-rejoin correctly classified on a >50-node plan")
+        void shouldDetectBranchRejoinWithCommonAncestorBeyondFiftyNodes() {
+            // classify -> a0 -> ... -> a59 -> merge
+            // classify -> b0 -> ... -> b59 -> merge
+            // The only shared ancestor (classify) sits 60 hops behind each merge predecessor.
+            BaseNode classify = new TestNode("agent:classify", NodeType.MCP);
+            nodeMap.put("agent:classify", classify);
+            int depth = 60;
+            for (String branch : List.of("a", "b")) {
+                for (int i = 0; i < depth; i++) {
+                    BaseNode n = new TestNode("mcp:" + branch + i, NodeType.MCP);
+                    n.addPredecessor(i == 0 ? "agent:classify" : "mcp:" + branch + (i - 1));
+                    nodeMap.put("mcp:" + branch + i, n);
+                }
+            }
+            BaseNode mergeNode = new TestNode("core:merge", NodeType.MERGE);
+            mergeNode.addPredecessor("mcp:a" + (depth - 1));
+            mergeNode.addPredecessor("mcp:b" + (depth - 1));
+            nodeMap.put("core:merge", mergeNode);
+
+            assertThat(handler.isBranchRejoinMerge("core:merge", nodeMap))
+                .as("the full-closure walk reaches agent:classify 60 hops back in both branches; "
+                  + "a 50-capped walk missed it and misclassified this rejoin as an aggregation")
+                .isTrue();
+        }
+
         @Test
         @DisplayName("should return false when merge node not in nodeMap")
         void shouldReturnFalseWhenMergeNodeNotInNodeMap() {
@@ -640,6 +781,80 @@ class SplitMergeHandlerTest {
 
             // classify is non-split common ancestor → IS branch-rejoin
             assertThat(handler.isBranchRejoinMerge("core:merge", nodeMap)).isTrue();
+        }
+    }
+
+    @Nested
+    @DisplayName("collectTransitiveAncestors() graph-size bound")
+    class CollectTransitiveAncestorsBound {
+
+        /**
+         * Regression for the root fix (2026-07-16): the walk's processing bound was a CONSTANT
+         * 50, smaller than legitimate large workflows, so a real 60-node chain truncated. The
+         * bound is now {@code max(50, nodeMap.size() + 1)}; with the visited-dedup each distinct
+         * node is processed at most once, so a plan whose predecessors all resolve in the nodeMap
+         * can never exhaust it. Fails on the pre-fix constant-50 code (truncated=true, 50
+         * ancestors).
+         */
+        @Test
+        @DisplayName("Regression: a 60-node chain with a FULL nodeMap is never truncated and returns every ancestor")
+        void fullNodeMapChainOfSixtyIsNeverTruncated() {
+            // core:n0 <- core:n1 <- ... <- core:n59 <- core:reader, all resolvable.
+            int chainLength = 60;
+            for (int i = 0; i < chainLength; i++) {
+                BaseNode n = new TestNode("core:n" + i, NodeType.MCP);
+                if (i > 0) {
+                    n.addPredecessor("core:n" + (i - 1));
+                }
+                nodeMap.put("core:n" + i, n);
+            }
+            BaseNode reader = new TestNode("core:reader", NodeType.MCP);
+            reader.addPredecessor("core:n" + (chainLength - 1));
+            nodeMap.put("core:reader", reader);
+
+            SplitMergeHandler.AncestorWalk walk = SplitMergeHandler.collectTransitiveAncestors(
+                "core:reader", nodeMap, java.util.Set.of());
+
+            assertThat(walk.truncated())
+                .as("visited-dedup + a bound >= the graph size: truncation is unreachable on a "
+                  + "real plan, whatever its length")
+                .isFalse();
+            assertThat(walk.ancestors())
+                .as("the COMPLETE ancestor set, including the node furthest from the start")
+                .hasSize(chainLength)
+                .contains("core:n0", "core:n59");
+        }
+
+        /**
+         * Defensive net kept alive: the truncated flag must still fire when the bound is
+         * genuinely exceeded. A real plan cannot do that (every distinct resolvable node is
+         * processed at most once), so the only trigger is a pathological input: predecessor
+         * lists referencing more distinct ids than the nodeMap resolves. Unresolvable ids ARE
+         * enqueued and counted (they just cannot expand), so 60 of them on a 1-node map exceed
+         * the 50 floor.
+         */
+        @Test
+        @DisplayName("Defensive net: 60 unresolvable predecessor ids on a tiny nodeMap exceed the 50 floor -> truncated=true with a partial set")
+        void pathologicalUnresolvableFanInStillTruncates() {
+            BaseNode reader = new TestNode("core:reader", NodeType.MCP);
+            int fanIn = 60;
+            for (int i = 0; i < fanIn; i++) {
+                reader.addPredecessor("core:ghost" + i);
+            }
+            nodeMap.put("core:reader", reader);
+            // Bound = max(50, 1 + 1) = 50: the floor holds, it does not shrink with the map.
+
+            SplitMergeHandler.AncestorWalk walk = SplitMergeHandler.collectTransitiveAncestors(
+                "core:reader", nodeMap, java.util.Set.of());
+
+            assertThat(walk.truncated())
+                .as("60 distinct enqueued ids against the 50 floor: the walk stops with work "
+                  + "still queued and must say so")
+                .isTrue();
+            assertThat(walk.ancestors())
+                .as("exactly the floor's worth of ancestors was processed - proving the floor "
+                  + "did not collapse to nodeMap.size() + 1 = 2")
+                .hasSize(50);
         }
     }
 

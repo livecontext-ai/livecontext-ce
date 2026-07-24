@@ -128,6 +128,18 @@ public class WorkflowEntity implements OrgScopedEntity {
     @Column(name = "production_run_id")
     private UUID productionRunId;
 
+    /**
+     * Optional cost budget for this workflow / application, in credits
+     * (1 credit = $0.001). {@code null} = no budget. Edited in the "Advanced"
+     * section of the workflow settings modal. Enforced at the epoch boundary:
+     * once a run's accumulated cost across all epochs reaches this budget, no
+     * NEW epoch is allowed to start (the in-flight epoch still finishes) - see
+     * {@code ReusableTriggerService}. The CE edition shows this as dollars, the
+     * cloud edition as credits (frontend display concern).
+     */
+    @Column(name = "budget_credits", precision = 15, scale = 4)
+    private java.math.BigDecimal budgetCredits;
+
     public enum WorkflowStatus {
         ACTIVE, INACTIVE, DRAFT, ARCHIVED
     }
@@ -390,6 +402,14 @@ public class WorkflowEntity implements OrgScopedEntity {
 
     public void setProductionRunId(UUID productionRunId) {
         this.productionRunId = productionRunId;
+    }
+
+    public java.math.BigDecimal getBudgetCredits() {
+        return budgetCredits;
+    }
+
+    public void setBudgetCredits(java.math.BigDecimal budgetCredits) {
+        this.budgetCredits = budgetCredits;
     }
 
     @PrePersist

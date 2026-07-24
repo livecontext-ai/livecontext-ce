@@ -27,8 +27,14 @@ vi.mock('next-intl', () => ({
   useTranslations: () => (key: string) => key,
   useLocale: () => 'en',
 }));
+// The tab / type filter are query-param backed (useQueryParamState), so tests
+// drive them by mutating this state instead of clicking chips.
+const searchParamsState = vi.hoisted(() => ({ params: new URLSearchParams() }));
+const routerMock = vi.hoisted(() => ({ replace: vi.fn(), push: vi.fn() }));
 vi.mock('next/navigation', () => ({
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => searchParamsState.params,
+  usePathname: () => '/app/marketplace',
+  useRouter: () => routerMock,
 }));
 vi.mock('@tanstack/react-query', () => ({
   useQueryClient: () => ({ invalidateQueries: vi.fn().mockResolvedValue(undefined) }),
@@ -143,8 +149,18 @@ function card(pubId: string): HTMLElement {
   return match;
 }
 
+const AGENT_PUB = {
+  id: 'pub-agent-1',
+  title: 'Wired Agent',
+  displayMode: 'AGENT',
+  publicationType: 'AGENT',
+  creditsPerUse: 0,
+  publisherId: '999',
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
+  searchParamsState.params = new URLSearchParams();
   orgResetCallbacks.list = [];
   useMarketplaceInstallStore.setState({ active: null });
   orchestratorApiMock.getMarketplacePublications.mockResolvedValue({
@@ -188,10 +204,10 @@ describe('ExploreTab - inline install wiring', () => {
     expect(card('pub-app-2')).toHaveAttribute('data-is-acquired', 'false');
     expect(card('pub-app-2')).toHaveAttribute('data-open-href', '');
     // Acquired set refreshed, then the success consumed (store released).
-    // getAcquiredApplications is called once on mount and once by the success
-    // effect - assert the effect's refetch happened.
+    // getPurchases is called once on mount and once by the success effect -
+    // assert the effect's refetch happened.
     await waitFor(() => {
-      expect(publicationServiceMock.getAcquiredApplications.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(publicationServiceMock.getPurchases.mock.calls.length).toBeGreaterThanOrEqual(2);
     });
     await waitFor(() => {
       expect(useMarketplaceInstallStore.getState().active).toBeNull();
@@ -237,8 +253,8 @@ describe('ExploreTab - inline install wiring', () => {
     // Hold that refetch open, start install B in the meantime, then resolve:
     // B's machine must survive (clear() instead of consumeSuccess would kill it).
     let resolveRefetch: (v: unknown) => void = () => {};
-    publicationServiceMock.getAcquiredApplications
-      .mockResolvedValueOnce({ applications: [] }) // initial mount fetch
+    publicationServiceMock.getPurchases
+      .mockResolvedValueOnce({ purchases: [] }) // initial mount fetch
       .mockImplementationOnce(() => new Promise((r) => { resolveRefetch = r; })); // success-effect refetch, held open
     useMarketplaceInstallStore.setState({
       active: activeInstall({ status: 'success', progress: 100, acquiredId: 'wf-1' }),
@@ -247,7 +263,7 @@ describe('ExploreTab - inline install wiring', () => {
     render(<MarketplacePage />);
     await screen.findByText('Wired App');
     await waitFor(() => {
-      expect(publicationServiceMock.getAcquiredApplications.mock.calls.length).toBe(2);
+      expect(publicationServiceMock.getPurchases.mock.calls.length).toBe(2);
     });
 
     // Install B starts while A's refetch is still in flight.
@@ -291,9 +307,13 @@ describe('MyPurchasesTab - inline install wiring', () => {
     publication: { ...APP_PUB, status: 'ACTIVE' },
   };
 
+  // The active tab lives in the URL now, and the mocked router does not
+  // navigate, so a click on the tab button would leave the page on Explore -
+  // where the same publication also renders, silently testing the wrong tab.
+  // Deep-link instead; the click-writes-the-URL half is covered in the query-param suite below.
   async function openPurchasesTab() {
+    searchParamsState.params = new URLSearchParams('tab=purchases');
     render(<MarketplacePage />);
-    fireEvent.click(await screen.findByText('tabMyPurchases'));
     await screen.findByText('Wired App');
   }
 
@@ -347,5 +367,218 @@ describe('MyPurchasesTab - inline install wiring', () => {
       expect(useMarketplaceInstallStore.getState().active).toBeNull();
     });
     expect(card('pub-app-1')).toHaveAttribute('data-open-href', '/app/applications/pub-app-1');
+  });
+});
+
+describe('ExploreTab - installed badge covers every publication type', () => {
+  // Regression: the installed set was built from getAcquiredApplications, which
+  // lists acquired APPLICATION workflows only. Installing an AGENT produces no
+  // APPLICATION clone, so its publication id was never in the set and the card
+  // kept offering "Install" after a successful install. The set now comes from
+  // the receipts (getPurchases), which are written for every type.
+  beforeEach(() => {
+    searchParamsState.params = new URLSearchParams('type=agents');
+    orchestratorApiMock.getMarketplacePublications.mockResolvedValue({
+      publications: [AGENT_PUB, { ...AGENT_PUB, id: 'pub-agent-2', title: 'Other Agent' }],
+    });
+  });
+
+  it('marks an installed AGENT publication as acquired from its receipt', async () => {
+    publicationServiceMock.getPurchases.mockResolvedValue({
+      purchases: [{
+        publicationId: 'pub-agent-1',
+        creditsPaid: 0,
+        acquiredAt: '2026-07-20T00:00:00Z',
+        // APPLICATION-only field: false for an agent, and deliberately NOT the
+        // signal we key on - keying on it would reintroduce the same blind spot.
+        hasActiveWorkflow: false,
+        publication: { id: 'pub-agent-1', displayMode: 'AGENT' },
+      }],
+    });
+
+    render(<MarketplacePage />);
+    await screen.findByText('Wired Agent');
+
+    await waitFor(() => {
+      expect(card('pub-agent-1')).toHaveAttribute('data-is-acquired', 'true');
+    });
+    // The un-installed sibling is untouched.
+    expect(card('pub-agent-2')).toHaveAttribute('data-is-acquired', 'false');
+  });
+
+  it('an untyped receipt (publisher hard-deleted the publication) is skipped, not guessed', async () => {
+    // Without the nested publication we cannot tell a clone-backed type from an
+    // agent, so the receipt defaults to WORKFLOW and takes the conservative
+    // clone-backed path. Such a publication is delisted anyway, so the only
+    // visible effect is that we never invent an Installed badge for it.
+    publicationServiceMock.getPurchases.mockResolvedValue({
+      purchases: [{
+        publicationId: 'pub-agent-1',
+        creditsPaid: 0,
+        acquiredAt: '2026-07-20T00:00:00Z',
+        hasActiveWorkflow: false,
+        publication: null,
+      }],
+    });
+
+    render(<MarketplacePage />);
+    await screen.findByText('Wired Agent');
+
+    await waitFor(() => {
+      expect(publicationServiceMock.getPurchases).toHaveBeenCalled();
+    });
+    expect(card('pub-agent-1')).toHaveAttribute('data-is-acquired', 'false');
+  });
+
+  it('an agent with no receipt stays installable', async () => {
+    publicationServiceMock.getPurchases.mockResolvedValue({ purchases: [] });
+
+    render(<MarketplacePage />);
+    await screen.findByText('Wired Agent');
+
+    await waitFor(() => {
+      expect(publicationServiceMock.getPurchases).toHaveBeenCalled();
+    });
+    expect(card('pub-agent-1')).toHaveAttribute('data-is-acquired', 'false');
+  });
+});
+
+describe('ExploreTab - applications keep their live-clone semantics', () => {
+  // The receipt is permanent: it survives deleting the installed clone and it
+  // is not filtered by the org per-member restriction deny-list. So an
+  // APPLICATION must NOT be marked installed from its receipt alone, or a
+  // deleted clone would show "Installed" with an Open link pointing at nothing.
+  // /publications/acquired is derived from the live clone and applies the
+  // deny-list, so applications stay on it.
+  it('Regression - a receipt WITHOUT a live clone does not mark an application installed', async () => {
+    publicationServiceMock.getAcquiredApplications.mockResolvedValue({ applications: [] });
+    publicationServiceMock.getPurchases.mockResolvedValue({
+      purchases: [{
+        publicationId: 'pub-app-1',
+        creditsPaid: 0,
+        acquiredAt: '2026-07-20T00:00:00Z',
+        hasActiveWorkflow: false,
+        publication: { id: 'pub-app-1', displayMode: 'APPLICATION' },
+      }],
+    });
+
+    render(<MarketplacePage />);
+    await screen.findByText('Wired App');
+
+    await waitFor(() => {
+      expect(publicationServiceMock.getAcquiredApplications).toHaveBeenCalled();
+    });
+    expect(card('pub-app-1')).toHaveAttribute('data-is-acquired', 'false');
+    expect(card('pub-app-1')).toHaveAttribute('data-open-href', '');
+  });
+
+  it('an application with a live clone is still marked installed', async () => {
+    publicationServiceMock.getAcquiredApplications.mockResolvedValue({
+      applications: [{ sourcePublicationId: 'pub-app-1', workflowId: 'wf-1' }],
+    });
+
+    render(<MarketplacePage />);
+    await screen.findByText('Wired App');
+
+    await waitFor(() => {
+      expect(card('pub-app-1')).toHaveAttribute('data-is-acquired', 'true');
+    });
+    expect(card('pub-app-1')).toHaveAttribute('data-open-href', '/app/applications/pub-app-1');
+  });
+});
+
+describe('Marketplace - tab and type filter survive a round trip (query params)', () => {
+  // Regression: both were plain useState, so opening an agent and coming back
+  // remounted the page on Explore/Applications and the agent was off screen.
+  it('renders the agent grid straight from ?type=agents', async () => {
+    searchParamsState.params = new URLSearchParams('type=agents');
+    orchestratorApiMock.getMarketplacePublications.mockResolvedValue({
+      publications: [AGENT_PUB, APP_PUB],
+    });
+
+    render(<MarketplacePage />);
+
+    // The agent shows, the application is filtered out - i.e. the deep link
+    // selected the Agents chip without any click.
+    await screen.findByText('Wired Agent');
+    expect(screen.queryByText('Wired App')).not.toBeInTheDocument();
+  });
+
+  it('writes the selected type into the URL so a return trip can restore it', async () => {
+    orchestratorApiMock.getMarketplacePublications.mockResolvedValue({
+      publications: [APP_PUB],
+    });
+
+    render(<MarketplacePage />);
+    await screen.findByText('Wired App');
+
+    fireEvent.click(screen.getByRole('button', { name: /agents/i }));
+
+    expect(routerMock.replace).toHaveBeenCalledWith(
+      '/app/marketplace?type=agents',
+      { scroll: false },
+    );
+  });
+});
+
+describe('Marketplace - tab is query-param backed too', () => {
+  it('opens My Purchases straight from ?tab=purchases', async () => {
+    searchParamsState.params = new URLSearchParams('tab=purchases');
+    publicationServiceMock.getPurchases.mockResolvedValue({ purchases: [] });
+
+    render(<MarketplacePage />);
+
+    // The purchases tab owns this fetch; Explore's grid must not be showing.
+    await waitFor(() => {
+      expect(publicationServiceMock.getPurchases).toHaveBeenCalled();
+    });
+    expect(screen.queryByText('Wired App')).not.toBeInTheDocument();
+  });
+
+  it('tab and type coexist without clobbering each other', async () => {
+    searchParamsState.params = new URLSearchParams('tab=explore&type=agents');
+    orchestratorApiMock.getMarketplacePublications.mockResolvedValue({
+      publications: [AGENT_PUB],
+    });
+
+    render(<MarketplacePage />);
+    await screen.findByText('Wired Agent');
+
+    // Selecting the fallback tab drops only `tab` and preserves `type`.
+    fireEvent.click(screen.getByText('tabExplore'));
+    expect(routerMock.replace).toHaveBeenCalledWith(
+      '/app/marketplace?type=agents',
+      { scroll: false },
+    );
+  });
+
+  it('clicking My Purchases writes ?tab=purchases', async () => {
+    orchestratorApiMock.getMarketplacePublications.mockResolvedValue({
+      publications: [APP_PUB],
+    });
+
+    render(<MarketplacePage />);
+    await screen.findByText('Wired App');
+
+    fireEvent.click(screen.getByText('tabMyPurchases'));
+
+    expect(routerMock.replace).toHaveBeenCalledWith(
+      '/app/marketplace?tab=purchases',
+      { scroll: false },
+    );
+  });
+
+  it('selecting the default type drops the param instead of writing type=apps', async () => {
+    searchParamsState.params = new URLSearchParams('type=agents');
+    orchestratorApiMock.getMarketplacePublications.mockResolvedValue({
+      publications: [AGENT_PUB],
+    });
+
+    render(<MarketplacePage />);
+    await screen.findByText('Wired Agent');
+
+    fireEvent.click(screen.getByRole('button', { name: /applications/i }));
+
+    expect(routerMock.replace).toHaveBeenCalledWith('/app/marketplace', { scroll: false });
   });
 });

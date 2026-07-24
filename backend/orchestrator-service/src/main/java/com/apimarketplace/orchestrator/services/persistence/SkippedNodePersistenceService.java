@@ -4,6 +4,7 @@ import com.apimarketplace.common.web.TenantResolver;
 import com.apimarketplace.orchestrator.domain.WorkflowStepDataEntity;
 import com.apimarketplace.orchestrator.domain.execution.NodeType;
 import com.apimarketplace.orchestrator.domain.workflow.Core;
+import com.apimarketplace.orchestrator.domain.workflow.ErrorMessageLimits;
 import com.apimarketplace.orchestrator.domain.workflow.WorkflowExecution;
 import com.apimarketplace.orchestrator.persistence.StepDataNativeRepository;
 import com.apimarketplace.orchestrator.utils.LabelNormalizer;
@@ -164,6 +165,19 @@ public class SkippedNodePersistenceService {
             UUID storageId = stepPayloadService.persistSkippedNodePayload(
                     execution.getPlan().getTenantId(), skipPayload, currentEpoch);
             entity.setOutputStorageId(storageId);
+
+            // Row truth for the SKIPPED sibling: pre-fix a null storageId was
+            // swallowed with no stamp at all - the row landed SKIPPED with a
+            // silently missing payload blob. The status stays SKIPPED (a skip
+            // is not a failure; the payload is a synthetic skip envelope, not
+            // node output), but the loss is stamped on error_message so it is
+            // visible instead of silent.
+            if (storageId == null) {
+                entity.setErrorMessage(ErrorMessageLimits.truncate(
+                        "[storage] Skip payload persist failed - skip details blob unavailable. See logs for cause."));
+                logger.error("Skip payload missing on SKIPPED step row - stamping error_message: runId={} nodeId={}",
+                        runId, nodeId);
+            }
 
             // Persist to database using ON CONFLICT DO NOTHING
             boolean inserted = nativeRepository.insertIgnoringDuplicate(entity);

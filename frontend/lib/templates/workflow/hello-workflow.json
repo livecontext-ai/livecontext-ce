@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 1,
+  "kind": "workflow",
+  "meta": {
+    "slug": "hello-workflow",
+    "kind": "workflow",
+    "order": 10,
+    "difficulty": "beginner",
+    "icon": "Play",
+    "runnable": true,
+    "teachesCount": 3,
+    "nodeKinds": [
+      "manual",
+      "transform"
+    ]
+  },
+  "plan": {
+    "triggers": [
+      {
+        "id": "trigger-1",
+        "type": "manual",
+        "label": "Start",
+        "position": {
+          "x": 120,
+          "y": 260
+        },
+        "params": {}
+      }
+    ],
+    "mcps": [],
+    "cores": [
+      {
+        "id": "core-1",
+        "type": "transform",
+        "label": "Build greeting",
+        "position": {
+          "x": 520,
+          "y": 260
+        },
+        "transform": {
+          "mappings": [
+            {
+              "label": "greeting",
+              "expression": "Hello from {{trigger:start.output.triggered_by}}"
+            },
+            {
+              "label": "run_time",
+              "expression": "{{trigger:start.output.triggered_at}}"
+            }
+          ]
+        }
+      }
+    ],
+    "notes": [
+      {
+        "id": "note-trigger",
+        "type": "note",
+        "label": "templates.workflow.helloWorkflow.notes.trigger.label",
+        "text": "templates.workflow.helloWorkflow.notes.trigger.text",
+        "color": "#fef3c7",
+        "borderColor": "#fbbf24",
+        "textColor": "#92400e",
+        "width": 300,
+        "height": 150,
+        "position": {
+          "x": 60,
+          "y": 40
+        }
+      },
+      {
+        "id": "note-label",
+        "type": "note",
+        "label": "templates.workflow.helloWorkflow.notes.label.label",
+        "text": "templates.workflow.helloWorkflow.notes.label.text",
+        "color": "#dbeafe",
+        "borderColor": "#3b82f6",
+        "textColor": "#1e40af",
+        "width": 320,
+        "height": 190,
+        "position": {
+          "x": 460,
+          "y": 20
+        }
+      },
+      {
+        "id": "note-output",
+        "type": "note",
+        "label": "templates.workflow.helloWorkflow.notes.output.label",
+        "text": "templates.workflow.helloWorkflow.notes.output.text",
+        "color": "#d1fae5",
+        "borderColor": "#10b981",
+        "textColor": "#065f46",
+        "width": 320,
+        "height": 160,
+        "position": {
+          "x": 460,
+          "y": 440
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "trigger:start",
+        "to": "core:build_greeting"
+      }
+    ]
+  }
+}

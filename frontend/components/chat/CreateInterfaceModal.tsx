@@ -9,6 +9,8 @@ import { InterfaceThumbnail } from '@/app/workflows/builder/components/interface
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { orchestratorApi } from '@/lib/api/orchestrator';
 import { useTranslations } from 'next-intl';
+import { normalizeInterfaceFormat, resolveInterfaceFormat } from '@/lib/interfaces/interfaceFormats';
+import { InterfaceFormatSelect } from '@/components/interfaces/InterfaceFormatSelect';
 import {
   Layout, ArrowRight, ArrowLeft, Check, Code, FileText
 } from 'lucide-react';
@@ -77,6 +79,7 @@ interface InterfaceData {
   htmlTemplate?: string;
   cssTemplate?: string;
   jsTemplate?: string;
+  format?: string | null;
   isPublic?: boolean;
   isActive?: boolean;
 }
@@ -106,6 +109,16 @@ export const CreateInterfaceModal: React.FC<CreateInterfaceModalProps> = ({
   const [htmlTemplate, setHtmlTemplate] = useState(interfaceData?.htmlTemplate || '');
   const [cssTemplate, setCssTemplate] = useState(interfaceData?.cssTemplate || '');
   const [jsTemplate, setJsTemplate] = useState(interfaceData?.jsTemplate || '');
+
+  // Step 2: Format - the shape this interface is designed for. null = Auto (no declared
+  // shape): the screenshot is then a FULL-PAGE capture, which is what a tall dashboard wants.
+  // It is NOT the `classic` preset (an exact 1280x800 frame that crops below the fold), so the
+  // control must never default to a preset.
+  const [effectiveFormat, setEffectiveFormat] = useState<string | null>(
+    normalizeInterfaceFormat(interfaceData?.format),
+  );
+  const [isCustomFormatInvalid, setIsCustomFormatInvalid] = useState(false);
+  const formatViewport = resolveInterfaceFormat(effectiveFormat);
 
   // UI state
   const [isSaving, setIsSaving] = useState(false);
@@ -146,6 +159,10 @@ export const CreateInterfaceModal: React.FC<CreateInterfaceModalProps> = ({
   // Save handler
   const handleSave = async () => {
     if (!name.trim()) return;
+    // An unusable custom size must never be saved: it normalises to null, which would CLEAR the
+    // interface's shape - the opposite of what the user typed. The select surfaces the error
+    // itself; this just refuses the write.
+    if (isCustomFormatInvalid) return;
 
     try {
       setIsSaving(true);
@@ -166,6 +183,9 @@ export const CreateInterfaceModal: React.FC<CreateInterfaceModalProps> = ({
       if (jsTemplate.trim()) {
         payload.jsTemplate = jsTemplate.trim();
       }
+      // Always sent, including as null: the REST layer reads the KEY's presence, so omitting it
+      // would make "back to Auto" impossible.
+      payload.format = effectiveFormat;
 
       if (isEditMode && interfaceData?.id) {
         await orchestratorApi.updateInterface(interfaceData.id, payload);
@@ -257,18 +277,39 @@ export const CreateInterfaceModal: React.FC<CreateInterfaceModalProps> = ({
             <div className="flex flex-1 h-full animate-in fade-in-0 slide-in-from-right-4 duration-300">
               {/* Left column: Editors (scrollable) */}
               <div className="w-1/2 overflow-y-auto px-6 pb-4 border-r border-theme">
-                <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-4 min-h-full pb-2">
+                  {/* Format - the shape this interface is designed for. Drives every preview,
+                      screenshot and video of it, so it sits above the code it constrains. */}
+                  <div>
+                    <label htmlFor="interface-format-select" className="block text-sm font-medium text-theme-primary mb-2">
+                      {t('formatLabel')}
+                    </label>
+                    <InterfaceFormatSelect
+                      // The state, not the prop: `effectiveFormat` is what gets saved, so feeding
+                      // the control anything else lets the two drift apart silently.
+                      value={effectiveFormat}
+                      onChange={setEffectiveFormat}
+                      onValidityChange={setIsCustomFormatInvalid}
+                    />
+                  </div>
+
                   {/* HTML Template */}
                   <div>
                     <label className="block text-sm font-medium text-theme-primary mb-2">
                       {t('htmlTemplateLabel')}
                     </label>
-                    <ExpressionEditor
-                      value={htmlTemplate}
-                      onChange={setHtmlTemplate}
-                      placeholder={t('htmlTemplatePlaceholder')}
-                      className="w-full min-h-[200px]"
-                    />
+                    {/* fullHeight + a sized parent is the only way to get a tall editor here:
+                        by default ExpressionEditor hugs its content and hard-caps at 200px, so a
+                        min-h class on it is overridden and the box stays tiny. */}
+                    <div className="h-[340px]">
+                      <ExpressionEditor
+                        value={htmlTemplate}
+                        onChange={setHtmlTemplate}
+                        placeholder={t('htmlTemplatePlaceholder')}
+                        fullHeight
+                        className="w-full"
+                      />
+                    </div>
                   </div>
 
                   {/* CSS Template */}
@@ -276,12 +317,15 @@ export const CreateInterfaceModal: React.FC<CreateInterfaceModalProps> = ({
                     <label className="block text-sm font-medium text-theme-primary mb-2">
                       {t('cssTemplateLabel')}
                     </label>
-                    <ExpressionEditor
-                      value={cssTemplate}
-                      onChange={setCssTemplate}
-                      placeholder={t('cssTemplatePlaceholder')}
-                      className="w-full min-h-[120px]"
-                    />
+                    <div className="h-[220px]">
+                      <ExpressionEditor
+                        value={cssTemplate}
+                        onChange={setCssTemplate}
+                        placeholder={t('cssTemplatePlaceholder')}
+                        fullHeight
+                        className="w-full"
+                      />
+                    </div>
                   </div>
 
                   {/* JS Template */}
@@ -289,12 +333,15 @@ export const CreateInterfaceModal: React.FC<CreateInterfaceModalProps> = ({
                     <label className="block text-sm font-medium text-theme-primary mb-2">
                       {t('jsTemplateLabel')}
                     </label>
-                    <ExpressionEditor
-                      value={jsTemplate}
-                      onChange={setJsTemplate}
-                      placeholder={t('jsTemplatePlaceholder')}
-                      className="w-full min-h-[120px]"
-                    />
+                    <div className="h-[220px]">
+                      <ExpressionEditor
+                        value={jsTemplate}
+                        onChange={setJsTemplate}
+                        placeholder={t('jsTemplatePlaceholder')}
+                        fullHeight
+                        className="w-full"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -303,12 +350,28 @@ export const CreateInterfaceModal: React.FC<CreateInterfaceModalProps> = ({
               <div className="w-1/2 flex flex-col overflow-hidden p-4">
                 <div className="w-full rounded-xl border border-theme overflow-hidden">
                   {htmlTemplate?.trim() ? (
-                    <InterfaceThumbnail
-                      htmlTemplate={htmlTemplate}
-                      mode="edit"
-                      customCss={cssTemplate || undefined}
-                      jsTemplate={jsTemplate || undefined}
-                    />
+                    // With a format, preview at its exact aspect ratio so the author sees the
+                    // real shape (and fold) while writing. Without one, keep the natural
+                    // width-fit preview of a full page.
+                    formatViewport ? (
+                      <div style={{ aspectRatio: `${formatViewport.width} / ${formatViewport.height}` }}>
+                        <InterfaceThumbnail
+                          htmlTemplate={htmlTemplate}
+                          mode="edit"
+                          customCss={cssTemplate || undefined}
+                          jsTemplate={jsTemplate || undefined}
+                          fit="contain"
+                          viewport={formatViewport}
+                        />
+                      </div>
+                    ) : (
+                      <InterfaceThumbnail
+                        htmlTemplate={htmlTemplate}
+                        mode="edit"
+                        customCss={cssTemplate || undefined}
+                        jsTemplate={jsTemplate || undefined}
+                      />
+                    )
                   ) : (
                     <div className="flex items-center justify-center text-theme-secondary text-sm" style={{ aspectRatio: '16 / 10' }}>
                       No HTML template available
@@ -341,7 +404,13 @@ export const CreateInterfaceModal: React.FC<CreateInterfaceModalProps> = ({
                 <ArrowRight className="h-4 w-4 ml-2" />
               </Button>
             ) : (
-              <Button onClick={handleSave} disabled={!name.trim() || isSaving}>
+              <Button
+                onClick={handleSave}
+                // isCustomFormatInvalid belongs here, not only in handleSave: an unusable custom
+                // size makes the write refuse, so an enabled button would just no-op silently.
+                // Matches the inspector's Save.
+                disabled={!name.trim() || isSaving || isCustomFormatInvalid}
+              >
                 {isSaving ? (
                   <>
                     <LoadingSpinner size="xs" className="mr-2" />

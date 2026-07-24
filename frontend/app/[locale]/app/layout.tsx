@@ -7,6 +7,7 @@ import { StreamingProvider } from '@/contexts/StreamingContext';
 import { WorkflowRunProvider } from '@/contexts/WorkflowRunContext';
 import { SidePanelProvider } from '@/contexts/SidePanelContext';
 import { SidePanelLayoutProvider } from '@/contexts/SidePanelLayoutContext';
+import { WorkflowLayoutDirectionProvider } from '@/contexts/WorkflowLayoutDirectionContext';
 import { AppShell } from './AppShell';
 import InsufficientCreditsModal from '@/components/billing/InsufficientCreditsModal';
 import InsufficientStorageModal from '@/components/billing/InsufficientStorageModal';
@@ -41,6 +42,7 @@ export default function AppLayout({
           <WorkflowRunProvider>
               <SidePanelProvider>
                 <SidePanelLayoutProvider>
+                <WorkflowLayoutDirectionProvider>
                 <NavigationGuardProvider>
                   <div className="h-[100dvh] bg-theme-primary transition-colors duration-300 fixed inset-0 z-50">
                     {/* Sidebar + content + side panel, arranged per the dock-position
@@ -56,6 +58,7 @@ export default function AppLayout({
                     <AgentErrorModal />
                   </div>
                 </NavigationGuardProvider>
+                </WorkflowLayoutDirectionProvider>
                 </SidePanelLayoutProvider>
               </SidePanelProvider>
           </WorkflowRunProvider>

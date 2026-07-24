@@ -356,6 +356,9 @@ public class ShowcaseSnapshotReader {
         result.put("htmlTemplate", htmlTemplate);
         result.put("cssTemplate", cssTemplate);
         result.put("jsTemplate", source.get("jsTemplate"));
+        // The format travels with the templates: without it the marketplace preview renders the
+        // published interface at the default 1280x800 instead of its own shape.
+        result.put("format", source.get("format"));
         result.put("actionMappings", source.get("actionMappings"));
         result.put("items", sliced);
 

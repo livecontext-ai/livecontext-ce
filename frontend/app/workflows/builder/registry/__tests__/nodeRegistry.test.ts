@@ -105,6 +105,16 @@ describe('nodeRegistry', () => {
       expect(nodeRegistry.getPrefixesForNode(node)).toEqual(['core']);
     });
 
+    it('returns ["core"] for flowNode with public_link kind', () => {
+      const node = mockNode('flowNode', { kind: 'public_link' });
+      expect(nodeRegistry.getPrefixesForNode(node)).toEqual(['core']);
+    });
+
+    it('returns ["core"] for flowNode with media kind', () => {
+      const node = mockNode('flowNode', { kind: 'media' });
+      expect(nodeRegistry.getPrefixesForNode(node)).toEqual(['core']);
+    });
+
     it('returns ["core"] for flowNode with wait kind', () => {
       const node = mockNode('flowNode', { kind: 'wait' });
       expect(nodeRegistry.getPrefixesForNode(node)).toEqual(['core']);
@@ -176,7 +186,7 @@ describe('nodeRegistry', () => {
     });
 
     it('returns true for flowNode-based control nodes (by kind)', () => {
-      const controlKinds = ['transform', 'wait', 'download_file', 'http_request', 'data_input'];
+      const controlKinds = ['transform', 'wait', 'download_file', 'public_link', 'media', 'http_request', 'data_input'];
       for (const k of controlKinds) {
         expect(nodeRegistry.isControlNode(mockNode('flowNode', { kind: k as BuilderNodeKind }))).toBe(true);
       }
@@ -445,6 +455,60 @@ describe('nodeRegistry', () => {
 
     it('returns false for unrelated node', () => {
       expect(nodeRegistry.isDownloadFileNode(mockNode('flowNode', { kind: 'action' }))).toBe(false);
+    });
+  });
+
+  // ==================== isPublicLinkNode ====================
+  describe('isPublicLinkNode', () => {
+    it('returns true for kind=public_link', () => {
+      expect(nodeRegistry.isPublicLinkNode(mockNode('flowNode', { kind: 'public_link' }))).toBe(true);
+    });
+
+    it('returns true for data.id="public_link"', () => {
+      expect(nodeRegistry.isPublicLinkNode(mockNode('flowNode', { id: 'public_link' }))).toBe(true);
+    });
+
+    it('returns true for data.id starting with "public-link-"', () => {
+      expect(nodeRegistry.isPublicLinkNode(mockNode('flowNode', { id: 'public-link-1' }))).toBe(true);
+    });
+
+    it('returns true for data.id starting with "public_link-"', () => {
+      expect(nodeRegistry.isPublicLinkNode(mockNode('flowNode', { id: 'public_link-1' }))).toBe(true);
+    });
+
+    it('returns false for unrelated node', () => {
+      expect(nodeRegistry.isPublicLinkNode(mockNode('flowNode', { kind: 'action' }))).toBe(false);
+    });
+
+    it('does NOT match a download_file node (sibling file node)', () => {
+      expect(nodeRegistry.isPublicLinkNode(mockNode('flowNode', { kind: 'download_file', id: 'download_file-1' }))).toBe(false);
+    });
+  });
+
+  // ==================== isMediaNode ====================
+  describe('isMediaNode', () => {
+    it('returns true for kind=media', () => {
+      expect(nodeRegistry.isMediaNode(mockNode('flowNode', { kind: 'media' }))).toBe(true);
+    });
+
+    it('returns true for data.id="media"', () => {
+      expect(nodeRegistry.isMediaNode(mockNode('flowNode', { id: 'media' }))).toBe(true);
+    });
+
+    it('returns true for data.id starting with "media-"', () => {
+      expect(nodeRegistry.isMediaNode(mockNode('flowNode', { id: 'media-1' }))).toBe(true);
+    });
+
+    it('returns false for unrelated node', () => {
+      expect(nodeRegistry.isMediaNode(mockNode('flowNode', { kind: 'action' }))).toBe(false);
+    });
+
+    it('does NOT match an mcp tool node whose id merely CONTAINS "media"', () => {
+      expect(nodeRegistry.isMediaNode(mockNode('flowNode', { id: 'create_media_container-1' }))).toBe(false);
+    });
+
+    it('does NOT match a download_file node (sibling file node)', () => {
+      expect(nodeRegistry.isMediaNode(mockNode('flowNode', { kind: 'download_file', id: 'download_file-1' }))).toBe(false);
     });
   });
 
@@ -806,7 +870,7 @@ describe('nodeRegistry', () => {
     });
 
     it('returns true for flowNode-based core nodes by kind', () => {
-      const coreKinds = ['transform', 'wait', 'download_file', 'merge', 'http_request', 'data_input'];
+      const coreKinds = ['transform', 'wait', 'download_file', 'public_link', 'media', 'merge', 'http_request', 'data_input'];
       for (const k of coreKinds) {
         expect(nodeRegistry.isCoreNode(mockNode('flowNode', { kind: k as BuilderNodeKind }))).toBe(true);
       }

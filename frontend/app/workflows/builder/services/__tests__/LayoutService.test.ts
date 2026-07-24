@@ -3,6 +3,7 @@ import type { Node, Edge } from 'reactflow';
 import type { BuilderNodeData } from '../../types';
 import {
   applyDagreLayout,
+  centerOnCrossAxis,
   estimateNodeWidth,
   getNodeDimensions,
 } from '../LayoutService';
@@ -120,6 +121,16 @@ describe('getNodeDimensions', () => {
       data: { interfaceData: { showPreview: true, previewWidth: 333, previewHeight: 222 } },
     });
     expect(getNodeDimensions(node)).toEqual({ width: 333, height: 222 });
+  });
+
+  it('falls back to the 400x250 default box for an interface node with no stored dims - the size the node actually renders (drop/import default), so auto-layout spacing has no phantom 50px', () => {
+    const node = makeNode({
+      id: 'iface-fresh',
+      type: 'interfaceNode',
+      kind: 'interface',
+      data: { interfaceData: { showPreview: true } },
+    });
+    expect(getNodeDimensions(node)).toEqual({ width: 400, height: 250 });
   });
 
   it('uses a resized data_input box size, not the label estimate, when unmeasured', () => {
@@ -329,18 +340,123 @@ describe('applyDagreLayout - independent components', () => {
     expect(pos.get('b')!.x).toBeGreaterThan(pos.get('a')!.x);
   });
 
-  it('auto-layout is idempotent w.r.t. measured dims (button == agent-sync layout)', () => {
+  it('keeps the RANK structure idempotent w.r.t. measured dims (no disorienting jump)', () => {
     // The builder lays out from estimates on import / agent plan-sync (nodes not yet
-    // measured); the auto-layout button must reproduce the SAME layout, not "jump".
-    // So applyDagreLayout must be identical whether or not nodes carry measured dims.
+    // measured); the auto-layout button must not RESHUFFLE the graph. The FLOW axis
+    // (rank positions - x in this LR layout) is what carries that structure, so it
+    // must be identical with or without measured dims. The CROSS axis is allowed to
+    // differ: the button refines centring using real widths (covered in
+    // centerOnCrossAxis.test.ts), which is a deliberate improvement, not a jump.
     const build = (measured: boolean) => {
       const dim = (w: number, h: number) => (measured ? { width: w, height: h } : {});
       const a = makeNode({ id: 'a', label: LONG_LABEL, ...dim(516, 84) });
       const b = makeNode({ id: 'b', label: 'Next step', ...dim(232, 80) });
       const c = makeNode({ id: 'c', label: 'Final', ...dim(180, 80) });
       return applyDagreLayout([a, b, c], [edge('a', 'b'), edge('b', 'c')])
-        .map(n => ({ id: n.id, x: Math.round(n.position.x), y: Math.round(n.position.y) }));
+        .map(n => ({ id: n.id, x: Math.round(n.position.x) }));
     };
     expect(build(true)).toEqual(build(false));
+  });
+});
+
+// =============================================================================
+// Vertical (top-to-bottom) layout
+// =============================================================================
+describe('applyDagreLayout - vertical (rankdir TB)', () => {
+  const edge = (source: string, target: string, sourceHandle?: string): Edge =>
+    ({ id: `${source}->${target}${sourceHandle ? `:${sourceHandle}` : ''}`, source, target, sourceHandle });
+  // The vertical config the builder passes (mirrors layoutConfigForDirection('vertical')).
+  const TB = { rankdir: 'TB' as const, nodesep: 44, ranksep: 104, align: undefined };
+
+  const boxesOverlap = (
+    a: { x: number; y: number; w: number; h: number },
+    b: { x: number; y: number; w: number; h: number },
+  ) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+
+  it('lays a chain out top-to-bottom: each node is BELOW its predecessor', () => {
+    const a = makeNode({ id: 'a', label: 'Start' });
+    const b = makeNode({ id: 'b', label: 'Middle' });
+    const c = makeNode({ id: 'c', label: 'End' });
+    const out = applyDagreLayout([a, b, c], [edge('a', 'b'), edge('b', 'c')], TB);
+    const y = (id: string) => out.find(n => n.id === id)!.position.y;
+    expect(y('b')).toBeGreaterThan(y('a'));
+    expect(y('c')).toBeGreaterThan(y('b'));
+  });
+
+  it('does not overlap the siblings of a wide branch node (the estimator-transpose bug)', () => {
+    // A 6-case switch (measured wide) fanning to 6 children. Before the vertical width
+    // estimate + un-clamped width, the switch was under-reported and its rank-mate
+    // packed on top of it. Here the switch has one child rank below with 6 nodes; the
+    // switch itself is the only node in its rank, so assert the CHILDREN rank does not
+    // self-overlap and the branch node clears them.
+    const cases = Array.from({ length: 6 }, (_, i) => ({ id: `c${i}` }));
+    const sw = makeNode({ id: 'sw', type: 'switchNode', label: 'Route', data: { switchCases: cases } });
+    const kids = cases.map((_, i) => makeNode({ id: `k${i}`, label: `Case ${i}` }));
+    const edges = cases.map((_, i) => edge('sw', `k${i}`, `sw-case-${i}`));
+    const out = applyDagreLayout([sw, ...kids], edges, TB);
+
+    const box = (id: string) => {
+      const n = out.find(x => x.id === id)!;
+      const { width, height } = getNodeDimensions(n, true, 'vertical');
+      return { x: n.position.x, y: n.position.y, w: width, h: height };
+    };
+    // No two children overlap.
+    for (let i = 0; i < kids.length; i++) {
+      for (let j = i + 1; j < kids.length; j++) {
+        expect(boxesOverlap(box(`k${i}`), box(`k${j}`)), `k${i} overlaps k${j}`).toBe(false);
+      }
+    }
+    // The switch sits above its children, not on them.
+    expect(box('sw').y + box('sw').h).toBeLessThanOrEqual(box('k0').y + 1);
+  });
+});
+
+// =============================================================================
+// centerOnCrossAxis is VERTICAL-ONLY (regression 2026-07-17)
+// The cross-axis centering pass was added with the vertical layout and, applied to
+// BOTH directions, visibly changed long-standing HORIZONTAL layouts. Horizontal must
+// use the historical algorithm (plain Dagre placement, no post-centering); vertical
+// keeps the centering.
+// =============================================================================
+describe('applyDagreLayout - centerOnCrossAxis gated to vertical', () => {
+  const edge = (source: string, target: string): Edge =>
+    ({ id: `${source}->${target}`, source, target });
+  const LR = { rankdir: 'LR', nodesep: 40, ranksep: 90, ignoreMeasured: true } as any;
+  const TB = { rankdir: 'TB', nodesep: 44, ranksep: 104, ignoreMeasured: true } as any;
+
+  // A 5-way fan: one parent to five children. The centering pass demonstrably MOVES
+  // nodes on the cross axis here (re-centring the parent + resolving the children's
+  // spacing), so running it is observable - which is exactly what lets us detect
+  // whether `applyDagreLayout` applied it for a given direction.
+  const buildTree = () => {
+    const nodes = [
+      makeNode({ id: 'p', label: 'Parent' }),
+      ...Array.from({ length: 5 }, (_, i) => makeNode({ id: `c${i}`, label: `Child ${i}` })),
+    ];
+    const edges = Array.from({ length: 5 }, (_, i) => edge('p', `c${i}`));
+    return { nodes, edges };
+  };
+  const cross = (ns: Node<BuilderNodeData>[], vertical: boolean) =>
+    ns.map((n) => Math.round(n.position[vertical ? 'x' : 'y'])).join(',');
+  // centerOnCrossAxis mutates in place, so run it on a deep copy and snapshot the
+  // pre-centring cross positions first.
+  const copy = (ns: Node<BuilderNodeData>[]) => ns.map((n) => ({ ...n, position: { ...n.position } }));
+
+  it('does NOT centre the HORIZONTAL layout: applying centering afterwards still changes it', () => {
+    const { nodes, edges } = buildTree();
+    const laid = applyDagreLayout(nodes, edges, LR);
+    const before = cross(laid, false);
+    // If horizontal were still being centred, a fresh centring pass would be a no-op.
+    // Because the fix skips centring for horizontal, the pass has work left to do.
+    const centred = centerOnCrossAxis(copy(laid), edges, LR);
+    expect(before).not.toEqual(cross(centred, false));
+  });
+
+  it('DOES centre the VERTICAL layout: a second centring pass is a no-op (already centred)', () => {
+    const { nodes, edges } = buildTree();
+    const laid = applyDagreLayout(nodes, edges, TB);
+    const before = cross(laid, true);
+    const centred = centerOnCrossAxis(copy(laid), edges, TB);
+    expect(before).toEqual(cross(centred, true));
   });
 });

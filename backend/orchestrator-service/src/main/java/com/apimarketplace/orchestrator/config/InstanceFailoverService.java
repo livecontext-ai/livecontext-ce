@@ -5,14 +5,18 @@ import com.apimarketplace.common.scaling.registry.ServiceInstance;
 import com.apimarketplace.orchestrator.domain.WorkflowRunEntity;
 import com.apimarketplace.orchestrator.domain.workflow.RunStatus;
 import com.apimarketplace.orchestrator.repository.WorkflowRunRepository;
+import com.apimarketplace.orchestrator.services.events.WorkflowRunTerminatedEvent;
 import com.apimarketplace.orchestrator.services.streaming.context.RunContextRegistry;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import org.springframework.data.redis.core.ScanOptions;
 
@@ -31,9 +35,12 @@ import java.util.stream.Collectors;
  * this service:
  * <ol>
  *   <li>Reads the dead instance's active-runs set from Redis</li>
- *   <li>For each orphaned run still in RUNNING status, marks it FAILED
- *       (the existing OrchestrationRecoveryService zombie detector would catch these
- *       eventually, but this is faster - immediate vs. 5-minute threshold)</li>
+ *   <li>For each orphaned run still in RUNNING status, marks it FAILED and publishes
+ *       {@code WorkflowRunTerminatedEvent} in the same transaction, exactly like
+ *       OrchestrationRecoveryService's zombie detector (which would catch these
+ *       eventually, but this is faster - immediate vs. 5-minute threshold). The event
+ *       is what rearms {@code workflow.production_run_id} and emits the RUN_FAILED
+ *       notification when the orphan was the production run.</li>
  *   <li>Cleans up the dead instance's Redis tracking key</li>
  * </ol>
  *
@@ -55,17 +62,27 @@ public class InstanceFailoverService {
     private final WorkflowRunRepository runRepository;
     private final OrchestratorInstanceRegistrar registrar;
     private final Clock clock;
+    private final ApplicationEventPublisher eventPublisher;
+    private final TransactionTemplate transactionTemplate;
 
     public InstanceFailoverService(RedisServiceRegistry registry,
                                     StringRedisTemplate redisTemplate,
                                     WorkflowRunRepository runRepository,
                                     OrchestratorInstanceRegistrar registrar,
-                                    Clock clock) {
+                                    Clock clock,
+                                    ApplicationEventPublisher eventPublisher,
+                                    PlatformTransactionManager transactionManager) {
         this.registry = registry;
         this.redisTemplate = redisTemplate;
         this.runRepository = runRepository;
         this.registrar = registrar;
         this.clock = clock;
+        this.eventPublisher = eventPublisher;
+        // Per-run transaction: the FAILED write and the WorkflowRunTerminatedEvent must
+        // share one commit, because the downstream listeners (RunTerminationListener
+        // rearm + NotificationEmitter RUN_FAILED) are AFTER_COMMIT - published outside
+        // a transaction the event is silently dropped and neither fires.
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
     /**
@@ -120,9 +137,9 @@ public class InstanceFailoverService {
     }
 
     /**
-     * Recover orphaned runs from a dead instance.
+     * Recover orphaned runs from a dead instance. Package-private for tests.
      */
-    private void recoverOrphanedRuns(String deadInstanceId) {
+    void recoverOrphanedRuns(String deadInstanceId) {
         String activeRunsKey = RunContextRegistry.activeRunsKeyFor(deadInstanceId);
         Set<String> orphanedRunIds = redisTemplate.opsForSet().members(activeRunsKey);
 
@@ -141,15 +158,33 @@ public class InstanceFailoverService {
 
         for (String runId : orphanedRunIds) {
             try {
-                WorkflowRunEntity run = runRepository.findByRunIdPublic(runId).orElse(null);
-                if (run == null) continue;
+                Boolean failed = transactionTemplate.execute(txStatus -> {
+                    WorkflowRunEntity run = runRepository.findByRunIdPublic(runId).orElse(null);
+                    if (run == null) return false;
 
-                // Only fail runs that are still actively running
-                if (run.getStatus() == RunStatus.RUNNING) {
+                    // Only fail runs that are still actively running
+                    if (run.getStatus() != RunStatus.RUNNING) return false;
+
                     run.setStatus(RunStatus.FAILED);
                     run.setEndedAt(now);
                     run.setUpdatedAt(now);
                     runRepository.save(run);
+
+                    // Same contract as OrchestrationRecoveryService.cleanupAfterForceFail:
+                    // the termination event drives RunTerminationListener (rearms
+                    // workflow.production_run_id when this was the production run - without
+                    // it the FK stays pointing at a FAILED run and every production lane
+                    // resolves empty until the resolver's missed-rearm backstop kicks in)
+                    // and NotificationEmitter (user-facing RUN_FAILED). Published inside
+                    // this transaction so the AFTER_COMMIT listeners actually fire.
+                    eventPublisher.publishEvent(new WorkflowRunTerminatedEvent(
+                            run.getId(),
+                            run.getWorkflow() != null ? run.getWorkflow().getId() : null,
+                            RunStatus.FAILED,
+                            run.getPlanVersion()));
+                    return true;
+                });
+                if (Boolean.TRUE.equals(failed)) {
                     failedCount++;
                     logger.warn("[Failover] Marked orphaned run {} as FAILED (was on dead instance {})",
                             runId, deadInstanceId);

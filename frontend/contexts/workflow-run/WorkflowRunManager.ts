@@ -522,6 +522,39 @@ export class WorkflowRunManager {
         break;
       }
 
+      // Live run-cost update: an agent execution settled its credits. Payload
+      // { epoch, epochCostCredits, totalCostCredits, budgetCredits }. The total
+      // is authoritative (accumulated across all epochs).
+      case 'runCost': {
+        this.store.setRunCost(
+          typeof data.totalCostCredits === 'number' ? data.totalCostCredits : undefined,
+          data.budgetCredits ?? null,
+          typeof data.epoch === 'number' ? data.epoch : undefined,
+          typeof data.epochCostCredits === 'number' ? data.epochCostCredits : undefined,
+        );
+        break;
+      }
+
+      // Budget reached: a new epoch was refused (the in-flight epoch, if any,
+      // still finishes). Surface an explanatory toast to any live viewer via a
+      // global CustomEvent (this manager is not a React component).
+      case 'runBudgetBlocked': {
+        try {
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('workflow:runBudgetBlocked', {
+              detail: {
+                runId: data.runId ?? this.runId,
+                spentCredits: data.spentCredits ?? null,
+                budgetCredits: data.budgetCredits ?? null,
+              },
+            }));
+          }
+        } catch {
+          // best-effort toast only
+        }
+        break;
+      }
+
       default:
         streamDebug.log('WorkflowRunManager', `Unhandled event type: ${eventType}`);
     }

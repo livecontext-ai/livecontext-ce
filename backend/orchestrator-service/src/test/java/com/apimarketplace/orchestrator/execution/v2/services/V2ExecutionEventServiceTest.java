@@ -133,6 +133,78 @@ class V2ExecutionEventServiceTest {
     }
 
     @Nested
+    @DisplayName("rePublishNodeOutput() - payload-lost acknowledgement")
+    class RePublishNodeOutputTests {
+
+        private ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> attachAppender() {
+            ch.qos.logback.classic.Logger log =
+                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(V2ExecutionEventService.class);
+            ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+            appender.start();
+            log.addAppender(appender);
+            return appender;
+        }
+
+        @Test
+        @DisplayName("payload-lost re-persist logs a WARN naming the cause (return NOT silently dropped) but does NOT rewrite - the loop already exited")
+        void payloadLostRePersistLogsWarn() {
+            when(node.getNodeId()).thenReturn("core:my_loop");
+            NodeExecutionResult terminationResult = NodeExecutionResult.success(
+                "core:my_loop", Map.of("terminated", true));
+            when(nodeCompletionService.emitNodeComplete(eq(execution), eq(node), any(), any(), anyInt(), any(), any()))
+                .thenReturn(com.apimarketplace.orchestrator.services.completion.StepCompletionResult
+                    .persistedPayloadLost(Map.of(), Map.of(),
+                        "[storage] Output payload lost: storage write failed after retries"));
+
+            var appender = attachAppender();
+            service.rePublishNodeOutput(execution, node, terminationResult, triggerItem, 0, context, 3);
+
+            boolean warned = appender.list.stream().anyMatch(e ->
+                e.getLevel() == ch.qos.logback.classic.Level.WARN
+                    && e.getFormattedMessage().contains("Loop-termination re-persist lost its output payload")
+                    && e.getFormattedMessage().contains("storage write failed after retries"));
+            assertThat(warned)
+                .as("the completion return must not be silently dropped - a payload loss on the "
+                        + "loop-termination re-persist must surface a WARN naming the cause")
+                .isTrue();
+        }
+
+        @Test
+        @DisplayName("BEHAVIOUR GUARD: a normally persisted re-persist logs NO payload-loss WARN")
+        void normalRePersistDoesNotWarn() {
+            NodeExecutionResult terminationResult = NodeExecutionResult.success(
+                "core:my_loop", Map.of("terminated", true));
+            when(nodeCompletionService.emitNodeComplete(eq(execution), eq(node), any(), any(), anyInt(), any(), any()))
+                .thenReturn(com.apimarketplace.orchestrator.services.completion.StepCompletionResult
+                    .persisted(Map.of(), Map.of()));
+
+            var appender = attachAppender();
+            service.rePublishNodeOutput(execution, node, terminationResult, triggerItem, 0, context, 3);
+
+            boolean warned = appender.list.stream().anyMatch(e ->
+                e.getFormattedMessage().contains("Loop-termination re-persist lost its output payload"));
+            assertThat(warned).isFalse();
+        }
+
+        @Test
+        @DisplayName("BEHAVIOUR GUARD: a null completion (legacy/duplicate path) logs NO payload-loss WARN and does not throw")
+        void nullCompletionDoesNotWarn() {
+            NodeExecutionResult terminationResult = NodeExecutionResult.success(
+                "core:my_loop", Map.of("terminated", true));
+            when(nodeCompletionService.emitNodeComplete(eq(execution), eq(node), any(), any(), anyInt(), any(), any()))
+                .thenReturn(null);
+
+            var appender = attachAppender();
+            service.rePublishNodeOutput(execution, node, terminationResult, triggerItem, 0, context, 3);
+
+            boolean warned = appender.list.stream().anyMatch(e ->
+                e.getFormattedMessage().contains("Loop-termination re-persist lost its output payload"));
+            assertThat(warned).isFalse();
+        }
+    }
+
+    @Nested
     @DisplayName("initializeTotalItems()")
     class InitializeTotalItemsTests {
         @Test

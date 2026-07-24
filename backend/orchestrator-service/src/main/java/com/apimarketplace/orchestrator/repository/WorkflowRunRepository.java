@@ -144,6 +144,22 @@ public interface WorkflowRunRepository extends JpaRepository<WorkflowRunEntity, 
     Optional<UUID> findWorkflowIdByRunIdPublic(@Param("runIdPublic") String runIdPublic);
 
     /**
+     * Is this run its workflow's live PRODUCTION run ({@code workflow.production_run_id}
+     * points at it)? Single indexed round-trip through the lazy association (JPQL field
+     * access - safe outside a transaction, same pattern as
+     * {@link #findWorkflowIdByRunIdPublic}).
+     *
+     * <p>Exists because {@code __editorRun__} cannot answer the question: pinning
+     * promotes an editor run to production and never strips the flag, so the
+     * production run of a pinned workflow carries it too. Consumers that must treat
+     * production differently ({@code MockRunGate}: production never mocks) key on
+     * this instead of the metadata.
+     */
+    @Query("SELECT CASE WHEN COUNT(wr) > 0 THEN true ELSE false END FROM WorkflowRunEntity wr "
+            + "WHERE wr.runIdPublic = :runIdPublic AND wr.id = wr.workflow.productionRunId")
+    boolean isProductionRunByRunIdPublic(@Param("runIdPublic") String runIdPublic);
+
+    /**
      * Phase A2 - batched flusher for {@code WsEventSequencer.lastEventSeq}.
      * Per the plan, runs every 5s in steady state. Single round-trip for N
      * runs (PostgreSQL {@code UPDATE ... FROM (VALUES ...)}) keeps DB write
@@ -248,6 +264,82 @@ public interface WorkflowRunRepository extends JpaRepository<WorkflowRunEntity, 
         """, nativeQuery = true)
     int updateSnapshotAndSeq(@Param("runIdPublic") String runIdPublic,
                               @Param("snapshot") String snapshot);
+
+    /**
+     * Accumulate agent cost onto a run, in credits (1 credit = $0.001). Agent
+     * executions are the only cost source; each settled agent execution calls
+     * this once through {@code RunCostService}.
+     *
+     * <p>Atomic + monotonic: {@code cost_credits} grows by {@code :credits} and
+     * the per-epoch bucket in {@code cost_by_epoch} grows by the same amount in
+     * the SAME statement, so the run total always equals the sum of its epoch
+     * buckets. Because both are pure increments, concurrent notifications from
+     * parallel agent nodes never lose a write (no read-modify-write in app code).
+     *
+     * <p>Neither column is {@code state_snapshot}/{@code state_snapshot_seq}, so
+     * this does NOT go through the JsonbPatchExecutor - it is allow-listed in
+     * {@code JsonbWritesCallsiteInvariantTest}. Org-scoped with a null-safe
+     * predicate (personal-scope runs carry {@code organization_id = NULL}); the
+     * unique {@code run_id_public} already pins the row, the org clause is
+     * defense-in-depth against a cross-scope notification.
+     *
+     * @return rows updated (0 = run deleted, or org mismatch)
+     */
+    @Modifying
+    @org.springframework.transaction.annotation.Transactional
+    @Query(value = """
+        UPDATE workflow_runs
+        SET cost_credits = cost_credits + cast(:credits as numeric),
+            cost_by_epoch = jsonb_set(
+                COALESCE(cost_by_epoch, '{}'::jsonb),
+                ARRAY[cast(:epochKey as text)],
+                to_jsonb(
+                    COALESCE((cost_by_epoch->>cast(:epochKey as text))::numeric, 0)
+                    + cast(:credits as numeric))),
+            updated_at = now()
+        WHERE run_id_public = :runIdPublic
+          AND (organization_id = cast(:orgId as text)
+               OR (cast(:orgId as text) IS NULL AND organization_id IS NULL))
+        """, nativeQuery = true)
+    int incrementRunCost(@Param("runIdPublic") String runIdPublic,
+                         @Param("orgId") String orgId,
+                         @Param("epochKey") String epochKey,
+                         @Param("credits") java.math.BigDecimal credits);
+
+    /**
+     * Fresh {@code cost_credits} for a run, bypassing any stale L1-cached entity.
+     * Used by the epoch budget gate ({@code ReusableTriggerService}) which must
+     * compare the LIVE accumulated cost against the workflow budget before
+     * opening a new epoch - the {@code run} entity in that path was loaded
+     * earlier and its {@code costCredits} field may lag behind the native
+     * increments issued by concurrent agent notifications.
+     */
+    @Query("SELECT wr.costCredits FROM WorkflowRunEntity wr WHERE wr.runIdPublic = :runIdPublic")
+    Optional<java.math.BigDecimal> findCostCreditsByRunIdPublic(@Param("runIdPublic") String runIdPublic);
+
+    /**
+     * The budget (credits) of the workflow this run belongs to, or empty when
+     * the run has no budget set. Read via the {@code @ManyToOne} association as
+     * a JPQL field access so it works outside a transaction. Consumed by
+     * {@code RunCostService} to stamp {@code budgetCredits} on the emitted cost
+     * event (so the frontend can paint the over-budget warning without a second
+     * fetch) and by the epoch budget gate.
+     */
+    @Query("SELECT wr.workflow.budgetCredits FROM WorkflowRunEntity wr WHERE wr.runIdPublic = :runIdPublic")
+    Optional<java.math.BigDecimal> findWorkflowBudgetByRunIdPublic(@Param("runIdPublic") String runIdPublic);
+
+    /**
+     * Fresh cost of a single epoch bucket from {@code cost_by_epoch}, in credits.
+     * Read back by {@code RunCostService} right after {@link #incrementRunCost}
+     * so the emitted WS event carries the up-to-date per-epoch figure. Returns
+     * empty when the run or the epoch bucket does not exist yet.
+     */
+    @Query(value = """
+        SELECT (cost_by_epoch->>cast(:epochKey as text))::numeric
+        FROM workflow_runs WHERE run_id_public = :runIdPublic
+        """, nativeQuery = true)
+    Optional<java.math.BigDecimal> findEpochCostByRunIdPublic(@Param("runIdPublic") String runIdPublic,
+                                                              @Param("epochKey") String epochKey);
 
     /**
      * Find by runIdPublic with pessimistic write lock.

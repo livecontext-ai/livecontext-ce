@@ -1,20 +1,23 @@
 LiveContext Community Edition
-Copyright (c) 2026 LiveContext
+Copyright (C) 2026 LiveContext
 
-This product is licensed under the LiveContext Sustainable Use License 1.0
-(see LICENSE).
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version.
 
-This product includes open-source software developed by third parties.
-Each dependency is governed by its own license, declared in its package
-metadata (Maven POMs under backend/, package.json files under frontend/
-and mcp/). Notable runtime components:
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
 
-  - Spring Boot and the Spring ecosystem (Apache-2.0)
-  - Next.js and React (MIT)
-  - PostgreSQL JDBC driver (BSD-2-Clause)
-  - Flyway Community (Apache-2.0)
-  - MinIO client SDK (Apache-2.0)
+You should have received a copy of the GNU Affero General Public License along
+with this program (see the LICENSE file). If not, see
+<https://www.gnu.org/licenses/>.
 
-"LiveContext" and the LiveContext logo are trademarks of LiveContext.
-This NOTICE file is for attribution purposes and does not modify the
-LICENSE terms.
+This product bundles third-party components distributed under their own
+licenses. See THIRD_PARTY_NOTICES for the list and the required attributions.
+
+"LiveContext" and the LiveContext logo are trademarks of LiveContext. Trademark
+rights are separate from the copyright license above: the AGPL grants no
+permission to use these marks. See TRADEMARKS for the trademark policy. This
+NOTICE file is for attribution purposes and does not modify the LICENSE terms.

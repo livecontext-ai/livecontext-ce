@@ -23,6 +23,8 @@ export type BuilderNodeKind =
   | 'fork'
   | 'parallel'   // backward compat
   | 'download_file'
+  | 'public_link'
+  | 'media'
   | 'aggregate'
   | 'response'
   | 'exit'
@@ -243,6 +245,8 @@ export interface NodeMock {
     message: string;
     output?: Record<string, unknown>;
   };
+  /** Simulated execution time in ms (0..600000). The node waits this long before returning the mock. */
+  durationMs?: number;
 }
 
 export interface LoopChildDescriptor {
@@ -470,6 +474,8 @@ export interface BuilderNodeData {
     actionMapping?: Record<string, string>; // {cssSelector: "trigger:label:actiontype"}
     dataSourceId?: string | number | null;
     isEntryInterface?: boolean; // Whether this is the entry interface (shown first)
+    // No display format here: it belongs to the interface entity (its HTML is authored for one
+    // fixed viewport width), and every surface reads it from there.
     generateScreenshot?: boolean; // When true, capture a PNG of the rendered interface and expose it as the `screenshot` FileRef output
     generatePdf?: boolean; // When true, render the interface to a PDF and expose it as the `pdf` FileRef output
     pdfFormat?: string; // Page size for generatePdf: 'A4' | 'Letter' | 'Legal' (default A4)

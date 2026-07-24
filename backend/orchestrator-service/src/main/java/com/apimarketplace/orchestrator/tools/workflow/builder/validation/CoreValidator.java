@@ -200,9 +200,17 @@ public class CoreValidator implements WorkflowValidator {
             if ("email_inbox".equals(type)) {
                 String action = null;
                 if (cn.get("emailInbox") instanceof Map<?, ?> m && m.get("action") != null) {
-                    action = String.valueOf(m.get("action"));
+                    // Normalized like Core.EmailInboxConfig does, so 'CREATE_FOLDER' is not
+                    // mistaken for a per-message action and asked for a messageUid.
+                    action = String.valueOf(m.get("action")).trim().toLowerCase(java.util.Locale.ROOT);
                 }
-                if (action != null && !action.isBlank() && !"none".equals(action) && !"list_folders".equals(action)) {
+                if ("create_folder".equals(action)) {
+                    // Mailbox-level action: names the folder to create, never a message.
+                    if (!hasConfigField(cn, "emailInbox", "targetFolder")) {
+                        result.addError("INBOX_NO_TARGET_FOLDER", nodeId,
+                                "Email Inbox '" + label + "' create_folder action requires targetFolder.");
+                    }
+                } else if (action != null && !action.isBlank() && !"none".equals(action) && !"list_folders".equals(action)) {
                     if (!hasConfigField(cn, "emailInbox", "messageUid")) {
                         result.addError("INBOX_NO_MESSAGE_UID", nodeId,
                                 "Email Inbox '" + label + "' action '" + action + "' requires messageUid.");

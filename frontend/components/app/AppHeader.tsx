@@ -384,30 +384,48 @@ export function AppHeader() {
     id: string;
     name: string;
     description: string;
+    /** Workflow cost budget in credits (loaded lazily for workflow resources). */
+    budgetCredits?: number | null;
   } | null>(null);
   const [isSavingMetadata, setIsSavingMetadata] = useState(false);
 
   useEffect(() => {
     const handler = (event: CustomEvent) => {
-      const detail = event.detail as { resourceType: EditMetadataResourceType; id: string; name: string; description?: string };
+      const detail = event.detail as { resourceType: EditMetadataResourceType; id: string; name: string; description?: string; budgetCredits?: number | null };
       if (!detail?.id || !detail?.resourceType) return;
       setEditMetadata({
         resourceType: detail.resourceType,
         id: detail.id,
         name: detail.name || '',
         description: detail.description || '',
+        budgetCredits: detail.budgetCredits ?? null,
       });
+      // Seed the budget field for workflow/application resources: the breadcrumb
+      // opener doesn't carry it, so fetch the current value once on open.
+      if (detail.resourceType === 'workflow' && detail.budgetCredits == null) {
+        orchestratorApi.getWorkflow(detail.id)
+          .then((wf) => {
+            setEditMetadata((prev) => (prev && prev.id === detail.id)
+              ? { ...prev, budgetCredits: wf.budgetCredits ?? null }
+              : prev);
+          })
+          .catch(() => { /* best-effort: field just starts blank */ });
+      }
     };
     window.addEventListener('openMetadataEditModal', handler as EventListener);
     return () => window.removeEventListener('openMetadataEditModal', handler as EventListener);
   }, []);
 
-  const handleSaveMetadata = useCallback(async (values: { name: string; description: string }) => {
+  const handleSaveMetadata = useCallback(async (values: { name: string; description: string; budgetCredits?: number | null }) => {
     if (!editMetadata) return;
     setIsSavingMetadata(true);
     try {
       if (editMetadata.resourceType === 'workflow') {
-        await orchestratorApi.updateWorkflow(editMetadata.id, { name: values.name, description: values.description } as any);
+        await orchestratorApi.updateWorkflow(editMetadata.id, {
+          name: values.name,
+          description: values.description,
+          budgetCredits: values.budgetCredits,
+        } as any);
         // Notify workflow builder to update its in-memory plan name
         window.dispatchEvent(new CustomEvent('workflowNameChangeFromBreadcrumb', {
           detail: { workflowId: editMetadata.id, newName: values.name },
@@ -668,6 +686,7 @@ export function AppHeader() {
         resourceType={editMetadata.resourceType}
         initialName={editMetadata.name}
         initialDescription={editMetadata.description}
+        initialBudgetCredits={editMetadata.budgetCredits}
         isSaving={isSavingMetadata}
         onClose={() => setEditMetadata(null)}
         onSave={handleSaveMetadata}

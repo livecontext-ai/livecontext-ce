@@ -1,5 +1,6 @@
 package com.apimarketplace.orchestrator.services;
 
+import com.apimarketplace.common.plan.PlanStripUtils;
 import com.apimarketplace.common.storage.service.StorageBreakdownService;
 import com.apimarketplace.orchestrator.domain.WorkflowEntity;
 import com.apimarketplace.orchestrator.domain.WorkflowPlanVersionEntity;
@@ -156,6 +157,14 @@ public class WorkflowPlanVersionService {
      *   <li>plan content differs → overwrite the latest version's stored plan IN PLACE
      *       (same number, label preserved) so the run↔version content parity holds
      *       without inflating the history</li>
+     *   <li>workflow is pinned and the plan content == the PINNED version's content
+     *       (a production fire) → return the pinned number, read-only. Checked before
+     *       the latest-row comparison so a pinned run is never mislabelled with the
+     *       latest number nor allowed to clobber a newer draft</li>
+     *   <li>plan content == some OLDER version's content (a version replay, or a
+     *       canvas undone back to an earlier state) → return that version's number,
+     *       read-only. Without this the older plan would be written over the latest
+     *       row, destroying it</li>
      *   <li>latest version is the workflow's pinned version → the pinned row is
      *       immutable: fall back to {@link #createVersion} (mints a draft version)</li>
      *   <li>no version history yet → {@link #createVersion} seeds v1</li>
@@ -180,18 +189,113 @@ public class WorkflowPlanVersionService {
         }
 
         WorkflowPlanVersionEntity latest = latestOpt.get();
-        if (plansAreEqual(plan, latest.getPlan())) {
+        // Scalar projection rather than findById: only the pin number is needed, and
+        // two of the four call sites resolve under REQUIRES_NEW where a fresh
+        // persistence context would hydrate WorkflowEntity's JSONB columns (the full
+        // plan among them) from the database. On the other two the entity is already
+        // managed, so the projection costs one extra round-trip there.
+        Integer pinnedVersion = workflowRepository.findPinnedVersionById(workflowId).orElse(null);
+
+        // A pinned workflow's runs execute the PINNED content, which is not
+        // necessarily the latest row. Resolve those against the pinned row FIRST,
+        // otherwise the pinned plan is mistaken for drifted canvas content: the run
+        // gets stamped with the latest number (a version it does not execute) and the
+        // newer draft is overwritten in place with the pinned plan - silent data loss
+        // on the user's work in progress. Read-only: no row is touched.
+        //
+        // Deliberately ordered BEFORE the latest-row comparison. This is NOT free:
+        // the pin lookup now runs on every resolve (pre-fix it ran only once content
+        // had drifted), and when a pin is present the branch additionally fetches the
+        // pinned row and runs a full plan comparison that is discarded on a miss -
+        // more work than the entity hydration the scalar projection above avoids.
+        // Correctness alone justifies the ordering:
+        // ProductionRunResolver.isAllowedForProduction gates the next production fire
+        // on run.planVersion == workflow.pinnedVersion, so a run stamped with the
+        // draft number is REFUSED at that chokepoint - the mislabel silently breaks
+        // production, it does not merely look wrong in the history. A draft carrying
+        // byte-identical content to the pin is exactly the case that must still
+        // answer with the pinned number.
+        boolean matchesLatestExactly = plansAreEqual(plan, latest.getPlan());
+        if (pinnedVersion != null && pinnedVersion.intValue() != currentMax) {
+            Optional<WorkflowPlanVersionEntity> pinnedOpt =
+                    versionRepository.findByWorkflowIdAndVersion(workflowId, pinnedVersion);
+            if (pinnedOpt.isPresent()) {
+                // An EXACT match on the pin wins outright, including when the draft
+                // happens to carry the same bytes - the run does execute the pin.
+                if (plansAreEqual(plan, pinnedOpt.get().getPlan())) {
+                    return pinnedVersion;
+                }
+                // A NORMALIZED match only counts when the plan is not exactly the
+                // draft. Otherwise an editor run on the current draft of a pinned
+                // workflow whose draft differs from the pin by nothing but a re-armed
+                // trigger ref would be stamped with the PIN - which then lets that
+                // editor run adopt the live production run (see EditorRunResolver).
+                // Exact beats normalized: the draft is what this run executes.
+                if (!matchesLatestExactly
+                        && plansMatchAllowingTriggerRebinding(plan, pinnedOpt.get().getPlan())) {
+                    return pinnedVersion;
+                }
+            } else {
+                // The pin points at a row that no longer exists (purge protection
+                // bypassed, manual delete, restore gone wrong). Execution continues on
+                // the legacy lane below, which may overwrite the latest draft - the
+                // exact data loss this block prevents. Loud because it is unreachable
+                // through any supported flow.
+                logger.warn("Pinned version {} row is missing for workflow {} - cannot verify whether this run "
+                        + "executes the pinned plan; falling through to latest-version resolution", pinnedVersion, workflowId);
+            }
+        }
+
+        if (matchesLatestExactly) {
             return currentMax;
         }
 
         // Pinned rows are immutable - a pin is a contract that this exact content
         // stays reproducible. If the latest version IS the pinned one, mint a draft
         // version instead of mutating it (editor runs on pinned workflows).
-        Integer pinnedVersion = workflowRepository.findById(workflowId)
-                .map(WorkflowEntity::getPinnedVersion)
-                .orElse(null);
-        if (pinnedVersion != null && pinnedVersion == currentMax) {
+        if (pinnedVersion != null && pinnedVersion.intValue() == currentMax) {
+            // Same restore normalization as the pin-trails-draft branch above, which
+            // cannot run here (it is gated on pinned != max). Restoring a version
+            // strips standalone trigger refs regardless of whether the pin happens to
+            // be the latest, so without this a restore of the PINNED version onto a
+            // pin == max workflow misses the byte comparison and mints a spurious
+            // draft - stamping the run one above the pin and getting it refused at
+            // the production chokepoint, the exact failure this method now prevents.
+            if (plansMatchIgnoringStandaloneRefs(plan, latest.getPlan())) {
+                return currentMax;
+            }
+            Optional<Integer> replayedPinned = findVersionWithMatchingContent(workflowId, plan, currentMax);
+            if (replayedPinned.isPresent()) {
+                return replayedPinned.get();
+            }
             return createVersion(workflowId, plan, userId, null);
+        }
+
+        // Last guard before mutating anything: the executing plan may BE an older
+        // version's content rather than drifted canvas content. That is what a version
+        // replay hands us (findOrCreateRunForVersion -> createExecution ->
+        // recordWorkflowStart -> autoArchiveExecutionPlan passes the HISTORICAL plan),
+        // and it also happens when a canvas is undone back to an earlier state.
+        // Overwriting the latest row with it would destroy that row's content - the
+        // unpinned sibling of the pinned data loss above. Resolving to the matching
+        // historical number instead is both content-true and non-destructive.
+        //
+        // Deliberately the LAST check: it loads the version bodies, so it only runs on
+        // the rare path where a write was about to happen anyway.
+        //
+        // Gated on NOT being a re-bound copy of `latest`. The caller above only ruled
+        // `latest` out with a PLAIN comparison, while the scan matches with trigger
+        // refs normalized away - so without this gate a plan that is `latest` with a
+        // re-armed scheduleId would skip `latest` (excluded from the scan) and match
+        // an older same-logic version, stamping the run with a stale number. That is
+        // the unpinned refresh lane's normal traffic, not an edge case. Falling
+        // through instead refreshes the row in place, which is the pre-existing
+        // behaviour for a re-bind and keeps the stored ref current.
+        if (!plansMatchIgnoringStandaloneRefs(plan, latest.getPlan())) {
+            Optional<Integer> replayed = findVersionWithMatchingContent(workflowId, plan, currentMax);
+            if (replayed.isPresent()) {
+                return replayed.get();
+            }
         }
 
         latest.setPlan(new HashMap<>(plan));
@@ -265,6 +369,93 @@ public class WorkflowPlanVersionService {
 
         // Different session (or no versions yet) → create new version with sessionId as label
         return createVersion(workflowId, plan, userId, sessionId);
+    }
+
+    /**
+     * Find an EXISTING version whose stored content equals {@code plan}, skipping
+     * {@code excludeVersion} (already compared by the caller). Highest version first,
+     * so the most recent match wins when a plan was saved more than once.
+     *
+     * <p>Exists to keep the resolver from mistaking "this run executes an older
+     * version" for "the canvas drifted". The clearest case is a version replay, which
+     * hands this service a historical plan; overwriting the latest row with it would
+     * destroy that row. Returning the matching number is content-true and writes
+     * nothing.
+     *
+     * <p>Loads the version bodies, so callers must only reach it on a path that was
+     * about to write anyway.
+     */
+    private Optional<Integer> findVersionWithMatchingContent(UUID workflowId,
+                                                             Map<String, Object> plan,
+                                                             int excludeVersion) {
+        try {
+            for (WorkflowPlanVersionEntity candidate : versionRepository.findByWorkflowIdOrderByVersionDesc(workflowId)) {
+                if (candidate.getVersion() == null || candidate.getVersion() == excludeVersion) {
+                    continue;
+                }
+                if (plansMatchAllowingTriggerRebinding(plan, candidate.getPlan())) {
+                    logger.info("Execution plan matches existing version {} for workflow {} - resolving to it instead of "
+                            + "overwriting version {}", candidate.getVersion(), workflowId, excludeVersion);
+                    return Optional.of(candidate.getVersion());
+                }
+            }
+        } catch (Exception e) {
+            // Never let this lookup break execution - degrade to the legacy behaviour.
+            logger.warn("Could not scan version history for a content match on workflow {}: {}", workflowId, e.getMessage());
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Does {@code plan} execute the content of {@code storedPlan} (a version row)?
+     *
+     * <p>Byte equality first, then a retry with standalone-trigger back-references
+     * ({@code scheduleId} / {@code webhookId} / {@code chatEndpointId} /
+     * {@code formEndpointId}) normalized away on BOTH sides.
+     *
+     * <p>The retry is required, not defensive: restoring a version writes the
+     * historical plan into {@code workflows.plan} through
+     * {@link com.apimarketplace.common.plan.PlanStripUtils#deepCopyAndStrip}, which
+     * removes exactly those keys. Restoring the PINNED version onto a pinned
+     * workflow therefore produces a live plan that is the pinned plan minus its
+     * trigger refs. On a plain equality check that would miss the pin and fall
+     * through to the legacy lane, overwriting the newer draft - the very data loss
+     * the pin branch exists to prevent, resurfacing in a subcase of the path that
+     * most plausibly reaches it.
+     *
+     * <p>Those keys are live infrastructure bindings, not plan logic, so ignoring
+     * them cannot make two semantically different plans compare equal.
+     *
+     * <p>The normalization is SYMMETRIC, so it covers more than restore: a plan that
+     * gained a {@code scheduleId}, or whose {@code scheduleId} changed (re-armed
+     * schedule, re-issued webhook), also matches the pin and resolves read-only where
+     * a plain comparison would have minted a draft. That is intended - those are the
+     * same plan bound to different infrastructure - and it is what keeps the run's
+     * stamp equal to the pin across a trigger re-arm.
+     */
+    private boolean plansMatchAllowingTriggerRebinding(Map<String, Object> plan, Map<String, Object> pinnedPlan) {
+        return plansAreEqual(plan, pinnedPlan) || plansMatchIgnoringStandaloneRefs(plan, pinnedPlan);
+    }
+
+    /**
+     * The normalized half of {@link #plansMatchAllowingTriggerRebinding}, callable on its own when
+     * the plain equality check has already been performed and failed (the
+     * {@code pinned == latest} lane, where {@code latest} IS the pinned row).
+     */
+    private boolean plansMatchIgnoringStandaloneRefs(Map<String, Object> plan, Map<String, Object> pinnedPlan) {
+        if (plan == null || pinnedPlan == null) {
+            return false;
+        }
+        try {
+            return plansAreEqual(
+                    PlanStripUtils.deepCopyAndStrip(plan, objectMapper),
+                    PlanStripUtils.deepCopyAndStrip(pinnedPlan, objectMapper));
+        } catch (Exception e) {
+            // Never let a normalization failure decide the pin question - fall back
+            // to "not the pinned plan", i.e. the pre-existing behaviour.
+            logger.warn("Could not normalize plans for the pinned-version comparison: {}", e.getMessage());
+            return false;
+        }
     }
 
     /**

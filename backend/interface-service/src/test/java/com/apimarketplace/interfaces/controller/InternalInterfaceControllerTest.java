@@ -10,6 +10,7 @@ import com.apimarketplace.interfaces.service.InterfaceSnapshotService;
 import com.apimarketplace.interfaces.service.InterfaceVariableExtractor;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -135,10 +136,26 @@ class InternalInterfaceControllerTest {
     @Nested
     class CreateInterface {
         @Test
+        @DisplayName("An unusable format is a 400 here too - the internal path is not a back door")
+        void unusableFormatIsBadRequest() throws Exception {
+            // Without the guard the value normalises to null and the caller silently gets a
+            // shapeless interface, while the public and tool paths reject the same input.
+            String body = "{\"name\":\"New\",\"html_template\":\"<p>hi</p>\",\"format\":\"9999x9999\"}";
+
+            mockMvc.perform(post(BASE)
+                            .header("X-User-ID", TENANT)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body))
+                    .andExpect(status().isBadRequest());
+
+            verifyNoInteractions(interfaceService);
+        }
+
+        @Test
         void shouldCreate() throws Exception {
             InterfaceEntity entity = createEntity();
             when(interfaceService.createInterface(eq(TENANT), eq("New"), isNull(), eq("<p>hi</p>"),
-                    isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                    isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), any()))
                     .thenReturn(entity);
 
             String body = "{\"name\":\"New\",\"html_template\":\"<p>hi</p>\"}";
@@ -155,10 +172,26 @@ class InternalInterfaceControllerTest {
     @Nested
     class UpdateInterface {
         @Test
+        @DisplayName("An unusable format is a 400, never a silent clear of the interface's shape")
+        void unusableFormatIsBadRequest() throws Exception {
+            // The trap: an invalid value sets updateFormat=TRUE and then normalises to null, so
+            // without the guard the update CLEARS the shape instead of changing it.
+            String body = "{\"format\":\"9999x9999\"}";
+
+            mockMvc.perform(put(BASE + "/{id}", UUID.randomUUID())
+                            .header("X-User-ID", TENANT)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body))
+                    .andExpect(status().isBadRequest());
+
+            verifyNoInteractions(interfaceService);
+        }
+
+        @Test
         void shouldUpdate() throws Exception {
             InterfaceEntity entity = createEntity();
             when(interfaceService.updateInterface(eq(entity.getId()), eq(TENANT), isNull(), isNull(),
-                    eq("Updated"), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                    eq("Updated"), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(entity);
 
             String body = "{\"name\":\"Updated\"}";
@@ -176,7 +209,7 @@ class InternalInterfaceControllerTest {
             // mutation) can propagate their org context.
             InterfaceEntity entity = createEntity();
             when(interfaceService.updateInterface(eq(entity.getId()), eq(TENANT), eq("org-x"), eq("MEMBER"),
-                    eq("Updated"), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                    eq("Updated"), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(entity);
 
             mockMvc.perform(put(BASE + "/{id}", entity.getId())
@@ -188,7 +221,7 @@ class InternalInterfaceControllerTest {
                     .andExpect(status().isOk());
 
             verify(interfaceService).updateInterface(eq(entity.getId()), eq(TENANT), eq("org-x"), eq("MEMBER"),
-                    eq("Updated"), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+                    eq("Updated"), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
         }
     }
 

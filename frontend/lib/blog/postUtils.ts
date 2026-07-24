@@ -36,14 +36,34 @@ export function findPostBySlug(posts: BlogPost[], slug: string): BlogPost | unde
   return posts.find((post) => post.slug === slug);
 }
 
+// Scripts that are not whitespace-delimited: CJK ideographs (+ extension A and
+// the compatibility block), kana, and Hangul syllables. Splitting these on
+// whitespace counts a whole paragraph as ONE token, so a Chinese article used to
+// report a small fraction of its real reading time (the zh translation of a
+// 22-minute English post announced 7 minutes). They are counted per character
+// instead.
+const NON_SPACED_SCRIPT = /[㐀-䶿一-鿿豈-﫿぀-ヿ가-힯]/g;
+
+const WORDS_PER_MINUTE = 200;
+// Chinese is read per character, not per word, and far denser per character than
+// English is per letter. 400 characters/minute is a common published pace and
+// lands within ~10% of the English estimate for the same article translated.
+const CHARS_PER_MINUTE = 400;
+
 /**
- * Estimated reading time in whole minutes, minimum 1. Counts whitespace-
- * separated tokens and rounds to the nearest minute at 200 words per minute (a
- * common prose reading pace).
+ * Estimated reading time in whole minutes, minimum 1.
+ *
+ * Mixed-script safe: characters from non-whitespace-delimited scripts (CJK, kana,
+ * Hangul) are counted individually at {@link CHARS_PER_MINUTE}, and whatever
+ * remains is counted as whitespace-separated words at {@link WORDS_PER_MINUTE}.
+ * A post that mixes both (Chinese prose around English model names, figures and
+ * code) is therefore charged for both parts exactly once.
  */
 export function estimateReadingMinutes(content: string): number {
-  const words = content.trim().split(/\s+/).filter(Boolean).length;
-  return Math.max(1, Math.round(words / 200));
+  const chars = content.match(NON_SPACED_SCRIPT)?.length ?? 0;
+  const rest = content.replace(NON_SPACED_SCRIPT, ' ');
+  const words = rest.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.round(words / WORDS_PER_MINUTE + chars / CHARS_PER_MINUTE));
 }
 
 /**

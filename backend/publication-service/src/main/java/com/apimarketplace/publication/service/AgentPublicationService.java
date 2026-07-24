@@ -586,6 +586,9 @@ public class AgentPublicationService {
                     ifSnapshot.put("htmlTemplate", iface.getHtmlTemplate());
                     ifSnapshot.put("cssTemplate", iface.getCssTemplate());
                     ifSnapshot.put("jsTemplate", iface.getJsTemplate());
+                    // The format travels with the templates: without it, acquiring an agent that
+                    // grants a vertical interface silently yields a full-page 1280x800 copy.
+                    ifSnapshot.put("format", iface.getFormat());
                     ifSnapshot.put("interfaceType", iface.getInterfaceType());
                     ifSnapshot.put("data", iface.getData());
                     interfaces.put(ifIdStr, ifSnapshot);
@@ -1304,6 +1307,9 @@ public class AgentPublicationService {
                 req.setCssTemplate(asContentText(ifData.get("cssTemplate"), null));
                 req.setJsTemplate(asContentText(ifData.get("jsTemplate"), null));
                 req.setInterfaceType(ifData.get("interfaceType") != null ? ifData.get("interfaceType").toString() : "html");
+                // Restore the published shape. Content-validated like the templates it belongs to:
+                // a numeric value here must not be stringified into the column.
+                req.setFormat(asContentText(ifData.get("format"), null));
                 req.setIsPublic(false);
                 if (normalizeScope(organizationId) != null) {
                     req.setOrganizationId(normalizeScope(organizationId));

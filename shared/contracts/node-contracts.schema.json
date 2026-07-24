@@ -742,6 +742,103 @@
     },
 
     {
+      "id": "public_link",
+      "name": "Public Link",
+      "category": "action",
+      "description": "Turns a file (FileRef) into a public, time-limited signed URL on the platform's own storage - for APIs that pull media from a URL (Instagram, TikTok) instead of accepting an upload",
+      "parameters": [
+        { "name": "file", "type": "string", "required": true, "status": "aligned", "notes": "Template expression referencing a WHOLE FileRef output, e.g. {{interface:card.output.video}} or {{core:download.output.file}}" },
+        { "name": "ttl_minutes", "type": "number", "default": 240, "status": "aligned", "notes": "Link lifetime in minutes, clamped by the backend to 5-10080 (7 days)" },
+        { "name": "disposition", "type": "string", "enum": ["inline", "attachment"], "default": "inline", "status": "aligned", "notes": "How browsers handle the file at the URL: inline (render) or attachment (download prompt)" }
+      ],
+      "outputs": [
+        { "name": "url", "type": "string", "status": "aligned", "action": "keep", "notes": "Public expiring signed URL, fetchable by any external server with no credentials until expiry" },
+        { "name": "expires_at", "type": "string", "status": "aligned", "action": "keep", "notes": "ISO timestamp when the link stops working" },
+        { "name": "ttl_minutes", "type": "number", "status": "aligned", "action": "keep", "notes": "Effective lifetime in minutes after clamping" },
+        { "name": "file", "type": "object", "status": "aligned", "action": "keep", "notes": "Echo of the input FileRef the link points at" }
+      ]
+    },
+
+    {
+      "id": "media",
+      "name": "Media",
+      "category": "action",
+      "description": "Probe, mux, mix, extract, concat, frame-grab, or overlay audio/video/image files via the platform's ffmpeg sidecar. Config lives in the generic params map with the contract field names; every param accepts a {{...}} template expression, and every file param also accepts a literal FileRef object",
+      "parameters": [
+        { "name": "operation", "type": "string", "required": true, "enum": ["probe", "mux_audio", "mix", "extract_audio", "concat", "frame", "overlay"], "status": "aligned", "notes": "probe = inspect a media file (JSON report, no output file); mux_audio = put ONE audio track onto ONE video; mix = blend up to 8 audio tracks (optionally onto a video); extract_audio = pull the audio out of a video; concat = glue 1-8 videos back to back into one mp4 (single input = trim/speed edit); frame = extract ONE still image from a video; overlay = burn an image (logo, watermark) onto a video" },
+        { "name": "input", "type": "string", "status": "aligned", "notes": "probe/extract_audio/frame only. Template expression referencing a WHOLE FileRef output, e.g. {{core:download.output.file}}, or a literal FileRef object" },
+        { "name": "video", "type": "string", "status": "aligned", "notes": "mux_audio (required), mix (optional), overlay (required). FileRef expression for the video; with mix, present = mp4 output (video stream copied), absent = audio-only output" },
+        { "name": "audio", "type": "string", "status": "aligned", "notes": "mux_audio only (required). FileRef expression for the audio track" },
+        { "name": "tracks", "type": "array", "itemType": "object", "status": "aligned", "notes": "mix only (required, 1-8 items). See Track nested type; each track's source is a FileRef expression" },
+        { "name": "inputs", "type": "array", "itemType": "object", "status": "aligned", "notes": "concat only (required, 1-8 items, order = playback order). See ConcatInput nested type; each item's source is a FileRef expression or literal FileRef" },
+        { "name": "transition", "type": "string", "enum": ["cut", "crossfade"], "default": "cut", "status": "aligned", "notes": "concat only. crossfade needs >= 2 inputs (video xfade + audio acrossfade)" },
+        { "name": "transition_seconds", "type": "number", "default": 0.5, "status": "aligned", "notes": "concat crossfade only, 0.1-5.0. Must be strictly smaller than every clip's effective duration" },
+        { "name": "target_width", "type": "number", "status": "aligned", "notes": "concat only, 16-4096, BOTH with target_height or NEITHER (even values, rounded down). Default: first input's dimensions; non-matching clips are fitted and padded, never stretched" },
+        { "name": "target_height", "type": "number", "status": "aligned", "notes": "concat only, 16-4096, BOTH with target_width or NEITHER (even values, rounded down)" },
+        { "name": "target_fps", "type": "number", "status": "aligned", "notes": "concat only, 1-60. Default: first input's fps" },
+        { "name": "at_seconds", "type": "number", "status": "aligned", "notes": "frame only, >= 0. Default: the MIDDLE of the video (duration/2); beyond the end is clamped to just before the end, never an error" },
+        { "name": "image_format", "type": "string", "enum": ["jpeg", "png"], "default": "jpeg", "status": "aligned", "notes": "frame only" },
+        { "name": "width", "type": "number", "status": "aligned", "notes": "frame only, 16-4096. Scales the extracted image keeping the aspect ratio (height auto)" },
+        { "name": "image", "type": "string", "status": "aligned", "notes": "overlay only (required). FileRef expression for the image to burn onto the video (png alpha respected)" },
+        { "name": "position", "type": "string", "enum": ["top_left", "top_right", "bottom_left", "bottom_right", "center"], "default": "bottom_right", "status": "aligned", "notes": "overlay only. Anchor of the overlaid image" },
+        { "name": "margin_px", "type": "number", "default": 24, "status": "aligned", "notes": "overlay only, >= 0. Distance from the two nearest edges (ignored for center)" },
+        { "name": "width_percent", "type": "number", "default": 15, "status": "aligned", "notes": "overlay only, 1-100. Image width as a percent of the VIDEO width, height auto (aspect ratio kept)" },
+        { "name": "opacity", "type": "number", "default": 1.0, "status": "aligned", "notes": "overlay only, 0-1" },
+        { "name": "start_seconds", "type": "number", "status": "aligned", "notes": "overlay only, >= 0. Overlay visible only from this second; absent = from the start" },
+        { "name": "end_seconds", "type": "number", "status": "aligned", "notes": "overlay only, > start_seconds. Overlay visible only up to this second; absent = to the end" },
+        { "name": "volume", "type": "number", "default": 100, "status": "aligned", "notes": "mux_audio: new-audio volume percent 0-400" },
+        { "name": "offset_seconds", "type": "number", "default": 0, "status": "aligned", "notes": "mux_audio: audio starts at t=offset (>= 0)" },
+        { "name": "trim_start_seconds", "type": "number", "status": "aligned", "notes": "mux_audio/extract_audio: use only this segment of the audio (>= 0)" },
+        { "name": "trim_end_seconds", "type": "number", "status": "aligned", "notes": "mux_audio/extract_audio: use only this segment of the audio (>= 0)" },
+        { "name": "loop", "type": "boolean", "default": false, "status": "aligned", "notes": "mux_audio: loop the audio to the video length" },
+        { "name": "fade_in_seconds", "type": "number", "default": 0, "status": "aligned", "notes": "mux_audio: fade the audio in (>= 0). concat: global fade-in on the RESULT (video + audio), default 0" },
+        { "name": "fade_out_seconds", "type": "number", "default": 1.0, "status": "aligned", "notes": "mux_audio: fade the audio out (>= 0), default 1.0. concat: global fade-out on the RESULT (video + audio), default 0" },
+        { "name": "keep_original_audio", "type": "boolean", "default": false, "status": "aligned", "notes": "mux_audio/mix with video: MIX the video's original track under the new audio" },
+        { "name": "original_volume", "type": "number", "default": 100, "status": "aligned", "notes": "Original-track volume percent 0-400 (only with keep_original_audio)" },
+        { "name": "audio_fit", "type": "string", "enum": ["pad", "shortest", "loop"], "default": "pad", "status": "aligned", "notes": "What happens when audio is shorter/longer than the video" },
+        { "name": "normalize", "type": "any", "default": true, "status": "aligned", "notes": "true = loudnorm at -16 LUFS TP -1.5; a number = that LUFS target (-70 to -5); false = no loudness normalization. Default true for mux_audio/mix but FALSE for concat (normalization forces the re-encode path; set true to even out loudness between clips)" },
+        { "name": "audio_bitrate", "type": "string", "default": "192k", "status": "aligned", "notes": "Output audio bitrate (concat: re-encode path only)" },
+        { "name": "output_format", "type": "string", "enum": ["mp3", "wav", "aac"], "default": "mp3", "status": "aligned", "notes": "extract_audio and video-less mix only; a mix WITH video is always mp4" }
+      ],
+      "outputs": [
+        { "name": "file", "type": "object", "status": "aligned", "action": "keep", "notes": "FileRef of the produced media file (mux_audio, mix, extract_audio, concat, overlay = video/audio; frame = image; absent for probe)" },
+        { "name": "duration_seconds", "type": "number", "status": "aligned", "action": "keep", "notes": "Duration of the result (or of the probed file) in seconds. Not set for frame (a still image has no duration)" },
+        { "name": "timestamp_seconds", "type": "number", "status": "aligned", "action": "keep", "notes": "frame only: the ACTUAL timestamp the still was taken at, after the default-to-middle and end-clamp rules" },
+        { "name": "size_bytes", "type": "number", "status": "aligned", "action": "keep", "notes": "probe only: file size in bytes" },
+        { "name": "format_name", "type": "string", "status": "aligned", "action": "keep", "notes": "probe only: container/format name, e.g. mov,mp4,m4a or mp3" },
+        { "name": "bit_rate", "type": "number", "status": "aligned", "action": "keep", "notes": "probe only: overall bit rate, null when unknown" },
+        { "name": "has_video", "type": "boolean", "status": "aligned", "action": "keep", "notes": "probe only: whether the file has a video stream" },
+        { "name": "has_audio", "type": "boolean", "status": "aligned", "action": "keep", "notes": "probe only: whether the file has an audio stream" },
+        { "name": "video", "type": "object", "status": "aligned", "action": "keep", "notes": "probe only: { codec, width, height, fps }, null when no video stream" },
+        { "name": "audio", "type": "object", "status": "aligned", "action": "keep", "notes": "probe only: { codec, sample_rate, channels }, null when no audio stream" }
+      ],
+      "nestedTypes": {
+        "Track": [
+          { "name": "id", "type": "string", "notes": "Optional id for duck_under references; defaults to track_N" },
+          { "name": "source", "type": "string", "required": true, "notes": "FileRef expression for this track's audio" },
+          { "name": "volume", "type": "number", "default": 100, "notes": "Percent 0-400" },
+          { "name": "offset_seconds", "type": "number", "default": 0 },
+          { "name": "trim_start_seconds", "type": "number" },
+          { "name": "trim_end_seconds", "type": "number" },
+          { "name": "loop", "type": "boolean", "default": false },
+          { "name": "fade_in_seconds", "type": "number", "default": 0 },
+          { "name": "fade_out_seconds", "type": "number", "default": 0 },
+          { "name": "speed", "type": "number", "default": 1.0, "notes": "0.5-2.0, atempo pitch-preserving" },
+          { "name": "duck_under", "type": "string", "notes": "Id of ANOTHER track; this track auto-lowers while that one is audible (sidechaincompress)" },
+          { "name": "duck_amount_db", "type": "number", "default": 12 },
+          { "name": "duck_attack_ms", "type": "number", "default": 20 },
+          { "name": "duck_release_ms", "type": "number", "default": 300 }
+        ],
+        "ConcatInput": [
+          { "name": "source", "type": "string", "required": true, "notes": "FileRef expression (or literal FileRef) of this clip's video; may or may not have audio" },
+          { "name": "trim_start_seconds", "type": "number", "notes": ">= 0. Use the clip only FROM this second" },
+          { "name": "trim_end_seconds", "type": "number", "notes": "> trim_start_seconds. Use the clip only UP TO this second" },
+          { "name": "speed", "type": "number", "default": 1.0, "notes": "0.5-2.0, pitch-preserving (video setpts + audio atempo)" }
+        ]
+      }
+    },
+
+    {
       "id": "compression",
       "name": "Compression",
       "category": "action",

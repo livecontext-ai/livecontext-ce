@@ -29,6 +29,10 @@ class OrgScopePredicateInvariantTest {
             // or audit record, not a scope predicate.
             "InternalAgentController#toDto",
             "AgentObservabilityService#doRecordFromRequest",
+            // recordFromRequest forwards the request's scope pair verbatim to
+            // RunCostNotifier.notifyRunCost (per-run cost attribution) - pure
+            // stamping into a downstream notification, not a scope predicate.
+            "AgentObservabilityService#recordFromRequest",
             // Multi-step task executors - read scope fields to stamp onto
             // child entities (task → execution record), not to gate access.
             "AgentTaskRecurrenceService#fireOnce",

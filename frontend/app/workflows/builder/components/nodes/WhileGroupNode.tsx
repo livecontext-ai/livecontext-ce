@@ -15,6 +15,8 @@ import { NodePlayButton, deriveNodeStatus } from '../NodePlayButton';
 import { NodeBottomBar } from './NodeBottomBar';
 
 
+import { useWorkflowLayoutDirectionSafe } from '@/contexts/WorkflowLayoutDirectionContext';
+import { getBranchHandleGeometry, getBranchHandleGeometryAt, getBranchRowFlow } from './handleGeometry';
 /**
  * While node - loop control flow node.
  *
@@ -27,6 +29,11 @@ import { NodeBottomBar } from './NodeBottomBar';
  * Each port row contains both a left handle and a right handle.
  */
 export function WhileGroupNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
+  // Branch rows and their handles follow the canvas reading direction.
+  const { direction: layoutDirection } = useWorkflowLayoutDirectionSafe();
+  const branchOut = getBranchHandleGeometry(layoutDirection, true);
+  const branchIn = getBranchHandleGeometry(layoutDirection, false);
+
   const t = useTranslations('whileGroup');
   const { isRunMode, isPreviewOnly, viewingEpoch } = useWorkflowMode();
   const visuals = getNodeVisual('whileGroup');
@@ -103,7 +110,11 @@ export function WhileGroupNode({ data, selected, id }: NodeProps<BuilderNodeData
       />
 
       {/* Port rows - each row has a left handle (target) and a right handle (source) */}
-      <div className="mt-4 space-y-2 text-[11px] text-slate-500" style={{ paddingBottom: effectiveStatus && effectiveStatus !== 'pending' ? '10px' : '0' }}>
+      <div className={`mt-4 ${getBranchRowFlow(layoutDirection)} text-[11px] text-slate-500`} style={
+          layoutDirection === 'vertical'
+            ? { paddingRight: effectiveStatus && effectiveStatus !== 'pending' ? '10px' : '0' }
+            : { paddingBottom: effectiveStatus && effectiveStatus !== 'pending' ? '10px' : '0' }
+        }>
 
         {/* Row 1: Entry (left) + Exit (right) - gray */}
         <div className="relative rounded-2xl border border-theme px-3 py-2">
@@ -115,30 +126,30 @@ export function WhileGroupNode({ data, selected, id }: NodeProps<BuilderNodeData
               Exit
             </span>
           </div>
-          {/* Entry target handle (left) */}
-          <Handle
-            type="target"
-            id={`while-${id}-entry`}
-            position={Position.Left}
-            className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
-            style={{
-              left: -27,
-              top: '50%',
-              transform: 'translateY(-50%)',
-              backgroundColor: 'var(--border-color)',
-              ...handleVisibility,
-            }}
-          />
+          {/* Entry target handle. Horizontal pins it to this row's left edge; vertical
+              hoists it to the node's top border (below) - the rows sit under the
+              header, so a top handle cannot pin to a row. */}
+          {layoutDirection !== 'vertical' && (
+            <Handle
+              type="target"
+              id={`while-${id}-entry`}
+              position={branchIn.position}
+              className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
+              style={{
+                ...branchIn.style,
+                backgroundColor: 'var(--border-color)',
+                ...handleVisibility,
+              }}
+            />
+          )}
           {/* Exit source handle (right) */}
           <Handle
             type="source"
             id={`while-${id}-exit`}
-            position={Position.Right}
+            position={branchOut.position}
             className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
             style={{
-              right: -27,
-              top: '50%',
-              transform: 'translateY(-50%)',
+              ...branchOut.style,
               backgroundColor: 'var(--border-color)',
               ...handleVisibility,
             }}
@@ -155,36 +166,59 @@ export function WhileGroupNode({ data, selected, id }: NodeProps<BuilderNodeData
               <span className="text-slate-400">max {data.maxIterations}</span>
             )}
           </div>
-          {/* Loop-back target handle (left, orange) */}
-          <Handle
-            type="target"
-            id={`while-${id}-loop-back`}
-            position={Position.Left}
-            className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
-            style={{
-              left: -27,
-              top: '50%',
-              transform: 'translateY(-50%)',
-              backgroundColor: '#f97316',
-              ...handleVisibility,
-            }}
-          />
+          {/* Loop-back target handle. Same as entry: node-level on the top border in
+              vertical (rendered below), row-pinned in horizontal. */}
+          {layoutDirection !== 'vertical' && (
+            <Handle
+              type="target"
+              id={`while-${id}-loop-back`}
+              position={branchIn.position}
+              className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
+              style={{
+                ...branchIn.style,
+                backgroundColor: '#f97316',
+                ...handleVisibility,
+              }}
+            />
+          )}
           {/* Body source handle (right, orange) */}
           <Handle
             type="source"
             id={`while-${id}-body`}
-            position={Position.Right}
+            position={branchOut.position}
             className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
             style={{
-              right: -27,
-              top: '50%',
-              transform: 'translateY(-50%)',
+              ...branchOut.style,
               backgroundColor: '#f97316',
               ...handleVisibility,
             }}
           />
         </div>
       </div>
+
+      {/* Vertical: the two target handles (entry, loop-back) spread along the node's
+          TOP border, above their columns, since a row-pinned top handle would land in
+          the header. Their colours match the rows. */}
+      {layoutDirection === 'vertical' && (
+        <>
+          {[
+            { id: `while-${id}-entry`, color: 'var(--border-color)' },
+            { id: `while-${id}-loop-back`, color: '#f97316' },
+          ].map((h, index) => {
+            const geo = getBranchHandleGeometryAt(layoutDirection, false, index, 2);
+            return (
+              <Handle
+                key={h.id}
+                type="target"
+                id={h.id}
+                position={geo.position}
+                className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
+                style={{ ...geo.style, backgroundColor: h.color, ...handleVisibility }}
+              />
+            );
+          })}
+        </>
+      )}
 
       {/* Status badge */}
       {effectiveStatus && effectiveStatus !== 'pending' && (

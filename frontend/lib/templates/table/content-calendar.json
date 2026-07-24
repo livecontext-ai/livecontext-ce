@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "kind": "table",
+  "meta": {
+    "slug": "content-calendar",
+    "kind": "table",
+    "order": 30,
+    "difficulty": "intermediate",
+    "icon": "CalendarDays",
+    "runnable": true,
+    "teachesCount": 3,
+    "columnTypes": [
+      "text",
+      "select",
+      "date",
+      "select",
+      "url"
+    ]
+  },
+  "table": {
+    "columns": [
+      {
+        "nameKey": "templates.table.contentCalendar.columns.topic",
+        "preset": "text"
+      },
+      {
+        "nameKey": "templates.table.contentCalendar.columns.channel",
+        "preset": "select"
+      },
+      {
+        "nameKey": "templates.table.contentCalendar.columns.publishDate",
+        "preset": "date"
+      },
+      {
+        "nameKey": "templates.table.contentCalendar.columns.status",
+        "preset": "select"
+      },
+      {
+        "nameKey": "templates.table.contentCalendar.columns.link",
+        "preset": "url"
+      }
+    ]
+  }
+}

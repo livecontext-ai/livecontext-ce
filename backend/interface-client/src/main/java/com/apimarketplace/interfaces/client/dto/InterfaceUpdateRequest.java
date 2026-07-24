@@ -32,6 +32,18 @@ public class InterfaceUpdateRequest {
     @JsonProperty("clear_data_source")
     private Boolean clearDataSource;
 
+    /** Display/capture format (preset name or "WIDTHxHEIGHT"). Null = leave unchanged. */
+    @JsonProperty("format")
+    private String format;
+
+    /**
+     * Clears the format back to "unset" (full page at 1280x800). Needed because a null
+     * `format` means "leave unchanged" on this merge-style update, mirroring
+     * {@code clear_data_source}.
+     */
+    @JsonProperty("clear_format")
+    private Boolean clearFormat;
+
     @JsonProperty("is_public")
     private Boolean isPublic;
 
@@ -67,6 +79,12 @@ public class InterfaceUpdateRequest {
 
     public Boolean getClearDataSource() { return clearDataSource; }
     public void setClearDataSource(Boolean clearDataSource) { this.clearDataSource = clearDataSource; }
+
+    public String getFormat() { return format; }
+    public void setFormat(String format) { this.format = format; }
+
+    public Boolean getClearFormat() { return clearFormat; }
+    public void setClearFormat(Boolean clearFormat) { this.clearFormat = clearFormat; }
 
     public Boolean getIsPublic() { return isPublic; }
     public void setIsPublic(Boolean isPublic) { this.isPublic = isPublic; }

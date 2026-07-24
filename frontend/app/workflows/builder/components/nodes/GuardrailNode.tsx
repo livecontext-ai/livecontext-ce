@@ -19,6 +19,8 @@ import { NodeBottomBar } from './NodeBottomBar';
 import { getEffectiveDefaultProvider } from '@/hooks/useModels';
 import { getProviderIconSlug } from '@/lib/ai-providers/providerIcons';
 
+import { useWorkflowLayoutDirectionSafe } from '@/contexts/WorkflowLayoutDirectionContext';
+import { getTargetHandleGeometry, getBranchHandleGeometry, getBranchRowFlow } from './handleGeometry';
 // Guardrail type labels for display
 const GUARDRAIL_TYPE_LABELS: Record<string, string> = {
   pii_detection: 'PII Detection',
@@ -42,6 +44,12 @@ function getGuardrailIconSlug(data: BuilderNodeData): string | undefined {
 }
 
 export function GuardrailNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
+  // Handle sides follow the canvas reading direction. Safe variant: nodes also
+  // render on provider-less surfaces (marketplace preview, snapshots).
+  const { direction: layoutDirection } = useWorkflowLayoutDirectionSafe();
+  const targetHandle = getTargetHandleGeometry(layoutDirection);
+  const branchOut = getBranchHandleGeometry(layoutDirection, true);
+
   const visuals = getNodeVisual('guardrail');
   const rules: GuardrailRule[] =
     (data.guardrailRules as GuardrailRule[] | undefined) ?? createDefaultGuardrailRules(data.id);
@@ -127,7 +135,11 @@ export function GuardrailNode({ data, selected, id }: NodeProps<BuilderNodeData>
       />
 
       {/* Output branches: Pass and Fail */}
-      <div className="mt-4 space-y-2 text-[11px]" style={{ paddingBottom: effectiveStatus && effectiveStatus !== 'pending' ? '10px' : '0' }}>
+      <div className={`mt-4 ${getBranchRowFlow(layoutDirection)} text-[11px]`} style={
+          layoutDirection === 'vertical'
+            ? { paddingRight: effectiveStatus && effectiveStatus !== 'pending' ? '10px' : '0' }
+            : { paddingBottom: effectiveStatus && effectiveStatus !== 'pending' ? '10px' : '0' }
+        }>
         {/* Pass output */}
         <div className="relative rounded-2xl border border-theme px-3 py-2">
           <div className="flex items-center gap-2">
@@ -139,12 +151,10 @@ export function GuardrailNode({ data, selected, id }: NodeProps<BuilderNodeData>
           <Handle
             type="source"
             id="pass"
-            position={Position.Right}
+            position={branchOut.position}
             className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
             style={{
-              right: -27,
-              top: '50%',
-              transform: 'translateY(-50%)',
+              ...branchOut.style,
               backgroundColor: 'var(--border-color)',
               opacity: isRunMode ? 0 : 1,
               pointerEvents: isRunMode ? 'none' : 'auto'
@@ -163,12 +173,10 @@ export function GuardrailNode({ data, selected, id }: NodeProps<BuilderNodeData>
           <Handle
             type="source"
             id="fail"
-            position={Position.Right}
+            position={branchOut.position}
             className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
             style={{
-              right: -27,
-              top: '50%',
-              transform: 'translateY(-50%)',
+              ...branchOut.style,
               backgroundColor: 'var(--border-color)',
               opacity: isRunMode ? 0 : 1,
               pointerEvents: isRunMode ? 'none' : 'auto'
@@ -210,12 +218,10 @@ export function GuardrailNode({ data, selected, id }: NodeProps<BuilderNodeData>
       {/* Input handle on the left */}
       <Handle
         type="target"
-        position={Position.Left}
+        position={targetHandle.position}
         className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
         style={{
-          left: -6,
-          top: '50%',
-          transform: 'translateY(-50%)',
+          ...targetHandle.style,
           backgroundColor: 'var(--border-color)',
           opacity: isRunMode ? 0 : 1,
           pointerEvents: isRunMode ? 'none' : 'auto'

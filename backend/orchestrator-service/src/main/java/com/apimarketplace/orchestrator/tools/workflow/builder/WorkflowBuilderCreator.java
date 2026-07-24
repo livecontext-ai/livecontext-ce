@@ -212,6 +212,23 @@ public class WorkflowBuilderCreator {
         return coreCreator.executeAddDownloadFile(session, parameters);
     }
 
+    /**
+     * Mints a public, time-limited signed URL for a stored file (FileRef).
+     * Delegates to ControlNodeCreator for the actual implementation.
+     */
+    public ToolExecutionResult executeAddPublicLink(WorkflowBuilderSession session, Map<String, Object> parameters) {
+        return coreCreator.executeAddPublicLink(session, parameters);
+    }
+
+    /**
+     * Processes audio/video files (probe, mux_audio, mix, extract_audio) on the
+     * optional renderer component.
+     * Delegates to ControlNodeCreator for the actual implementation.
+     */
+    public ToolExecutionResult executeAddMedia(WorkflowBuilderSession session, Map<String, Object> parameters) {
+        return coreCreator.executeAddMedia(session, parameters);
+    }
+
     // ==================== Add HTTP Request ====================
 
     /**

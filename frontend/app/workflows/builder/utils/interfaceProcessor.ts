@@ -36,11 +36,13 @@ export function collectInterfaces(ctx: PlanGeneratorContext): void {
     // (usePreparedGraph needs this value before previewModeNodes effect runs)
     interfaceEntry.showPreview = interfaceData.showPreview !== false;
 
-    // Save preview dimensions if customized
-    if (interfaceData.previewWidth && interfaceData.previewWidth !== 400) {
+    // Save the snapped preview box unless it is exactly the 400x250 default
+    // (classic/unset format). Both dims travel together so a re-import reconstructs
+    // the same shape; a legacy single-dim value is dropped and the node re-snaps
+    // itself to the interface's format on load.
+    if (interfaceData.previewWidth && interfaceData.previewHeight &&
+        !(interfaceData.previewWidth === 400 && interfaceData.previewHeight === 250)) {
       interfaceEntry.previewWidth = interfaceData.previewWidth;
-    }
-    if (interfaceData.previewHeight && interfaceData.previewHeight !== 300) {
       interfaceEntry.previewHeight = interfaceData.previewHeight;
     }
 
@@ -58,6 +60,9 @@ export function collectInterfaces(ctx: PlanGeneratorContext): void {
     if (interfaceData.isEntryInterface === true) {
       interfaceEntry.isEntryInterface = true;
     }
+
+    // The display/capture format is deliberately NOT serialized: it belongs to the interface
+    // entity, not to the node that renders it.
 
     // Serialize generate-screenshot toggle
     if (interfaceData.generateScreenshot === true) {

@@ -296,7 +296,7 @@ describe('ensureCompleteHtml', () => {
     expect(result).toContain('</html>');
   });
 
-  it('should include base CSS in the style tag', () => {
+  it('should include base CSS in the style tag (fragments inherit the platform theme)', () => {
     const result = ensureCompleteHtml('<p>Test</p>');
     expect(result).toContain('box-sizing: border-box');
     expect(result).toContain('font-family');
@@ -305,6 +305,67 @@ describe('ensureCompleteHtml', () => {
   it('should include custom CSS when provided', () => {
     const result = ensureCompleteHtml('<p>Test</p>', '.custom { color: red; }');
     expect(result).toContain('.custom { color: red; }');
+  });
+
+  it('fragment: base CSS comes BEFORE the custom CSS so the author can override every base rule', () => {
+    const result = ensureCompleteHtml('<p>Test</p>', 'body { padding: 0; }');
+    const baseIdx = result.indexOf('padding: 8px');
+    const customIdx = result.indexOf('body { padding: 0; }');
+    expect(baseIdx).toBeGreaterThan(-1);
+    expect(customIdx).toBeGreaterThan(baseIdx);
+  });
+
+  // Byte-parity contract with the backend renderer scaffold: the SAME literal is
+  // pinned in InterfaceScreenshotServiceImplTest (fragmentBaseCssPinsSharedRules).
+  // Editing the base on either side without the other fails one of the two suites.
+  it('fragment: the injected base is the exact shared platform literal (parity with FRAGMENT_BASE_CSS)', () => {
+    const SHARED_FRAGMENT_BASE_CSS =
+      "* { box-sizing: border-box; }\n" +
+      'body {\n' +
+      '  margin: 0;\n' +
+      '  padding: 8px;\n' +
+      "  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;\n" +
+      '}';
+    const result = ensureCompleteHtml('<p>Test</p>');
+    expect(result).toContain(SHARED_FRAGMENT_BASE_CSS);
+  });
+
+  // Regression for the 2026-07-16 report: an interface authored as a COMPLETE
+  // document rendered perfectly centered in the generated video (the renderer
+  // injects nothing) but shifted in the builder preview and application panel.
+  // Root cause: the base CSS (body { padding: 8px } + * { box-sizing }) was
+  // injected at the END of <head>, winning the cascade over the author's own
+  // body reset. Complete documents must inherit NO platform styling.
+  it('complete document: the platform base CSS is NOT injected (WYSIWYG parity with the renderer)', () => {
+    const complete =
+      '<!doctype html><html><head><style>body{margin:0;padding:0}</style></head><body>Hi</body></html>';
+    const result = ensureCompleteHtml(complete);
+    expect(result).not.toContain('padding: 8px');
+    expect(result).not.toContain('box-sizing: border-box');
+  });
+
+  it('complete document: custom CSS is still injected without dragging the base CSS along', () => {
+    const complete = '<!doctype html><html><head></head><body>Hi</body></html>';
+    const result = ensureCompleteHtml(complete, '.injected { color: blue; }');
+    expect(result).toContain('.injected { color: blue; }');
+    expect(result).not.toContain('padding: 8px');
+  });
+
+  // Regression for the 2026-07-16 report: a portrait (1080x1920) complete
+  // document looked fine in the canvas-node preview but "grew at the edges"
+  // in the run-mode application panel. The node path passes autoFit=true and
+  // AUTO_FIT_CSS (overflow:hidden + flex centering on html/body) was still
+  // injected into complete documents, clipping/re-centering them in previews
+  // only - the panel (autoFit=false) and the renderer inject nothing, so they
+  // exposed what the node preview masked. Complete documents must inherit
+  // NOTHING, autoFit included, on every surface.
+  it('complete document: autoFit injects neither AUTO_FIT_CSS nor its script (WYSIWYG parity with panel and renderer)', () => {
+    const complete = '<!doctype html><html><head></head><body>Hi</body></html>';
+    const result = ensureCompleteHtml(complete, undefined, true);
+    expect(result).not.toContain('auto-fit-wrapper');
+    expect(result).not.toContain('overflow: hidden');
+    expect(result).not.toContain('fitContent');
+    expect(result).not.toContain('padding: 8px');
   });
 
   it('should inject styles into existing complete HTML before </head>', () => {

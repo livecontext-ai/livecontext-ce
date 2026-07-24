@@ -39,6 +39,8 @@ import { SwitchCasesForm } from '../forms/SwitchCasesForm';
 import { SplitParametersForm } from '../forms/SplitParametersForm';
 import { AggregateParametersForm } from '../forms/AggregateParametersForm';
 import { DownloadFileParametersForm } from '../forms/DownloadFileParametersForm';
+import { PublicLinkParametersForm } from '../forms/PublicLinkParametersForm';
+import { MediaParametersForm } from '../forms/MediaParametersForm';
 import { HttpRequestParametersForm } from '../forms/HttpRequestParametersForm';
 import { DataInputParametersForm } from '../forms/DataInputParametersForm';
 import { WhileGroupParametersForm } from '../forms/WhileGroupParametersForm';
@@ -443,6 +445,36 @@ export function DownloadFileFormAdapter(props: InspectorFormProps) {
 
   return (
     <DownloadFileParametersForm
+      node={props.node}
+      data={props.node.data}
+      isRunMode={props.isRunMode}
+      onUpdate={(data) => props.onUpdate(data)}
+      connectionProps={legacyProps}
+      findUnknownVariables={props.findUnknownVariables}
+    />
+  );
+}
+
+export function PublicLinkFormAdapter(props: InspectorFormProps) {
+  const legacyProps = unpackConnectionProps(props.connectionProps, props.node.id);
+
+  return (
+    <PublicLinkParametersForm
+      node={props.node}
+      data={props.node.data}
+      isRunMode={props.isRunMode}
+      onUpdate={(data) => props.onUpdate(data)}
+      connectionProps={legacyProps}
+      findUnknownVariables={props.findUnknownVariables}
+    />
+  );
+}
+
+export function MediaFormAdapter(props: InspectorFormProps) {
+  const legacyProps = unpackConnectionProps(props.connectionProps, props.node.id);
+
+  return (
+    <MediaParametersForm
       node={props.node}
       data={props.node.data}
       isRunMode={props.isRunMode}

@@ -218,6 +218,8 @@ export type InspectorNodeType =
   | 'wait'
   | 'fork'
   | 'download_file'
+  | 'public_link'
+  | 'media'
   | 'http_request'
   | 'data_input'
   | 'response'
@@ -302,6 +304,8 @@ export function detectNodeType(node: Node<BuilderNodeData> | null): InspectorNod
   if (nodeRegistry.isWaitNode(node)) return 'wait';
   if (nodeRegistry.isForkNode(node)) return 'fork';
   if (nodeRegistry.isDownloadFileNode(node)) return 'download_file';
+  if (nodeRegistry.isPublicLinkNode(node)) return 'public_link';
+  if (nodeRegistry.isMediaNode(node)) return 'media';
   if (nodeRegistry.isHttpRequestNode(node)) return 'http_request';
   if (nodeRegistry.isDataInputNode(node)) return 'data_input';
   if (nodeRegistry.isResponseNode(node)) return 'response';

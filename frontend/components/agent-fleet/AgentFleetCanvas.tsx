@@ -22,6 +22,7 @@ import { useThemeSafely } from '@/hooks/useThemeSafely';
 import { useSvgSafeId } from '@/hooks/useSvgSafeId';
 import { nodeTypes } from '@/app/workflows/builder/constants/graphTypes';
 import { WorkflowModeProvider } from '@/contexts/WorkflowModeContext';
+import { WorkflowLayoutDirectionProvider } from '@/contexts/WorkflowLayoutDirectionContext';
 import { StepByStepProvider } from '@/app/workflows/builder/contexts/StepByStepContext';
 import { ValidationProvider } from '@/app/workflows/builder/contexts/ValidationContext';
 import { EdgeActionsProvider } from '@/app/workflows/builder/components/EdgeActionsContext';
@@ -71,7 +72,12 @@ function readEdgeType(key: string): FleetEdgeType {
 // fleet stores 'default' for the same Bezier style. Map at the UI boundary so
 // the fleet shows the exact same control as the workflow builder.
 const toConnectionType = (t: FleetEdgeType): ConnectionType => (t === 'default' ? 'bezier' : t);
-const fromConnectionType = (t: ConnectionType): FleetEdgeType => (t === 'bezier' ? 'default' : t);
+// The fleet has no reading-direction preference (it is always top-to-bottom), so the
+// builder-only 'auto' style resolves to its vertical shape, `smoothstep`. The fleet
+// never STORES 'auto' (it stores the resolved fleet type), so the selector here never
+// shows it back.
+const fromConnectionType = (t: ConnectionType): FleetEdgeType =>
+  t === 'bezier' ? 'default' : t === 'auto' ? 'smoothstep' : t;
 
 // ─── Connection type visibility filters ───
 const EDGE_CATEGORIES_ALL = ['model', 'tools', 'resources', 'sub-agents', 'skills'] as const;
@@ -877,6 +883,10 @@ export function AgentFleetCanvas({ singleAgentId, snapshot, snapshotMode = false
   }
 
   return (
+    // Pin the layout direction to horizontal: the fleet reuses the builder's node
+    // components, which read the workflow layout preference, but the fleet is its own
+    // canvas and must not shift its node buttons when a user flips that preference.
+    <WorkflowLayoutDirectionProvider forcedDirection="horizontal">
     <WorkflowModeProvider readOnly>
       <StepByStepProvider
         isEnabled={false}
@@ -1168,5 +1178,6 @@ export function AgentFleetCanvas({ singleAgentId, snapshot, snapshotMode = false
         />
       )}
     </WorkflowModeProvider>
+    </WorkflowLayoutDirectionProvider>
   );
 }

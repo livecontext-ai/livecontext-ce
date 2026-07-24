@@ -21,12 +21,18 @@ public class RestTemplateConfig {
     private int readTimeout;
 
     /**
-     * Read timeout for the renderer sidecar's VIDEO endpoint. A video render legitimately takes
-     * up to the recording duration (<= 120s) plus load (<= 10s + 30s clamp headroom) and the
-     * ffmpeg transcode (<= 60s sidecar-side) - far beyond the default 30s read timeout, which
-     * would abort every recording midway. 210s covers the worst case end to end.
+     * Read timeout for the renderer sidecar's VIDEO endpoint, far beyond the default 30s which
+     * would abort every recording midway.
+     *
+     * <p>This MUST stay above the sidecar's WORST-CASE total, or a read timeout aborts the call
+     * client-side and throws away a clip the sidecar was about to return (best-effort =&gt; the
+     * node then emits NO video at all, strictly worse than a short one). The sidecar's budget is
+     * not its total: {@code wallDeadline} is armed only AFTER {@code page.setContent}, which is
+     * separately capped at {@code MAX_TIMEOUT_MS} = 30s. Worst case therefore = 30s load + 450s
+     * wall budget + the ffmpeg finalise and body transfer, and the sidecar pool can queue on top.
+     * 540s leaves ~60s of real margin over that 480s floor.
      */
-    @Value("${http.client.timeout.video-read:210000}")
+    @Value("${http.client.timeout.video-read:540000}")
     private int videoReadTimeout;
 
     @Bean

@@ -39,6 +39,11 @@ export interface EdgeV2 {
 export interface WorkflowPlan {
   name?: string; // Workflow name - used for breadcrumb editing
   description?: string; // Workflow description
+  // The reading direction this workflow was authored in. Persisted so a published /
+  // shared / cloned workflow renders the way its author laid it out, regardless of
+  // the viewer's own preference. Absent on workflows authored before this existed
+  // (they fall back to 'horizontal' on load). The first plan-persisted view setting.
+  layoutDirection?: 'horizontal' | 'vertical';
   triggers: Array<{
     id: string;
     type: string;
@@ -119,7 +124,7 @@ export interface WorkflowPlan {
   }>;
   cores?: Array<{
     id: string;
-    type: 'decision' | 'switch' | 'loop' | 'split' | 'merge' | 'fork' | 'transform' | 'wait' | 'download_file' | 'aggregate' | 'exit' | 'response' | 'option' | 'http_request' | 'data_input' | 'approval'
+    type: 'decision' | 'switch' | 'loop' | 'split' | 'merge' | 'fork' | 'transform' | 'wait' | 'download_file' | 'public_link' | 'media' | 'aggregate' | 'exit' | 'response' | 'option' | 'http_request' | 'data_input' | 'approval'
       | 'filter' | 'sort' | 'limit' | 'remove_duplicates' | 'summarize'
       | 'date_time' | 'crypto_jwt' | 'xml' | 'compression' | 'rss'
       | 'convert_to_file' | 'extract_from_file' | 'compare_datasets'
@@ -173,6 +178,8 @@ export interface WorkflowPlan {
       headers?: Record<string, string>;
       timeout?: number;
     };
+    // public_link nodes have NO dedicated config key: their config lives in the
+    // generic `params` map ({ file, ttl_minutes, disposition }) per the backend contract.
     // For aggregate nodes
     aggregate?: {
       fields: Array<{ label: string; expression: string }>;
@@ -354,6 +361,7 @@ export interface WorkflowPlan {
       smtpUseTls?: boolean;
       fromEmail?: string;
       fromName?: string;
+      replyTo?: string;
       toEmail?: string;
       ccEmail?: string;
       bccEmail?: string;
@@ -374,6 +382,7 @@ export interface WorkflowPlan {
       action?: string;
       messageUid?: string;
       targetFolder?: string;
+      createTargetIfMissing?: boolean;
       fromContains?: string;
       subjectContains?: string;
       bodyContains?: string;

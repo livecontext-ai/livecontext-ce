@@ -55,6 +55,12 @@ export function createInterfaceNodes(
   // Track how many times each interfaceId has been seen (for collision handling)
   const seenInterfaceIds = new Map<string, number>();
 
+  // Single-entry invariant: an app has ONE entry page. The builder UI enforces it on
+  // edit, but agent-written plans (MCP add_node/modify) can carry several flagged
+  // interfaces - keep the FIRST and clear the rest, mirroring the backend resolver's
+  // findFirst() so what the author sees matches what the showcase picks.
+  let entryAssigned = false;
+
   for (const iface of interfaces) {
     const label = iface.label || iface.id;
     const normalizedLabel = normalizeLabel(label);
@@ -80,7 +86,12 @@ export function createInterfaceNodes(
     // Parse position (use parsePosition like all other node creators)
     const { position } = parsePosition(iface.position, startX, startY, `interface ${iface.id}`);
 
-    // Create interface node
+    const isEntry = iface.isEntryInterface === true && !entryAssigned;
+    if (isEntry) entryAssigned = true;
+
+    // Create interface node. A persisted box always wins; otherwise the historical default.
+    // The interface's own shape is applied by the node's thumbnail once the interface loads,
+    // so nothing here needs to know the format.
     const previewW = iface.previewWidth || 400;
     const previewH = iface.previewHeight || 250;
     const interfaceNode: Node<BuilderNodeData> = {
@@ -101,7 +112,7 @@ export function createInterfaceNodes(
           showPreview: iface.showPreview !== false,
           variableMapping: iface.variableMapping,
           actionMapping: iface.actionMapping,
-          isEntryInterface: iface.isEntryInterface,
+          isEntryInterface: isEntry,
           generateScreenshot: iface.generateScreenshot,
           generatePdf: iface.generatePdf,
           pdfFormat: iface.pdfFormat,

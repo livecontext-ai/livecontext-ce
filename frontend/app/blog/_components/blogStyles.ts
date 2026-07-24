@@ -4,6 +4,20 @@
 // theme tokens and stays decoupled from the app-wide theme.
 
 export const blogStyles = `
+  /* Inline code in article prose may wrap as a last resort. docsStyles sets
+     \`white-space: nowrap\` on inline code, which is right for the docs (short
+     identifiers should not break), but in a blog article a ~44-character span
+     glued to CJK text with no inter-character space to break at pushed the
+     paragraph past a 390px viewport (the zh audit-trail post). Overriding to
+     normal wrapping with \`overflow-wrap: anywhere\` breaks a long identifier
+     ONLY when it would otherwise overflow, and never affects the fenced code
+     blocks (which own their own horizontal scroll). Blog-scoped: blogStyles is
+     injected only on /blog routes, so the docs pages keep nowrap. */
+  .landing-root .docs-prose :not(pre) > code {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
   /* ---- Shared image + meta bits ------------------------------------------ */
   .landing-root .blog-cover {
     display: block;
@@ -237,6 +251,34 @@ export const blogStyles = `
   .landing-root .blog-card:hover .blog-read-more,
   .landing-root .blog-featured:hover .blog-read-more {
     gap: 0.55rem;
+  }
+
+  /* ---- Fenced code blocks in article prose --------------------------------
+     docsStyles only styles INLINE code (its selector is \`:not(pre) > code\`), and
+     the docs pages render code through the .docs-code React component rather
+     than Markdown. Blog bodies go through react-markdown, so a fenced block had
+     no rule at all: browser default, no surface, and \`white-space: pre\` pushing
+     long lines past the article's max-w-3xl column. Articles carry formulas,
+     schemas and sample payloads, so give them a real surface that scrolls. */
+  .landing-root .docs-prose pre {
+    margin: 1.5rem 0;
+    padding: 1rem 1.125rem;
+    overflow-x: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 0.75rem;
+    background: var(--bg-tertiary);
+    font-size: 0.8125rem;
+    line-height: 1.6;
+  }
+
+  .landing-root .docs-prose pre code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    color: var(--text-primary);
+    background: none;
+    border: 0;
+    padding: 0;
+    /* The <pre> owns the scrolling; the code must be free to be wider than it. */
+    white-space: pre;
   }
 
   /* ---- Article ----------------------------------------------------------- */

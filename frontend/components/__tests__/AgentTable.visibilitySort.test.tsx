@@ -25,7 +25,11 @@ const mocks = vi.hoisted(() => ({
   getSchedule: vi.fn(),
 }));
 
-vi.mock('next-intl', () => ({ useTranslations: () => (key: string) => key }));
+vi.mock('next-intl', () => ({
+  // .raw mirrors the real next-intl API: template copy is read verbatim through it
+  // so workflow expressions like {{item}} are not parsed as ICU arguments.
+  useTranslations: () => Object.assign((key: string) => key, { raw: (key: string) => key }),
+}));
 vi.mock('next/navigation', () => ({
   useSearchParams: () => new URLSearchParams(),
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
@@ -52,7 +56,11 @@ vi.mock('@/components/ui/EmptyState', () => ({ EmptyState: () => null }));
 vi.mock('@/components/ui/CardSkeletonGrid', () => ({ CardSkeletonGrid: () => null }));
 vi.mock('@/components/ui/PaginationBar', () => ({ PaginationBar: () => null }));
 vi.mock('@/hooks/useDebouncedValue', () => ({ useDebouncedValue: (v: unknown) => v }));
-vi.mock('@/lib/stores/current-org-store', () => ({ useCanMutateInCurrentOrg: () => true }));
+vi.mock('@/lib/stores/current-org-store', () => ({
+  useCanMutateInCurrentOrg: () => true,
+  // Consumed by the TemplateGallery banner, which scopes its collapsed pref per workspace.
+  useCurrentOrg: () => ({ currentOrgId: null }),
+}));
 vi.mock('@/lib/hooks/useOrgScopedReset', () => ({ useOrgScopedReset: () => undefined }));
 vi.mock('@/hooks/useSelectableItems', () => ({
   useSelectableItems: () => ({ selectedIds: new Set<string>(), toggle: vi.fn(), clear: vi.fn(), selectAll: vi.fn() }),
@@ -64,6 +72,8 @@ vi.mock('@/components/ui/dialog', () => ({
   DialogContent: ({ children }: any) => children,
   DialogHeader: ({ children }: any) => children,
   DialogTitle: ({ children }: any) => children,
+  // Used by the templates modal in the page header.
+  DialogDescription: ({ children }: any) => children,
 }));
 vi.mock('@/components/ui/select', async () => {
   const ReactLib = await vi.importActual<typeof import('react')>('react');

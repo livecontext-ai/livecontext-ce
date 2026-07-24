@@ -92,7 +92,7 @@ class InterfaceResourceStrategyTest {
     }
 
     @Test
-    @DisplayName("buildSnapshot captures html/css/js/interfaceType and sanitized data")
+    @DisplayName("buildSnapshot captures html/css/js/format/interfaceType and sanitized data")
     void buildSnapshotCapturesFields() {
         UUID id = UUID.randomUUID();
         InterfaceDto iface = iface(id, OWNER, "Page", "Desc");
@@ -100,6 +100,7 @@ class InterfaceResourceStrategyTest {
         iface.setCssTemplate(".a{}");
         iface.setJsTemplate("console.log(1)");
         iface.setInterfaceType("CUSTOM");
+        iface.setFormat("vertical");
         iface.setData(new LinkedHashMap<>(Map.of("title", "Hello")));
         when(interfaceClient.getInterface(id, OWNER)).thenReturn(iface);
 
@@ -111,6 +112,8 @@ class InterfaceResourceStrategyTest {
                 .containsEntry("htmlTemplate", "<div/>")
                 .containsEntry("cssTemplate", ".a{}")
                 .containsEntry("jsTemplate", "console.log(1)")
+                // The shape travels with the templates: the clone must keep the published frame.
+                .containsEntry("format", "vertical")
                 .containsEntry("interfaceType", "CUSTOM");
         assertThat(snapshot.get("data")).isInstanceOf(Map.class);
     }

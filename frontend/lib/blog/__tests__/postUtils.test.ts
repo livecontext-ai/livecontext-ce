@@ -84,6 +84,37 @@ describe('estimateReadingMinutes', () => {
     const content = Array.from({ length: 400 }, () => 'x').join('\n\n   ');
     expect(estimateReadingMinutes(content)).toBe(2);
   });
+
+  // Regression: Chinese has no spaces, so splitting on whitespace counted a whole
+  // paragraph as ONE word. The zh translation of a 22-minute English post used to
+  // announce 7 minutes.
+  it('counts unspaced CJK per character, not as a single word', () => {
+    // 800 ideographs with no whitespace at all -> 800 / 400 = 2 minutes.
+    const content = '中'.repeat(800);
+    expect(estimateReadingMinutes(content)).toBe(2);
+  });
+
+  it('does not collapse a whole CJK paragraph into one minute', () => {
+    // The pre-fix implementation saw exactly 1 token here and returned 1.
+    const content = '工作流'.repeat(1000); // 3,000 ideographs -> 7.5 -> 8
+    expect(estimateReadingMinutes(content)).toBe(8);
+  });
+
+  it('charges both halves of mixed CJK and latin content exactly once', () => {
+    // 400 ideographs (1 min) + 200 latin words (1 min) = 2.
+    const content = `${'中'.repeat(400)} ${Array.from({ length: 200 }, () => 'word').join(' ')}`;
+    expect(estimateReadingMinutes(content)).toBe(2);
+  });
+
+  it('counts kana and Hangul per character too', () => {
+    expect(estimateReadingMinutes('あ'.repeat(800))).toBe(2);
+    expect(estimateReadingMinutes('가'.repeat(800))).toBe(2);
+  });
+
+  it('leaves latin-only estimates untouched by the CJK path', () => {
+    const content = Array.from({ length: 500 }, () => 'word').join(' ');
+    expect(estimateReadingMinutes(content)).toBe(3);
+  });
 });
 
 describe('formatAuthors', () => {

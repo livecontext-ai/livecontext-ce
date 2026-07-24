@@ -264,6 +264,66 @@ class ReusableTriggerServiceVersionParityTest {
     // Helpers
     // ====================================================================
 
+    @Test
+    @DisplayName("Regression 2026-07-21: chokepoint catches a version-drifted PRODUCTION run despite its __editorRun__ flag")
+    void chokepointCatchesDriftedProductionRunDespiteEditorFlag() {
+        // Pinning promotes an editor run and never strips __editorRun__, so the old
+        // `!isEditorRun(run)` exemption skipped the chokepoint for 100% of promoted
+        // production runs - the defense-in-depth was dead for exactly the runs it
+        // guards. The exemption now excludes the production run (FK identity).
+        Map<String, Object> plan = planWith(List.of(mcp("Step A", Map.of("url", "x"))),
+                List.of(edge("trigger:my_webhook", "mcp:step_a")));
+        WorkflowEntity workflow = unpinnedWorkflow(plan);
+        workflow.setPinnedVersion(17);
+        WorkflowRunEntity run = runWith(plan, workflow);
+        run.setPlanVersion(12); // drifted from the pin - the leak the chokepoint exists for
+        run.getMetadata().put("__editorRun__", Boolean.TRUE);
+        UUID productionRunId = UUID.randomUUID();
+        ReflectionTestUtils.setField(run, "id", productionRunId);
+        workflow.setProductionRunId(productionRunId);
+
+        // Real resolver: isAllowedForProduction touches only its two arguments.
+        ReflectionTestUtils.setField(service, "productionRunResolver",
+                new ProductionRunResolver(workflowRepository, runRepository));
+        when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(workflow));
+        lenient().when(runRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        lenient().when(runRepository.findByRunIdPublic(RUN_ID)).thenReturn(Optional.of(run));
+
+        TriggerExecutionResult result =
+                service.executeTriggerInternal(run, TRIGGER_ID, TriggerType.WEBHOOK, Map.of(), false);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.message()).contains("Production trigger refused");
+    }
+
+    @Test
+    @DisplayName("Chokepoint still exempts a NON-production editor run on a pinned workflow (draft testing keeps working)")
+    void chokepointStillExemptsNonProductionEditorRun() {
+        Map<String, Object> plan = planWith(List.of(mcp("Step A", Map.of("url", "x"))),
+                List.of(edge("trigger:my_webhook", "mcp:step_a")));
+        WorkflowEntity workflow = unpinnedWorkflow(plan);
+        workflow.setPinnedVersion(17);
+        // Production is a DIFFERENT run.
+        workflow.setProductionRunId(UUID.randomUUID());
+        WorkflowRunEntity run = runWith(plan, workflow);
+        run.setPlanVersion(12); // draft testing at a non-pinned version - allowed
+        run.getMetadata().put("__editorRun__", Boolean.TRUE);
+        ReflectionTestUtils.setField(run, "id", UUID.randomUUID());
+
+        ReflectionTestUtils.setField(service, "productionRunResolver",
+                new ProductionRunResolver(workflowRepository, runRepository));
+        setupThroughPlanResolution(workflow);
+
+        TriggerExecutionResult result =
+                service.executeTriggerInternal(run, TRIGGER_ID, TriggerType.WEBHOOK, Map.of(), false);
+
+        // Passes the chokepoint (fails later at the deliberate epoch-manager stop) -
+        // the refusal message must NOT be the chokepoint's.
+        assertThat(result.message() == null || !result.message().contains("Production trigger refused"))
+                .as("a non-production editor run must not be refused by the chokepoint")
+                .isTrue();
+    }
+
     private void setupThroughPlanResolution(WorkflowEntity workflow) {
         when(runRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(workflowRepository.findById(WORKFLOW_ID)).thenReturn(Optional.of(workflow));

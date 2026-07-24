@@ -2,6 +2,7 @@ package com.apimarketplace.auth.credential.web;
 
 import com.apimarketplace.common.web.TenantResolver;
 import com.apimarketplace.auth.credential.domain.OAuth2Models.*;
+import com.apimarketplace.auth.credential.service.GooglePickerAppId;
 import com.apimarketplace.auth.credential.service.InternalCredentialService;
 import com.apimarketplace.auth.credential.service.OAuth2Service;
 import jakarta.servlet.http.HttpServletRequest;
@@ -158,8 +159,37 @@ public class OAuth2Controller {
         // API key (an api_key credential has no refresh_token -> empty). Owner-gated: resolves only
         // this user's credential. The refresh token itself is never exposed.
         return internalCredentialService.refreshAccessToken(userId, credentialName, organizationId)
-                .<ResponseEntity<?>>map(token -> ResponseEntity.ok(new PickerTokenResponse(token)))
+                .<ResponseEntity<?>>map(token -> ResponseEntity.ok(
+                        new PickerTokenResponse(token, resolvePickerAppId(userId, credentialName, organizationId))))
                 .orElseGet(() -> ResponseEntity.status(404).body(Map.of("error", "no_google_credential")));
+    }
+
+    /**
+     * Cloud project number of the OAuth client this credential connects with, for
+     * {@code PickerBuilder.setAppId} (required by Google for the {@code drive.file} scope, and
+     * without which a picked file is never granted to the app). Read from the same credential the
+     * token was just minted from, so platform / BYOK / CE each resolve their own client. Null when
+     * unavailable: the Picker then behaves exactly as it did before, rather than being handed a
+     * wrong App ID, which would break the Picker itself.
+     */
+    private String resolvePickerAppId(String userId, String credentialName, String organizationId) {
+        try {
+            Map<String, String> data =
+                    internalCredentialService.getCredentialDataMap(userId, credentialName, organizationId);
+            if (data == null || data.isEmpty()) {
+                return null;
+            }
+            String clientId = data.get("oauth_client_id");
+            if (clientId == null || clientId.isBlank()) {
+                clientId = data.get("client_id");
+            }
+            return GooglePickerAppId.fromClientId(clientId).orElse(null);
+        } catch (RuntimeException e) {
+            // Never fail the token mint over the App ID: the caller degrades to the old behaviour.
+            log.warn("picker-token: could not resolve the Picker App ID for '{}' ({})",
+                    credentialName, e.toString());
+            return null;
+        }
     }
 
     /**

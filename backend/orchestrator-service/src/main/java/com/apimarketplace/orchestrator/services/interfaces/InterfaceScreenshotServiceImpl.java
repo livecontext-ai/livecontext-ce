@@ -2,6 +2,7 @@ package com.apimarketplace.orchestrator.services.interfaces;
 
 import com.apimarketplace.common.scaling.lock.DistributedSemaphore;
 import com.apimarketplace.orchestrator.domain.file.FileRef;
+import com.apimarketplace.interfaces.client.InterfaceFormat;
 import com.apimarketplace.orchestrator.repository.WorkflowRunRepository;
 import com.apimarketplace.orchestrator.services.InterfaceRenderService;
 import com.apimarketplace.orchestrator.services.InterfaceRenderService.ResolvedTemplateSnapshot;
@@ -81,8 +82,11 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
      *  fast screenshot/PDF traffic behind long-held "screenshot:sidecar" permits. */
     private static final String VIDEO_SEMAPHORE_KEY = "video:sidecar";
 
-    /** Options specific to a VIDEO render; null for the other kinds. */
-    private record VideoOptions(String preset, int maxDurationSeconds, String mode, int fps) { }
+    /** Options specific to a VIDEO render; null for the other kinds. {@code explicitPreset} is
+     *  the node's videoPreset when one was configured, else null - the dimension decision itself
+     *  happens in {@link #buildVideoBody}, once the interface's own format is known (it comes from
+     *  the resolved snapshot, which is only available inside doRender). */
+    private record VideoOptions(String explicitPreset, int maxDurationSeconds, String mode, int fps) { }
 
     /** Distinguishes the render outputs, driving the sidecar endpoint, MIME, extension,
      *  filename segment and storage source-type. Keeps the screenshot path byte-identical. */
@@ -131,7 +135,14 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
         DistributedSemaphore screenshotConcurrency,
         @Value("${services.screenshot-renderer.max-concurrent:4}") int maxConcurrent,
         @Value("${services.screenshot-renderer.video-max-concurrent:2}") int videoMaxConcurrent,
-        @Value("${services.screenshot-renderer.video-max-bytes:52428800}") long videoMaxBytes
+        // 100MB (was 50MB). This is an UPLOAD guard, not a memory guard: it is checked after
+        // exchange() has already materialised the whole clip as a byte[], so raising it costs
+        // no additional heap - it only decides store-vs-drop. 50MB was sized when the sidecar's
+        // wall budget capped a busy 1080x1920@60fps clip at ~9s; now that such a clip runs its
+        // full 20s a MEASURED prod render weighs 47.4MB, and a heavier page exceeds 50MB. Over
+        // the cap the clip is DROPPED (Optional.empty()), so leaving this at 50MB would turn
+        // "short video" into "no video" - a strictly worse outcome than the bug being fixed.
+        @Value("${services.screenshot-renderer.video-max-bytes:104857600}") long videoMaxBytes
     ) {
         this.renderService = renderService;
         this.fileStorageService = fileStorageService;
@@ -157,6 +168,8 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
     public Optional<FileRef> capturePdf(String tenantId, String runId, int epoch, int spawn,
                                         Integer itemIndex, String nodeId, UUID interfaceId,
                                         String pdfFormat, boolean landscape) {
+        // The PDF deliberately ignores the interface's display format - page size is
+        // paper-based (pdfFormat A4/Letter/Legal + pdfLandscape).
         return render(RenderKind.PDF, tenantId, runId, epoch, spawn, itemIndex, nodeId,
             interfaceId, pdfFormat, landscape, null);
     }
@@ -166,12 +179,15 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
                                           Integer itemIndex, String nodeId, UUID interfaceId,
                                           String videoPreset, Integer maxDurationSeconds,
                                           String videoMode, Integer videoFps) {
-        String preset = normalizeVideoPresetOrDefault(videoPreset);
         int duration = clampVideoDurationSeconds(maxDurationSeconds);
         String mode = normalizeVideoModeOrDefault(videoMode);
         int fps = clampVideoFps(videoFps);
+        // Only the EXPLICIT preset is known here. The interface's own format comes from the
+        // snapshot resolved inside doRender, so the precedence (explicit preset > interface
+        // format > vertical) is applied later, in buildVideoBody.
+        String explicitPreset = normalizeVideoPresetOrNull(videoPreset);
         return render(RenderKind.VIDEO, tenantId, runId, epoch, spawn, itemIndex, nodeId,
-            interfaceId, null, false, new VideoOptions(preset, duration, mode, fps));
+            interfaceId, null, false, new VideoOptions(explicitPreset, duration, mode, fps));
     }
 
     /**
@@ -203,11 +219,21 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
      * honouring the documented "unknown falls back to vertical" contract.
      */
     static String normalizeVideoPresetOrDefault(String raw) {
+        String preset = normalizeVideoPresetOrNull(raw);
+        return preset != null ? preset : DEFAULT_VIDEO_PRESET;
+    }
+
+    /**
+     * Like {@link #normalizeVideoPresetOrDefault} but null for blank/unknown input - lets
+     * {@link #buildVideoBody} distinguish "no explicit preset" (the interface's own format may
+     * drive the viewport) from an explicit preset (which always wins).
+     */
+    static String normalizeVideoPresetOrNull(String raw) {
         if (raw == null || raw.isBlank()) {
-            return DEFAULT_VIDEO_PRESET;
+            return null;
         }
         String candidate = raw.trim().toLowerCase(Locale.ROOT);
-        return SUPPORTED_VIDEO_PRESETS.contains(candidate) ? candidate : DEFAULT_VIDEO_PRESET;
+        return SUPPORTED_VIDEO_PRESETS.contains(candidate) ? candidate : null;
     }
 
     /** Clamp the caller's recording ceiling to [MIN, MAX] seconds; null/non-positive → default. */
@@ -282,11 +308,34 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
             return Optional.empty();
         }
 
-        String assembled = assembleHtml(snapshot.html(), snapshot.css(), snapshot.js(), snapshot.vars());
+        // The format is a property of the INTERFACE, so it arrives with the resolved snapshot
+        // (which prefers a run snapshot over the live interface) rather than from the node.
+        String format = snapshot.format();
+
+        String assembled = assembleHtml(snapshot.html(), snapshot.css(), snapshot.js(), snapshot.vars(), format);
 
         byte[] bytes;
         try {
-            bytes = postToSidecar(kind, assembled, pdfFormat, landscape, videoOptions);
+            SidecarResponse rendered = postToSidecar(kind, assembled, pdfFormat, landscape, videoOptions, format);
+            bytes = rendered.bytes();
+            // A truncated clip still comes back 200 with a VALID, merely shorter mp4, so this
+            // is the only signal that the wall-clock budget - not the page's own done flag -
+            // ended the recording. Without it a 20s clip silently ships as 9s.
+            if (rendered.truncated()) {
+                logger.warn("video render hit the sidecar wall-clock budget and was TRUNCATED to {} frames "
+                        + "({}s at {}fps, requested up to {}s) for nodeId={} runId={} epoch={}. "
+                        + "Lower videoFps or shorten the interface's clip to fit the budget.",
+                    rendered.frames(),
+                    // Locale.ROOT: a log line is machine-facing, so the decimal separator must not
+                    // follow the JVM's default locale (a French default renders "9,0", not "9.0").
+                    rendered.frames() != null && videoOptions != null && videoOptions.fps() > 0
+                        ? String.format(java.util.Locale.ROOT, "%.1f",
+                            rendered.frames() / (double) videoOptions.fps())
+                        : "?",
+                    videoOptions != null ? videoOptions.fps() : "?",
+                    videoOptions != null ? videoOptions.maxDurationSeconds() : "?",
+                    nodeId, runId, epoch);
+            }
         } catch (RestClientException e) {
             logger.warn("{} sidecar call failed for nodeId={} runId={} epoch={}: {}",
                 kind.segment, nodeId, runId, epoch, e.getMessage());
@@ -381,24 +430,53 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
         return trimmed.startsWith("<!doctype") || trimmed.startsWith("<html");
     }
 
-    private String assembleHtml(String bodyHtml, String css, String js, Map<String, Object> vars) {
+    /**
+     * Platform base stylesheet for FRAGMENT templates only - the default theme a bare HTML
+     * snippet inherits when wrapped in the scaffold below (system font, border-box sizing,
+     * 8px breathing room). Byte-identical to the frontend preview's BASE_IFRAME_CSS in
+     * interfaceHtmlUtils.ts (keep both in sync): a fragment must render the same in the
+     * builder preview and in the screenshot/video. Complete documents (isCompleteHtml) get
+     * NO base CSS on either side - the author owns the whole page.
+     */
+    static final String FRAGMENT_BASE_CSS =
+        "* { box-sizing: border-box; }\n"
+            + "body {\n"
+            + "  margin: 0;\n"
+            + "  padding: 8px;\n"
+            + "  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;\n"
+            + "}";
+
+    /**
+     * @param format the interface's declared format; drives the scaffold's meta viewport so a
+     *               fragment template gets the same coordinate space as the Playwright viewport.
+     *               Null falls back to the historical 1280x800.
+     */
+    private String assembleHtml(String bodyHtml, String css, String js, Map<String, Object> vars,
+                                String format) {
         String hydrationScripts = buildHydrationScripts(vars, js);
 
         if (isCompleteHtml(bodyHtml)) {
             // Publisher provided a full <!DOCTYPE>/<html> document - inject CSS in <head>
             // and our hydration scripts before </body> (or at end if no </body>).
+            // Deliberately NO platform base CSS here (see FRAGMENT_BASE_CSS).
             String withCss = (css != null && !css.isBlank())
                 ? injectBeforeHeadClose(bodyHtml, "<style>" + css + "</style>")
                 : bodyHtml;
             return injectBeforeBodyClose(withCss, hydrationScripts);
         }
 
-        // Fragment template - wrap in our standard scaffold.
+        // Fragment template - wrap in our standard scaffold. The scaffold's viewport must match
+        // the interface's declared format: it IS the coordinate space the fragment is laid out
+        // in, and the sidecar renders at those same dimensions. The platform base CSS comes
+        // FIRST so the author's cssTemplate can override every rule (same order as the
+        // frontend preview).
+        InterfaceFormat.Viewport scaffold = InterfaceFormat.resolveOrDefault(format);
         StringBuilder sb = new StringBuilder(4096);
         sb.append("<!DOCTYPE html><html><head>");
         sb.append("<meta charset=\"utf-8\">");
         sb.append("<meta name=\"viewport\" content=\"width=")
-          .append(VIEWPORT_WIDTH).append(", height=").append(VIEWPORT_HEIGHT).append("\">");
+          .append(scaffold.width()).append(", height=").append(scaffold.height()).append("\">");
+        sb.append("<style>").append(FRAGMENT_BASE_CSS).append("</style>");
         if (css != null && !css.isBlank()) {
             sb.append("<style>").append(css).append("</style>");
         }
@@ -456,8 +534,12 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
         return haystack.toLowerCase(Locale.ROOT).indexOf(needle.toLowerCase(Locale.ROOT));
     }
 
-    private byte[] postToSidecar(RenderKind kind, String html, String pdfFormat, boolean landscape,
-                                 VideoOptions videoOptions) {
+    /** Sidecar reply: the rendered bytes plus the smooth-video wall-clock outcome (see
+     *  X-Render-Truncated). `truncated` is false for every non-smooth render. */
+    private record SidecarResponse(byte[] bytes, boolean truncated, Integer frames) { }
+
+    private SidecarResponse postToSidecar(RenderKind kind, String html, String pdfFormat, boolean landscape,
+                                          VideoOptions videoOptions, String format) {
         String endpoint = switch (kind) {
             case PDF -> PDF_ENDPOINT;
             case VIDEO -> VIDEO_ENDPOINT;
@@ -469,8 +551,8 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
 
         Map<String, Object> body = switch (kind) {
             case PDF -> buildPdfBody(html, pdfFormat, landscape);
-            case VIDEO -> buildVideoBody(html, videoOptions);
-            case SCREENSHOT -> buildScreenshotBody(html);
+            case VIDEO -> buildVideoBody(html, videoOptions, format);
+            case SCREENSHOT -> buildScreenshotBody(html, format);
         };
 
         HttpHeaders headers = new HttpHeaders();
@@ -484,21 +566,40 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
         // long-read-timeout template: a recording legitimately outlives the default 30s window.
         RestTemplate template = kind == RenderKind.VIDEO ? videoRestTemplate : restTemplate;
         ResponseEntity<byte[]> response = template.exchange(url, HttpMethod.POST, entity, byte[].class);
-        return response.getBody();
+        return new SidecarResponse(
+            response.getBody(),
+            "true".equalsIgnoreCase(response.getHeaders().getFirst("X-Render-Truncated")),
+            parseFrameCount(response.getHeaders().getFirst("X-Render-Frames")));
     }
 
-    private Map<String, Object> buildScreenshotBody(String html) {
+    /** Header is informational: an unparseable/absent value must never fail a good render. */
+    private static Integer parseFrameCount(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            return Integer.valueOf(raw.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private Map<String, Object> buildScreenshotBody(String html, String format) {
+        InterfaceFormat.Viewport formatViewport = InterfaceFormat.resolve(format);
+
         Map<String, Object> viewport = new LinkedHashMap<>();
-        viewport.put("width", VIEWPORT_WIDTH);
-        viewport.put("height", VIEWPORT_HEIGHT);
+        viewport.put("width", formatViewport != null ? formatViewport.width() : VIEWPORT_WIDTH);
+        viewport.put("height", formatViewport != null ? formatViewport.height() : VIEWPORT_HEIGHT);
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("html", html);
         body.put("viewport", viewport);
-        // Capture the entire scrollable interface, not just the 1280x800 viewport - otherwise
-        // tall dashboards / long result grids get cropped and the screenshot can't be trusted
-        // for a visual check.
-        body.put("fullPage", true);
+        // No format configured: capture the entire scrollable interface, not just the 1280x800
+        // viewport - otherwise tall dashboards / long result grids get cropped and the
+        // screenshot can't be trusted for a visual check.
+        // Format configured: capture the EXACT WxH frame instead, so the PNG matches the video
+        // and every preview surface pixel-for-pixel (that is the point of the shared format).
+        body.put("fullPage", formatViewport == null);
         body.put("waitFor", "networkidle");
         body.put("timeoutMs", PLAYWRIGHT_TIMEOUT_MS);
         return body;
@@ -517,14 +618,31 @@ public class InterfaceScreenshotServiceImpl implements InterfaceScreenshotServic
         return body;
     }
 
-    private Map<String, Object> buildVideoBody(String html, VideoOptions videoOptions) {
+    /**
+     * @param format the interface's own display format, resolved from the snapshot. Dimension
+     *               precedence: an explicit (valid) videoPreset wins, else the interface's format
+     *               drives the recording viewport, else the vertical preset default.
+     */
+    private Map<String, Object> buildVideoBody(String html, VideoOptions videoOptions, String format) {
         VideoOptions opts = videoOptions != null
             ? videoOptions
-            : new VideoOptions(DEFAULT_VIDEO_PRESET, DEFAULT_VIDEO_DURATION_SECONDS,
+            : new VideoOptions(null, DEFAULT_VIDEO_DURATION_SECONDS,
                 DEFAULT_VIDEO_MODE, DEFAULT_VIDEO_FPS);
+        InterfaceFormat.Viewport formatViewport =
+            opts.explicitPreset() == null ? InterfaceFormat.resolve(format) : null;
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("html", html);
-        body.put("preset", opts.preset());
+        if (formatViewport != null) {
+            // The interface's format drives the recording dimensions. An explicit viewport
+            // wins over `preset` in the sidecar (resolveVideoViewport), which also floors odd
+            // dimensions to even for the H.264 yuv420p encoder.
+            Map<String, Object> viewport = new LinkedHashMap<>();
+            viewport.put("width", formatViewport.width());
+            viewport.put("height", formatViewport.height());
+            body.put("viewport", viewport);
+        } else {
+            body.put("preset", opts.explicitPreset() != null ? opts.explicitPreset() : DEFAULT_VIDEO_PRESET);
+        }
         // The orchestrator always requests MP4 (H.264 + faststart): the one container every
         // downstream consumer (social upload APIs, Telegram, browsers) accepts.
         body.put("format", "mp4");

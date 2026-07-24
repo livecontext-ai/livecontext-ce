@@ -44,8 +44,9 @@ import java.util.concurrent.atomic.AtomicReference;
  * {@code fileService.uploadGeneric} (Files page, chat attachments, avatars, DataTable files) 404s
  * on upload, and the Files detail view 404s when it fetches content via {@code by-id/{id}/raw}.
  *
- * <p>This bridge mounts ONLY those two endpoints (the signed-proxy / delete paths stay cloud-only
- * by design) and delegates to the storage {@link FileStorageService} bean the monolith already
+ * <p>This bridge mounts those two endpoints plus {@code GET /proxy-signed} (added with the
+ * public_link node - see its javadoc; the delete paths stay cloud-only by design)
+ * and delegates to the storage {@link FileStorageService} bean the monolith already
  * wires (see {@code MonolithFileStorageServiceAdapter}). It reads the gateway/embedded-auth headers
  * directly - the same {@code X-User-ID}/{@code X-Organization-ID} headers {@code StorageExplorerController}
  * reads and the CE org-context filter injects - mirroring {@code FileController}'s org-scope logic
@@ -65,15 +66,123 @@ public class MonolithFileController {
     private final PublicFileUrlBuilder publicFileUrlBuilder;
     private final StorageService storageService;
     private final OrgAccessGuard orgAccessGuard;
+    private final com.apimarketplace.common.storage.signing.ShowcaseUrlSigner showcaseUrlSigner;
+    private final com.apimarketplace.storage.util.MimeTypeRegistry mimeTypeRegistry;
 
     public MonolithFileController(FileStorageService fileStorageService,
                                   PublicFileUrlBuilder publicFileUrlBuilder,
                                   StorageService storageService,
-                                  OrgAccessGuard orgAccessGuard) {
+                                  OrgAccessGuard orgAccessGuard,
+                                  com.apimarketplace.common.storage.signing.ShowcaseUrlSigner showcaseUrlSigner,
+                                  com.apimarketplace.storage.util.MimeTypeRegistry mimeTypeRegistry) {
         this.fileStorageService = fileStorageService;
         this.publicFileUrlBuilder = publicFileUrlBuilder;
         this.storageService = storageService;
         this.orgAccessGuard = orgAccessGuard;
+        this.showcaseUrlSigner = showcaseUrlSigner;
+        this.mimeTypeRegistry = mimeTypeRegistry;
+    }
+
+    /**
+     * Public file download via HMAC-signed URL - the CE mount of the cloud
+     * {@code storage.web.FileController#proxySignedDownload}. Added with the public_link
+     * workflow node: a CE install that sets {@code STORAGE_SHOWCASE_HMAC_SECRET} can mint
+     * public links, so the verifying route must exist here too (previously cloud-only,
+     * which made CE-minted links 404). The signature IS the authorisation: no JWT, no
+     * tenant headers. Validation order mirrors the cloud: signature (which includes
+     * expiry) first, then existence. With a blank secret the signer verifies nothing and
+     * every request is 403, matching the mint side's "not enabled" failure.
+     */
+    @GetMapping("/proxy-signed")
+    public ResponseEntity<org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody> proxySignedDownload(
+            @RequestParam String key,
+            @RequestParam long exp,
+            @RequestParam(defaultValue = "inline") String disposition,
+            @RequestParam String sig) {
+
+        long now = java.time.Instant.now().getEpochSecond();
+        if (!showcaseUrlSigner.verify(key, exp, disposition, sig, now)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+
+        return fileStorageService.openStream(key)
+            .map(ds -> {
+                String fileName = com.apimarketplace.storage.util.FileNameExtractor.fromStoragePath(key);
+                String mimeType = mimeTypeRegistry.resolve(fileName);
+                String contentDisposition = ContentDispositions.of(
+                        "attachment".equalsIgnoreCase(disposition) ? "attachment" : "inline", fileName);
+                org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody body = out -> {
+                    try (com.apimarketplace.storage.service.file.DownloadStream s = ds) {
+                        s.stream().transferTo(out);
+                    }
+                };
+                ResponseEntity.BodyBuilder builder = ResponseEntity.ok()
+                        .header(HttpHeaders.CONTENT_DISPOSITION, contentDisposition)
+                        .header(HttpHeaders.CACHE_CONTROL, "private, max-age=900")
+                        .contentType(mimeType != null ? MediaType.parseMediaType(mimeType) : MediaType.APPLICATION_OCTET_STREAM);
+                if (ds.contentLength() > 0) {
+                    builder.contentLength(ds.contentLength());
+                }
+                return builder.body(body);
+            })
+            .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    /**
+     * Workflow-context upload - the CE counterpart of {@code FileController.uploadFile}
+     * ({@code POST /api/files/upload}). Same request shape (multipart {@code file} +
+     * {@code workflowId}/{@code runId}/{@code stepAlias}) and the same bare {@link FileRef}
+     * response, so every cloud caller works unchanged: {@code fileService.uploadFile} feeds
+     * the data_input inspector upload, the trigger-panel file fields and interface-form
+     * uploads, ALL of which 404ed on CE before this mount (only {@code generic-upload}
+     * existed here). {@code MonolithSecurityFilter} already forwards the exact path for
+     * share-token sessions - the route just did not exist.
+     */
+    @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<?> uploadFile(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam("workflowId") String workflowId,
+            @RequestParam("runId") String runId,
+            @RequestParam(value = "stepAlias", defaultValue = "upload") String stepAlias,
+            @RequestHeader("X-User-ID") String tenantId,
+            @RequestHeader(value = "X-Organization-ID", required = false) String organizationId,
+            @RequestHeader(value = "X-Organization-Role", required = false) String orgRole) {
+
+        logger.info("CE file upload: name={}, size={}, workflow={}, run={}, tenant={}, org={}",
+                file.getOriginalFilename(), file.getSize(), workflowId, runId, tenantId, organizationId);
+
+        if (file.getSize() > FileConstants.MAX_FILE_SIZE_BYTES) {
+            return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                    .body(Map.of("error", "File too large. Maximum size: " + FileConstants.MAX_FILE_SIZE_MB + " MB"));
+        }
+        if (file.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "File is empty"));
+        }
+
+        try {
+            String fileName = file.getOriginalFilename() != null ? file.getOriginalFilename() : FileConstants.DEFAULT_FILENAME;
+            String mimeType = file.getContentType() != null ? file.getContentType() : FileConstants.DEFAULT_MIME_TYPE;
+            var inputStream = file.getInputStream();
+            long size = file.getSize();
+
+            AtomicReference<FileRef> result = new AtomicReference<>();
+            // Same org-scope stamping as genericUpload / the cloud controller's
+            // withRequestOrgScope: the indexed row lands in the caller's active workspace.
+            TenantResolver.runWithOrgScope(organizationId, orgRole, () ->
+                    result.set(fileStorageService.upload(
+                            tenantId, workflowId, runId, stepAlias,
+                            fileName, mimeType, inputStream, size)));
+
+            return ResponseEntity.ok(result.get());
+        } catch (IOException e) {
+            logger.error("CE file upload failed: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Upload failed: " + e.getMessage()));
+        } catch (QuotaExceededException e) {
+            logger.warn("CE file upload refused by storage quota: tenant={}, error={}", tenantId, e.getMessage());
+            return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                    .body(Map.of("error", "Storage quota exceeded"));
+        }
     }
 
     /**

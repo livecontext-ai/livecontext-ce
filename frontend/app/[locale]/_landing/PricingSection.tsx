@@ -112,7 +112,7 @@ export default function PricingSection() {
     <div className="w-full">
       <div className="flex justify-center">
         <div
-          className="relative inline-flex items-center gap-1 p-1.5 rounded-full"
+          className="relative inline-flex items-center gap-1 p-1 rounded-xl"
           style={{ background: 'var(--bg-tertiary)' }}
         >
           <CycleButton active={cycle === 'monthly'} onClick={() => setCycle('monthly')}>
@@ -178,7 +178,7 @@ function CycleButton({
     <button
       type="button"
       onClick={onClick}
-      className="relative z-10 flex items-center justify-center px-6 py-2 rounded-full text-sm font-medium transition-colors duration-200"
+      className="relative z-10 flex items-center justify-center px-5 py-1.5 rounded-lg text-sm font-medium transition-colors duration-200"
       style={{
         background: active ? 'var(--bg-primary)' : 'transparent',
         color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
@@ -267,7 +267,7 @@ function PlanCardView({ plan }: { plan: PlanCard }) {
             : '/app/settings/pricing'
         }
         onClick={plan.id === 'enterprise' ? undefined : handleSignIn}
-        className="mt-6 inline-flex items-center justify-center w-full h-10 rounded-full text-sm font-medium transition-all duration-200 hover:brightness-110 active:scale-[0.98] cursor-pointer"
+        className="mt-6 inline-flex items-center justify-center w-full h-9 rounded-xl text-sm font-medium transition-colors duration-200 hover:bg-[var(--accent-hover)] active:scale-[0.98] cursor-pointer"
         style={{
           background: 'var(--accent-primary)',
           color: 'var(--accent-foreground)',

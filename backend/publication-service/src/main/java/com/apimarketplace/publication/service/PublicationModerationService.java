@@ -589,6 +589,9 @@ public class PublicationModerationService {
                     entry.put("htmlTemplate", iface.getHtmlTemplate());
                     entry.put("cssTemplate", iface.getCssTemplate());
                     entry.put("jsTemplate", iface.getJsTemplate());
+                    // The snapshot side of this diff carries the format, so the live side must
+                    // too - otherwise the reviewer sees a spurious "removed" on every interface.
+                    entry.put("format", iface.getFormat());
                     entry.put("interfaceType", iface.getInterfaceType());
                     entry.put("data", iface.getData());
                     liveInterfaces.put(ifaceIdStr, entry);

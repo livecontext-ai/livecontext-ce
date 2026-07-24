@@ -77,6 +77,9 @@ public final class PlanSnapshotSanitizer {
             "id", "label", "position", "isEntryInterface",
             "showPreview", "previewWidth", "previewHeight",
             "_snapshot_htmlTemplate", "_snapshot_cssTemplate", "_snapshot_jsTemplate",
+            // The interface's display/capture format. It travels with the templates: without it
+            // an app published from a vertical interface is acquired as a 1280x800 one.
+            "_snapshot_format",
             // Required for the marketplace iframe bridge to fire prefillForms()
             // (textareas + selects pre-filled with the publisher's chosen values).
             // Without these, the marketplace card and click-preview render the
@@ -95,8 +98,23 @@ public final class PlanSnapshotSanitizer {
             // `rendered_js` string outputs (the resolved interface templates). Survives publish
             // → clone so the cloned workflow keeps the publisher's choice; the rendered source
             // itself is resolved at run time under the cloning tenant's own run context.
-            "exposeRenderedSource"
+            "exposeRenderedSource",
+            // Same contract as generateScreenshot / exposeRenderedSource: these are publisher
+            // choices that must survive publish → clone; the PDF / MP4 themselves are generated
+            // under the cloning tenant's own prefix at run time. They were missing from this
+            // whitelist, so publishing silently dropped them and the cloned workflow lost its
+            // PDF / video outputs.
+            "generatePdf", "pdfFormat", "pdfLandscape",
+            "generateVideo", "videoPreset", "videoMaxDurationSeconds", "videoMode", "videoFps"
     );
+
+    // Top-level SCALAR keys kept as-is on the sanitized preview snapshot. These carry
+    // no secrets and drive how the marketplace canvas RENDERS the plan, so the preview
+    // must honour them. `layoutDirection` ('horizontal' | 'vertical') is the workflow's
+    // reading direction: the publisher authored the canvas one way and the preview (and
+    // a later clone) must show it the same way. Without this passthrough the loop below
+    // keeps only whitelisted COLLECTIONS and silently drops every scalar top-level key.
+    private static final Set<String> SCALAR_PASSTHROUGH_KEYS = Set.of("layoutDirection");
 
     private static final Map<String, Set<String>> COLLECTION_WHITELISTS = Map.of(
             "triggers", TRIGGER_KEYS,
@@ -122,6 +140,11 @@ public final class PlanSnapshotSanitizer {
 
             if ("notes".equals(collectionName)) {
                 sanitized.put(collectionName, deepCopyList(value));
+                continue;
+            }
+
+            if (SCALAR_PASSTHROUGH_KEYS.contains(collectionName)) {
+                sanitized.put(collectionName, value);
                 continue;
             }
 

@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "kind": "agent",
+  "meta": {
+    "slug": "data-analyst",
+    "kind": "agent",
+    "order": 20,
+    "difficulty": "intermediate",
+    "icon": "Table",
+    "runnable": true,
+    "teachesCount": 3,
+    "avatarUrl": "preset:teal"
+  },
+  "agent": {
+    "systemPromptKey": "templates.agent.dataAnalyst.systemPrompt",
+    "temperature": 0.2,
+    "maxTokens": 16000,
+    "maxIterations": 30,
+    "avatarUrl": "preset:teal",
+    "toolsConfig": {
+      "mode": "none",
+      "tablesGrant": "all",
+      "tableAccessMode": "read",
+      "webSearch": false
+    }
+  }
+}

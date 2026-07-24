@@ -2,45 +2,54 @@
  * Utilities for calculating node positions in the workflow builder
  */
 
+import type { WorkflowLayoutDirection } from '@/contexts/WorkflowLayoutDirectionContext';
+import { DEFAULT_WORKFLOW_LAYOUT_DIRECTION } from '@/contexts/WorkflowLayoutDirectionContext';
+
 interface PendingHoverConnection {
   nodeId: string;
   handleId: string;
   handleType: 'source' | 'target';
-  handlePosition: 'left' | 'right' | 'top';
+  handlePosition: 'left' | 'right' | 'top' | 'bottom';
   position: { x: number; y: number };
 }
 
+const NODE_WIDTH = 220; // approximate
+const NODE_HEIGHT = 100; // approximate
+const SPACING = 150; // gap between the "+" and the new node
+
 /**
- * Calculate the target position for a new node based on pending connection or grid pattern
+ * Where to drop a node created from a hover "+".
+ *
+ * Placed by the handle's ROLE and the canvas direction, not the geometric side, so a
+ * source "+" always continues the flow (right in horizontal, below in vertical) and a
+ * target "+" always precedes the hovered node. `pending.position` is the "+"'s own
+ * location, already offset out along the correct axis by the overlay, so the new node
+ * just extends past it. The old switch keyed off `handlePosition` and had no vertical
+ * case, so a vertical "+" placed the node sideways.
  */
 export function calculateNodePosition(
   pendingConnection: PendingHoverConnection | null,
-  nodeCreationCounter: number
+  nodeCreationCounter: number,
+  direction: WorkflowLayoutDirection = DEFAULT_WORKFLOW_LAYOUT_DIRECTION,
 ): { x: number; y: number } {
   if (pendingConnection) {
-    const nodeWidth = 220; // Approximate node width
-    const nodeHeight = 100; // Approximate node height
-    const spacing = 150; // Space between nodes
+    const { position, handleType } = pendingConnection;
+    const isSource = handleType === 'source';
 
-    if (pendingConnection.handlePosition === 'right') {
-      // Clicked on right handle - position new node to the right
+    if (direction === 'vertical') {
+      // Flow runs down: a source drops the new node below, a target above, centred
+      // horizontally on the "+".
       return {
-        x: pendingConnection.position.x + spacing,
-        y: pendingConnection.position.y - 40, // Center vertically
-      };
-    } else if (pendingConnection.handlePosition === 'top') {
-      // Clicked on top handle - position new node above
-      return {
-        x: pendingConnection.position.x - nodeWidth / 2, // Center horizontally
-        y: pendingConnection.position.y - nodeHeight - spacing,
-      };
-    } else {
-      // Clicked on left handle - position new node to the left
-      return {
-        x: pendingConnection.position.x - nodeWidth - spacing,
-        y: pendingConnection.position.y - 40, // Center vertically
+        x: position.x - NODE_WIDTH / 2,
+        y: isSource ? position.y + SPACING : position.y - NODE_HEIGHT - SPACING,
       };
     }
+    // Flow runs right: a source drops the new node to the right, a target to the left,
+    // centred vertically on the "+".
+    return {
+      x: isSource ? position.x + SPACING : position.x - NODE_WIDTH - SPACING,
+      y: position.y - 40,
+    };
   }
 
   // Default positioning (grid pattern) when no pending connection

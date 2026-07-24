@@ -97,10 +97,10 @@ export default function CookieConsentBanner() {
         {t('privacyLink')}
       </Link>
       <div className="mt-3 flex items-center justify-end gap-2">
-        <Button variant="outline" size="sm" onClick={() => persist('rejected')}>
+        <Button variant="outline" size="sm" className="h-9 px-4 rounded-xl" onClick={() => persist('rejected')}>
           {t('reject')}
         </Button>
-        <Button variant="default" size="sm" onClick={() => persist('accepted')}>
+        <Button variant="default" size="sm" className="h-9 px-4 rounded-xl" onClick={() => persist('accepted')}>
           {t('accept')}
         </Button>
       </div>

@@ -1331,7 +1331,7 @@ class AgentWorkflowFireServiceTest {
         }
 
         private NodeMock enabledStaticMock() {
-            return new NodeMock(true, NodeMock.SOURCE_STATIC, Map.of("x", 1), null, null);
+            return new NodeMock(true, NodeMock.SOURCE_STATIC, Map.of("x", 1), null, null, null);
         }
 
         @Test
@@ -1343,6 +1343,68 @@ class AgentWorkflowFireServiceTest {
             Map<String, Object> result = service.buildResult(run, okFire(), workflow, plan, TENANT_ID);
 
             assertThat(result).doesNotContainKeys("mock_mode", "mocked_nodes", "mock_note");
+        }
+
+        /**
+         * Regression 2026-07-21 (production-identity audit, finding "addMockInfo is
+         * metadata-keyed"): pinning PROMOTES an editor run and strips neither
+         * __editorRun__ nor a leftover __mockMode__, so the promoted production run
+         * still carries both - but per the MockRunGate FK rule its fires execute for
+         * REAL. Reporting mock_mode='all_mcp' + mocked_nodes here told the agent a
+         * real production epoch was fake ("Outputs are CONFIGURED MOCKS"). The FK is
+         * the identity test, same as MockRunGate.
+         */
+        @Test
+        @DisplayName("PROMOTED production run (editor flags + FK match) omits all mock keys - its fires execute for real")
+        void promotedProductionRun_withStaleMockMetadata_omitsMockKeys() {
+            UUID promotedId = UUID.randomUUID();
+            lenient().when(run.getId()).thenReturn(promotedId);
+            lenient().when(workflow.getProductionRunId()).thenReturn(promotedId);
+            lenient().when(run.getMetadata()).thenReturn(editorMetadata("all_mcp"));
+            lenient().when(plan.getNodeMocks()).thenReturn(Map.of("mcp:fetch", enabledStaticMock()));
+
+            Map<String, Object> result = service.buildResult(run, okFire(), workflow, plan, TENANT_ID);
+
+            assertThat(result).doesNotContainKeys("mock_mode", "mocked_nodes", "mock_note");
+        }
+
+        @Test
+        @DisplayName("NON-production editor run with the same flags still reports its mocks (FK points elsewhere)")
+        void nonProductionEditorRun_sameFlags_stillReportsMocks() {
+            lenient().when(run.getId()).thenReturn(UUID.randomUUID());
+            lenient().when(workflow.getProductionRunId()).thenReturn(UUID.randomUUID());
+            lenient().when(run.getMetadata()).thenReturn(editorMetadata("all_mcp"));
+            lenient().when(plan.getNodeMocks()).thenReturn(Map.of("mcp:fetch", enabledStaticMock()));
+
+            Map<String, Object> result = service.buildResult(run, okFire(), workflow, plan, TENANT_ID);
+
+            assertThat(result.get("mock_mode")).isEqualTo("all_mcp");
+            assertThat((String) result.get("mock_note")).contains("CONFIGURED MOCKS");
+        }
+
+        /**
+         * Regression 2026-07-21 (round-4 audit, CRITICAL): the first version of the FK
+         * guard read run.getWorkflow() - on the real agent path the re-fetched run is
+         * DETACHED (open-in-view false, no surrounding transaction) so that reference
+         * is an uninitialized lazy proxy and the dereference threw
+         * LazyInitializationException on EVERY agent execute report (every agent-minted
+         * run carries __editorRun__=true, so the guard was always reached). The guard
+         * must use the caller-passed workflow entity and never touch run.getWorkflow().
+         */
+        @Test
+        @DisplayName("addMockInfo NEVER dereferences run.getWorkflow() (detached lazy proxy on the agent path)")
+        void addMockInfo_neverTouchesTheRunsLazyWorkflowProxy() {
+            lenient().when(run.getId()).thenReturn(UUID.randomUUID());
+            lenient().when(run.getWorkflow()).thenThrow(
+                    new org.hibernate.LazyInitializationException("could not initialize proxy - no Session"));
+            lenient().when(workflow.getProductionRunId()).thenReturn(UUID.randomUUID());
+            lenient().when(run.getMetadata()).thenReturn(editorMetadata("all_mcp"));
+            lenient().when(plan.getNodeMocks()).thenReturn(Map.of("mcp:fetch", enabledStaticMock()));
+
+            Map<String, Object> result = service.buildResult(run, okFire(), workflow, plan, TENANT_ID);
+
+            // Report built from the passed workflow entity; the lazy proxy is never touched.
+            assertThat(result.get("mock_mode")).isEqualTo("all_mcp");
         }
 
         @Test
@@ -1376,7 +1438,7 @@ class AgentWorkflowFireServiceTest {
         void editorRun_disabledMock_excluded() {
             when(run.getMetadata()).thenReturn(editorMetadata(null));
             when(plan.getNodeMocks()).thenReturn(Map.of(
-                    "mcp:parked", new NodeMock(false, NodeMock.SOURCE_STATIC, Map.of(), null, null)));
+                    "mcp:parked", new NodeMock(false, NodeMock.SOURCE_STATIC, Map.of(), null, null, null)));
 
             Map<String, Object> result = service.buildResult(run, okFire(), workflow, plan, TENANT_ID);
 

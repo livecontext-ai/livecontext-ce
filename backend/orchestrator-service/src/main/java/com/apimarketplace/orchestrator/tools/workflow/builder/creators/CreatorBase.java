@@ -33,6 +33,8 @@ public abstract class CreatorBase {
         TRANSFORM("core", "add_transform"),  // Transform is stored in cores but behaves as passthrough step
         WAIT("core", "add_wait"),            // Wait is stored in cores but behaves as passthrough step
         DOWNLOAD_FILE("core", "add_download_file"),  // Download file from URL and store for workflow use
+        PUBLIC_LINK("core", "add_public_link"),      // Mint a public, time-limited signed URL for a stored file
+        MEDIA("core", "add_media"),                  // Audio/video processing: probe, mux_audio, mix, extract_audio (renderer component)
         EXIT("core", "add_exit"),            // Exit branch execution (terminal node, other parallel branches continue)
         RESPONSE("core", "add_response"),    // Send a message response to chat interface
         OPTION("core", "add_option"),        // Multiple choice branching (N choices, first true wins)

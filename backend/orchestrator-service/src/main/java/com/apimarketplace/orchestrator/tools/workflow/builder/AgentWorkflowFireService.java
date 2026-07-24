@@ -392,8 +392,11 @@ public class AgentWorkflowFireService {
 
         // Mock-mode visibility: which nodes served configured mocks instead of
         // really executing (anti "forgot a mock was active" guard - zero noise
-        // when no mock is in play).
-        addMockInfo(result, run, plan);
+        // when no mock is in play). The caller-provided workflow entity is passed
+        // for the FK identity test: the re-fetched run's getWorkflow() is an
+        // UNINITIALIZED lazy proxy here (open-in-view false, agent-tool path holds
+        // no session) and dereferencing it throws LazyInitializationException.
+        addMockInfo(result, run, workflow, plan);
 
         // Top-level error from trigger failure (not a node error)
         if (("FAILED".equals(status) || "PARTIAL_SUCCESS".equals(status))
@@ -426,11 +429,28 @@ public class AgentWorkflowFireService {
      * metadata (static view - the authoritative per-row flag is {@code mocked:true}
      * on get_node_output).
      */
-    private void addMockInfo(Map<String, Object> result, WorkflowRunEntity run, WorkflowPlan plan) {
+    private void addMockInfo(Map<String, Object> result, WorkflowRunEntity run,
+                             WorkflowEntity workflow, WorkflowPlan plan) {
         Map<String, Object> metadata = run.getMetadata();
         boolean editorRun = metadata != null && Boolean.TRUE.equals(metadata.get("__editorRun__"));
         if (!editorRun || plan == null) {
-            return; // production fires never apply mocks - nothing to report
+            return; // no editor flag = legacy/flag-less run, mocks never applied - nothing to report
+        }
+        // PRODUCTION NEVER MOCKS, and the metadata cannot decide this: pinning promotes
+        // an editor run without stripping __editorRun__ or a leftover __mockMode__, so
+        // for the promoted production run the flags describe a fire that (per the
+        // MockRunGate FK rule) executed for REAL. Reporting mock_mode/mocked_nodes here
+        // would tell the agent a real production epoch is fake. Same FK identity test
+        // as MockRunGate - report nothing, matching every real production fire.
+        // NEVER read run.getWorkflow() here: on the agent-tool path the re-fetched run
+        // is detached (open-in-view false, no surrounding transaction) and its workflow
+        // is an uninitialized lazy proxy - dereferencing it throws
+        // LazyInitializationException. The caller passes its fully-loaded workflow
+        // entity instead; its productionRunId is as-of the pre-fire load, the same
+        // staleness class as the pinned_version reported above.
+        if (workflow != null && workflow.getProductionRunId() != null
+                && workflow.getProductionRunId().equals(run.getId())) {
+            return;
         }
         Map<String, NodeMock> mocks = plan.getNodeMocks();
         List<String> enabledMocks = mocks.entrySet().stream()

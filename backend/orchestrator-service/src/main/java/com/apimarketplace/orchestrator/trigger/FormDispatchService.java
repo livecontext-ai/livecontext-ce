@@ -127,6 +127,21 @@ public class FormDispatchService {
                     throw new IllegalStateException(
                         "This form is not accepting submissions yet: its workflow has no published production version.");
                 }
+                if (!resolution.isFound()) {
+                    // Same F8 class as NOT_PINNED above: falling through returned a green
+                    // "accepted" to the submitter while the data fired nothing. Under the
+                    // FK-first resolver this state is deterministic (production run parked
+                    // on a blocking signal, or no trusted run survived a rearm), not a
+                    // transient race - so tell the submitter instead of dropping silently.
+                    // Covers NO_PRODUCTION_RUN and the (race-only, workflow deleted between
+                    // our load and the resolve) WORKFLOW_MISSING outcome alike.
+                    logger.warn("Form endpoint '{}' refused: workflow {} has no dispatchable production run " +
+                        "(outcome={}: paused on a signal, none survived a rearm, or workflow deleted).",
+                        endpoint.getName(), workflow.getId(), resolution.outcome());
+                    triggerClient.logFormSubmission(endpoint.getId(), formData, "no_production_run", 0, ipAddress);
+                    throw new IllegalStateException(
+                        "This form is temporarily not accepting submissions. Please try again later.");
+                }
                 if (resolution.isFound()) {
                     WorkflowRunEntity run = resolution.run().get();
 
@@ -143,8 +158,19 @@ public class FormDispatchService {
                         // fall through to log + return triggered=0 below
                     } else {
 
-                    // Skip terminal runs
+                    // A terminal production run here means a deliberate stop (COMPLETED is
+                    // the only terminal TRUSTED status; non-COMPLETED terminals are healed
+                    // by the resolver's missed-rearm backstop). Refuse loudly instead of
+                    // returning the green "accepted" that silently dropped the submission.
                     RunStatus runStatus = run.getStatus();
+                    if (runStatus.isTerminal()) {
+                        logger.warn("Form endpoint '{}' refused: production run {} of workflow {} is " +
+                            "{} (deliberate stop). Reactivate the run or re-pin to resume form intake.",
+                            endpoint.getName(), run.getRunIdPublic(), workflow.getId(), runStatus);
+                        triggerClient.logFormSubmission(endpoint.getId(), formData, "production_run_stopped", 0, ipAddress);
+                        throw new IllegalStateException(
+                            "This form is no longer accepting submissions: its workflow was stopped.");
+                    }
                     if (!runStatus.isTerminal()) {
 
                         // Use stored triggerId directly (same as webhook pattern)

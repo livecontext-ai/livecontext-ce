@@ -36,6 +36,16 @@ import java.util.Optional;
  * result that composes with retry policies / continueOnFailure like any failure.
  * A {@code catalog_example} fetch failure also produces a FAILED result with an
  * explicit message - never a silent fallback shape.
+ *
+ * <p>{@code durationMs} simulates the real call's latency: the factory waits that
+ * long (on the same worker thread a real slow call would block, self-capped at
+ * {@link NodeMock#MAX_DURATION_MS}) before serving the result, so the step's
+ * measured execution time reflects it. Applies to every source, including
+ * {@code error}. The wait is sliced into 100 ms chunks polling the run's cancel
+ * signal (the {@code WaitNode} F2.4 pattern), so a user STOP releases the worker
+ * within ~100 ms instead of the full simulated duration; a thread interrupt
+ * (executor shutdown) ends the wait the same way. Either way the mock result is
+ * served immediately - the wait is best-effort, never a new failure mode.
  */
 @Service
 public class MockNodeResultFactory {
@@ -49,9 +59,20 @@ public class MockNodeResultFactory {
         this.catalogMockClient = catalogMockClient;
     }
 
+    /** Optional: run cancel-signal source so a user STOP releases a simulated duration early. */
+    private com.apimarketplace.orchestrator.services.streaming.redis.WorkflowRedisPublisher workflowRedisPublisher;
+
+    @Autowired(required = false)
+    public void setWorkflowRedisPublisher(
+            com.apimarketplace.orchestrator.services.streaming.redis.WorkflowRedisPublisher workflowRedisPublisher) {
+        this.workflowRedisPublisher = workflowRedisPublisher;
+    }
+
     public NodeExecutionResult build(ExecutionNode node, ExecutionContext ctx, NodeMock mock) {
         long start = System.currentTimeMillis();
         String nodeId = node.getNodeId();
+
+        simulateDuration(nodeId, ctx, mock);
 
         if (mock.isError()) {
             Map<String, Object> output = new HashMap<>(mock.error().output());
@@ -101,6 +122,45 @@ public class MockNodeResultFactory {
         return new NodeExecutionResult(nodeId, NodeStatus.COMPLETED, output,
                 Optional.empty(), mockMetadata(mock.source()),
                 System.currentTimeMillis() - start);
+    }
+
+    /**
+     * Simulated execution time: blocks the current worker thread for
+     * {@code mock.durationMs}, exactly where the real call would block. The value
+     * is parse-capped at {@link NodeMock#MAX_DURATION_MS} (10 minutes).
+     *
+     * <p>Sliced into 100 ms chunks polling the run's cancel signal (the
+     * {@code WaitNode} F2.4 pattern): the engine's user-STOP cancellation is
+     * cooperative, so a monolithic sleep would hold a pooled worker for the full
+     * simulated duration after a STOP (compounding across a split fan-out). A
+     * thread interrupt (executor shutdown) also ends the wait, with the flag
+     * restored. Either way the mock result is then served immediately - the wait
+     * is best-effort and never introduces a new failure mode.
+     */
+    private void simulateDuration(String nodeId, ExecutionContext ctx, NodeMock mock) {
+        if (!mock.hasSimulatedDuration()) {
+            return;
+        }
+        long durationMs = mock.durationMs();
+        String runId = ctx != null ? ctx.runId() : null;
+        logger.info("[Mock] Node {} simulating {} ms of execution time", nodeId, durationMs);
+        long remaining = durationMs;
+        try {
+            while (remaining > 0) {
+                long slice = Math.min(100L, remaining);
+                Thread.sleep(slice);
+                remaining -= slice;
+                if (workflowRedisPublisher != null && runId != null
+                        && workflowRedisPublisher.isAgentCancelSignalSet(runId)) {
+                    logger.info("[Mock] Node {} simulated duration aborted by run cancel signal ({} ms remaining)",
+                            nodeId, remaining);
+                    return;
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            logger.debug("[Mock] Node {} simulated duration interrupted - serving the mock immediately", nodeId);
+        }
     }
 
     /**

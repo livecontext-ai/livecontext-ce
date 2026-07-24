@@ -43,6 +43,10 @@ function classifyNodeIdPrefix(nodeId: string): string {
       nodeId.includes('merge') || nodeId.includes('transform') || nodeId.includes('wait') ||
       nodeId.includes('fork') || nodeId.includes('exit') || nodeId.includes('response') ||
       nodeId.includes('download_file') || nodeId.includes('download-file') ||
+      nodeId.includes('public_link') || nodeId.includes('public-link') ||
+      // 'media' is a PREFIX match only: mcp tool ids like create_media_container-123
+      // contain "media" but are mcp nodes (mirrors StepByStepContext.normalizeNodeId)
+      nodeId === 'media' || nodeId.startsWith('media-') ||
       nodeId.includes('http_request') || nodeId.includes('http-request') ||
       nodeId.includes('data_input') || nodeId.includes('data-input')) {
     return 'core';
@@ -132,6 +136,8 @@ const NODE_SPECS: NodeSpec[] = [
   { name: 'Exit', nodeId: 'exit-123-abc', dataId: 'exit-123-abc', kind: 'exit', expectedPrefix: 'core', isTrigger: false, isDataTable: false },
   { name: 'Response', nodeId: 'response-123-abc', dataId: 'response-123-abc', kind: 'response', expectedPrefix: 'core', isTrigger: false, isDataTable: false },
   { name: 'Download file', nodeId: 'download_file-123-abc', dataId: 'download_file-123-abc', kind: 'utility', expectedPrefix: 'core', isTrigger: false, isDataTable: false },
+  { name: 'Public link', nodeId: 'public_link-123-abc', dataId: 'public_link-123-abc', kind: 'public_link', expectedPrefix: 'core', isTrigger: false, isDataTable: false },
+  { name: 'Media', nodeId: 'media-123-abc', dataId: 'media-123-abc', kind: 'media', expectedPrefix: 'core', isTrigger: false, isDataTable: false },
   { name: 'HTTP request', nodeId: 'http_request-123-abc', dataId: 'http_request-123-abc', kind: 'utility', expectedPrefix: 'core', isTrigger: false, isDataTable: false },
   { name: 'Data input', nodeId: 'data_input-123-abc', dataId: 'data_input-123-abc', kind: 'utility', expectedPrefix: 'core', isTrigger: false, isDataTable: false },
 

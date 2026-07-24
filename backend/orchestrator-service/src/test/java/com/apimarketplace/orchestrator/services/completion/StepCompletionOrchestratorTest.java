@@ -164,7 +164,7 @@ class StepCompletionOrchestratorTest {
 
             when(persistenceService.recordStep(eq(execution), eq(NODE_ID), eq(NODE_LABEL),
                     eq(NODE_ID), any(StepExecutionResult.class), anyInt(), any()))
-                    .thenReturn(StepPersistenceResult.notPersisted());
+                    .thenReturn(StepPersistenceResult.duplicate());
             // NodeCounts are always updated to stay in sync with EdgeCounts
             when(stateSnapshotService.recordNodeCompletionAndGetCounts(RUN_ID, NODE_ID, "COMPLETED", null, 0, 100L))
                     .thenReturn(ONE_COMPLETED);
@@ -320,7 +320,7 @@ class StepCompletionOrchestratorTest {
                     execution, NODE_ID, NODE_LABEL, result, 0, 0);
 
             when(persistenceService.recordStep(any(), any(), any(), any(), any(), anyInt(), any()))
-                    .thenReturn(StepPersistenceResult.notPersisted());
+                    .thenReturn(StepPersistenceResult.duplicate());
             // NodeCounts always updated (even for duplicates)
             when(stateSnapshotService.recordNodeCompletionAndGetCounts(any(), any(), any(), any(), anyInt(), anyLong()))
                     .thenReturn(ONE_COMPLETED);

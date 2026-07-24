@@ -982,6 +982,129 @@ export interface DownloadFileOutputs {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// PUBLIC LINK
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Parameters for Public Link
+ * Turns a file (FileRef) into a public, time-limited signed URL on the platform's own storage - for APIs that pull media from a URL (Instagram, TikTok) instead of accepting an upload
+ */
+export interface PublicLinkParameters {
+  file: string;
+  ttlMinutes?: number;
+  disposition?: 'inline' | 'attachment';
+}
+
+/**
+ * Outputs produced by Public Link
+ */
+export interface PublicLinkOutputs {
+  /** Public expiring signed URL, fetchable by any external server with no credentials until expiry */
+  url?: string;
+  /** ISO timestamp when the link stops working */
+  expires_at?: string;
+  /** Effective lifetime in minutes after clamping */
+  ttl_minutes?: number;
+  /** Echo of the input FileRef the link points at */
+  file?: Record<string, any>;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MEDIA
+// ═══════════════════════════════════════════════════════════════
+
+export interface MediaTrack {
+  id?: string;
+  source: string;
+  volume?: number;
+  offset_seconds?: number;
+  trim_start_seconds?: number;
+  trim_end_seconds?: number;
+  loop?: boolean;
+  fade_in_seconds?: number;
+  fade_out_seconds?: number;
+  speed?: number;
+  duck_under?: string;
+  duck_amount_db?: number;
+  duck_attack_ms?: number;
+  duck_release_ms?: number;
+}
+
+export interface MediaConcatInput {
+  source: string;
+  trim_start_seconds?: number;
+  trim_end_seconds?: number;
+  speed?: number;
+}
+
+/**
+ * Parameters for Media
+ * Probe, mux, mix, extract, concat, frame-grab, or overlay audio/video/image files via the platform's ffmpeg sidecar. Config lives in the generic params map with the contract field names; every param accepts a {{...}} template expression, and every file param also accepts a literal FileRef object
+ */
+export interface MediaParameters {
+  operation: 'probe' | 'mux_audio' | 'mix' | 'extract_audio' | 'concat' | 'frame' | 'overlay';
+  input?: string;
+  video?: string;
+  audio?: string;
+  tracks?: Record<string, any>[];
+  inputs?: Record<string, any>[];
+  transition?: 'cut' | 'crossfade';
+  transitionSeconds?: number;
+  targetWidth?: number;
+  targetHeight?: number;
+  targetFps?: number;
+  atSeconds?: number;
+  imageFormat?: 'jpeg' | 'png';
+  width?: number;
+  image?: string;
+  position?: 'top_left' | 'top_right' | 'bottom_left' | 'bottom_right' | 'center';
+  marginPx?: number;
+  widthPercent?: number;
+  opacity?: number;
+  startSeconds?: number;
+  endSeconds?: number;
+  volume?: number;
+  offsetSeconds?: number;
+  trimStartSeconds?: number;
+  trimEndSeconds?: number;
+  loop?: boolean;
+  fadeInSeconds?: number;
+  fadeOutSeconds?: number;
+  keepOriginalAudio?: boolean;
+  originalVolume?: number;
+  audioFit?: 'pad' | 'shortest' | 'loop';
+  normalize?: any;
+  audioBitrate?: string;
+  outputFormat?: 'mp3' | 'wav' | 'aac';
+}
+
+/**
+ * Outputs produced by Media
+ */
+export interface MediaOutputs {
+  /** FileRef of the produced media file (mux_audio, mix, extract_audio, concat, overlay = video/audio; frame = image; absent for probe) */
+  file?: Record<string, any>;
+  /** Duration of the result (or of the probed file) in seconds. Not set for frame (a still image has no duration) */
+  duration_seconds?: number;
+  /** frame only: the ACTUAL timestamp the still was taken at, after the default-to-middle and end-clamp rules */
+  timestamp_seconds?: number;
+  /** probe only: file size in bytes */
+  size_bytes?: number;
+  /** probe only: container/format name, e.g. mov,mp4,m4a or mp3 */
+  format_name?: string;
+  /** probe only: overall bit rate, null when unknown */
+  bit_rate?: number;
+  /** probe only: whether the file has a video stream */
+  has_video?: boolean;
+  /** probe only: whether the file has an audio stream */
+  has_audio?: boolean;
+  /** probe only: { codec, width, height, fps }, null when no video stream */
+  video?: Record<string, any>;
+  /** probe only: { codec, sample_rate, channels }, null when no audio stream */
+  audio?: Record<string, any>;
+}
+
+// ═══════════════════════════════════════════════════════════════
 // COMPRESSION
 // ═══════════════════════════════════════════════════════════════
 
@@ -1546,6 +1669,14 @@ export function isDownloadFile(nodeId: string): boolean {
   return nodeId === 'download_file' || nodeId.startsWith('download_file-');
 }
 
+export function isPublicLink(nodeId: string): boolean {
+  return nodeId === 'public_link' || nodeId.startsWith('public_link-');
+}
+
+export function isMedia(nodeId: string): boolean {
+  return nodeId === 'media' || nodeId.startsWith('media-');
+}
+
 export function isCompression(nodeId: string): boolean {
   return nodeId === 'compression' || nodeId.startsWith('compression-');
 }
@@ -1748,6 +1879,16 @@ export const NODE_TYPES = {
   'download_file': {
     id: 'download_file',
     name: 'Download File',
+    category: 'action',
+  },
+  'public_link': {
+    id: 'public_link',
+    name: 'Public Link',
+    category: 'action',
+  },
+  'media': {
+    id: 'media',
+    name: 'Media',
     category: 'action',
   },
   'compression': {

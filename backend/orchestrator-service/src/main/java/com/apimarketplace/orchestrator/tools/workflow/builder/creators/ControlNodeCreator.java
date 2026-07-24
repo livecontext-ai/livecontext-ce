@@ -207,6 +207,27 @@ public class ControlNodeCreator extends CreatorBase {
     }
 
     /**
+     * Mints a public, time-limited signed URL for a stored file (FileRef).
+     * Delegates to UtilityNodeCreator for the actual implementation.
+     *
+     * @see UtilityNodeCreator#executeAddPublicLink(WorkflowBuilderSession, Map)
+     */
+    public ToolExecutionResult executeAddPublicLink(WorkflowBuilderSession session, Map<String, Object> parameters) {
+        return utilityNodeCreator.executeAddPublicLink(session, parameters);
+    }
+
+    /**
+     * Processes audio/video files on the optional renderer component
+     * (probe, mux_audio, mix, extract_audio).
+     * Delegates to UtilityNodeCreator for the actual implementation.
+     *
+     * @see UtilityNodeCreator#executeAddMedia(WorkflowBuilderSession, Map)
+     */
+    public ToolExecutionResult executeAddMedia(WorkflowBuilderSession session, Map<String, Object> parameters) {
+        return utilityNodeCreator.executeAddMedia(session, parameters);
+    }
+
+    /**
      * Execute add_stop action.
      * Exit ends execution along this branch - terminal node.
      * Other parallel branches (fork, split) continue normally.
@@ -396,6 +417,8 @@ public class ControlNodeCreator extends CreatorBase {
             case "transform" -> executeAddTransform(session, parameters);
             case "wait" -> executeAddWait(session, parameters);
             case "download_file" -> executeAddDownloadFile(session, parameters);
+            case "public_link" -> executeAddPublicLink(session, parameters);
+            case "media" -> executeAddMedia(session, parameters);
             case "exit" -> executeAddExit(session, parameters);
             case "response" -> executeAddResponse(session, parameters);
             case "aggregate" -> executeAddAggregate(session, parameters);
@@ -430,7 +453,7 @@ public class ControlNodeCreator extends CreatorBase {
             case "sftp" -> executeAddSftp(session, parameters);
             case "database" -> executeAddDatabase(session, parameters);
             default -> ToolExecutionResult.failure(ToolErrorCode.INVALID_ENUM_VALUE, "Unknown control node type: " + type +
-                ". Valid types: decision, switch, split, fork, merge, transform, wait, download_file, exit, response, aggregate, http_request, loop, approval, data_input, interface, filter, sort, limit, remove_duplicates, summarize, date_time, crypto_jwt, xml, compression, rss, convert_to_file, extract_from_file, compare_datasets, sub_workflow, respond_to_webhook, send_email, email_inbox, code, task, stop_on_error, ssh, sftp, database");
+                ". Valid types: decision, switch, split, fork, merge, transform, wait, download_file, public_link, media, exit, response, aggregate, http_request, loop, approval, data_input, interface, filter, sort, limit, remove_duplicates, summarize, date_time, crypto_jwt, xml, compression, rss, convert_to_file, extract_from_file, compare_datasets, sub_workflow, respond_to_webhook, send_email, email_inbox, code, task, stop_on_error, ssh, sftp, database");
         };
     }
 }

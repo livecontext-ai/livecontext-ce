@@ -1452,6 +1452,23 @@ class WorkflowPlanParserTest {
         }
 
         @Test
+        @DisplayName("Should ignore a legacy node-level format key without failing the parse")
+        void shouldIgnoreLegacyNodeFormatKey() {
+            // The format moved to the interface entity. Plans written before that move still
+            // carry the key: parsing them must keep working and simply drop it, otherwise every
+            // pre-existing workflow breaks on load.
+            Map<String, Object> ifaceData = new HashMap<>();
+            ifaceData.put("id", "uuid-legacy-format");
+            ifaceData.put("label", "Vertical Card");
+            ifaceData.put("format", "vertical");
+
+            List<InterfaceDef> result = WorkflowPlanParser.parseInterfaces(List.of(ifaceData));
+
+            assertEquals(1, result.size());
+            assertEquals("Vertical Card", result.get(0).label());
+        }
+
+        @Test
         @DisplayName("Should parse guardrail rules from Map format (builder tool)")
         void shouldParseGuardrailRulesFromMapFormat() {
             // Builder agent generates guardrailRules as Map<key, description>

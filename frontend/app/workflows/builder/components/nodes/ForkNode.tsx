@@ -16,6 +16,8 @@ import { NodePlayButton } from '../NodePlayButton';
 import { useNodeExecutionStatus } from '../../contexts/StepByStepContext';
 import { NodeBottomBar } from './NodeBottomBar';
 
+import { useWorkflowLayoutDirectionSafe } from '@/contexts/WorkflowLayoutDirectionContext';
+import { getTargetHandleGeometry, getBranchHandleGeometry, getBranchRowFlow } from './handleGeometry';
 export interface ForkOutputRow {
   id: string;
   label: string;
@@ -23,6 +25,12 @@ export interface ForkOutputRow {
 
 
 export function ForkNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
+  // Handle sides follow the canvas reading direction. Safe variant: nodes also
+  // render on provider-less surfaces (marketplace preview, snapshots).
+  const { direction: layoutDirection } = useWorkflowLayoutDirectionSafe();
+  const targetHandle = getTargetHandleGeometry(layoutDirection);
+  const branchOut = getBranchHandleGeometry(layoutDirection, true);
+
   const visuals = getNodeVisual('fork');
   // Use forkOutputs - similar to how MergeNode uses mergeInputs
   const outputs: ForkOutputRow[] =
@@ -114,13 +122,11 @@ export function ForkNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
       {/* Single input handle on the left */}
       <Handle
         type="target"
-        position={Position.Left}
+        position={targetHandle.position}
         id="target-left"
         className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
         style={{
-          left: -6,
-          top: '50%',
-          transform: 'translateY(-50%)',
+          ...targetHandle.style,
           backgroundColor: 'var(--border-color)',
           opacity: isRunMode ? 0 : 1,
           pointerEvents: isRunMode ? 'none' : 'auto'
@@ -137,7 +143,11 @@ export function ForkNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
       />
 
       {/* Output handles list - show connected target labels */}
-      <div className="mt-4 space-y-2 text-[11px] text-slate-500" style={{ paddingBottom: effectiveStatus && effectiveStatus !== 'pending' ? '10px' : '0' }}>
+      <div className={`mt-4 ${getBranchRowFlow(layoutDirection)} text-[11px] text-slate-500`} style={
+          layoutDirection === 'vertical'
+            ? { paddingRight: effectiveStatus && effectiveStatus !== 'pending' ? '10px' : '0' }
+            : { paddingBottom: effectiveStatus && effectiveStatus !== 'pending' ? '10px' : '0' }
+        }>
         {outputs.map((output, index) => {
           const connectedLabel = outputLabels.get(output.id);
           return (
@@ -153,12 +163,10 @@ export function ForkNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
               <Handle
                 type="source"
                 id={output.id}
-                position={Position.Right}
+                position={branchOut.position}
                 className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
                 style={{
-                  right: -27,
-                  top: '50%',
-                  transform: 'translateY(-50%)',
+                  ...branchOut.style,
                   backgroundColor: 'var(--border-color)',
                   opacity: isRunMode ? 0 : 1,
                   pointerEvents: isRunMode ? 'none' : 'auto'

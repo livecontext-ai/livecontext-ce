@@ -296,7 +296,8 @@ public class WorkflowBuilderModifier {
                 return ToolExecutionResult.failure(ToolErrorCode.INVALID_PARAMETER_VALUE,
                     "'mock' must be an object: {output: {...}} | {source: 'catalog_example'} | "
                         + "{error: {message: '...'}} | {port: '...'} - or {} to remove the mock. "
-                        + "See workflow(action='help', topics=['mocking']).");
+                        + "Any form also takes durationMs (simulated execution time in milliseconds, "
+                        + "max 600000). See workflow(action='help', topics=['mocking']).");
             }
             Map<String, Object> mockMap = (Map<String, Object>) mockObj;
             if (mockMap.isEmpty()) {
@@ -356,6 +357,17 @@ public class WorkflowBuilderModifier {
             session.updateAllReferences(nodeId, newNodeId);  // Update edges, pendingLoopExits, logicalMapping
         }
 
+        // Single-entry invariant: setting is_entry_interface=true here demotes any other
+        // flagged interface, exactly like the canvas builder. Without this, agent-written
+        // plans could carry several "entry" pages and the author's intent would silently
+        // lose to the resolver's findFirst().
+        List<String> demotedEntries = List.of();
+        if (changes.containsKey("isEntryInterface")
+                && Boolean.TRUE.equals(node.get("isEntryInterface"))
+                && session.getInterfaces().stream().anyMatch(i -> i == node)) {
+            demotedEntries = session.enforceSingleEntryInterface(node);
+        }
+
         // Handle connect_after: rewire incoming edges
         String effectiveNodeId = newNodeId; // Use new nodeId if label changed
         List<Map<String, Object>> oldIncomingEdges = null;
@@ -392,6 +404,11 @@ public class WorkflowBuilderModifier {
             actionData.put("old_incoming_edges", oldIncomingEdges);
             actionData.put("new_connect_after", newConnectAfterNodeId);
         }
+        if (!demotedEntries.isEmpty()) {
+            // Undo must restore the demoted sibling's entry flag too, or "revert this
+            // change" leaves the plan with ZERO entry pages.
+            actionData.put("demoted_entry_labels", demotedEntries);
+        }
         session.recordAction("modify", newNodeId, getNodeType(newNodeId), actionData);
         session.clearRedoStack();
 
@@ -413,6 +430,13 @@ public class WorkflowBuilderModifier {
             mockReport.put("configured", configured);
             if (configured && mockKind != null) {
                 mockReport.put("kind", mockKind);
+            }
+            if (configured && node.get(NodeMock.JSON_KEY) instanceof Map<?, ?> committedMock) {
+                Object duration = committedMock.containsKey("durationMs")
+                        ? committedMock.get("durationMs") : committedMock.get("duration_ms");
+                if (duration != null) {
+                    mockReport.put("duration_ms", duration);
+                }
             }
             result.put("mock", mockReport);
             result.put("mock_hint", configured
@@ -460,6 +484,11 @@ public class WorkflowBuilderModifier {
             result.put("ACTION_MAPPING_WARNING",
                 "Some action_mapping references point to nodes that do not exist: " +
                 actionMappingWarnings + ". These bindings won't work until the referenced triggers/interfaces exist.");
+        }
+
+        if (!demotedEntries.isEmpty()) {
+            result.put("entry_interface_moved", "This interface is now the app's entry page; "
+                + "is_entry_interface was cleared on: " + demotedEntries + " (an app has ONE entry page).");
         }
 
         result.put("tip", "Use workflow(action='undo') to revert this change.");
@@ -579,6 +608,17 @@ public class WorkflowBuilderModifier {
                         // Restore old incoming edges
                         for (Map<String, Object> edge : oldIncomingEdges) {
                             session.getEdges().add(new LinkedHashMap<>(edge));
+                        }
+                    }
+                    // Re-flag the sibling(s) this modify demoted via the single-entry
+                    // invariant - restoring only the modified node would leave the plan
+                    // with no entry page at all.
+                    List<String> demotedLabels = (List<String>) data.get("demoted_entry_labels");
+                    if (demotedLabels != null) {
+                        for (Map<String, Object> iface : session.getInterfaces()) {
+                            if (demotedLabels.contains(String.valueOf(iface.get("label")))) {
+                                iface.put("isEntryInterface", true);
+                            }
                         }
                     }
                 } else {
@@ -820,6 +860,8 @@ public class WorkflowBuilderModifier {
         Map.entry("transform", "transform"),
         Map.entry("wait", "wait"),
         Map.entry("download_file", "download"),
+        Map.entry("public_link", "params"),
+        Map.entry("media", "params"),
         Map.entry("http_request", "httpRequest"),
         Map.entry("response", "response"),
         Map.entry("aggregate", "aggregate"),
@@ -1059,6 +1101,38 @@ public class WorkflowBuilderModifier {
             }
             else if ("expose_rendered_source".equals(key) && LabelNormalizer.isInterfaceKey(nodeId)) {
                 harmonized.put("exposeRenderedSource", value);
+            }
+            else if ("generate_pdf".equals(key) && LabelNormalizer.isInterfaceKey(nodeId)) {
+                harmonized.put("generatePdf", value);
+            }
+            else if ("pdf_format".equals(key) && LabelNormalizer.isInterfaceKey(nodeId)) {
+                harmonized.put("pdfFormat", value);
+            }
+            else if ("pdf_landscape".equals(key) && LabelNormalizer.isInterfaceKey(nodeId)) {
+                harmonized.put("pdfLandscape", value);
+            }
+            else if ("generate_video".equals(key) && LabelNormalizer.isInterfaceKey(nodeId)) {
+                harmonized.put("generateVideo", value);
+            }
+            else if ("video_preset".equals(key) && LabelNormalizer.isInterfaceKey(nodeId)) {
+                harmonized.put("videoPreset", value);
+            }
+            else if ("video_max_duration_seconds".equals(key) && LabelNormalizer.isInterfaceKey(nodeId)) {
+                harmonized.put("videoMaxDurationSeconds", value);
+            }
+            else if ("video_mode".equals(key) && LabelNormalizer.isInterfaceKey(nodeId)) {
+                harmonized.put("videoMode", value);
+            }
+            else if ("video_fps".equals(key) && LabelNormalizer.isInterfaceKey(nodeId)) {
+                harmonized.put("videoFps", value);
+            }
+            // The display/capture format is no longer a node param: it belongs to the interface
+            // itself. Drop the key instead of harmonising it, so a plan written before the move
+            // keeps working and does not resurrect a param the node ignores. Setting the shape is
+            // done with interface(action='update', interface_id='<uuid>', format='vertical').
+            else if (("format".equals(key) || "interface_format".equals(key) || "interfaceFormat".equals(key))
+                    && LabelNormalizer.isInterfaceKey(nodeId)) {
+                // intentionally dropped
             }
             // Pass through: prompt, model, temperature, input, maxIterations, maxItems, etc.
             else {

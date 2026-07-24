@@ -11,6 +11,7 @@
  *    and only a port that actually exists on the node,
  *  - a static mock on a port-selecting node MUST select a branch (port),
  *  - output must be a plain JSON object,
+ *  - durationMs must be a number between 0 and 600000 ms (10 minutes),
  *  - no mock at all on triggers, notes and split/merge/aggregate/loop/fork.
  */
 
@@ -20,8 +21,10 @@ import { BaseValidationRule } from './BaseValidationRule';
 import { normalizeLabel } from '../../../utils/labelNormalizer';
 import { getNodeType } from '../core/nodeUtils';
 import {
+  coerceDurationMsValue,
   isMcpCatalogToolNode,
   isPortSelectingNode,
+  MOCK_MAX_DURATION_MS,
   nodePortOptions,
   nodeSupportsMock,
 } from '../../../utils/nodeMock';
@@ -146,6 +149,25 @@ export class MockConfigurationRule extends BaseValidationRule {
             nodeType,
             'A static mock on a branching node must select the branch to take - pick a port',
             { rule: 'mock_port_required', nodeId: node.id }
+          )
+        );
+      }
+
+      // (g) durationMs: a number (or numeric string, backend-coercible) within
+      // the backend's parse cap - beyond it the backend rejects the whole plan,
+      // failing every editor run.
+      const rawDuration = mock.durationMs ?? mock.duration_ms;
+      const durationMs = coerceDurationMsValue(rawDuration);
+      if (
+        rawDuration !== undefined &&
+        (durationMs === undefined || durationMs < 0 || durationMs > MOCK_MAX_DURATION_MS)
+      ) {
+        issues.push(
+          this.createWarning(
+            elementKey,
+            nodeType,
+            `Mock duration must be a number between 0 and ${MOCK_MAX_DURATION_MS} milliseconds (10 minutes)`,
+            { rule: 'mock_duration_invalid', nodeId: node.id }
           )
         );
       }

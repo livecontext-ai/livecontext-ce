@@ -63,7 +63,8 @@ class JsonbWritesCallsiteInvariantTest {
             "cancelStaleRuns",                // same: bulk cancel WAITING_TRIGGER + PAUSED by workflow_id
             "cancelWaitingTriggerRuns",       // same: bulk cancel WAITING_TRIGGER by workflow_id
             "upsertUserPlanMetadata",         // plan v4 E2E4 carve-out: metadata/userPlan jsonb_set only - never touches state_snapshot
-            "updateSnapshotAndSeq"            // plan v4 E2E5 carve-out: saveSnapshotFullRewrite native UPDATE (snapshot + seq atomic)
+            "updateSnapshotAndSeq",           // plan v4 E2E5 carve-out: saveSnapshotFullRewrite native UPDATE (snapshot + seq atomic)
+            "incrementRunCost"                // run-budget carve-out: cost_credits + cost_by_epoch monotonic increment - never touches state_snapshot; idempotent-safe (pure add), fed by agent-cost notifications
     );
 
     @Test

@@ -1292,6 +1292,8 @@ public class WorkflowBuilderProvider implements ToolsProvider {
                 case "transform", "map" -> creator.executeAddTransform(sr.session(), merged);
                 case "wait", "delay", "sleep" -> creator.executeAddWait(sr.session(), merged);
                 case "download_file", "download", "fetch_file" -> creator.executeAddDownloadFile(sr.session(), merged);
+                case "public_link", "public_url", "share_link" -> creator.executeAddPublicLink(sr.session(), merged);
+                case "media", "audio", "mux" -> creator.executeAddMedia(sr.session(), merged);
                 case "http_request", "http", "request", "api_call" -> creator.executeAddHttpRequest(sr.session(), merged);
                 case "exit", "halt", "abort" -> creator.executeAddExit(sr.session(), merged);
                 case "response", "message", "reply" -> creator.executeAddResponse(sr.session(), merged);

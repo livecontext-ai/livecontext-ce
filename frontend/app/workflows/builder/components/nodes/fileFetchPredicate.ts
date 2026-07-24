@@ -45,9 +45,9 @@ const FINISHED_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>([
  * Decision tree:
  *   - !isRunMode || !isCompleted ⇒ false (we have nothing to show yet)
  *   - selected ⇒ true (user is inspecting this node - fetch on demand)
- *   - isStaticFileProducingNode ⇒ true (4 node types known to always
- *     produce a file: download_file, convert_to_file, compression, sftp;
- *     no runtime detection needed, fetch is cheap and always relevant)
+ *   - isStaticFileProducingNode ⇒ true (node types known to produce a file:
+ *     download_file, convert_to_file, compression, sftp, media; no runtime
+ *     detection needed, fetch is cheap and always relevant)
  *   - runIsLive (status NOT in FINISHED_STATUSES) ⇒ true (live runs keep
  *     the eager-fetch behaviour so thumbnails appear as nodes complete; the
  *     30s `staleTime` cache prevents poll loops)

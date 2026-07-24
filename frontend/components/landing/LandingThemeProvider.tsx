@@ -4,17 +4,18 @@ import { createContext, useCallback, useContext, useEffect, useState } from 'rea
 
 // Self-contained light/dark theme for the PUBLIC site (landing + /about, /contact,
 // /legal/*, /changelog, /docs). It is deliberately DECOUPLED from the app-wide
-// `ThemeProvider`: the public site DEFAULTS TO DARK for every visitor and persists
-// its own choice under a localStorage key, while the logged-in app keeps following
-// the user's OS/preference untouched. The theme is expressed as a `dark` class on
-// the `.landing-root` wrapper (palette + decorative tokens are defined for
-// `.landing-root` / `.landing-root.dark` in `landingChromeStyles`), so it never
-// touches <body> and never collides with the app theme.
+// `ThemeProvider`: the public site DEFAULTS TO LIGHT (warm white, the reassurance
+// theme) for every visitor and persists its own choice under a localStorage key,
+// while the logged-in app keeps following the user's OS/preference untouched. The
+// theme is expressed as a `dark` class on the `.landing-root` wrapper (palette +
+// decorative tokens are defined for `.landing-root` / `.landing-root.dark` in
+// `landingChromeStyles`), so it never touches <body> and never collides with the
+// app theme.
 //
-// The landing/marketing pages are dark-only (respectStored=false → always dark).
-// The docs section opts into a real toggle by passing its OWN `storageKey`
-// ('docs-theme') + `respectStored`, so a docs light/dark choice is independent of
-// the landing and never changes it.
+// The landing/marketing pages default to light and restore the visitor's choice
+// (footer `LandingThemeToggle`, persisted under 'landing-theme'). The docs
+// section keeps its OWN `storageKey` ('docs-theme'), so a docs light/dark choice
+// is independent of the landing and never changes it.
 //
 // Like the rest of the landing chrome this stays intl-context-free (no next-intl),
 // because the shared header/footer also render on the non-localized public pages.
@@ -28,10 +29,10 @@ interface LandingThemeContextValue {
 
 const LandingThemeContext = createContext<LandingThemeContextValue | null>(null);
 
-// Safe accessor: falls back to the dark default (and a no-op toggle) when used
+// Safe accessor: falls back to the light default (and a no-op toggle) when used
 // outside the provider, mirroring `useThemeSafely`.
 export function useLandingTheme(): LandingThemeContextValue {
-  return useContext(LandingThemeContext) ?? { theme: 'dark', toggle: () => {} };
+  return useContext(LandingThemeContext) ?? { theme: 'light', toggle: () => {} };
 }
 
 interface LandingThemeProviderProps {
@@ -50,7 +51,7 @@ export default function LandingThemeProvider({
   className = '',
   storageKey = 'landing-theme',
   respectStored = false,
-  defaultTheme = 'dark',
+  defaultTheme = 'light',
 }: LandingThemeProviderProps) {
   // Start from the default on the server and the first client render (so SSR markup
   // matches and there is no hydration mismatch); a post-mount effect then restores

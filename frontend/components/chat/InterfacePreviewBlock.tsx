@@ -28,6 +28,7 @@ interface InterfaceData {
   htmlTemplate?: string;
   cssTemplate?: string;
   jsTemplate?: string;
+  format?: string | null;
   targetTable?: string;
   dataSourceId?: number;
   interfaceType?: string;
@@ -43,6 +44,7 @@ interface RenderResult {
   htmlTemplate: string;
   cssTemplate?: string;
   jsTemplate?: string;
+  format?: string | null;
   items: RenderItem[];
   pagination: {
     page: number;
@@ -242,6 +244,9 @@ export function InterfacePreviewBlock({ interfaceId, onError, onDelete }: Interf
               resolvedData={itemData}
               mode={renderMode}
               autoFit={false}
+              // The interface's own shape - the same primitive as /app/interface/[id] means the
+              // same input: without it a vertical page renders 1280-wide and clipped at 400px.
+              format={renderResult?.format ?? interfaceData?.format}
               className="w-full h-full"
               isLoading={isResolvingData}
             />

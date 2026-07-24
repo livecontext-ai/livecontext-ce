@@ -9,7 +9,11 @@ import { PlanParserService, type ParsedPlan } from './PlanParserService';
 import { NodeCreationService, type NodeCreationResult } from './NodeCreationService';
 import { EdgeCreationService, type EdgeCreationResult } from './EdgeCreationService';
 import { InputValidationService, type ValidationResult } from './InputValidationService';
-import { applyDagreLayout, needsLayout } from '../LayoutService';
+import { applyDagreLayout, layoutConfigForDirection, needsLayout } from '../LayoutService';
+import {
+  DEFAULT_WORKFLOW_LAYOUT_DIRECTION,
+  type WorkflowLayoutDirection,
+} from '@/contexts/WorkflowLayoutDirectionContext';
 
 export interface ImportResult {
   nodes: Node<BuilderNodeData>[];
@@ -23,9 +27,17 @@ export class WorkflowPlanImporter {
   /**
    * Import a workflow plan from JSON string
    */
+  /**
+   * @param layoutDirection reading direction to lay the imported plan out in. This is
+   *   a USER PREFERENCE living in a React context, and this importer is a plain
+   *   service, so callers (all of them hooks or components) must pass it down rather
+   *   than have the service reach for it. Defaults to horizontal, matching the
+   *   context's own default, so an un-updated caller keeps the previous behaviour.
+   */
   static async importPlan(
     jsonString: string,
-    existingNodes: Node<BuilderNodeData>[] = []
+    existingNodes: Node<BuilderNodeData>[] = [],
+    layoutDirection: WorkflowLayoutDirection = DEFAULT_WORKFLOW_LAYOUT_DIRECTION
   ): Promise<ImportResult> {
     try {
       // Step 1: Parse and validate plan structure
@@ -91,7 +103,7 @@ export class WorkflowPlanImporter {
 
       if (needsLayout(updatedNodes)) {
         console.log('[Import] Nodes without positions detected - applying Dagre layout');
-        layoutedNodes = applyDagreLayout(updatedNodes, edgeResult.edges);
+        layoutedNodes = applyDagreLayout(updatedNodes, edgeResult.edges, layoutConfigForDirection(layoutDirection));
       } else {
         console.log('[Import] All nodes have positions - respecting manual layout');
       }

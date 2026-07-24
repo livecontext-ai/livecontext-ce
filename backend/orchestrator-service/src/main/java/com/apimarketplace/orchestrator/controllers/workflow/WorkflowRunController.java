@@ -464,9 +464,21 @@ public class WorkflowRunController {
             }
             response.put("totalDurationMs", totalDurationMs);
 
-            // Include planVersion from the run entity
+            // Include planVersion + accumulated run cost + workflow budget from
+            // the run entity. costCredits is the total across ALL epochs (agent
+            // executions are the only cost source); budgetCredits is the
+            // workflow's cap (null = unlimited). Both in credits (1 credit =
+            // $0.001); the frontend renders dollars in CE, credits in cloud. Live
+            // deltas arrive via the runCost WS event; this seeds the initial view.
             workflowRunRepository.findByRunIdPublic(runId).ifPresent(run -> {
                 response.put("planVersion", run.getPlanVersion());
+                response.put("costCredits", run.getCostCredits());
+                if (run.getCostByEpoch() != null) {
+                    response.put("costByEpoch", run.getCostByEpoch());
+                }
+                if (run.getWorkflow() != null) {
+                    response.put("budgetCredits", run.getWorkflow().getBudgetCredits());
+                }
             });
 
             return ResponseEntity.ok()

@@ -268,6 +268,43 @@ public class WorkflowResumeService {
             return WorkflowPlan.fromMap(frozenPlan, runEntity.getWorkflow().getId().toString(), runEntity.getTenantId());
         }
 
+        // A pinned workflow's PRODUCTION run executes the immutable pinned version.
+        // workflow.getPlan() is the editable draft, so syncing it here would swap
+        // production onto unpinned content while run.planVersion still matches the
+        // pin - passing the defense-in-depth chokepoint. Reachable through a
+        // "rerun from step" on the production run. Keep the frozen plan.
+        if (workflow.getPinnedVersion() != null && isProductionRun(workflow, runEntity)) {
+            logger.warn("[refreshPlanFromWorkflowDefinition] runId={} is the production run of a workflow pinned to v{}; "
+                    + "keeping the frozen pinned plan instead of syncing the draft", runId, workflow.getPinnedVersion());
+            Map<String, Object> pinnedSafePlan = frozenPlan;
+            if (pinnedSafePlan == null && planVersionService != null) {
+                // Legacy/corrupt state: the production run lost its cached plan. The
+                // draft (workflow.getPlan()) must still not execute as production -
+                // reload the PINNED version's stored content instead, mirroring the
+                // pin-safety reload in the trigger fire path.
+                pinnedSafePlan = planVersionService
+                        .getVersion(workflow.getId(), workflow.getPinnedVersion())
+                        .map(v -> v.getPlan())
+                        .orElse(null);
+                if (pinnedSafePlan != null) {
+                    logger.warn("[refreshPlanFromWorkflowDefinition] runId={} had a null cached plan; "
+                            + "reloaded pinned v{} from the version history", runId, workflow.getPinnedVersion());
+                }
+            }
+            if (pinnedSafePlan == null) {
+                // Last resort, loudly: no frozen plan and no pinned row - executing
+                // the draft is the only remaining option, but it is a pin violation
+                // and must be visible.
+                logger.error("[refreshPlanFromWorkflowDefinition] runId={} production run has no cached plan and "
+                        + "pinned v{} is missing from the version history - falling back to the LIVE draft. "
+                        + "This is a pin violation; investigate the version history.",
+                        runId, workflow.getPinnedVersion());
+                pinnedSafePlan = latestPlanMap;
+            }
+            return WorkflowPlan.fromMap(pinnedSafePlan,
+                    runEntity.getWorkflow().getId().toString(), runEntity.getTenantId());
+        }
+
         // Update run's cached plan + re-stamp planVersion so the run never claims a
         // version whose stored content differs from the plan it will execute.
         runEntity.setPlan(latestPlanMap);
@@ -318,14 +355,29 @@ public class WorkflowResumeService {
         // resolver in ReusableTriggerService.executeTriggerInternal would
         // happily execute the
         // diverged plan because run.planVersion still matches.
-        // Editor runs (__editorRun__=true) are exempt - they may iterate
+        // Editor runs that are NOT the production run are exempt - they may iterate
         // against drafts even on pinned workflows.
+        //
+        // The test is the production_run_id FK, NOT the __editorRun__ flag. Pinning
+        // PROMOTES an existing run (almost always the editor run the user tested
+        // with) and never strips that flag, so the production run of a pinned
+        // workflow carries __editorRun__=true. Keying the exemption on the flag
+        // therefore exempted exactly the run this guard exists to protect: edits
+        // landed on the production run, and the block further down mirrored them
+        // into workflow.plan.
         com.apimarketplace.orchestrator.domain.WorkflowEntity workflow = runEntity.getWorkflow();
         Map<String, Object> metadata = runEntity.getMetadata();
         boolean isEditorRun = metadata != null && Boolean.TRUE.equals(metadata.get("__editorRun__"));
-        if (workflow != null && workflow.getPinnedVersion() != null && !isEditorRun) {
-            logger.warn("[updateRunPlan] runId={} refused: workflow is pinned to v{} (non-editor run); pin a new version to publish edits",
-                    runId, workflow.getPinnedVersion());
+        boolean isProductionRun = isProductionRun(workflow, runEntity);
+        // Two independent reasons to refuse, both required:
+        //   - not an editor run at all (the original guard: a buggy/malicious caller
+        //     diverging run.plan from the pinned version), OR
+        //   - it IS the production run (the promoted editor run, which carries the
+        //     flag and was therefore exempted by the original guard).
+        if (workflow != null && workflow.getPinnedVersion() != null && (!isEditorRun || isProductionRun)) {
+            logger.warn("[updateRunPlan] runId={} refused: workflow is pinned to v{} ({}); pin a new version to publish edits",
+                    runId, workflow.getPinnedVersion(),
+                    isProductionRun ? "run is the production run" : "non-editor run");
             return null;
         }
 
@@ -375,7 +427,10 @@ public class WorkflowResumeService {
         // writes to (UI/agent parity). Params and other node content stay
         // run-scoped by design; APPLICATION workflows stay untouched (immutable
         // acquired clones, same rule as the execute-time auto-save).
-        if (isEditorRun && workflow != null && !workflow.isApplication() && workflowRepository != null) {
+        // Same correction as the pin guard above: the production run carries
+        // __editorRun__, so this mirror must additionally exclude it or an edit on
+        // production rewrites the workflow's live plan.
+        if (isEditorRun && !isProductionRun && workflow != null && !workflow.isApplication() && workflowRepository != null) {
             try {
                 Map<String, Object> merged = com.apimarketplace.orchestrator.utils.NodeMockPlanMerger
                         .mergedWorkflowPlanOrNull(planMap, workflow.getPlan());
@@ -398,6 +453,24 @@ public class WorkflowResumeService {
     }
 
     /**
+     * Is {@code run} the workflow's live production run?
+     *
+     * <p>Keyed on the {@code production_run_id} FK, the same pointer
+     * {@code ProductionRunResolver} follows. Deliberately NOT the
+     * {@code __editorRun__} flag: pinning promotes an existing editor run and never
+     * strips it, so that flag is true on the production run too and cannot separate
+     * "editor iteration" from "production".
+     */
+    private static boolean isProductionRun(com.apimarketplace.orchestrator.domain.WorkflowEntity workflow,
+                                           WorkflowRunEntity run) {
+        if (workflow == null || run == null) {
+            return false;
+        }
+        java.util.UUID productionRunId = workflow.getProductionRunId();
+        return productionRunId != null && productionRunId.equals(run.getId());
+    }
+
+    /**
      * Resolve the version-history entry matching {@code planMap} and stamp it on the
      * run. No-op when the version service bean is absent (narrow test wiring) -
      * callers then keep the legacy stale-version behavior.
@@ -407,6 +480,18 @@ public class WorkflowResumeService {
      * ({@link WorkflowPlanVersionService#resolveContentVersionForExecution}), so
      * re-fires of the same run (new epochs) keep the same version instead of
      * inflating the history with "In-run edit" entries.
+     *
+     * <p>This method is pin-blind by design: the pinned-workflow case is decided in
+     * the resolver, which answers with the PINNED number when the executing plan is
+     * the pinned content. Whatever it answers is written onto the run verbatim.
+     *
+     * <p>Both call sites can carry pinned content, and the pinned answer is the
+     * correct one at either. Via {@code updateRunPlan} it is reachable for editor
+     * runs on a pinned workflow (non-editor runs are refused outright, see the pin
+     * guard in that method). Via {@code refreshPlanFromWorkflowDefinition} the plan
+     * is {@code workflow.getPlan()}, which is usually the draft but IS the pinned
+     * content after a version restore: restoring writes a historical plan into
+     * {@code workflows.plan} without minting a version.
      *
      * <p>Exception - version-replay runs ({@code __versionReplay__}): an accepted
      * in-run edit there is NEW content derived from a historical plan; overwriting

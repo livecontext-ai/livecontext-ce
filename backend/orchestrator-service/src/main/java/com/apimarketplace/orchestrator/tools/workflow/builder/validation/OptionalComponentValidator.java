@@ -21,6 +21,9 @@ import java.util.Map;
  *       while the renderer sidecar is not configured - the {@code screenshot}/{@code pdf}
  *       /{@code video} output will silently be absent (best-effort contract, run still
  *       succeeds).</li>
+ *   <li>{@code media} core node while the renderer sidecar is not configured - unlike the
+ *       best-effort interface renders, the media output IS the node's purpose, so the
+ *       node WILL fail at run time.</li>
  * </ul>
  *
  * WARNINGS only, never errors: the workflow stays saveable and runs correctly on
@@ -42,7 +45,9 @@ public class OptionalComponentValidator implements WorkflowValidator {
                 .anyMatch(OptionalComponentValidator::isBrowserAgentNode);
         boolean hasRenderToggle = session.getInterfaces().stream()
                 .anyMatch(OptionalComponentValidator::hasRenderToggle);
-        if (!hasBrowserAgent && !hasRenderToggle) {
+        boolean hasMediaNode = session.getCores().stream()
+                .anyMatch(OptionalComponentValidator::isMediaNode);
+        if (!hasBrowserAgent && !hasRenderToggle && !hasMediaNode) {
             return;
         }
 
@@ -79,6 +84,21 @@ public class OptionalComponentValidator implements WorkflowValidator {
                             + "here, or disable the toggle.");
                 }
             }
+
+            if (hasMediaNode && !capabilityService.isScreenshotRendererAvailable()) {
+                for (Map<String, Object> core : session.getCores()) {
+                    if (!isMediaNode(core)) {
+                        continue;
+                    }
+                    result.addWarning("MEDIA_RENDERER_UNAVAILABLE",
+                            nodeRef(core, "core"),
+                            "Media processing (probe/mux_audio/mix/extract_audio) needs the optional renderer "
+                            + "component, which is not available on this installation. This node WILL fail at "
+                            + "run time here (its media output is not best-effort); the workflow still runs on "
+                            + "installations that have the component. Only the user or an administrator can "
+                            + "enable it - tell them if they expect this node to run here, or remove the node.");
+                }
+            }
         } catch (RuntimeException e) {
             // Unknown availability must never fail (or falsely warn on) validation.
             log.warn("Optional-component capability resolution failed for tenant {}: {}",
@@ -88,6 +108,10 @@ public class OptionalComponentValidator implements WorkflowValidator {
 
     private static boolean isBrowserAgentNode(Map<String, Object> step) {
         return "browser_agent".equalsIgnoreCase(String.valueOf(step.get("type")));
+    }
+
+    private static boolean isMediaNode(Map<String, Object> core) {
+        return "media".equalsIgnoreCase(String.valueOf(core.get("type")));
     }
 
     /**

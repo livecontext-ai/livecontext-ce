@@ -6,6 +6,8 @@ import { Copy, Trash2 } from 'lucide-react';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
 import { NodePlayButton, deriveNodeStatus, type TriggerButtonVariant } from '../NodePlayButton';
 
+import { useWorkflowLayoutDirectionSafe } from '@/contexts/WorkflowLayoutDirectionContext';
+import { getSideAttachment } from './handleGeometry';
 // Shared button style (same as agent/subworkflow/interface persistent buttons).
 // Exported so other persistent node buttons (e.g. the fleet trigger buttons) render
 // the EXACT same round button as the workflow node bottom bar.
@@ -75,8 +77,14 @@ interface NodeBottomBarProps {
   buttons?: BottomButton[];
   /** Play/rerun button config rendered via NodePlayButton with position="bottom-center" */
   playButton?: PlayButtonConfig;
-  /** Extra top offset (e.g. when pagination is visible below interface nodes) */
-  extraTopOffset?: boolean;
+  /**
+   * Something else already occupies the node's attachment band (a file strip, the
+   * interface pagination), so push this bar one notch further out. Was
+   * `extraTopOffset` while the band was always BELOW the node; the band follows the
+   * reading direction now (below in horizontal, beside in vertical), so the name no
+   * longer names an axis.
+   */
+  extraOffset?: boolean;
   /** Slot rendered before the standard buttons (e.g. trigger pin button) */
   leadingSlot?: React.ReactNode;
   /** Slot rendered after the play button (e.g. edit-mode trigger launcher menu) */
@@ -104,7 +112,8 @@ interface NodeBottomBarProps {
  * Renders all contextual + execution buttons in a single centered row below
  * the node, revealed on node hover when `hover` is provided.
  */
-export function NodeBottomBar({ borderColor, isRunning, buttons, playButton, extraTopOffset, leadingSlot, trailingSlot, hover, hoverActions }: NodeBottomBarProps) {
+export function NodeBottomBar({ borderColor, isRunning, buttons, playButton, extraOffset, leadingSlot, trailingSlot, hover, hoverActions }: NodeBottomBarProps) {
+  const { direction: layoutDirection } = useWorkflowLayoutDirectionSafe();
   const t = useTranslations('workflowBuilder.nodes');
   const { isRunMode, isPreviewOnly } = useWorkflowMode();
 
@@ -148,10 +157,13 @@ export function NodeBottomBar({ borderColor, isRunning, buttons, playButton, ext
     // itself) never swallow canvas clicks; each interactive child re-enables
     // its own pointer events while the bar is revealed.
     <div
-      className="absolute left-1/2 z-10 flex gap-1.5 nodrag nopan pointer-events-none transition-opacity duration-200 ease-out"
+      className={`absolute z-10 flex gap-1.5 nodrag nopan pointer-events-none transition-opacity duration-200 ease-out ${
+        layoutDirection === 'vertical' ? 'flex-col' : 'flex-row'
+      }`}
       style={{
-        transform: 'translateX(-50%)',
-        top: extraTopOffset ? 'calc(100% + 40px)' : 'calc(100% + 8px)',
+        // The bar hangs off whichever edge the flow does NOT use: below the node in
+        // horizontal, beside it in vertical (where bottom is the source handle).
+        ...getSideAttachment(layoutDirection, 8, extraOffset ? 32 : 0),
         opacity: isRevealed ? 1 : 0,
       }}
       onMouseEnter={hover?.onHover}

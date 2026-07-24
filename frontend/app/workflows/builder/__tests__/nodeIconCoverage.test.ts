@@ -61,7 +61,7 @@ describe('Backend add_<type> actions used by the agent → activity feed icons',
     // Control flow / branching
     'decision', 'switch', 'split', 'fork', 'merge', 'loop', 'exit', 'option',
     // Core utility
-    'transform', 'wait', 'download_file', 'http_request', 'response',
+    'transform', 'wait', 'download_file', 'public_link', 'media', 'http_request', 'response',
     'aggregate', 'approval', 'data_input', 'set', 'html_extract',
     'code', 'sub_workflow', 'respond_to_webhook', 'send_email',
     // Data processing

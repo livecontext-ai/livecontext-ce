@@ -642,16 +642,21 @@ public class NotificationEmitter {
      */
     private static boolean isExcludedRun(WorkflowRunEntity run, WorkflowEntity workflow) {
         if (isShowcaseRun(run)) return true;
+        // Production identity trumps EVERY metadata flag, not just __editorRun__:
+        // promotion never strips run metadata, so the production run can also carry
+        // __agentInitiated__ (agent-created run that got pinned) or a leftover
+        // __versionReplay__. Its fires are production fires and must notify -
+        // otherwise a pinned workflow fails nightly and the user never hears of it.
+        if (workflow != null
+                && workflow.getProductionRunId() != null
+                && workflow.getProductionRunId().equals(run.getId())) {
+            return false;
+        }
         Map<String, Object> meta = run.getMetadata();
         if (meta == null) return false;
         if (meta.containsKey(META_VERSION_REPLAY)) return true;
         if (Boolean.TRUE.equals(meta.get(META_AGENT_INITIATED))) return true;
-        if (Boolean.TRUE.equals(meta.get(META_EDITOR_RUN))) {
-            return workflow == null
-                    || workflow.getProductionRunId() == null
-                    || !workflow.getProductionRunId().equals(run.getId());
-        }
-        return false;
+        return Boolean.TRUE.equals(meta.get(META_EDITOR_RUN));
     }
 
     /**

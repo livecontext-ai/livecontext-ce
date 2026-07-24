@@ -216,7 +216,7 @@ public class WorkflowBuilderHelpModule implements ToolModule {
         stepTypes.put("<tool-uuid>", "API tool call - use the exact tool UUID as the type. Find UUIDs via workflow(action='search') or catalog(action='search')");
         stepTypes.put("http_request", "Raw HTTP request to any URL");
         stepTypes.put("send_email", "Send email notification");
-        stepTypes.put("email_inbox", "Read a mailbox and act on messages (flag/move/delete) via IMAP");
+        stepTypes.put("email_inbox", "Read a mailbox and act on it (flag/move/delete a message, list or create folders) via IMAP");
         stepTypes.put("sub_workflow", "Execute another workflow as a step");
         stepTypes.put("respond_to_webhook", "Return response to the webhook that triggered this workflow");
         // I/O
@@ -224,6 +224,8 @@ public class WorkflowBuilderHelpModule implements ToolModule {
         stepTypes.put("response", "Send message in chat (requires chat trigger in DAG)");
         stepTypes.put("data_input", "Prompt user for additional data mid-workflow");
         stepTypes.put("download_file", "Download a file from URL");
+        stepTypes.put("public_link", "Mint a public, expiring signed URL for a stored file");
+        stepTypes.put("media", "Process audio/video files: probe metadata, mux audio onto video, mix tracks, extract audio");
         stepTypes.put("wait", "Delay execution for a specified duration");
         stepTypes.put("exit", "Exit branch execution (other parallel branches continue)");
         stepTypes.put("stop_on_error", "Stop ENTIRE workflow with error (all branches cancelled, run → FAILED)");

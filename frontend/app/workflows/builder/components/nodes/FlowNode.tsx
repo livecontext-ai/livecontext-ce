@@ -13,13 +13,12 @@ import { findNodeClassById } from '../../nodes/nodeClasses';
 import { NodeStatusBadge } from '../NodeStatusBadge';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
 import { InterfaceThumbnail } from '../interface/InterfaceThumbnail';
+import { resolveInterfaceFormat } from '@/lib/interfaces/interfaceFormats';
 import { parseUtcAware } from '@/lib/utils/dateFormatters';
 import type { RenderMode } from '../../utils/interfaceHtmlUtils';
-import { Loader2, Play, Eye, Table, File, Image, FileText, Film, Music, Zap, Workflow, Monitor, FolderOpen, Globe, ChevronRight, Wrench, Activity, Clock, Cpu, Coins, Trash2, Pencil } from 'lucide-react';
+import { Loader2, Play, Eye, Table, FileText, Zap, Workflow, Monitor, FolderOpen, Globe, ChevronRight, Wrench, Activity, Clock, Cpu, Coins, Trash2, Pencil } from 'lucide-react';
 import { type FilePanelTarget } from '@/lib/sidePanel/openFilesPanel';
 import { useInterfaceById, useInterfaceRender } from '../../hooks/useInterfaces';
-import { fileRefToUrl, normalizeFileRef, findFileRefs, isFileRef } from '@/lib/api/orchestrator/file.service';
-import { useAuthedObjectUrl } from '@/hooks/useAuthedObjectUrl';
 import { NodePlayButton, deriveNodeStatus } from '../NodePlayButton';
 import { NodeBottomBar } from './NodeBottomBar';
 import { FleetTriggerButtons } from './FleetTriggerButtons';
@@ -29,17 +28,16 @@ import { useNodeExecutionStatus } from '../../contexts/StepByStepContext';
 import { deriveNodeContextFlags, useNodeContextualButtons } from '../../hooks/useNodeContextualButtons';
 import { nodeRegistry } from '../../registry/nodeRegistry';
 import { ResizableNodeWrapper } from './ResizableNodeWrapper';
-import { useRunOutputData } from '../../hooks/useRunOutputData';
-import { normalizeLabel } from '../../utils/labelNormalizer';
 import { useBrowserLiveView } from './shared/useBrowserLiveView';
 import { useTranslations } from 'next-intl';
 import { useAgentActivity } from '@/components/agent-fleet/hooks/useAgentActivityStream';
 
-import { useRun } from '@/contexts/WorkflowRunContext';
-import { useQueryClient } from '@tanstack/react-query';
 import { ItemNavigator } from '../inspector/outputs/ItemNavigator';
-import { shouldFetchFileOutput } from './fileFetchPredicate';
+import { FileNodePreview } from './FileNodePreview';
+import { DataInputNodePreview } from './DataInputNodePreview';
 
+import { useWorkflowLayoutDirectionSafe } from '@/contexts/WorkflowLayoutDirectionContext';
+import { branchSpreadPercent, getSourceHandleGeometry, getTargetHandleGeometry, getSideAttachment } from './handleGeometry';
 // Fleet resource type → icon + background override (used only in fleet canvas)
 // 'tool' and 'model' are excluded: tools use their service icon or MCP logo fallback,
 // models use their provider icon (openai, anthropic, etc.)
@@ -54,6 +52,12 @@ const FLEET_RESOURCE_ICONS: Record<string, { icon: React.ComponentType<{ classNa
 };
 
 export function FlowNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
+  // Handle sides follow the canvas reading direction. Safe variant: nodes also
+  // render on provider-less surfaces (marketplace preview, snapshots).
+  const { direction: layoutDirection } = useWorkflowLayoutDirectionSafe();
+  const targetHandle = getTargetHandleGeometry(layoutDirection);
+  const sourceHandle = getSourceHandleGeometry(layoutDirection);
+
   const visuals = getNodeVisual(data.kind);
   const { targetRef: nodeRef, isVisible: showActions, show } = useHoverVisibility<HTMLDivElement>();
   const { isRunMode, isPreviewOnly, isApplicationMode, runId, viewingEpoch, setViewingEpoch, workflowId } = useWorkflowMode();
@@ -179,6 +183,14 @@ export function FlowNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
     currentPage,
     1, // Card preview shows 1 item
     viewingEpoch ?? undefined
+  );
+
+  // The INTERFACE's display format -> thumbnail virtual viewport, so this card has the same
+  // shape as the capture. Render result first (a run reads its frozen snapshot), entity as
+  // fallback; undefined keeps the thumbnail's classic 1280x800 default.
+  const interfaceFormatViewport = React.useMemo(
+    () => resolveInterfaceFormat(renderData?.format ?? interfaceDetails?.format) ?? undefined,
+    [renderData?.format, interfaceDetails?.format],
   );
 
   // Get render data for run mode
@@ -408,6 +420,7 @@ export function FlowNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
               customCss={interfaceCssTemplate}
               jsTemplate={interfaceJsTemplate}
               fit="contain"
+              viewport={interfaceFormatViewport}
               actionMapping={interfaceRenderMode === 'run' ? interfaceActionMapping : undefined}
               triggerData={interfaceRenderMode === 'run' ? interfaceTriggerData : undefined}
             />
@@ -531,8 +544,8 @@ export function FlowNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
       {/* Pagination controls - below node (spawn items only, not epochs) */}
       {isRunMode && isInterfaceNode && viewingEpoch != null && runModeTotalItems > 1 && (
         <div
-          className="absolute left-1/2 -translate-x-1/2 nodrag nopan z-10"
-          style={{ top: 'calc(100% + 8px)' }}
+          className="absolute nodrag nopan z-10"
+          style={getSideAttachment(layoutDirection, 8)}
           onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}
         >
@@ -676,6 +689,12 @@ export function FlowNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
             hover={{ isVisible: showActions, onHover: show }}
             borderColor={borderColor}
             isRunning={isNodeRunning}
+            // The file strip owns the bar's row (calc(100% + 8px)) whenever it is
+            // up, so drop the bar a row rather than stack the two in one band.
+            // The Files button is already gone by then (useNodeContextualButtons),
+            // so this only ever moves buttons the strip cannot replace (play,
+            // agent, sub-workflow). No strip = no offset = no wasted space.
+            extraOffset={!!currentFile}
             buttons={bottomButtons.length > 0 ? bottomButtons : undefined}
             hoverActions={hasHoverActions ? {
               onDelete: data.onDeleteNode ? () => data.onDeleteNode?.(id) : undefined,
@@ -748,7 +767,7 @@ export function FlowNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
           hover={{ isVisible: showActions, onHover: show }}
           borderColor={borderColor}
           isRunning={isNodeRunning}
-          extraTopOffset={viewingEpoch != null && runModeTotalItems > 1}
+          extraOffset={viewingEpoch != null && runModeTotalItems > 1}
           buttons={[{
             key: 'interface',
             icon: <Monitor className="h-3 w-3" strokeWidth={2} />,
@@ -792,12 +811,10 @@ export function FlowNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
         <>
           <Handle
             type="target"
-            position={Position.Left}
+            position={targetHandle.position}
             className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
             style={{
-              left: -6,
-              top: '50%',
-              transform: 'translateY(-50%)',
+              ...targetHandle.style,
               backgroundColor: 'var(--border-color)',
               opacity: hideHandles ? 0 : 1,
               pointerEvents: hideHandles ? 'none' : 'auto'
@@ -805,13 +822,11 @@ export function FlowNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
           />
           <Handle
             type="source"
-            position={Position.Right}
+            position={sourceHandle.position}
             id="source-right"
             className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
             style={{
-              right: -6,
-              top: '50%',
-              transform: 'translateY(-50%)',
+              ...sourceHandle.style,
               backgroundColor: 'var(--border-color)',
               opacity: hideHandles ? 0 : 1,
               pointerEvents: hideHandles ? 'none' : 'auto'
@@ -821,12 +836,10 @@ export function FlowNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
       ) : !isFleetMode && !isTriggerNode && (
         <Handle
           type="target"
-          position={Position.Left}
+          position={targetHandle.position}
           className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
           style={{
-            left: -6,
-            top: '50%',
-            transform: 'translateY(-50%)',
+            ...targetHandle.style,
             backgroundColor: 'var(--border-color)',
             opacity: hideHandles ? 0 : 1,
             pointerEvents: hideHandles ? 'none' : 'auto'
@@ -839,13 +852,11 @@ export function FlowNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
           {/* Output handle on the right for all nodes (including triggers, data table nodes, but not interface) */}
           <Handle
             type="source"
-            position={Position.Right}
+            position={sourceHandle.position}
             id="source-right"
             className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
             style={{
-              right: -6,
-              top: '50%',
-              transform: 'translateY(-50%)',
+              ...sourceHandle.style,
               backgroundColor: 'var(--border-color)',
               opacity: hideHandles ? 0 : 1,
               pointerEvents: hideHandles ? 'none' : 'auto'
@@ -860,7 +871,7 @@ export function FlowNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
           const total = handles.length;
           const HANDLE_LABELS: Record<string, string> = { model: 'Model', tools: 'Tools', resources: 'Resources' };
           return handles.map((h: string, i: number) => {
-            const pct = total === 1 ? 50 : total === 2 ? 35 + i * 30 : 25 + (i * 50) / (total - 1);
+            const pct = branchSpreadPercent(i, total);
             const color = 'var(--border-color)';
             const label = HANDLE_LABELS[h];
             return (
@@ -925,326 +936,5 @@ export function FlowNode({ data, selected, id }: NodeProps<BuilderNodeData>) {
         />
       )}
     </div>
-  );
-}
-
-// ============================================================================
-// Data Input Node Preview (canvas)
-// ============================================================================
-
-function getDataInputFileIcon(mimeType: string) {
-  if (mimeType.startsWith('image/')) return Image;
-  if (mimeType.startsWith('video/')) return Film;
-  if (mimeType.startsWith('audio/')) return Music;
-  if (mimeType.includes('pdf') || mimeType.includes('document') || mimeType.includes('text')) return FileText;
-  return File;
-}
-
-function DataInputNodePreview({ data }: { data: BuilderNodeData }) {
-  const items: Array<{ id: string; label: string; type: 'text' | 'file'; text?: string; file?: { _type: string; path: string; name: string; mimeType: string; size: number } | null }> = (data as any).dataInputItems ?? [];
-  if (items.length === 0) return null;
-
-  const mainItem = items[0];
-  const thumbnailItems = items.filter((i) => i.id !== mainItem.id);
-  const hasContent = mainItem.type === 'text' ? !!mainItem.text : !!mainItem.file;
-
-  if (!hasContent && thumbnailItems.length === 0) return null;
-
-  return (
-    <div className="mt-3 space-y-1.5 w-full">
-      {/* Main preview */}
-      {mainItem.type === 'text' && mainItem.text && (
-        <div>
-          <span className="text-[10px] font-medium text-slate-400 dark:text-slate-500 uppercase tracking-wider">{mainItem.label}</span>
-          <p className="text-xs text-slate-500 dark:text-slate-400 whitespace-pre-wrap break-words leading-relaxed overflow-hidden">
-            {mainItem.text}
-          </p>
-        </div>
-      )}
-      {mainItem.type === 'file' && mainItem.file && (
-        <div>
-          <span className="text-[10px] font-medium text-slate-400 dark:text-slate-500 uppercase tracking-wider">{mainItem.label}</span>
-          <DataInputFileEntry file={mainItem.file} />
-        </div>
-      )}
-
-      {/* Thumbnails row */}
-      {thumbnailItems.length > 0 && (
-        <div className="flex gap-1.5 overflow-x-auto pt-1 border-t border-theme">
-          {thumbnailItems.map((item) => (
-            <div key={item.id} className="flex-shrink-0 max-w-[60px]" title={item.label}>
-              {item.type === 'text' && (
-                <div className="w-[60px] h-[36px] rounded bg-slate-50 dark:bg-slate-800 px-1 py-0.5 overflow-hidden">
-                  <span className="text-[9px] font-medium text-slate-400 dark:text-slate-500 block truncate">{item.label}</span>
-                  <p className="text-[8px] text-slate-400 dark:text-slate-500 truncate leading-tight">{item.text || ''}</p>
-                </div>
-              )}
-              {item.type === 'file' && item.file && (
-                <DataInputThumbnail file={item.file} label={item.label} />
-              )}
-              {item.type === 'file' && !item.file && (
-                <div className="w-[60px] h-[36px] rounded bg-slate-50 dark:bg-slate-800 px-1 py-0.5 overflow-hidden">
-                  <span className="text-[9px] font-medium text-slate-400 dark:text-slate-500 truncate">{item.label}</span>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function DataInputThumbnail({ file, label }: { file: { path: string; name: string; mimeType: string; size: number; id?: string }; label: string }) {
-  const isImage = file.mimeType.startsWith('image/');
-  // Header-authenticated fetch → blob: URL (no session token in the URL). See useAuthedObjectUrl.
-  const { url: imageUrl, error: imgError } = useAuthedObjectUrl(
-    isImage && file.path ? (fileRefToUrl(file as any, { inline: true }) || null) : null,
-  );
-
-  if (isImage && imageUrl && !imgError) {
-    return (
-      <div className="w-[60px] h-[36px] rounded bg-slate-50 dark:bg-slate-800 overflow-hidden">
-        <img
-          src={imageUrl}
-          alt={label}
-          className="w-full h-full object-cover rounded"
-        />
-      </div>
-    );
-  }
-
-  const IconComp = getDataInputFileIcon(file.mimeType);
-  return (
-    <div className="w-[60px] h-[36px] rounded bg-slate-50 dark:bg-slate-800 px-1 py-0.5 overflow-hidden flex flex-col items-center justify-center gap-0.5">
-      <IconComp className="h-3 w-3 text-slate-400 dark:text-slate-500" />
-      <span className="text-[8px] text-slate-400 dark:text-slate-500 truncate max-w-full">{label}</span>
-    </div>
-  );
-}
-
-function DataInputFileEntry({ file }: { file: { path: string; name: string; mimeType: string; size: number; id?: string } }) {
-  const isImage = file.mimeType.startsWith('image/');
-  // Header-authenticated fetch → blob: URL (no session token in the URL). See useAuthedObjectUrl.
-  const { url: imageUrl, error: imgError } = useAuthedObjectUrl(
-    isImage && file.path ? (fileRefToUrl(file as any, { inline: true }) || null) : null,
-  );
-
-  if (isImage && imageUrl && !imgError) {
-    return (
-      <img
-        src={imageUrl}
-        alt={file.name}
-        className="w-full object-contain rounded"
-      />
-    );
-  }
-
-  const IconComp = getDataInputFileIcon(file.mimeType);
-  return (
-    <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-      <IconComp className="h-3 w-3 shrink-0" />
-      <span className="truncate">{file.name}</span>
-    </div>
-  );
-}
-
-// ============================================================================
-// File-producing Node Preview (canvas)
-// Shared by download_file, convert_to_file, compression, sftp.
-// Reuses DataInputFileEntry for consistent file display style.
-// Dedupes (epoch, itemIndex) → max(spawn) so the navigator surfaces a clean
-// iteration axis instead of every retry.
-// ============================================================================
-
-function FileNodePreview({
-  data,
-  setCurrentFile,
-  selected = false,
-  isStaticFileProducingNode,
-}: {
-  data: BuilderNodeData;
-  setCurrentFile: React.Dispatch<React.SetStateAction<FilePanelTarget | null>>;
-  selected?: boolean;
-  isStaticFileProducingNode: boolean;
-}) {
-  const { isRunMode, workflowId, runId, viewingEpoch } = useWorkflowMode();
-  const queryClient = useQueryClient();
-
-  // Use normalized label (without prefix) to match DB step_alias.
-  // DB stores normalizeLabel("Download File") = "download_file", NOT "core:download_file".
-  const stepAlias = React.useMemo(
-    () => normalizeLabel(data.label || ''),
-    [data.label]
-  );
-
-  // Determine if node has completed execution
-  const effectiveStatus = data.status;
-  const isCompleted = effectiveStatus === 'completed';
-
-  // Spawn item pagination - local to this node, resets when viewing epoch changes
-  const [currentPage, setCurrentPage] = React.useState(0);
-  React.useEffect(() => { setCurrentPage(0); }, [viewingEpoch]);
-
-  // useRun MUST come before useRunOutputData because the gate predicate below
-  // reads runState?.runStatus to decide whether to fetch. Hooks-order rule:
-  // both unconditional, deterministic each render.
-  const [runState] = useRun(isRunMode ? runId : undefined);
-
-  // Fetch output data only in run mode when completed AND the gate predicate
-  // says so. Predicate kills the prod 80-call mount storm: terminal-run
-  // unselected MCP nodes don't fetch until clicked. Live runs + selected
-  // node + static file types stay eager (see fileFetchPredicate.ts for the
-  // full decision tree + rationale on FINISHED_STATUSES vs TERMINAL_STATUSES).
-  // dedupeMaxSpawn collapses retries so the navigator scrolls a clean
-  // (epoch, itemIndex) axis - same semantics as InterfaceRenderService.
-  const { totalItems, currentIndex, currentItem, goToIndex, getObjectAtPath } = useRunOutputData({
-    workflowId,
-    runId: runId || undefined,
-    stepAlias,
-    epoch: viewingEpoch,
-    enabled: shouldFetchFileOutput({
-      isRunMode,
-      isCompleted,
-      selected,
-      isStaticFileProducingNode,
-      runStatus: runState?.runStatus,
-    }),
-    dedupeMaxSpawn: true,
-  });
-  const resolvedStepCount = React.useMemo(() => {
-    if (!runState) return 0;
-    const completed = runState.completedSteps?.size || 0;
-    const failed = runState.failedSteps?.size || 0;
-    const skipped = runState.skippedSteps?.size || 0;
-    return completed + failed + skipped;
-  }, [runState?.completedSteps?.size, runState?.failedSteps?.size, runState?.skippedSteps?.size]);
-
-  const resolvedCountRef = React.useRef(resolvedStepCount);
-  React.useEffect(() => {
-    if (!isRunMode || !isCompleted) return;
-    if (resolvedStepCount === 0 || resolvedStepCount === resolvedCountRef.current) return;
-    resolvedCountRef.current = resolvedStepCount;
-
-    const timeoutId = setTimeout(() => {
-      queryClient.invalidateQueries({ queryKey: ['run-output-data'] });
-    }, 1000);
-    return () => clearTimeout(timeoutId);
-  }, [isRunMode, isCompleted, resolvedStepCount, queryClient]);
-
-  // Sync useRunOutputData index with shared page.
-  // useRunOutputData now returns items in display order (oldest first, newest at items.length-1),
-  // so the ItemNavigator "N / N" points to the most recent epoch. Default currentPage to the
-  // newest position on first load (and whenever totalItems grows beyond the current page).
-  const didInitRef = React.useRef(false);
-  React.useEffect(() => {
-    if (totalItems > 0 && !didInitRef.current) {
-      setCurrentPage(totalItems - 1);
-      didInitRef.current = true;
-    }
-  }, [totalItems]);
-  React.useEffect(() => { didInitRef.current = false; }, [viewingEpoch, runId, stepAlias]);
-
-  const targetIndex = totalItems > 0 ? Math.min(currentPage, totalItems - 1) : 0;
-  React.useEffect(() => {
-    if (totalItems > 0 && currentIndex !== targetIndex) {
-      goToIndex(targetIndex);
-    }
-  }, [targetIndex, totalItems, currentIndex, goToIndex]);
-
-  // Lazy-load the full output object for richer file data
-  const [outputData, setOutputData] = React.useState<any>(null);
-
-  // Reset outputData when epoch changes or current item changes so we reload
-  const prevEpochRef = React.useRef(viewingEpoch);
-  const prevItemIdRef = React.useRef(currentItem?.id);
-  React.useEffect(() => {
-    if (prevEpochRef.current !== viewingEpoch || prevItemIdRef.current !== currentItem?.id) {
-      prevEpochRef.current = viewingEpoch;
-      prevItemIdRef.current = currentItem?.id;
-      setOutputData(null);
-    }
-  }, [viewingEpoch, currentItem?.id]);
-
-  React.useEffect(() => {
-    if (!isRunMode || !isCompleted || outputData) return;
-    let cancelled = false;
-
-    getObjectAtPath('').then((obj) => {
-      if (!cancelled && obj) setOutputData(obj);
-    }).catch(() => {});
-
-    return () => { cancelled = true; };
-  }, [isRunMode, isCompleted, getObjectAtPath, outputData]);
-
-  // Extract the first FileRef from the output tree using the centralized
-  // walker. Covers every shape: canonical FileRef under `output.file` for the
-  // 4 producer nodes (download_file/sftp/convert_to_file/compression),
-  // image_generation's data.images[]._type='file', create_image's
-  // data[0].b64_json (post-dehydration), metadata.attachments[], and any
-  // future catalog-tool fileRef field - without per-shape code here.
-  //
-  // {@code outputData} comes back from StepPayloadService wrapped with
-  // envelope keys (_status, _duration_ms, _display_name, _error). The
-  // load-bearing _status guard in isFileRef rejects those envelopes, so
-  // for static file nodes (download_file et al.) the FileRef-shaped fields
-  // sit AT the envelope's top level alongside _status. We strip envelope
-  // keys before isFileRef-checking the root, then walk descendants for
-  // tools that nest the FileRef deeper (image_generation, create_image).
-  // Falls back to the step row's metadata blob when the lazy-loaded output
-  // is not yet hydrated (some nodes persist a FileRef under metadata.file).
-  const normalized = React.useMemo(() => {
-    if (outputData && typeof outputData === 'object') {
-      const stripped = { ...(outputData as Record<string, unknown>) };
-      delete stripped._status;
-      delete stripped._duration_ms;
-      delete stripped._display_name;
-      delete stripped._error;
-      if (isFileRef(stripped)) return normalizeFileRef(stripped as any);
-      const refs = findFileRefs(stripped);
-      if (refs.length > 0) return normalizeFileRef(refs[0].fileRef);
-    }
-    if (currentItem?.metadata) {
-      const refs = findFileRefs(currentItem.metadata);
-      if (refs.length > 0) return normalizeFileRef(refs[0].fileRef);
-    }
-    return null;
-  }, [outputData, currentItem]);
-
-  // Sync the parent's currentFile state every time the resolved file changes;
-  // clear on unmount or when the fetch is gated off (deselected MCP node on a
-  // terminal run) so the bottom-bar Files button hides until the user reopens
-  // the node - `selected` in deps fires this clear on deselect even though
-  // the component itself stays mounted.
-  React.useEffect(() => {
-    setCurrentFile(normalized
-      ? { path: normalized.path, id: (normalized as { id?: string }).id, name: normalized.name, mimeType: normalized.mimeType, size: normalized.size }
-      : null);
-    return () => { setCurrentFile(null); };
-  }, [normalized, selected, setCurrentFile]);
-
-  // Don't show anything if not in run mode or not completed
-  if (!isRunMode || !isCompleted) return null;
-
-  // No loading spinner below the node. The ['run-output-data'] query is
-  // invalidated on every status event (each completion bumps resolvedStepCount),
-  // so a spinner here reappeared - and grew/flickered the node - on every event.
-  // Instead we render nothing while the file (re)fetches: an already-resolved
-  // file stays visible (outputData persists across refetches), and the preview
-  // simply appears once resolved. The full loading state lives in the inspector
-  // panel (RunOutputPreview / RunDataPreview), not on the always-on canvas card.
-  if (!normalized) return null;
-
-  // Reuse DataInputFileEntry with max-height constraint for compact canvas display.
-  // The per-item ItemNavigator that used to render below the node was removed:
-  // multi-item navigation now lives in the inspector panel (RunOutputPreview /
-  // RunDataPreview / ResolvedParamsView), where it's only rendered when the
-  // user actually inspects a node. Saves a layer of always-on canvas chrome.
-  return (
-    <>
-      <div className="mt-3 w-full [&>img]:max-h-12 [&>img]:rounded">
-        <DataInputFileEntry file={normalized} />
-      </div>
-    </>
   );
 }

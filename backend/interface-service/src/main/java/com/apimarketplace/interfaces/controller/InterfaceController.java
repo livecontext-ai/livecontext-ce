@@ -1,5 +1,6 @@
 package com.apimarketplace.interfaces.controller;
 
+import com.apimarketplace.interfaces.client.InterfaceFormat;
 import com.apimarketplace.interfaces.client.dto.InterfaceDto;
 import com.apimarketplace.interfaces.client.dto.InterfaceSnapshotDto;
 import com.apimarketplace.common.web.TenantResolver;
@@ -58,9 +59,11 @@ public class InterfaceController {
         // would otherwise swallow a thrown exception into a generic 500).
         Long dataSourceId;
         Boolean isPublic;
+        String format;
         try {
             dataSourceId = num(body, "dataSourceId", "data_source_id");
             isPublic = bool(body, "isPublic", "is_public");
+            format = format(body);
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().build();
         }
@@ -77,7 +80,8 @@ public class InterfaceController {
                 dataSourceId,
                 isPublic,
                 null,
-                orgId);
+                orgId,
+                format);
         return ResponseEntity.ok(mapper.toDto(created));
     }
 
@@ -165,15 +169,21 @@ public class InterfaceController {
         Boolean updateDataSourceId = (body.containsKey("dataSourceId") || body.containsKey("data_source_id"))
                 ? Boolean.TRUE : null;
 
+        // Same key-presence rule for the display format: sending "format": null explicitly
+        // clears it back to unset (full page), while omitting the key leaves it untouched.
+        Boolean updateFormat = body.containsKey("format") ? Boolean.TRUE : null;
+
         // Parse wrong-typeable fields up front -> clean 400 on a bad type (portable, no advice
         // dependency), kept OUT of the service-call try below so a real "not found" still maps to 404.
         Long dataSourceId;
         Boolean isPublic;
         Boolean isActive;
+        String format;
         try {
             dataSourceId = num(body, "dataSourceId", "data_source_id");
             isPublic = bool(body, "isPublic", "is_public");
             isActive = bool(body, "isActive", "is_active");
+            format = format(body);
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().build();
         }
@@ -199,7 +209,9 @@ public class InterfaceController {
                     dataSourceId,
                     isPublic,
                     isActive,
-                    updateDataSourceId);
+                    updateDataSourceId,
+                    format,
+                    updateFormat);
         } catch (IllegalArgumentException e) {
             // "Interface not found" → cross-scope or genuinely missing - 404
             // matches the GET path's Optional.orElse semantics. Other validation
@@ -284,6 +296,33 @@ public class InterfaceController {
     private static String str(Map<String, Object> m, String camel, String snake) {
         Object v = m.get(camel);
         return (String) (v != null ? v : m.get(snake));
+    }
+
+    /**
+     * Reads a plain string field. A wrong-typed value is a 400 (the callers map this
+     * IllegalArgumentException to badRequest), never an uncaught ClassCastException surfacing as
+     * a 500 - interface-service has no exception-mapping advice. A JSON null is returned as null,
+     * which the caller distinguishes from "absent" via key presence.
+     */
+    private static String text(Map<String, Object> m, String key) {
+        Object v = m.get(key);
+        if (v == null) return null;
+        if (v instanceof String s) return s;
+        throw new IllegalArgumentException("Field '" + key + "' must be a string");
+    }
+
+    /**
+     * Reads the display format, rejecting a value that cannot be used. Same contract as the
+     * interface tool: an unusable format must be a 400, never a silent no-op - normalize() maps
+     * it to null, which on update would CLEAR the interface's shape instead of changing it.
+     * Blank stays legal: it is the explicit "back to no declared shape" clear.
+     */
+    private static String format(Map<String, Object> m) {
+        String raw = text(m, "format");
+        if (InterfaceFormat.isInvalid(raw)) {
+            throw new IllegalArgumentException("Field 'format' is not a usable interface format");
+        }
+        return raw;
     }
 
     private static Boolean bool(Map<String, Object> m, String camel, String snake) {

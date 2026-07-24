@@ -9,6 +9,7 @@ import { orchestratorApi } from '@/lib/api';
 import { publicationService } from '@/lib/api/orchestrator/publication.service';
 import { useAuthGuard } from '@/hooks/useAuthGuard';
 import { InterfaceThumbnail } from '@/app/workflows/builder/components/interface/InterfaceThumbnail';
+import { resolveInterfaceFormat } from '@/lib/interfaces/interfaceFormats';
 import { mergeTriggerDataIntoResolved } from '@/app/workflows/builder/utils/interfaceHtmlUtils';
 import type { InterfaceRenderResult } from '@/lib/api/orchestrator/types';
 
@@ -244,6 +245,10 @@ export function ShowcasePreview({ runId, interfaceId, className = '', hidePagina
                   : 'edit'
               }
               fit="contain"
+              // The interface's own shape, carried by the published render. The 16:10 box stays
+              // (a uniform card grid); the thumbnail letterboxes inside it, so a vertical
+              // interface keeps its proportions instead of being squashed to 16:10.
+              viewport={resolveInterfaceFormat(renderResult!.format) ?? undefined}
               // Publisher JS runs in marketplace previews too - isolation is enforced
               // by the iframe sandbox (`allow-scripts`, no `allow-same-origin`), so the
               // script can drive its own DOM but cannot reach the parent's storage.

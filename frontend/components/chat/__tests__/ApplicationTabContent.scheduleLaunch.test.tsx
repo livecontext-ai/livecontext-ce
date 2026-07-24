@@ -137,6 +137,7 @@ vi.mock('@/app/workflows/builder/utils/interfaceHtmlUtils', () => ({
 
 vi.mock('@/app/workflows/builder/utils/safeCenteringCss', () => ({
   SAFE_CENTERING_CSS: '',
+  centeringCssFor: () => '',
 }));
 
 vi.mock('@/lib/utils/dateFormatters', () => ({

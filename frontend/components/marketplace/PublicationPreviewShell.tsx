@@ -4,6 +4,11 @@ import React from 'react';
 import { PublicationSnapshotProvider } from '@/contexts/PublicationSnapshotContext';
 import { WorkflowModeProvider } from '@/contexts/WorkflowModeContext';
 import { WorkflowRunProvider } from '@/contexts/WorkflowRunContext';
+import {
+  WorkflowLayoutDirectionProvider,
+  isWorkflowLayoutDirection,
+  DEFAULT_WORKFLOW_LAYOUT_DIRECTION,
+} from '@/contexts/WorkflowLayoutDirectionContext';
 import type { WorkflowPublication } from '@/lib/api/orchestrator/types';
 
 interface PublicationPreviewShellProps {
@@ -66,14 +71,25 @@ export function PublicationPreviewShell({
   children,
 }: PublicationPreviewShellProps) {
   const showcaseRunId = publication.showcaseRunId ?? null;
+  // The published plan's reading direction is its identity: pin it so the preview
+  // canvas renders the way the publisher authored it, NOT the viewer's own workflow
+  // preference. `forcedDirection` also makes the in-canvas toggle a no-op, matching
+  // the read-only preview. Old plans (pre-feature) have no key: fall back to
+  // horizontal, the historical layout every legacy canvas was positioned in.
+  const rawDir = (publication.planSnapshot as { layoutDirection?: string } | null)?.layoutDirection;
+  const previewDirection = isWorkflowLayoutDirection(rawDir)
+    ? rawDir
+    : DEFAULT_WORKFLOW_LAYOUT_DIRECTION;
   const inner = (
-    <WorkflowModeProvider
-      workflowId={publication.workflowId}
-      initialRunId={showcaseRunId ?? undefined}
-      readOnly
-    >
-      {withRunProvider ? <WorkflowRunProvider>{children}</WorkflowRunProvider> : children}
-    </WorkflowModeProvider>
+    <WorkflowLayoutDirectionProvider forcedDirection={previewDirection}>
+      <WorkflowModeProvider
+        workflowId={publication.workflowId}
+        initialRunId={showcaseRunId ?? undefined}
+        readOnly
+      >
+        {withRunProvider ? <WorkflowRunProvider>{children}</WorkflowRunProvider> : children}
+      </WorkflowModeProvider>
+    </WorkflowLayoutDirectionProvider>
   );
 
   return (

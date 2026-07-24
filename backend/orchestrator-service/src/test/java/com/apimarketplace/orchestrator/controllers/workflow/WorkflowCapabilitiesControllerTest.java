@@ -26,25 +26,25 @@ class WorkflowCapabilitiesControllerTest {
     @DisplayName("GET /api/workflows/capabilities returns the service verdict for the X-User-ID tenant")
     void returnsServiceVerdict() {
         OptionalFeatureCapabilityService service = mock(OptionalFeatureCapabilityService.class);
-        when(service.resolve("tenant-1")).thenReturn(new FeatureCapabilities(false, true, true));
+        when(service.resolve("tenant-1")).thenReturn(new FeatureCapabilities(false, true, true, false));
         WorkflowCapabilitiesController controller = new WorkflowCapabilitiesController(service);
 
         ResponseEntity<FeatureCapabilities> response = controller.getCapabilities("tenant-1");
 
         assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
-        assertThat(response.getBody()).isEqualTo(new FeatureCapabilities(false, true, true));
+        assertThat(response.getBody()).isEqualTo(new FeatureCapabilities(false, true, true, false));
     }
 
     @Test
     @DisplayName("missing X-User-ID header still resolves (gate fail-closes on browsing, renderer is global)")
     void missingHeaderStillResolves() {
         OptionalFeatureCapabilityService service = mock(OptionalFeatureCapabilityService.class);
-        when(service.resolve(null)).thenReturn(new FeatureCapabilities(true, false, false));
+        when(service.resolve(null)).thenReturn(new FeatureCapabilities(true, false, false, true));
         WorkflowCapabilitiesController controller = new WorkflowCapabilitiesController(service);
 
         ResponseEntity<FeatureCapabilities> response = controller.getCapabilities(null);
 
-        assertThat(response.getBody()).isEqualTo(new FeatureCapabilities(true, false, false));
+        assertThat(response.getBody()).isEqualTo(new FeatureCapabilities(true, false, false, true));
     }
 
     /**
@@ -66,7 +66,7 @@ class WorkflowCapabilitiesControllerTest {
     @DisplayName("literal /api/workflows/capabilities wins over the sibling /{workflowId} template mapping")
     void literalPathBeatsPathVariableSibling() throws Exception {
         OptionalFeatureCapabilityService service = mock(OptionalFeatureCapabilityService.class);
-        when(service.resolve("tenant-1")).thenReturn(new FeatureCapabilities(false, true, true));
+        when(service.resolve("tenant-1")).thenReturn(new FeatureCapabilities(false, true, true, false));
         MockMvc mockMvc = MockMvcBuilders.standaloneSetup(
                 new WorkflowCapabilitiesController(service),
                 new PathVariableSiblingController()
@@ -76,7 +76,8 @@ class WorkflowCapabilitiesControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.screenshotRenderer").value(false))
                 .andExpect(jsonPath("$.browserAgent").value(true))
-                .andExpect(jsonPath("$.webSearch").value(true));
+                .andExpect(jsonPath("$.webSearch").value(true))
+                .andExpect(jsonPath("$.mediaRenderer").value(false));
 
         mockMvc.perform(get("/api/workflows/some-workflow-id"))
                 .andExpect(status().isOk())

@@ -11,18 +11,32 @@ import dagre from '@dagrejs/dagre';
 import type { Node, Edge } from 'reactflow';
 import type { BuilderNodeData } from '../types';
 import { nodeRegistry } from '../registry/nodeRegistry';
+import {
+  DEFAULT_WORKFLOW_LAYOUT_DIRECTION,
+  type WorkflowLayoutDirection,
+} from '@/contexts/WorkflowLayoutDirectionContext';
+
+/** The reading direction a dagre rankdir corresponds to. */
+function directionOf(rankdir: string): WorkflowLayoutDirection {
+  return rankdir === 'TB' || rankdir === 'BT' ? 'vertical' : 'horizontal';
+}
 
 /**
  * Layout configuration
  */
 const LAYOUT_CONFIG = {
-  // Dagre graph direction
+  // Dagre graph direction. Overridden per call from the user's reading direction
+  // (see `layoutConfigForDirection`); this stays the horizontal default.
   rankdir: 'LR' as 'TB' | 'BT' | 'LR' | 'RL', // Left to Right (horizontal layout)
 
   // Node spacing - kept tight for a compact graph (size-aware dims already
   // guarantee no overlap, so the gap is pure breathing room, not safety margin).
-  nodesep: 40,    // Vertical space between nodes in same rank (also the stack gap between independent components)
-  ranksep: 90,    // Horizontal space between ranks
+  // NOTE both are relative to the FLOW AXIS, so their roles swap with rankdir:
+  // `nodesep` is the within-rank gap (vertical in LR, horizontal in TB) and
+  // `ranksep` is the along-flow gap. These values are tuned for LR - see
+  // `layoutConfigForDirection` for the vertical set.
+  nodesep: 40,    // Within-rank gap (also the stack gap between independent components)
+  ranksep: 90,    // Along-flow gap between ranks
 
   // Edge spacing
   edgesep: 30,    // Space between edges
@@ -44,6 +58,34 @@ const LAYOUT_CONFIG = {
 };
 
 /**
+ * Layout config for a reading direction. Every caller that lays the BUILDER out
+ * should pass `layoutConfigForDirection(direction)` rather than a bare `rankdir`:
+ * the spacing constants are flow-axis relative, so flipping rankdir alone leaves
+ * vertical graphs badly spaced.
+ *
+ * Why the vertical numbers differ, rather than reusing the LR ones:
+ * - Nodes are WIDE and SHORT (200-900px x 80-140px). In TB, `nodesep` becomes the
+ *   horizontal gap between siblings, so the LR value of 40 would jam wide branches
+ *   nearly edge to edge, while `ranksep` becomes the vertical gap, where 90 is far
+ *   more room than two 80px-tall nodes need. The fleet canvas, which has been TB
+ *   since it shipped, settled on the inverse ratio (36 / 104) - these follow it.
+ * - `align: 'UL'` packs ranks toward the upper-left, which reads as intended in LR
+ *   but bunches TB branches against one side. Dagre centres when align is undefined,
+ *   which is what a top-down graph wants (and what the fleet uses).
+ */
+export function layoutConfigForDirection(
+  direction: WorkflowLayoutDirection,
+): Partial<typeof LAYOUT_CONFIG> {
+  if (direction !== 'vertical') return {};
+  return {
+    rankdir: 'TB',
+    nodesep: 44,
+    ranksep: 104,
+    align: undefined,
+  };
+}
+
+/**
  * Apply Dagre layout to nodes and edges
  *
  * @param nodes - ReactFlow nodes
@@ -59,6 +101,14 @@ export function applyDagreLayout(
   const config = { ...LAYOUT_CONFIG, ...options };
   if (nodes.length === 0) return nodes;
 
+  // The cross-axis centering pass is VERTICAL-ONLY. Horizontal keeps the historical
+  // algorithm (plain Dagre placement, no post-centering) so existing left-to-right
+  // canvases lay out exactly as they always did. Vertical (top-to-bottom) opted into
+  // the extra centering because Dagre leaves wide nodes off-centre over their children
+  // on the TB axis; horizontal never needed it and re-introducing it visibly shifted
+  // long-standing layouts, so it is gated here.
+  const vertical = config.rankdir === 'TB' || config.rankdir === 'BT';
+
   // Independent sub-graphs (e.g. several trigger chains in one workflow) otherwise
   // share Dagre's GLOBAL rank grid: a wide node in one chain pushes that column for
   // EVERY chain, and short chains leave large gaps - the sparse look in multi-trigger
@@ -67,7 +117,8 @@ export function applyDagreLayout(
   // the fast path and is unchanged.
   const components = connectedComponents(nodes, edges);
   if (components.length <= 1) {
-    return layoutConnectedGraph(nodes, edges, config);
+    const laid = layoutConnectedGraph(nodes, edges, config);
+    return vertical ? centerOnCrossAxis(laid, edges, config) : laid;
   }
 
   // Preserve the author's lane order: order components by the smallest existing
@@ -94,11 +145,20 @@ export function applyDagreLayout(
   for (const comp of ordered) {
     const compNodes = nodes.filter((n) => comp.has(n.id));
     const compEdges = edges.filter((e) => comp.has(e.source) && comp.has(e.target));
-    const laid = layoutConnectedGraph(compNodes, compEdges, config);
+    const laidComp = layoutConnectedGraph(compNodes, compEdges, config);
+    const laid = vertical ? centerOnCrossAxis(laidComp, compEdges, config) : laidComp;
 
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const n of laid) {
-      const { width, height } = getNodeDimensions(n, config.ignoreMeasured);
+      // Vertical prefers measured dims to match how `centerOnCrossAxis` just placed
+      // these nodes (mixing an estimated extent with measured positions would offset
+      // the next component's stack by the estimate/measure gap). Horizontal keeps the
+      // historical estimate-only extent so multi-component stacking is unchanged.
+      const measuredW = typeof n.width === 'number' && n.width > 0 ? n.width : undefined;
+      const measuredH = typeof n.height === 'number' && n.height > 0 ? n.height : undefined;
+      const est = getNodeDimensions(n, config.ignoreMeasured, directionOf(config.rankdir));
+      const width = vertical ? (measuredW ?? est.width) : est.width;
+      const height = vertical ? (measuredH ?? est.height) : est.height;
       minX = Math.min(minX, n.position.x);
       minY = Math.min(minY, n.position.y);
       maxX = Math.max(maxX, n.position.x + width);
@@ -162,6 +222,120 @@ function connectedComponents(
  * nodes. Loop-back edges are skipped (cycles); While exit edges are rerouted from
  * the last body node so the exit lands after the body chain.
  */
+/**
+ * Center connected nodes on the CROSS axis (perpendicular to the flow) so a parent
+ * sits over the middle of its children and a single child lines up under its parent,
+ * making the main edge run straight instead of bending.
+ *
+ * dagre's coordinate assignment (Brandes-Köpf) already tries to centre, but when
+ * sibling nodes differ in size it leaves a visible offset (a trigger ~50px off the
+ * decision it feeds). This is a post-pass on dagre's output that only shifts nodes
+ * along the CROSS axis, never the flow axis, so ranks and edge topology are
+ * untouched.
+ *
+ * Safety: it moves each rank as computed, then re-spaces any rank whose nodes would
+ * overlap back to a non-overlapping spread centred on the same midpoint. So it can
+ * only straighten alignment, never introduce a collision dagre had avoided.
+ *
+ * Runs in BOTH directions (the offset exists on either axis); horizontal users get
+ * the same straightening, which is why the audit's "do it in horizontal too" applies.
+ */
+export function centerOnCrossAxis(
+  laid: Node<BuilderNodeData>[],
+  edges: Edge[],
+  config: typeof LAYOUT_CONFIG,
+): Node<BuilderNodeData>[] {
+  if (laid.length < 2) return laid;
+  const vertical = config.rankdir === 'TB' || config.rankdir === 'BT';
+  // cross = the axis we may move on; flow = the axis we must never touch.
+  const cross: 'x' | 'y' = vertical ? 'x' : 'y';
+  const flow: 'x' | 'y' = vertical ? 'y' : 'x';
+  // Centre on the size the node is actually PAINTED at. dagre lays out from label
+  // estimates, but a rendered node is often wider (a branch node's estimate is ~368
+  // while it paints ~451), so aligning estimated centres leaves the VISUAL centres
+  // offset - which is the "not centred" the user sees. On the auto-layout button the
+  // nodes are already measured (`node.width`/`height` populated by ReactFlow), so use
+  // that; at import time nothing is measured yet and the estimate is all there is (and
+  // dagre used the same estimate, so they stay consistent).
+  const crossSize = (n: Node<BuilderNodeData>) => {
+    const measured = vertical ? n.width : n.height;
+    if (typeof measured === 'number' && measured > 0) return measured;
+    return getNodeDimensions(n, config.ignoreMeasured, directionOf(config.rankdir))[vertical ? 'width' : 'height'];
+  };
+  const gap = config.nodesep;
+
+  const byId = new Map(laid.map((n) => [n.id, n]));
+  const children = new Map<string, string[]>();
+  const parents = new Map<string, string[]>();
+  for (const e of edges) {
+    if (!byId.has(e.source) || !byId.has(e.target) || e.source === e.target) continue;
+    (children.get(e.source) ?? children.set(e.source, []).get(e.source)!).push(e.target);
+    (parents.get(e.target) ?? parents.set(e.target, []).get(e.target)!).push(e.source);
+  }
+
+  const crossCenter = (n: Node<BuilderNodeData>) => n.position[cross] + crossSize(n) / 2;
+  const setCrossCenter = (n: Node<BuilderNodeData>, c: number) => {
+    const p = { ...n.position, [cross]: c - crossSize(n) / 2 };
+    n.position = p;
+    n.positionAbsolute = p;
+  };
+
+  // Group nodes into ranks by their flow coordinate (dagre put a rank on one line).
+  const rankKey = (n: Node<BuilderNodeData>) => Math.round(n.position[flow]);
+  const ranks = new Map<number, Node<BuilderNodeData>[]>();
+  for (const n of laid) (ranks.get(rankKey(n)) ?? ranks.set(rankKey(n), []).get(rankKey(n))!).push(n);
+  // Ranks in flow order (top-to-bottom / left-to-right).
+  const orderedRankKeys = [...ranks.keys()].sort((a, b) => a - b);
+
+  // Pass 1, leaf-ward first (reverse rank order): a parent centres over its children.
+  for (const k of [...orderedRankKeys].reverse()) {
+    for (const n of ranks.get(k)!) {
+      const kids = (children.get(n.id) ?? []).map((id) => byId.get(id)!).filter(Boolean);
+      if (kids.length === 0) continue;
+      const mid = kids.reduce((s, c) => s + crossCenter(c), 0) / kids.length;
+      setCrossCenter(n, mid);
+    }
+  }
+  // Pass 2, root-ward (forward): a node with a SINGLE parent lines up under it, so a
+  // straight chain is dead straight. Skipped for merges (multiple parents), where
+  // pass 1's child-centring already placed them sensibly.
+  for (const k of orderedRankKeys) {
+    for (const n of ranks.get(k)!) {
+      const ps = parents.get(n.id) ?? [];
+      if (ps.length !== 1) continue;
+      const parent = byId.get(ps[0]);
+      const siblings = children.get(ps[0]) ?? [];
+      if (parent && siblings.length === 1) setCrossCenter(n, crossCenter(parent));
+    }
+  }
+
+  // Pass 3: within every rank, push apart any nodes that now overlap, keeping their
+  // order and their shared midpoint. This is the guard that makes the pass safe: it
+  // can never leave two nodes closer than dagre's gap.
+  for (const k of orderedRankKeys) {
+    const row = ranks.get(k)!.slice().sort((a, b) => crossCenter(a) - crossCenter(b));
+    if (row.length < 2) continue;
+    let overlap = false;
+    for (let i = 1; i < row.length; i++) {
+      const need = crossSize(row[i - 1]) / 2 + crossSize(row[i]) / 2 + gap;
+      if (crossCenter(row[i]) - crossCenter(row[i - 1]) < need - 0.5) { overlap = true; break; }
+    }
+    if (!overlap) continue;
+    // Lay them edge-to-edge with the gap, then recentre the whole row on its old mid.
+    const oldMid = row.reduce((s, n) => s + crossCenter(n), 0) / row.length;
+    let cursor = 0;
+    const centers: number[] = [];
+    for (let i = 0; i < row.length; i++) {
+      if (i > 0) cursor += crossSize(row[i - 1]) / 2 + gap + crossSize(row[i]) / 2;
+      centers.push(cursor);
+    }
+    const newMid = centers.reduce((s, c) => s + c, 0) / centers.length;
+    row.forEach((n, i) => setCrossCenter(n, centers[i] - newMid + oldMid));
+  }
+
+  return laid;
+}
+
 function layoutConnectedGraph(
   nodes: Node<BuilderNodeData>[],
   edges: Edge[],
@@ -182,7 +356,7 @@ function layoutConnectedGraph(
   dagreGraph.setGraph(graphConfig);
 
   nodes.forEach((node) => {
-    const { width, height } = getNodeDimensions(node, config.ignoreMeasured);
+    const { width, height } = getNodeDimensions(node, config.ignoreMeasured, directionOf(config.rankdir));
     dagreGraph.setNode(node.id, { width, height });
   });
 
@@ -247,6 +421,33 @@ function estimateRowNodeHeight(rowCount: number): number {
 }
 
 /**
+ * Approximate width of ONE branch row when the rows sit side by side (vertical
+ * canvas): the row is `rounded-2xl border px-3 py-2` holding an uppercase badge
+ * ("ELSE IF" is the widest) plus a truncated label.
+ */
+const ROW_WIDTH_PX = 132;
+
+/**
+ * Width of a branching node whose rows are laid out ACROSS it.
+ *
+ * `getBranchRowFlow` turns the row container from a column into a row on a vertical
+ * canvas, so a 5-case Switch stops being ~320px tall and becomes ~700px wide. Dagre
+ * packs the within-rank axis, which under `rankdir: TB` is the WIDTH - so this is the
+ * number that decides whether the next branch lands beside the node or on top of it.
+ * Feeding it the label-only estimate re-creates, on the vertical canvas, exactly the
+ * overlap that the row-aware HEIGHT estimate was added to fix on the horizontal one.
+ */
+function estimateRowNodeWidth(rowCount: number, label: string): number {
+  const rows = rowCount * ROW_WIDTH_PX + Math.max(0, rowCount - 1) * ROW_GAP_PX + NODE_CHROME_PX;
+  // NOT clamped to ESTIMATE_MAX_WIDTH: that cap tames a long LABEL, but here the rows
+  // ARE the node's real width (they render side by side in vertical), and this is the
+  // WITHIN-RANK axis dagre packs against under rankdir:TB. Capping it below the real
+  // width (a 7+-case switch exceeds 900) would under-space the rank and let the next
+  // node overlap - the exact bug the row-aware estimate exists to prevent.
+  return Math.max(rows, estimateNodeWidth(label, 220));
+}
+
+/**
  * Number of port rows a branching node renders, or null for non-row node types.
  * Mirrors each component's data source AND its createDefault* fallback row count
  * (DecisionNode → decisionConditions, SwitchNode → switchCases, etc.).
@@ -297,6 +498,7 @@ function isMeasured(value: number | null | undefined): value is number {
 export function getNodeDimensions(
   node: Node<BuilderNodeData>,
   ignoreMeasured = false,
+  direction: WorkflowLayoutDirection = DEFAULT_WORKFLOW_LAYOUT_DIRECTION,
 ): { width: number; height: number } {
   const data = node.data as any;
 
@@ -307,9 +509,12 @@ export function getNodeDimensions(
     const interfaceData = data.interfaceData;
     const isPreview = data.isPreviewMode ?? (interfaceData?.showPreview !== false);
     if (isPreview) {
+      // Fallback 400x250 = the drop/import default box (classic 1280x800 contained in
+      // 400x400). Once the interface's format loads, the node snaps its box to that
+      // format and persists previewWidth/Height, so layout measures the real shape.
       return {
         width: interfaceData?.previewWidth || 400,
-        height: interfaceData?.previewHeight || 300,
+        height: interfaceData?.previewHeight || 250,
       };
     }
   }
@@ -345,7 +550,11 @@ export function getNodeDimensions(
   // landed on top of any node with 3+ rows.
   const portRows = getPortRowCount(node);
   if (portRows !== null) {
-    return { width: estimateNodeWidth(data.label, 220), height: estimateRowNodeHeight(portRows) };
+    // The rows run ACROSS the node on a vertical canvas (getBranchRowFlow), so the
+    // row count drives the WIDTH there and the height collapses to a single row.
+    return direction === 'vertical'
+      ? { width: estimateRowNodeWidth(portRows, data.label), height: estimateRowNodeHeight(1) }
+      : { width: estimateNodeWidth(data.label, 220), height: estimateRowNodeHeight(portRows) };
   }
 
   // 4) Plain nodes: type-based base height + label-driven width estimate. Short

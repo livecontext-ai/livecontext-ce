@@ -23,6 +23,8 @@ interface InterfaceData {
   jsTemplate?: string;
   targetTable?: string;
   dataSourceId?: number;
+  /** Display format (preset name or "WIDTHxHEIGHT"); null = full page at 1280x800. */
+  format?: string | null;
   isPublic: boolean;
   isActive: boolean;
   createdAt?: string;
@@ -41,6 +43,7 @@ interface RenderResult {
   htmlTemplate: string;
   cssTemplate?: string;
   jsTemplate?: string;
+  format?: string | null;
   items: RenderItem[];
   pagination: {
     page: number;
@@ -265,6 +268,9 @@ export default function InterfaceDetailPage({ params }: { params: Promise<{ id: 
           className="w-full h-full"
           isLoading={isResolvingData}
           autoFit={false}
+          // The interface's own shape. Without it, a 1080x1920 page rendered at its native size
+          // in whatever box the layout gave it - the reason vertical interfaces looked broken.
+          format={renderResult?.format ?? interfaceData?.format}
           emptyLabel={t('chat.interfaceBlock.noTemplate')}
         />
 

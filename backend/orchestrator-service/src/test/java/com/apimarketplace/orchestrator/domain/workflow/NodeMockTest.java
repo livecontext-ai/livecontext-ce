@@ -218,4 +218,138 @@ class NodeMockTest {
                 .hasMessageContaining("error");
         }
     }
+
+    // =====================================================================
+    // durationMs - simulated execution time
+    // =====================================================================
+
+    @Nested
+    @DisplayName("durationMs (simulated execution time)")
+    class DurationMs {
+
+        @Test
+        @DisplayName("a numeric durationMs is kept and flags a simulated duration")
+        void numericDurationKept() {
+            NodeMock mock = NodeMock.fromMap(Map.of(
+                "output", Map.of("x", 1), "durationMs", 90_000), "agent:slow");
+
+            assertThat(mock.durationMs()).isEqualTo(90_000L);
+            assertThat(mock.hasSimulatedDuration()).isTrue();
+        }
+
+        @Test
+        @DisplayName("snake_case alias duration_ms is accepted (agents write snake_case naturally)")
+        void snakeCaseAliasAccepted() {
+            NodeMock mock = NodeMock.fromMap(Map.of(
+                "output", Map.of("x", 1), "duration_ms", 5_000), "agent:slow");
+
+            assertThat(mock.durationMs()).isEqualTo(5_000L);
+        }
+
+        @Test
+        @DisplayName("a numeric string is coerced (lenient shape, strict value)")
+        void numericStringCoerced() {
+            NodeMock mock = NodeMock.fromMap(Map.of(
+                "output", Map.of("x", 1), "durationMs", "1500"), "mcp:x");
+
+            assertThat(mock.durationMs()).isEqualTo(1_500L);
+        }
+
+        @Test
+        @DisplayName("fractional milliseconds are rounded (matches the builder's sanitize)")
+        void fractionalRounded() {
+            assertThat(NodeMock.fromMap(Map.of(
+                "output", Map.of(), "durationMs", 1500.6), "mcp:x").durationMs()).isEqualTo(1_501L);
+            assertThat(NodeMock.fromMap(Map.of(
+                "output", Map.of(), "durationMs", "1500.4"), "mcp:x").durationMs()).isEqualTo(1_500L);
+        }
+
+        @Test
+        @DisplayName("camelCase durationMs wins over the duration_ms alias when both are present")
+        void camelCaseWinsOverAlias() {
+            NodeMock mock = NodeMock.fromMap(Map.of(
+                "output", Map.of(), "durationMs", 2_000, "duration_ms", 5_000), "mcp:x");
+
+            assertThat(mock.durationMs()).isEqualTo(2_000L);
+        }
+
+        @Test
+        @DisplayName("a blank string durationMs is rejected (not silently ignored)")
+        void blankStringRejected() {
+            assertThatThrownBy(() -> NodeMock.fromMap(Map.of(
+                "output", Map.of(), "durationMs", "  "), "mcp:x"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("durationMs");
+        }
+
+        @Test
+        @DisplayName("NaN is rejected, never coerced to 0 (Number and String forms)")
+        void nanRejected() {
+            assertThatThrownBy(() -> NodeMock.fromMap(Map.of(
+                "output", Map.of(), "durationMs", Double.NaN), "mcp:x"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("durationMs");
+            assertThatThrownBy(() -> NodeMock.fromMap(Map.of(
+                "output", Map.of(), "durationMs", "NaN"), "mcp:x"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("durationMs");
+        }
+
+        @Test
+        @DisplayName("absent or 0 = no simulated duration")
+        void absentOrZeroMeansInstant() {
+            assertThat(NodeMock.fromMap(Map.of("output", Map.of()), "mcp:x")
+                .hasSimulatedDuration()).isFalse();
+            assertThat(NodeMock.fromMap(Map.of("output", Map.of(), "durationMs", 0), "mcp:x")
+                .hasSimulatedDuration()).isFalse();
+        }
+
+        @Test
+        @DisplayName("negative durations are rejected, naming the node")
+        void negativeRejected() {
+            assertThatThrownBy(() -> NodeMock.fromMap(Map.of(
+                "output", Map.of(), "durationMs", -1), "mcp:x"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("mcp:x")
+                .hasMessageContaining("durationMs");
+        }
+
+        @Test
+        @DisplayName("durations beyond the 10-minute cap are rejected")
+        void beyondCapRejected() {
+            assertThatThrownBy(() -> NodeMock.fromMap(Map.of(
+                "output", Map.of(), "durationMs", NodeMock.MAX_DURATION_MS + 1), "mcp:x"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("10 minutes");
+        }
+
+        @Test
+        @DisplayName("the cap itself (600000 ms) is accepted")
+        void capItselfAccepted() {
+            NodeMock mock = NodeMock.fromMap(Map.of(
+                "output", Map.of(), "durationMs", NodeMock.MAX_DURATION_MS), "mcp:x");
+
+            assertThat(mock.durationMs()).isEqualTo(NodeMock.MAX_DURATION_MS);
+        }
+
+        @Test
+        @DisplayName("a non-numeric durationMs is rejected with an actionable message")
+        void nonNumericRejected() {
+            assertThatThrownBy(() -> NodeMock.fromMap(Map.of(
+                "output", Map.of(), "durationMs", "fast"), "mcp:x"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("durationMs")
+                .hasMessageContaining("milliseconds");
+        }
+
+        @Test
+        @DisplayName("durationMs composes with every source, including error")
+        void composesWithErrorSource() {
+            NodeMock mock = NodeMock.fromMap(Map.of(
+                "error", Map.of("message", "boom"), "durationMs", 2_000), "mcp:x");
+
+            assertThat(mock.isError()).isTrue();
+            assertThat(mock.durationMs()).isEqualTo(2_000L);
+        }
+    }
 }

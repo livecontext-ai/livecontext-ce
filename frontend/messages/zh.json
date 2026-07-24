@@ -1128,7 +1128,18 @@
     },
     "rejected": "已拒绝",
     "sharedInReview": "已分享 · 等待管理员批准",
-    "sharedRejected": "已分享 · 审核拒绝"
+    "sharedRejected": "已分享 · 审核拒绝",
+    "runInfo": {
+      "costOfThisRun": "本次运行的成本",
+      "costTooltip": "本次运行在所有轮次中的总成本",
+      "budgetReached": "已达预算，不会启动新的运行",
+      "epochCost": "轮次 {epoch}",
+      "budgetBlockedTitle": "已达预算",
+      "budgetBlockedMessage": "已花费 {spent}/{budget}。未启动新的运行。",
+      "cost": "成本",
+      "scopeAll": "所有轮次",
+      "scopeEpoch": "轮次 {epoch}"
+    }
   },
   "data": {
     "title": "数据表",
@@ -2086,6 +2097,25 @@
       "cssTemplatePlaceholder": "输入您的 CSS 样式...",
       "jsTemplateLabel": "JavaScript",
       "jsTemplatePlaceholder": "输入您的 JavaScript 代码...",
+      "formatLabel": "格式",
+      "formatAuto": "自动（整页）",
+      "formatAutoHint": "以 1280 宽度捕获整个页面",
+      "formatHelp": "此界面所针对的形状。适用于它的每个预览、截图和视频。自动模式以 1280 宽度捕获整个页面。PDF 保留自己的页面尺寸。",
+      "formatCustom": "自定义",
+      "formatCustomPlaceholder": "宽x高，例如 1080x1920",
+      "formatCustomInvalid": "请输入“宽x高”格式的尺寸，每边介于 16 和 2160 之间（例如 1080x1920）。",
+      "formatPreset_classic": "经典",
+      "formatPreset_widescreen": "宽屏",
+      "formatPreset_vertical": "竖屏",
+      "formatPreset_square": "方形",
+      "formatPreset_portrait": "纵向",
+      "formatPreset_mobile": "手机",
+      "formatPreset_tablet": "平板",
+      "formatPreset_desktop": "桌面",
+      "formatPreset_banner": "横幅",
+      "formatPreset_social_card": "社交卡片",
+      "formatPreset_a4_portrait": "A4 纵向",
+      "formatPreset_a4_landscape": "A4 横向",
       "availableColumns": "可用列",
       "back": "返回",
       "next": "下一步",
@@ -2737,7 +2767,12 @@
       "saving": "正在保存……",
       "successMessage": "\"{name}\" 更新成功",
       "successTitle": "已更新",
-      "title": "编辑详情"
+      "title": "编辑详情",
+      "advancedSection": "高级",
+      "budgetLabel": "成本预算",
+      "budgetPlaceholder": "无限制",
+      "budgetHelpCredits": "此工作流可花费的最大额度。达到后不会启动新的运行。",
+      "budgetHelpDollars": "此工作流的最大支出。达到后不会启动新的运行。"
     },
     "suggestedApps": {
       "cta": "浏览市场",
@@ -5413,7 +5448,11 @@
       "creditLimitDescription": "无需确认即可使用的积分数量",
       "chatDefaultsTitle": "聊天默认设置",
       "chatDefaultsDescription": "应用于此工作区中新对话的默认选项。",
-      "savePreferences": "保存偏好设置"
+      "savePreferences": "保存偏好设置",
+      "workflowLayoutDirection": "工作流布局",
+      "workflowLayoutDirectionDescription": "工作流编辑器的阅读方向：从左到右，或从上到下。决定节点连接和按钮的位置，以及自动布局排列图形的方式。",
+      "workflowLayoutDirectionHorizontal": "从左到右",
+      "workflowLayoutDirectionVertical": "从上到下"
     },
     "notifications": {
       "title": "通知偏好设置",
@@ -5741,7 +5780,10 @@
       "useAsMock": "用作模拟输出",
       "usedAsMockToast": "已保存为 {label} 的模拟输出",
       "mockedBadge": "已模拟",
-      "toggleHelp": "从编辑器运行时会返回已配置的模拟输出，而不会执行此节点。生产运行永远不会被模拟。"
+      "toggleHelp": "从编辑器运行时会返回已配置的模拟输出，而不会执行此节点。生产运行永远不会被模拟。",
+      "durationLabel": "模拟时长",
+      "durationUnit": "秒",
+      "durationHelp": "节点会等待这段时间后再返回模拟输出，就像真实调用一样。留空或 0 = 立即返回。最长 10 分钟。"
     },
     "executionErrors": {
       "epochLimitTitle": "已达并发执行上限",
@@ -5866,6 +5908,7 @@
         "variableCountPlural": "{count} 个变量",
         "mappingPlaceholder": "将变量拖放到此处或留空",
         "mappingHelp": "将每个模板变量映射到工作流数据源。从其他节点拖拽变量或输入表达式。",
+        "formatTitle": "格式",
         "htmlTemplateTitle": "HTML",
         "cssTemplateTitle": "CSS",
         "jsTemplateTitle": "JavaScript",
@@ -5930,6 +5973,7 @@
         "generateVideo": "生成视频",
         "generateVideoDescription": "启用后，将界面的动画录制为 MP4 并将其暴露为 video FileRef 输出，供下游节点使用（社交媒体上传、Telegram 视频、邮件附件）。当页面设置 window.__DONE__ = true 时录制停止，否则在达到最大时长后停止。尽力而为：录制失败会使输出缺失，但不会使工作流失败。",
         "videoPreset": "视频格式",
+        "videoPresetAuto": "自动（界面的格式）",
         "videoPresetVertical": "竖屏 (1080x1920)",
         "videoPresetHorizontal": "横屏 (1920x1080)",
         "videoPresetSquare": "方形 (1080x1080)",
@@ -6536,7 +6580,9 @@
       "timeoutHelp": "最大执行时间（秒）",
       "maxDepth": "最大深度",
       "maxDepthPlaceholder": "例如：5",
-      "maxDepthHelp": "递归子工作流的最大嵌套深度"
+      "maxDepthHelp": "递归子工作流的最大嵌套深度",
+      "inputMappingPlaceholder": "{{core:build.output}} 或 {{trigger.output.payload}}",
+      "inputMappingHelp": "解析为传递给子工作流的对象的单个表达式。留空则转发本工作流的触发器数据。"
     },
     "respondToWebhookNode": {
       "title": "响应 Webhook",
@@ -6577,6 +6623,11 @@
       "bccPlaceholder": "bcc@example.com",
       "fromName": "发件人名称（可选）",
       "fromNamePlaceholder": "覆盖发件人显示名称",
+      "fromEmail": "发件人地址（可选）",
+      "fromEmailPlaceholder": "sender@example.com",
+      "fromEmailHint": "留空则使用凭证中的地址发送（通常做法）。大多数 SMTP 服务器会拒绝不属于自己的发件人地址。",
+      "replyTo": "回复地址（可选）",
+      "replyToPlaceholder": "replies@example.com, team@example.com",
       "subject": "主题",
       "subjectPlaceholder": "邮件主题",
       "body": "正文",
@@ -6605,6 +6656,7 @@
       "action": "操作",
       "actions": {
         "list_folders": "列出文件夹",
+        "create_folder": "创建文件夹",
         "none": "读取邮件",
         "mark_read": "标记为已读",
         "mark_unread": "标记为未读",
@@ -6626,7 +6678,10 @@
       "messageUid": "邮件 UID",
       "messageUidPlaceholder": "{{core:read.output.messages[0].uid}}",
       "targetFolder": "目标文件夹",
-      "targetFolderPlaceholder": "归档"
+      "folderToCreate": "要创建的文件夹",
+      "targetFolderPlaceholder": "INBOX.Clients",
+      "targetFolderHint": "必须是「列出文件夹」返回的服务器路径原文（例如在将文件夹嵌套于收件箱下的服务器上为 INBOX.Clients，分隔符为「.」），而不是界面上显示的名称。",
+      "createTargetIfMissing": "文件夹不存在时自动创建"
     },
     "codeNode": {
       "title": "代码",
@@ -6803,9 +6858,19 @@
         "schedule-trigger": "定时器",
         "form-trigger": "表单"
       },
-      "close": "关闭"
+      "close": "关闭",
+      "layoutDirection": "布局",
+      "layoutHorizontal": "从左到右",
+      "layoutVertical": "从上到下"
     },
     "nodes": {
+      "filePreview": {
+        "expand": "展开预览",
+        "collapse": "收起预览",
+        "openInPanel": "在侧边面板中打开",
+        "noPreview": "此文件类型没有内嵌预览",
+        "more": "还有 {count} 个"
+      },
       "deleteNode": "删除节点",
       "duplicateNode": "复制节点",
       "showNormalView": "显示常规视图",
@@ -6867,7 +6932,8 @@
           "forward": "前进",
           "refresh": "刷新"
         }
-      }
+      },
+      "delete": "删除"
     },
     "forms": {
       "required": "Required",
@@ -6931,6 +6997,131 @@
         "urlPlaceholder": "输入 URL...",
         "filename": "Filename",
         "autoDetect": "从 URL 自动检测"
+      },
+      "publicLink": {
+        "title": "公开链接",
+        "description": "将上游节点生成的文件转换为平台自有存储上的公开限时签名 URL。适用于通过 URL 拉取媒体的 API(如 Instagram、TikTok),而不是接受文件上传。",
+        "file": "文件",
+        "filePlaceholder": "'{{core:download.output.file}}'",
+        "fileHint": "引用上游节点的完整文件对象,例如 '{{interface:card.output.video}}'。",
+        "ttlMinutes": "链接有效期(分钟)",
+        "ttlHint": "5 到 10080 分钟(7 天)。默认:240。",
+        "disposition": "处理方式",
+        "dispositionInline": "内联(在浏览器中显示)",
+        "dispositionAttachment": "附件(提示下载)"
+      },
+      "media": {
+        "title": "媒体",
+        "description": "探测、封装、混音、提取、拼接、截帧或叠加音视频文件。文件来自上游节点的完整文件引用，例如 '{{core:download.output.file}}'。",
+        "operation": "操作",
+        "operationPlaceholder": "选择操作",
+        "opProbe": "探测",
+        "opProbeDesc": "检查媒体文件:时长、流、编解码器(不产生输出文件)",
+        "opMuxAudio": "合成音频",
+        "opMuxAudioDesc": "将一条音轨加到一个视频上",
+        "opMix": "混音",
+        "opMixDesc": "混合最多 8 条音轨,可选叠加到视频上",
+        "opExtractAudio": "提取音频",
+        "opExtractAudioDesc": "从视频中提取音轨",
+        "input": "输入文件",
+        "inputPlaceholder": "'{{core:download.output.file}}'",
+        "inputHint": "引用上游节点的完整文件对象。",
+        "video": "视频",
+        "videoPlaceholder": "'{{interface:card.output.video}}'",
+        "audio": "音频",
+        "audioPlaceholder": "'{{core:download.output.file}}'",
+        "mixVideoHint": "可选:提供视频时输出为 mp4;不提供时仅输出音频。",
+        "volume": "音量(%)",
+        "offsetSeconds": "偏移(秒)",
+        "trimStartSeconds": "裁剪起点(秒)",
+        "trimEndSeconds": "裁剪终点(秒)",
+        "loop": "循环",
+        "loopTrimHint": "循环开启时裁剪不可用:循环不能与裁剪起点/终点同时使用。",
+        "mixNoVideoLoopHint": "纯音频混音不能让所有音轨都循环:至少要有一条音轨不循环以确定混音时长,或添加一个视频。",
+        "fadeInSeconds": "淡入(秒)",
+        "fadeOutSeconds": "淡出(秒)",
+        "fadeOutHint": "默认:1 秒。",
+        "keepOriginalAudio": "保留原始音频",
+        "removeLiteralFile": "移除此文件",
+        "originalVolume": "原始音量(%)",
+        "audioFit": "音频适配",
+        "audioFitPad": "填充(保持视频时长)",
+        "audioFitShortest": "最短(按较短者截断)",
+        "audioFitLoop": "循环(重复音频至视频时长)",
+        "normalize": "响度归一化",
+        "normalizeAuto": "自动(-16 LUFS)",
+        "normalizeCustom": "自定义目标",
+        "normalizeOff": "关闭",
+        "normalizeLufs": "响度目标(LUFS)",
+        "normalizeLufsHint": "介于 {min} 和 {max} LUFS 之间。默认:-16。",
+        "audioBitrate": "音频比特率",
+        "outputFormat": "输出格式",
+        "tracks": "音轨",
+        "track": "音轨 {index}",
+        "trackId": "音轨标识",
+        "trackSource": "来源",
+        "trackSourcePlaceholder": "'{{core:download.output.file}}'",
+        "trackAdvanced": "高级",
+        "addTrack": "添加音轨",
+        "removeTrack": "移除音轨",
+        "tracksHint": "最多 {max} 条音轨。每条音轨都需要一个来源文件。",
+        "speed": "速度",
+        "speedHint": "介于 {min} 和 {max} 之间(音调保持不变)。默认:{default}。",
+        "duckUnder": "闪避于",
+        "duckNone": "不闪避",
+        "duckUnderHint": "当所选音轨有声音时,此音轨会自动降低音量。",
+        "duckAmountDb": "闪避幅度(dB)",
+        "duckAttackMs": "起音(毫秒)",
+        "duckReleaseMs": "释放(毫秒)",
+        "opConcat": "拼接",
+        "opConcatDesc": "将最多 8 个视频首尾相接合成一个视频",
+        "opFrame": "截帧",
+        "opFrameDesc": "从视频中提取一张静止图像（封面、缩略图）",
+        "opOverlay": "叠加",
+        "opOverlayDesc": "将图像（徽标、水印）叠加到视频上",
+        "clips": "片段",
+        "clip": "片段 {index}",
+        "clipSource": "来源",
+        "clipSourcePlaceholder": "'{{core:download.output.file}}'",
+        "addClip": "添加片段",
+        "removeClip": "移除片段",
+        "moveClipUp": "上移片段",
+        "moveClipDown": "下移片段",
+        "clipsHint": "最多 {max} 个片段，按顺序播放。每个片段都需要一个源视频。",
+        "transition": "转场",
+        "transitionCut": "硬切（无转场）",
+        "transitionCrossfade": "交叉淡化",
+        "transitionSeconds": "转场时长（秒）",
+        "transitionSecondsHint": "介于 {min} 和 {max} 秒之间，且短于每个片段。默认：{default}。",
+        "targetWidth": "目标宽度（px）",
+        "targetHeight": "目标高度（px）",
+        "targetSizeHint": "两者都设置或都不设置（{min} 到 {max}）。不匹配的片段会等比缩放并加黑边，绝不拉伸。",
+        "targetFps": "目标帧率（fps）",
+        "targetFpsHint": "介于 {min} 和 {max} 之间。默认：第一个片段的帧率。",
+        "concatNormalizeHint": "平衡各片段之间的响度。开启会强制重新编码。",
+        "atSeconds": "时间点（秒）",
+        "atSecondsHint": "默认取视频的中间位置。超出结尾时会自动取结尾前一刻。",
+        "imageFormat": "图像格式",
+        "frameWidth": "宽度（px）",
+        "frameWidthHint": "介于 {min} 和 {max} 之间。高度会自动调整以保持宽高比。",
+        "image": "图像",
+        "imagePlaceholder": "'{{core:download.output.file}}'",
+        "imageHint": "支持 PNG 透明度。",
+        "position": "位置",
+        "positionTopLeft": "左上",
+        "positionTopRight": "右上",
+        "positionBottomLeft": "左下",
+        "positionBottomRight": "右下",
+        "positionCenter": "居中",
+        "marginPx": "边距（px）",
+        "marginPxHint": "与最近边缘的距离。居中时忽略。",
+        "widthPercent": "宽度（视频的 %）",
+        "widthPercentHint": "介于视频宽度的 {min} 到 {max} 百分比之间。默认：15。",
+        "opacity": "不透明度",
+        "opacityHint": "介于 {min} 和 {max} 之间。默认：1。",
+        "startSeconds": "开始（秒）",
+        "endSeconds": "结束（秒）",
+        "overlayTimingHint": "开始和结束留空则整段视频都显示叠加。"
       },
       "fork": {
         "outputBranches": "输出分支",
@@ -9422,7 +9613,8 @@
     "card": {
       "epochs": "{count, plural, other {# 个 epoch}}",
       "runs": "{count, plural, other {# 次运行}}",
-      "reviewApprovals": "审核审批"
+      "reviewApprovals": "审核审批",
+      "costTitle": "生产运行的成本"
     },
     "columns": {
       "draft": "草稿",
@@ -9594,5 +9786,339 @@
     "done": "完成",
     "working": "处理中...",
     "failed": "失败"
+  },
+  "templates": {
+    "gallery": {
+      "workflowTitle": "从模板开始",
+      "workflowSubtitle": "打开一个模板，看看它是怎么运作的。每个模板在画布上都有注释。",
+      "agentTitle": "从模板开始",
+      "agentSubtitle": "先选一个起点，再按需调整，然后创建智能体。",
+      "readyToRun": "可直接运行",
+      "needsSetup": "需要配置",
+      "beginner": "入门",
+      "intermediate": "进阶",
+      "advanced": "高级",
+      "youWillLearn": "你将学到",
+      "creating": "创建中...",
+      "createFailed": "无法根据此模板创建",
+      "use": "使用 {name}",
+      "browse": "模板",
+      "tableTitle": "从模板开始",
+      "tableSubtitle": "创建一个已经配好列的表格。"
+    },
+    "workflow": {
+      "helloWorkflow": {
+        "title": "第一个工作流",
+        "description": "能做点实事的最小工作流：一个手动触发器，加上一个计算两个值的步骤。",
+        "teaches": {
+          "0": "每个工作流都从一个触发器开始",
+          "1": "一个步骤如何读取上一个步骤的输出",
+          "2": "运行之后在哪里查看某个步骤产出了什么"
+        },
+        "notes": {
+          "trigger": {
+            "label": "从这里开始",
+            "text": "工作流总是从触发器开始。这个是手动触发器：在你按下 Run 之前什么都不会发生。其他触发器可以由 webhook、定时计划、新的聊天消息，或另一个工作流失败时触发。"
+          },
+          "label": {
+            "label": "标签就是标识符",
+            "text": "步骤的标签同时也是它在表达式里的名字。'Build greeting' 会变成 build_greeting，所以连接读作 core:build_greeting，上面的表达式读作 trigger:start.output.triggered_by。一旦重命名某个步骤，你必须同步更新所有指向它的表达式。"
+          },
+          "output": {
+            "label": "查看步骤的产出",
+            "text": "按下 Run，然后点击这个步骤。右侧面板会显示它的输出。转换步骤会把映射好的字段放在 transformed 下面，所以后续步骤要用 {{core:build_greeting.output.transformed.greeting}} 来读取它们。一旦漏掉 transformed 这一段，表达式就会静默地解析为空。"
+          }
+        }
+      },
+      "branchDecision": {
+        "title": "用判断分支",
+        "description": "判断节点会根据你写的条件，让这次运行只走其中一条路径。",
+        "teaches": {
+          "0": "判断只会走一条分支，而且只有一条",
+          "1": "如何连接判断节点的某个指定端口",
+          "2": "为什么没被选中的分支标记为 SKIPPED，而不是失败"
+        },
+        "notes": {
+          "oneBranch": {
+            "label": "只走一条分支",
+            "text": "判断节点会从上到下逐条评估条件，并选中第一个匹配的条件。它绝不会同时运行两条分支。如果你希望多条路径同时运行，应该使用分叉（Fork）。"
+          },
+          "ports": {
+            "label": "端口是连接的一部分",
+            "text": "decision 不只是连接到下一个步骤，它是从某个具体的端口连出去的。所以这些连接写作 core:check_amount:if 和 core:check_amount:else。每增加一个条件就会多出一个端口：先是 elseif_0，然后是 elseif_1，依此类推。elseif 端口从零开始编号，和 fork 的分支一样。"
+          },
+          "elseRequired": {
+            "label": "始终保留 else",
+            "text": "如果没有 else 分支，一个你没预料到的值会让这条路径上的运行停下来：下面的步骤会被标记为 SKIPPED，而且任何地方都不会抛出错误。其他并行分支仍会继续执行。else 分支正是你处理意料之外情况的地方。"
+          },
+          "skipped": {
+            "label": "SKIPPED 不代表失败",
+            "text": "运行结束后，没被选中的分支会显示为 SKIPPED。这是判断节点正常且健康的结果。只有红色的 FAILED 步骤才说明出了问题。"
+          }
+        },
+        "ports": {
+          "above": "大于 100",
+          "belowOrEqual": "100 或以下"
+        }
+      },
+      "forkMerge": {
+        "title": "并行运行多个步骤",
+        "description": "分叉会同时运行每一条分支，而合并会等到它们全部完成。",
+        "teaches": {
+          "0": "与判断不同，分叉会运行它的所有分支",
+          "1": "合并会等待每一个前置步骤，然后才继续",
+          "2": "任何有多条入边的步骤本身就已经在做合并"
+        },
+        "notes": {
+          "vsDecision": {
+            "label": "分叉不是判断",
+            "text": "判断只挑选一条分支。分叉则会同时运行全部分支。当各条分支彼此独立、而你又希望运行更快时，就用分叉。"
+          },
+          "allBranches": {
+            "label": "所有分支同时启动",
+            "text": "下面两条分支在同一时刻启动。它们的端口从零开始编号：core:fan_out:branch_0 和 core:fan_out:branch_1。"
+          },
+          "waitsAll": {
+            "label": "合并会等所有人",
+            "text": "在两条分支都完成之前，Join 不会运行。完成的意思是：成功、失败或者被跳过。也就是说，失败的分支同样会放行 merge，正是这一点让一个有容错设置的步骤能把运行推进下去，而不是把它卡死。"
+          },
+          "implicitMerge": {
+            "label": "合并可以是隐式的",
+            "text": "任何有一条以上入边的步骤，行为上已经等同于一次合并：它会等待所有前置步骤。合并步骤的存在，是为了让这种等待在画布上清晰可见、有名字可指，而不是因为它是必需的。"
+          }
+        },
+        "ports": {
+          "branchA": "分支 A",
+          "branchB": "分支 B"
+        }
+      },
+      "splitList": {
+        "title": "处理一个列表",
+        "description": "拆分会把一个列表变成多次并行运行（每个元素一次），随后由聚合把结果收集回来。",
+        "teaches": {
+          "0": "拆分会为每个元素创建一个并行上下文",
+          "1": "如何用 {{item}} 和 {{index}} 读取当前元素",
+          "2": "拆分和循环之间的区别"
+        },
+        "notes": {
+          "parallel": {
+            "label": "每个元素一次运行",
+            "text": "拆分接收一个列表，并针对每个元素各启动一次后续步骤，且是并行的。三个元素就意味着下面的步骤会同时运行三次，每次带着各自的元素。"
+          },
+          "vsLoop": {
+            "label": "拆分不是循环",
+            "text": "拆分会按列表元素并行运行 N 份副本。循环则是顺序重复，一轮接一轮，只要条件仍然成立就继续。已知的列表用拆分，需要反复重新检查的条件用循环。"
+          },
+          "itemVar": {
+            "label": "读取当前元素",
+            "text": "在 split 内部，{{item}} 是当前元素，{{index}} 是它的位置，从零开始计数。在按元素处理的区域里，每个步骤都能解析它们，包括 decision 和 loop，它们只是对每个元素各执行一次。这个区域会在把各个元素重新汇合成一个结果的步骤处结束：一个 aggregate，或者一个把 split 收拢起来的 merge。"
+          },
+          "maxItems": {
+            "label": "maxItems 是安全网",
+            "text": "maxItems 限制 split 最多取用多少个元素，这里是 10（默认值是 100）。这一条请仔细读：超出上限的元素会被静默丢弃，既不报错，运行记录里也没有任何提示。请把它设得比你实际可能遇到的最长列表还大：它是防止列表失控的安全网，不是性能调节旋钮。"
+          },
+          "aggregate": {
+            "label": "把结果收集回来",
+            "text": "并行分支在这里结束。聚合会从每条分支各取一个值，汇总成一个列表，这就是拆分之后回到单次执行的方式。"
+          }
+        }
+      },
+      "resilientSteps": {
+        "title": "让步骤更稳健",
+        "description": "重试、超时和一个显式的失败步骤，避免一次不稳定的调用悄悄毁掉整次运行。",
+        "teaches": {
+          "0": "如何为每个步骤配置重试、退避和超时",
+          "1": "continueOnFailure 真正改变了什么",
+          "2": "如何带着清晰的错误信息主动让运行失败"
+        },
+        "notes": {
+          "replaceUrl": {
+            "label": "先替换 URL",
+            "text": "这个步骤指向的是一个占位地址。运行这个工作流之前，请打开它并填入你自己的 URL，否则这次调用注定会失败。"
+          },
+          "retry": {
+            "label": "重试与退避",
+            "text": "retryCount 为 2，也就是总共尝试 3 次：第一次加上 2 次重试。retryBackoffMs 会在两次尝试之间等待 1000 毫秒。在依赖它之前，有一点必须弄清楚：HTTP 4xx 或 5xx 响应并不算步骤失败，步骤本身是成功的，只是 success 为 false。只有硬性失败才会触发重试，比如主机不可达、请求超时或者 URL 无效。其余情况都交给对面的 decision 处理。"
+          },
+          "timeout": {
+            "label": "超时停止的是等待，不是工作本身",
+            "text": "这里有两个互不相干的超时。HTTP 步骤自己有一个传输超时（5000 毫秒），而 nodePolicy.timeoutMs（15000 毫秒）限制的是这次调用本身的每一次尝试。请让步骤级的这个值大于传输超时，否则外层会先触发，把真正的错误盖住。另外要留意超时的真正含义：你停止的只是等待回答，而远端服务器很可能已经收到并处理了你的请求。对于任何会写入数据的调用，请把它设计成可以安全重复执行。"
+          },
+          "continueOnFailure": {
+            "label": "continueOnFailure 让运行继续存活",
+            "text": "没有它，一个失败的步骤会把它之后的一切都标记为跳过。有了它，运行会继续下去，但这个步骤本身仍然显示为 FAILED。发生硬性失败时，这个步骤不会产生你期待的那些字段（success 和 data 都不存在），所以指向它们的表达式会解析为空，下面的 decision 会落到 else 分支。continueOnFailure 在 decision、switch 或 option 上会被拒绝：一个失败的分支步骤根本没有选中任何端口。"
+          },
+          "stopOnError": {
+            "label": "主动让它失败",
+            "text": "Stop on Error 会结束整次运行的所有分支，并用你写的信息把它标记为 FAILED。相比让一次运行带着错误数据变绿收场，请优先用它：响亮的失败比无声的失败更容易修复。"
+          }
+        },
+        "ports": {
+          "succeeded": "调用成功",
+          "failed": "调用失败"
+        },
+        "stopMessage": "重试全部用尽后，API 调用仍然失败。"
+      },
+      "errorHandler": {
+        "title": "对失败作出响应",
+        "description": "两个工作流并排放在一起：一个会失败，另一个在它失败时被唤醒。",
+        "teaches": {
+          "0": "错误触发器如何监听一个父工作流",
+          "1": "失败载荷里包含什么",
+          "2": "所有人都会忘记的那一步配置"
+        },
+        "notes": {
+          "pickParent": {
+            "label": "选择要监听的工作流",
+            "text": "两半画在同一块画布上，是为了让整体结构一目了然，但它们不能留在一起。包含错误触发器的工作流永远不会派发自己的失败（这就是防循环保护），所以这个处理器永远不会对上面那次运行做出反应。请把上面的 DAG 移到它自己的工作流里，然后在这里从面板新增一个 Error 触发器，并选择那个工作流作为父工作流。之后，被监控的工作流就无法在检查器里修改了。"
+          },
+          "seedRun": {
+            "label": "先手动运行一次，否则它一直是聋的",
+            "text": "这是几乎所有人都会漏掉的一步。保存这个工作流，然后手动运行它一次，并且让那次运行保持在进行中。处理器只能通过一个已经在等待的运行才会被触达：如果一个都没有，父工作流的失败会被静默忽略，没有报错，没有警告，父工作流的运行记录里也没有任何迹象告诉你处理器从未被触发。"
+          },
+          "payload": {
+            "label": "你会收到什么",
+            "text": "触发器会给你 status（父运行在被派发那一刻的状态，并不总是 FAILED）、parentWorkflowId、parentRunId、errorMessage 和 triggeredAt；当父工作流上报了统计数据时，还会给出 failedSteps、completedSteps、totalSteps 和 skippedSteps 这几个计数。这条注释旁边的步骤复制了其中几项，方便你在运行之后看清它们的结构。"
+          },
+          "noLoop": {
+            "label": "不会有无限循环",
+            "text": "一个失败的错误处理工作流不会再触发另一个错误处理工作流。你不可能不小心搭出一条自己喂自己的失败链条。"
+          },
+          "nextStep": {
+            "label": "接下来往哪走",
+            "text": "上面的 DAG 只是你真正想监控的那个工作流的替身：它做一点事情，然后故意失败。下面的 DAG 才是处理器。等结构清楚之后，把两者都换成真正的东西。"
+          }
+        },
+        "noParentSelected": "未选择",
+        "attempted": "假装在做一件很重要的事",
+        "stopMessage": "故意失败，好让旁边的处理器有东西可以响应。"
+      },
+      "interfacePage": {
+        "title": "给用户展示一个页面",
+        "description": "一个工作流先准备好数据，把它交给一个网页，然后等待用户继续。",
+        "teaches": {
+          "0": "工作流是后端，界面是前端",
+          "1": "variable_mapping 如何把数值送进页面",
+          "2": "为什么运行会停在界面上，直到用户操作"
+        },
+        "interfaceDescription": "由“给用户展示一个页面”模板创建的结果页面。",
+        "notes": {
+          "backendFrontend": {
+            "label": "同一个应用的两半",
+            "text": "可以这样理解：工作流是后端，界面是前端。步骤负责计算数值，页面负责展示。页面自己从不查询数据库，它显示的一切都来自工作流。"
+          },
+          "variableMapping": {
+            "label": "数值是怎么到达页面的",
+            "text": "界面节点带着一个 variable_mapping：每一条都指定 HTML 里的一个占位符，以及填充它的表达式。这里的 headline、who 和 when 来自前面的 transform，页面把它们写成 {{headline}}、{{who}} 和 {{when}}。竖线后面的 |default 部分，是数值缺失时显示的内容。"
+          },
+          "pauses": {
+            "label": "运行在这里停下，这是故意的",
+            "text": "界面步骤会等待。运行会停在这个节点上，直到用户操作，正是这一点让多步骤应用成为可能。页面上的按钮发送 __continue，这是唯一能让工作流继续往前走的动作。普通的 navigate 动作只会切换页面，不会让工作流前进。"
+          },
+          "ownCopy": {
+            "label": "这个页面现在属于你了",
+            "text": "从这个模板创建时，也创建了一个真实的界面，它归你所有，并列在 Interfaces 下面。你可以随意修改它的 HTML 和 CSS：你改的是自己的副本，绝不会动到模板。"
+          }
+        },
+        "page": {
+          "headline": "这个页面由你的工作流生成",
+          "meta": "运行者",
+          "hint": "这个页面上的每一个数值都来自它前面的那个步骤。改动那个步骤，再运行一次，页面也会跟着变。",
+          "cta": "继续工作流"
+        }
+      }
+    },
+    "agent": {
+      "basicAssistant": {
+        "title": "基础助手",
+        "description": "一个不带工具的普通对话式智能体，系统提示词写成了一个可直接参考的范例。",
+        "teaches": {
+          "0": "一个好用的系统提示词包含的四个部分",
+          "1": "为什么不带工具的智能体是个很好的起点",
+          "2": "temperature 实际上改变了什么"
+        },
+        "systemPrompt": "你是一个小团队的助手。\n\n角色：你清晰、简短地回答问题，并帮助别人把问题想清楚。\n\n语气：直接而友好。句子要短。不说废话，不奉承。\n\n规则：\n- 如果你不知道某件事，就直说，不要猜。\n- 当请求含糊不清时，先提一个澄清性的问题。\n- 绝不编造事实、人名、数字或来源。\n\n格式：用平实的散文作答。只有在你确实需要逐项列举时，才使用简短的项目符号列表。\n\n（这个提示词只是一个起点。上面的四个部分，角色、语气、规则和格式，是你为自己重写时值得保留的部分。）"
+      },
+      "dataAnalyst": {
+        "title": "数据分析师",
+        "description": "一个能以只读方式读取你的数据表的智能体，并被要求始终说明每个数字的来源。",
+        "teaches": {
+          "0": "如何授予智能体访问某一类资源的权限",
+          "1": "为什么只读权限是正确的默认选择",
+          "2": "要求智能体标明数据来源"
+        },
+        "systemPrompt": "你是一名数据分析师，负责处理团队的数据表。\n\n角色：通过读取你有权限访问的数据表来回答关于数据的问题。\n\n规则：\n- 回答之前必须先读取数据。绝不凭记忆估算数字。\n- 每一次都要说明某个数字来自哪张表、哪些列。\n- 如果数据表里没有答案，就明确这样说，并说明还需要什么。\n- 如果某个结果看起来反常，请把数字如实呈现并标出疑点，而不是把它抹平。\n\n格式：先给出数字，再用一行说明你是怎么得到它的。比较多个数值时，使用一张小表格。\n\n你只有读取权限。你无法修改数据，也不应主动提出去修改。"
+      },
+      "workflowConductor": {
+        "title": "工作流调度员",
+        "description": "一个获准运行你的工作流的智能体，并附有明确的指示，说明它什么时候该运行、什么时候不该。",
+        "teaches": {
+          "0": "智能体可以触发你搭建的工作流",
+          "1": "如何界定智能体何时可以直接行动、何时只应回答",
+          "2": "为什么要让智能体在产生外部影响前先确认"
+        },
+        "systemPrompt": "你负责协调团队的各个工作流。\n\n角色：理解用户的诉求，判断是否有现成的工作流能完成它，然后运行那个工作流。\n\n规则：\n- 运行任何东西之前，先说明你打算运行哪个工作流以及为什么。\n- 凡是会发送消息、写入数据，或以其他方式在本次对话之外产生可见影响的工作流，运行前都要请求确认。\n- 如果没有工作流匹配该请求，就直说。不要临时凑一个替代方案。\n- 运行结束后，报告发生了什么：成功、失败还是部分完成，以及输出是什么。\n\n格式：保持简短。一行说明意图，一行说明结果。"
+      },
+      "frugalAgent": {
+        "title": "节俭型智能体",
+        "description": "收紧的上限加上零 temperature，适合那些成本和一致性比灵活发挥更重要的重复性工作。",
+        "teaches": {
+          "0": "maxIterations 限制智能体最多能进行多少轮",
+          "1": "maxTokens 限制每次回答的长度",
+          "2": "temperature 为零时，相同的输入会得到相同的输出"
+        },
+        "systemPrompt": "你执行输出可预期的、简短且重复的任务。\n\n角色：准确地做被要求的事，做一次，然后停下。\n\n规则：\n- 保持简短。没有开场白，不复述请求，不加结尾客套。\n- 除非缺了答案任务就无法完成，否则不要追问。\n- 相同的输入给出相同的答案。不要为了风格而变换措辞。\n- 如果任务需要的步骤超出了你被允许的范围，说明缺了什么，然后停下。\n\n格式：只输出结果。除非有人要求，否则不作解释。\n\n（成本相关的调节项在高级设置里：maxIterations 限制这个智能体最多可进行多少轮，maxTokens 限制每次回答的大小，而额度预算会在用完时彻底让它停下。）"
+      }
+    },
+    "table": {
+      "contacts": {
+        "title": "联系人",
+        "description": "一个简单的通讯录：他们是谁、怎么联系，还有一处记备注的地方。",
+        "teaches": {
+          "0": "表格就是一组带类型的列",
+          "1": "邮箱和电话各有自己的类型，不是纯文本",
+          "2": "你随时可以新增或重命名列"
+        },
+        "columns": {
+          "name": "姓名",
+          "email": "邮箱",
+          "phone": "电话",
+          "company": "公司",
+          "notes": "备注"
+        }
+      },
+      "taskTracker": {
+        "title": "任务跟踪",
+        "description": "带状态、截止日期和优先级的任务，可以直接让工作流读取和更新。",
+        "teaches": {
+          "0": "选择类型的列能让取值保持统一",
+          "1": "日期和复选框各有专用的编辑器",
+          "2": "工作流可以读取并更新这些行"
+        },
+        "columns": {
+          "title": "任务",
+          "status": "状态",
+          "dueDate": "截止日期",
+          "done": "已完成",
+          "priority": "优先级"
+        }
+      },
+      "contentCalendar": {
+        "title": "内容日历",
+        "description": "你打算发布什么、发在哪里、什么时候发。很适合用来驱动一个定时工作流。",
+        "teaches": {
+          "0": "排期数据应该放在表格里，而不是写进工作流",
+          "1": "定时工作流可以取出今天该发布的内容",
+          "2": "链接列把已发布的网址放在计划旁边"
+        },
+        "columns": {
+          "topic": "主题",
+          "channel": "渠道",
+          "publishDate": "发布日期",
+          "status": "状态",
+          "link": "链接"
+        }
+      }
+    }
   }
 }

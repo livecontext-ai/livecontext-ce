@@ -37,6 +37,9 @@ const messages: AbstractIntlMessages = {
       resetToExample: 'Reset to example',
       portLabel: 'Branch to take',
       errorMessageLabel: 'Error message',
+      durationLabel: 'Simulated duration',
+      durationUnit: 'seconds',
+      durationHelp: 'The node takes this long before returning the mock.',
     },
   },
 };

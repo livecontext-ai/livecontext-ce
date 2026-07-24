@@ -234,16 +234,42 @@ class NotificationEmitterApprovalPendingTest {
                 eq("notification.created"), any());
     }
 
+    /**
+     * INVERTED 2026-07-21 (was: "skip, even on the production run"). Promotion
+     * never strips run metadata, so the production run can carry a leftover
+     * {@code __versionReplay__} or {@code __agentInitiated__} from before the pin.
+     * An approval pausing PRODUCTION must always reach the user - silencing it
+     * stalls the pinned workflow forever with nobody told. Production identity
+     * (the {@code production_run_id} FK) trumps every metadata flag; only the
+     * showcase exclusion still wins (an inert clone never notifies).
+     */
     @Test
-    @DisplayName("Version replay metadata → skip (Integer or any value), even on the production run")
-    void skipsForVersionReplay() {
+    @DisplayName("Version replay metadata on the PRODUCTION run → notifies (production identity trumps the flag)")
+    void versionReplayOnProductionRunNotifies() {
         Map<String, Object> meta = new HashMap<>();
         meta.put("__versionReplay__", 5);   // Integer value, key presence is what matters
         when(workflowRunRepository.findByRunIdPublic(RUN_PUBLIC))
                 .thenReturn(Optional.of(runWithMetadata(meta, PINNED_VERSION)));
-        // Stub the workflow AS the production run: replay exclusion must win anyway.
         when(workflowRepository.findById(WORKFLOW_ID))
                 .thenReturn(Optional.of(workflowPinnedWithProductionRun(PINNED_VERSION, RUN_ID)));
+        when(nativeQuery.getResultList()).thenReturn(List.of(42L));
+
+        emitter.onApprovalPending(event(null));
+
+        verify(redisPublisher).publishNotification(eq(TENANT_ID), eq("notification.created"), any());
+    }
+
+    @Test
+    @DisplayName("Version replay metadata on a NON-production run → skip (the exclusion itself is unchanged)")
+    void skipsForVersionReplayOnNonProductionRun() {
+        Map<String, Object> meta = new HashMap<>();
+        meta.put("__versionReplay__", 5);
+        when(workflowRunRepository.findByRunIdPublic(RUN_PUBLIC))
+                .thenReturn(Optional.of(runWithMetadata(meta, PINNED_VERSION)));
+        // Production is a DIFFERENT run.
+        when(workflowRepository.findById(WORKFLOW_ID))
+                .thenReturn(Optional.of(workflowPinnedWithProductionRun(PINNED_VERSION,
+                        UUID.fromString("00000000-0000-0000-0000-00000000dead"))));
 
         emitter.onApprovalPending(event(null));
 
@@ -252,14 +278,31 @@ class NotificationEmitterApprovalPendingTest {
     }
 
     @Test
-    @DisplayName("Agent-initiated metadata → skip, even on the production run")
-    void skipsForAgentInitiated() {
+    @DisplayName("Agent-initiated metadata on the PRODUCTION run → notifies (production identity trumps the flag)")
+    void agentInitiatedOnProductionRunNotifies() {
         Map<String, Object> meta = new HashMap<>();
         meta.put("__agentInitiated__", true);
         when(workflowRunRepository.findByRunIdPublic(RUN_PUBLIC))
                 .thenReturn(Optional.of(runWithMetadata(meta, PINNED_VERSION)));
         when(workflowRepository.findById(WORKFLOW_ID))
                 .thenReturn(Optional.of(workflowPinnedWithProductionRun(PINNED_VERSION, RUN_ID)));
+        when(nativeQuery.getResultList()).thenReturn(List.of(42L));
+
+        emitter.onApprovalPending(event(null));
+
+        verify(redisPublisher).publishNotification(eq(TENANT_ID), eq("notification.created"), any());
+    }
+
+    @Test
+    @DisplayName("Agent-initiated metadata on a NON-production run → skip (the exclusion itself is unchanged)")
+    void skipsForAgentInitiatedOnNonProductionRun() {
+        Map<String, Object> meta = new HashMap<>();
+        meta.put("__agentInitiated__", true);
+        when(workflowRunRepository.findByRunIdPublic(RUN_PUBLIC))
+                .thenReturn(Optional.of(runWithMetadata(meta, PINNED_VERSION)));
+        when(workflowRepository.findById(WORKFLOW_ID))
+                .thenReturn(Optional.of(workflowPinnedWithProductionRun(PINNED_VERSION,
+                        UUID.fromString("00000000-0000-0000-0000-00000000dead"))));
 
         emitter.onApprovalPending(event(null));
 

@@ -123,7 +123,14 @@ public final class ExamplesHelpProvider {
             )
         ));
         example.put("note", "Default action='none' READS (output.messages[] with uid each). Set action to "
-            + "mark_read/mark_unread/flag/unflag/move/delete to act on one message via messageUid (move also needs targetFolder).");
+            + "mark_read/mark_unread/flag/unflag/move/delete to act on one message via messageUid (move also needs targetFolder). "
+            + "action='list_folders' returns output.folders[]; action='create_folder' creates targetFolder. "
+            + "ALWAYS run action='list_folders' FIRST and build targetFolder from a name in output.folders[]: "
+            + "folder names are SERVER PATHS, and some servers namespace everything under the inbox "
+            + "('INBOX.Clients', separator '.') while others do not. create_folder and createTargetIfMissing "
+            + "create targetFolder EXACTLY AS WRITTEN and never correct it, so a guessed name silently creates "
+            + "a second, wrong folder and files mail into it instead of failing. Only set createTargetIfMissing=true "
+            + "once the path came from list_folders.");
         return example;
     }
 

@@ -144,6 +144,80 @@ class InterfaceCrudModuleTest {
     class CreateTests {
 
         @Test
+        @DisplayName("An unusable format is rejected on create too (string and non-string alike)")
+        void unusableFormatIsRejectedOnCreate() {
+            // Same contract as update: silently dropping it would hand the agent a full-page
+            // 1280x800 interface it never asked for, with nothing in the response to reveal it.
+            Map<String, Object> invalidString = new HashMap<>();
+            invalidString.put("name", "UI");
+            invalidString.put("html_template", "<div/>");
+            invalidString.put("format", "cinema");
+
+            Optional<ToolExecutionResult> res = module.execute("create", invalidString, TENANT, ctx());
+            assertThat(res).isPresent();
+            assertThat(res.get().success()).isFalse();
+            assertThat(res.get().error()).contains("vertical (1080x1920)");
+
+            Map<String, Object> nonString = new HashMap<>();
+            nonString.put("name", "UI");
+            nonString.put("html_template", "<div/>");
+            nonString.put("format", 1080);
+
+            Optional<ToolExecutionResult> res2 = module.execute("create", nonString, TENANT, ctx());
+            assertThat(res2).isPresent();
+            assertThat(res2.get().success()).isFalse();
+
+            verifyNoInteractions(interfaceService);
+        }
+
+        @Test
+        @DisplayName("create echoes the stored (normalized) format back - an alias comes back canonical")
+        void createEchoesTheNormalizedFormat() {
+            // The help promises "create/update/get responses echo the stored format". An agent
+            // that passed the alias 'story' must see 'vertical' in the create response itself,
+            // without spending a follow-up get to learn what was actually stored.
+            UUID id = UUID.randomUUID();
+            InterfaceEntity entity = fakeEntity(id, "Story");
+            entity.setFormat("vertical");
+            when(interfaceService.createInterface(any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), anyBoolean(), any(), any(), eq("story"))).thenReturn(entity);
+
+            Map<String, Object> params = new HashMap<>();
+            params.put("name", "Story");
+            params.put("html_template", "<div/>");
+            params.put("format", "story");
+
+            Optional<ToolExecutionResult> res = module.execute("create", params, TENANT, ctx());
+            assertThat(res).isPresent();
+            assertThat(res.get().success()).isTrue();
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) res.get().data();
+            assertThat(data).containsEntry("format", "vertical");
+        }
+
+        @Test
+        @DisplayName("create omits the format key when none was set (absent = no shape)")
+        void createOmitsAnUnsetFormat() {
+            // Same contract as get: absent means "no declared shape". An explicit null would
+            // read as a value to the agent.
+            UUID id = UUID.randomUUID();
+            when(interfaceService.createInterface(any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), anyBoolean(), any(), any(), any())).thenReturn(fakeEntity(id, "Plain"));
+
+            Map<String, Object> params = new HashMap<>();
+            params.put("name", "Plain");
+            params.put("html_template", "<div/>");
+
+            Optional<ToolExecutionResult> res = module.execute("create", params, TENANT, ctx());
+            assertThat(res).isPresent();
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) res.get().data();
+            assertThat(data).doesNotContainKey("format");
+        }
+
+        @Test
         @DisplayName("Should create interface with all templates")
         void shouldCreateWithAllTemplates() {
             UUID id = UUID.randomUUID();
@@ -151,7 +225,7 @@ class InterfaceCrudModuleTest {
             when(interfaceService.createInterface(
                 eq(TENANT), eq("Dashboard"), any(), eq("<h1>Hello</h1>"), eq("h1 { color: blue; }"), eq("// js"),
                 isNull(), isNull(), isNull(), isNull(), eq(false), isNull(), isNull()
-            )).thenReturn(entity);
+            , any())).thenReturn(entity);
 
             Map<String, Object> params = new HashMap<>();
             params.put("name", "Dashboard");
@@ -176,7 +250,7 @@ class InterfaceCrudModuleTest {
             UUID id = UUID.randomUUID();
             InterfaceEntity entity = fakeEntity(id, "Card");
             when(interfaceService.createInterface(any(), any(), any(), any(), any(), any(),
-                any(), any(), any(), any(), anyBoolean(), any(), any())).thenReturn(entity);
+                any(), any(), any(), any(), anyBoolean(), any(), any(), any())).thenReturn(entity);
 
             Map<String, Object> params = new HashMap<>();
             params.put("name", "Card");
@@ -199,7 +273,7 @@ class InterfaceCrudModuleTest {
             InterfaceEntity entity = fakeEntity(id, "Product");
             entity.setTemplateVariables(List.of("title", "price"));
             when(interfaceService.createInterface(any(), any(), any(), any(), any(), any(),
-                any(), any(), any(), any(), anyBoolean(), any(), any())).thenReturn(entity);
+                any(), any(), any(), any(), anyBoolean(), any(), any(), any())).thenReturn(entity);
 
             Map<String, Object> params = new HashMap<>();
             params.put("name", "Product");
@@ -271,7 +345,7 @@ class InterfaceCrudModuleTest {
         @DisplayName("Should propagate service exception on create")
         void shouldPropagateExceptionOnCreate() {
             when(interfaceService.createInterface(any(), any(), any(), any(), any(), any(),
-                any(), any(), any(), any(), anyBoolean(), any(), any()))
+                any(), any(), any(), any(), anyBoolean(), any(), any(), any()))
                 .thenThrow(new RuntimeException("DB error"));
 
             Map<String, Object> params = new HashMap<>();
@@ -288,7 +362,7 @@ class InterfaceCrudModuleTest {
         @DisplayName("Service IllegalArgumentException surfaces verbatim, no 'Failed to…' prefix")
         void shouldSurfaceIllegalArgumentVerbatimOnCreate() {
             when(interfaceService.createInterface(any(), any(), any(), any(), any(), any(),
-                any(), any(), any(), any(), anyBoolean(), any(), any()))
+                any(), any(), any(), any(), anyBoolean(), any(), any(), any()))
                 .thenThrow(new IllegalArgumentException("name cannot exceed 255 characters"));
 
             Map<String, Object> params = new HashMap<>();
@@ -307,7 +381,7 @@ class InterfaceCrudModuleTest {
         void shouldEnforceCreationRateLimit() {
             InterfaceEntity entity = fakeEntity(UUID.randomUUID(), "UI");
             when(interfaceService.createInterface(any(), any(), any(), any(), any(), any(),
-                any(), any(), any(), any(), anyBoolean(), any(), any())).thenReturn(entity);
+                any(), any(), any(), any(), anyBoolean(), any(), any(), any())).thenReturn(entity);
 
             Map<String, Object> variables = new HashMap<>();
             variables.put("turnId", "turn-123");
@@ -317,7 +391,7 @@ class InterfaceCrudModuleTest {
             for (int i = 0; i < 5; i++) {
                 entity = fakeEntity(UUID.randomUUID(), "UI" + i);
                 when(interfaceService.createInterface(any(), any(), any(), any(), any(), any(),
-                    any(), any(), any(), any(), anyBoolean(), any(), any())).thenReturn(entity);
+                    any(), any(), any(), any(), anyBoolean(), any(), any(), any())).thenReturn(entity);
 
                 Map<String, Object> params = new HashMap<>();
                 params.put("name", "UI" + i);
@@ -345,6 +419,43 @@ class InterfaceCrudModuleTest {
     @Nested
     @DisplayName("get")
     class GetTests {
+
+        @Test
+        @DisplayName("get echoes the format back - the help promises the agent can read it there")
+        void getEchoesTheFormat() {
+            // InterfaceHelpModule tells the agent "Read it back on interface(action='get') as
+            // `format`". That promise is the agent's ONLY way to check the shape it just set,
+            // so it has to be pinned: an agent has no other window into the entity.
+            UUID id = UUID.randomUUID();
+            InterfaceEntity entity = fakeEntity(id, "UI");
+            entity.setFormat("vertical");
+            when(interfaceService.getInterface(id, TENANT, null)).thenReturn(Optional.of(entity));
+
+            Optional<ToolExecutionResult> res = module.execute(
+                    "get", new HashMap<>(Map.of("interface_id", id.toString())), TENANT, ctx());
+
+            assertThat(res).isPresent();
+            assertThat(res.get().success()).isTrue();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) res.get().data();
+            assertThat(data).containsEntry("format", "vertical");
+        }
+
+        @Test
+        @DisplayName("get omits the format when the interface declares none (absent = no shape)")
+        void getOmitsAnUnsetFormat() {
+            // The help says "absent = none set": emitting an explicit null would read as a value.
+            UUID id = UUID.randomUUID();
+            when(interfaceService.getInterface(id, TENANT, null))
+                    .thenReturn(Optional.of(fakeEntity(id, "UI")));
+
+            Optional<ToolExecutionResult> res = module.execute(
+                    "get", new HashMap<>(Map.of("interface_id", id.toString())), TENANT, ctx());
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) res.get().data();
+            assertThat(data).doesNotContainKey("format");
+        }
 
         @Test
         @DisplayName("Should get interface by UUID")
@@ -759,7 +870,7 @@ class InterfaceCrudModuleTest {
             InterfaceEntity updated = fakeEntity(id, "NewName");
             when(interfaceService.getInterface(id, TENANT, null)).thenReturn(Optional.of(existing));
             when(interfaceService.updateInterface(eq(id), eq(TENANT), isNull(), isNull(), eq("NewName"), any(), any(), any(), any(),
-                isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), any(), any()))
                 .thenReturn(updated);
 
             Map<String, Object> params = new HashMap<>();
@@ -855,7 +966,7 @@ class InterfaceCrudModuleTest {
             InterfaceEntity updated = fakeEntity(id, "UI");
             when(interfaceService.getInterface(id, TENANT, null)).thenReturn(Optional.of(existing));
             when(interfaceService.updateInterface(eq(id), eq(TENANT), any(), any(), any(), any(), any(), any(), any(),
-                any(), any(), any(), any(), any(), any(), any())).thenReturn(updated);
+                any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(updated);
 
             // 3 updates should succeed
             for (int i = 0; i < 3; i++) {
@@ -897,6 +1008,141 @@ class InterfaceCrudModuleTest {
         }
 
         @Test
+        @DisplayName("A format-only update is accepted (the empty-update guard must know about it)")
+        void formatOnlyUpdateIsNotAnEmptyUpdate() {
+            // Re-shaping an interface is a legitimate lone edit. The empty-update guard predates
+            // the format param, so without widening it the very first "make this vertical" call
+            // is refused with a misleading "No fields to update".
+            UUID id = UUID.randomUUID();
+            InterfaceEntity existing = fakeEntity(id, "UI");
+            InterfaceEntity updated = fakeEntity(id, "UI");
+            updated.setFormat("vertical");
+            when(interfaceService.getInterface(id, TENANT, null)).thenReturn(Optional.of(existing));
+            when(interfaceService.updateInterface(eq(id), eq(TENANT), any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any(), eq("vertical"), eq(Boolean.TRUE)))
+                .thenReturn(updated);
+
+            Map<String, Object> params = new HashMap<>();
+            params.put("interface_id", id.toString());
+            params.put("format", "vertical");
+
+            Optional<ToolExecutionResult> res = module.execute("update", params, TENANT, ctx());
+
+            assertThat(res).isPresent();
+            assertThat(res.get().success()).isTrue();
+        }
+
+        @Test
+        @DisplayName("A NON-STRING format is rejected, not read as an explicit clear")
+        void nonStringFormatIsRejectedNotTreatedAsClear() {
+            // The trap: getStringParam returns null for a non-String, which is indistinguishable
+            // from "clear the format". Validating the parsed value instead of the raw one would
+            // let format=1080 WIPE the interface's shape while reporting success.
+            Map<String, Object> params = new HashMap<>();
+            params.put("interface_id", UUID.randomUUID().toString());
+            params.put("format", 1080);
+
+            Optional<ToolExecutionResult> res = module.execute("update", params, TENANT, ctx());
+
+            assertThat(res).isPresent();
+            assertThat(res.get().success()).isFalse();
+            verifyNoInteractions(interfaceService);
+        }
+
+        @Test
+        @DisplayName("format='' clears the shape back to unset (full page)")
+        void blankFormatClearsTheShape() {
+            // Blank is NOT an invalid value: it is the explicit way back to "no declared shape",
+            // which is a distinct, meaningful state (full-page capture).
+            UUID id = UUID.randomUUID();
+            InterfaceEntity existing = fakeEntity(id, "UI");
+            when(interfaceService.getInterface(id, TENANT, null)).thenReturn(Optional.of(existing));
+            when(interfaceService.updateInterface(eq(id), eq(TENANT), any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any(), eq(""), eq(Boolean.TRUE)))
+                .thenReturn(fakeEntity(id, "UI"));
+
+            Map<String, Object> params = new HashMap<>();
+            params.put("interface_id", id.toString());
+            params.put("format", "");
+
+            Optional<ToolExecutionResult> res = module.execute("update", params, TENANT, ctx());
+
+            assertThat(res).isPresent();
+            assertThat(res.get().success()).isTrue();
+        }
+
+        @Test
+        @DisplayName("update echoes the stored (normalized) format back - an alias comes back canonical")
+        void updateEchoesTheNormalizedFormat() {
+            // Mirror of the create echo: the agent that re-shaped with alias 'story' reads the
+            // canonical 'vertical' straight from the update response.
+            UUID id = UUID.randomUUID();
+            InterfaceEntity existing = fakeEntity(id, "UI");
+            InterfaceEntity updated = fakeEntity(id, "UI");
+            updated.setFormat("vertical");
+            when(interfaceService.getInterface(id, TENANT, null)).thenReturn(Optional.of(existing));
+            when(interfaceService.updateInterface(eq(id), eq(TENANT), any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any(), eq("story"), eq(Boolean.TRUE)))
+                .thenReturn(updated);
+
+            Map<String, Object> params = new HashMap<>();
+            params.put("interface_id", id.toString());
+            params.put("format", "story");
+
+            Optional<ToolExecutionResult> res = module.execute("update", params, TENANT, ctx());
+
+            assertThat(res).isPresent();
+            assertThat(res.get().success()).isTrue();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) res.get().data();
+            assertThat(data).containsEntry("format", "vertical");
+        }
+
+        @Test
+        @DisplayName("update omits the format key after an explicit clear (absent = no shape)")
+        void updateOmitsFormatAfterClear() {
+            // format='' clears the shape; the response must show the cleared state as ABSENCE,
+            // exactly like get does, so the agent's read-back contract stays uniform.
+            UUID id = UUID.randomUUID();
+            InterfaceEntity existing = fakeEntity(id, "UI");
+            existing.setFormat("vertical");
+            when(interfaceService.getInterface(id, TENANT, null)).thenReturn(Optional.of(existing));
+            when(interfaceService.updateInterface(eq(id), eq(TENANT), any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any(), eq(""), eq(Boolean.TRUE)))
+                .thenReturn(fakeEntity(id, "UI"));
+
+            Map<String, Object> params = new HashMap<>();
+            params.put("interface_id", id.toString());
+            params.put("format", "");
+
+            Optional<ToolExecutionResult> res = module.execute("update", params, TENANT, ctx());
+
+            assertThat(res).isPresent();
+            assertThat(res.get().success()).isTrue();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) res.get().data();
+            assertThat(data).doesNotContainKey("format");
+        }
+
+        @Test
+        @DisplayName("An invalid format is rejected with the preset list, never silently ignored")
+        void invalidFormatIsRejectedExplicitly() {
+            // InterfaceFormat.normalize maps anything unknown to null, so accepting it would hand
+            // the agent a full-page 1280x800 interface it never asked for, with nothing in the
+            // response to reveal the mistake.
+            Map<String, Object> params = new HashMap<>();
+            params.put("interface_id", UUID.randomUUID().toString());
+            params.put("format", "9999x9999");
+
+            Optional<ToolExecutionResult> res = module.execute("update", params, TENANT, ctx());
+
+            assertThat(res).isPresent();
+            assertThat(res.get().success()).isFalse();
+            assertThat(res.get().error()).contains("vertical (1080x1920)");
+            verifyNoInteractions(interfaceService);
+        }
+
+        @Test
         @DisplayName("Should reject update with no fields to change (does not burn a rate-limit slot)")
         void shouldRejectEmptyUpdate() {
             UUID id = UUID.randomUUID();
@@ -917,7 +1163,7 @@ class InterfaceCrudModuleTest {
             InterfaceEntity updated = fakeEntity(id, "UI");
             when(interfaceService.getInterface(id, TENANT, null)).thenReturn(Optional.of(existing));
             when(interfaceService.updateInterface(eq(id), eq(TENANT), any(), any(), any(), any(), any(), any(), any(),
-                any(), any(), any(), any(), any(), any(), any())).thenReturn(updated);
+                any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(updated);
 
             for (int i = 0; i < 3; i++) {
                 Map<String, Object> realUpdate = new HashMap<>();
@@ -936,7 +1182,7 @@ class InterfaceCrudModuleTest {
             InterfaceEntity existing = fakeEntity(id, "UI");
             when(interfaceService.getInterface(id, TENANT, null)).thenReturn(Optional.of(existing));
             when(interfaceService.updateInterface(eq(id), eq(TENANT), any(), any(), any(), any(), any(), any(), any(),
-                any(), any(), any(), any(), any(), any(), any()))
+                any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenThrow(new IllegalArgumentException("name cannot exceed 255 characters"));
 
             Map<String, Object> params = new HashMap<>();
@@ -958,7 +1204,7 @@ class InterfaceCrudModuleTest {
             InterfaceEntity updated = fakeEntity(id, "Updated UI");
             when(interfaceService.getInterface(id, TENANT, null)).thenReturn(Optional.of(existing));
             when(interfaceService.updateInterface(eq(id), eq(TENANT), any(), any(), any(), any(), any(), any(), any(),
-                any(), any(), any(), any(), any(), any(), any())).thenReturn(updated);
+                any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(updated);
 
             Map<String, Object> params = new HashMap<>();
             params.put("interface_id", id.toString());

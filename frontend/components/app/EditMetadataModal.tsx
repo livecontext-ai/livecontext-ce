@@ -4,8 +4,10 @@ import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Workflow, Table, Monitor, File as FileIcon } from 'lucide-react';
+import { Workflow, Table, Monitor, File as FileIcon, ChevronDown, ChevronRight } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { IS_CE } from '@/lib/edition';
+import { CREDIT_LIST_USD } from '@/lib/billing/pricing-constants';
 
 export type EditMetadataResourceType = 'workflow' | 'interface' | 'datasource' | 'file';
 
@@ -13,9 +15,14 @@ export interface EditMetadataModalProps {
   resourceType: EditMetadataResourceType;
   initialName: string;
   initialDescription?: string;
+  /**
+   * Workflow/application cost budget in CREDITS (1 credit = $0.001), or
+   * null/undefined when none is set. Only surfaced for workflow resources.
+   */
+  initialBudgetCredits?: number | null;
   isSaving?: boolean;
   onClose: () => void;
-  onSave: (values: { name: string; description: string }) => void | Promise<void>;
+  onSave: (values: { name: string; description: string; budgetCredits?: number | null }) => void | Promise<void>;
 }
 
 const ICON_BY_TYPE = {
@@ -29,6 +36,7 @@ export const EditMetadataModal: React.FC<EditMetadataModalProps> = ({
   resourceType,
   initialName,
   initialDescription = '',
+  initialBudgetCredits = null,
   isSaving = false,
   onClose,
   onSave,
@@ -37,17 +45,56 @@ export const EditMetadataModal: React.FC<EditMetadataModalProps> = ({
   const [name, setName] = useState(initialName);
   const [description, setDescription] = useState(initialDescription);
   const [mounted, setMounted] = useState(false);
+  // Budget is edited in the edition's unit: dollars in CE, credits in cloud.
+  // Seed the field by converting the stored credits into that unit. Convert via
+  // an integer credits-per-dollar factor (1 / CREDIT_LIST_USD = 1000) so whole
+  // amounts render cleanly - multiplying credits by 0.001 would surface IEEE-754
+  // artifacts in the input (e.g. 350 -> "0.35000000000000003").
+  const CREDITS_PER_DOLLAR = Math.round(1 / CREDIT_LIST_USD);
+  const showBudget = resourceType === 'workflow';
+  const creditsToDisplay = (credits: number | null | undefined): string => {
+    if (credits == null || credits <= 0) return '';
+    return IS_CE ? String(credits / CREDITS_PER_DOLLAR) : String(credits);
+  };
+  const [budgetInput, setBudgetInput] = useState<string>(creditsToDisplay(initialBudgetCredits));
+  const [advancedOpen, setAdvancedOpen] = useState<boolean>(!!(initialBudgetCredits && initialBudgetCredits > 0));
 
   useEffect(() => {
     setMounted(true);
     return () => setMounted(false);
   }, []);
 
+  // The budget is often fetched asynchronously after the modal opens (the
+  // breadcrumb opener doesn't carry it). Re-seed the field when it arrives, but
+  // don't clobber a value the user is already editing.
+  useEffect(() => {
+    if (!showBudget) return;
+    if (initialBudgetCredits != null && initialBudgetCredits > 0) {
+      setBudgetInput(creditsToDisplay(initialBudgetCredits));
+      setAdvancedOpen(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialBudgetCredits]);
+
   const Icon = ICON_BY_TYPE[resourceType];
 
   const handleSave = async () => {
     if (!name.trim()) return;
-    await onSave({ name: name.trim(), description: description.trim() });
+    // Convert the typed value (dollars in CE, credits in cloud) back to credits.
+    // Blank / non-positive clears the budget.
+    let budgetCredits: number | null | undefined = undefined;
+    if (showBudget) {
+      const raw = budgetInput.trim();
+      if (raw === '') {
+        budgetCredits = null;
+      } else {
+        const parsed = Number(raw);
+        budgetCredits = Number.isFinite(parsed) && parsed > 0
+          ? (IS_CE ? parsed * CREDITS_PER_DOLLAR : parsed)
+          : null;
+      }
+    }
+    await onSave({ name: name.trim(), description: description.trim(), budgetCredits });
   };
 
   const modalContent = (
@@ -89,6 +136,44 @@ export const EditMetadataModal: React.FC<EditMetadataModalProps> = ({
                 className="w-full min-h-[100px] px-4 py-3 text-sm rounded-xl border border-theme bg-theme-primary text-theme-primary placeholder:text-theme-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-2"
                 rows={3}
               />
+            </div>
+          )}
+
+          {/* Advanced: workflow / application cost budget. */}
+          {showBudget && (
+            <div className="pt-1 border-t border-theme">
+              <button
+                type="button"
+                onClick={() => setAdvancedOpen((prev) => !prev)}
+                className="flex items-center gap-1 text-sm font-medium text-theme-primary hover:text-[var(--accent-primary)] transition-colors w-full pt-3"
+              >
+                {advancedOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                <span>{t('advancedSection')}</span>
+              </button>
+              {advancedOpen && (
+                <div className="mt-3">
+                  <label className="block text-sm font-medium text-theme-primary mb-2">
+                    {t('budgetLabel')}
+                  </label>
+                  <div className="relative">
+                    {IS_CE && (
+                      <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm text-theme-secondary pointer-events-none">$</span>
+                    )}
+                    <Input
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={budgetInput}
+                      onChange={(e) => setBudgetInput(e.target.value)}
+                      placeholder={t('budgetPlaceholder')}
+                      className={`w-full ${IS_CE ? 'pl-7' : ''}`}
+                    />
+                  </div>
+                  <p className="mt-1.5 text-xs text-theme-secondary">
+                    {IS_CE ? t('budgetHelpDollars') : t('budgetHelpCredits')}
+                  </p>
+                </div>
+              )}
             </div>
           )}
         </div>

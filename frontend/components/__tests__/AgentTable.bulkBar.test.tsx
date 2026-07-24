@@ -53,7 +53,11 @@ vi.mock('@/components/ui/EmptyState', () => ({ EmptyState: () => null }));
 vi.mock('@/components/ui/CardSkeletonGrid', () => ({ CardSkeletonGrid: () => null }));
 vi.mock('@/components/ui/PaginationBar', () => ({ PaginationBar: () => null }));
 vi.mock('@/hooks/useDebouncedValue', () => ({ useDebouncedValue: (v: unknown) => v }));
-vi.mock('@/lib/stores/current-org-store', () => ({ useCanMutateInCurrentOrg: () => true }));
+vi.mock('@/lib/stores/current-org-store', () => ({
+  useCanMutateInCurrentOrg: () => true,
+  // Consumed by the TemplateGallery banner, which scopes its collapsed pref per workspace.
+  useCurrentOrg: () => ({ currentOrgId: null }),
+}));
 vi.mock('@/lib/hooks/useOrgScopedReset', () => ({ useOrgScopedReset: () => undefined }));
 vi.mock('@/hooks/useSelectableItems', () => ({
   useSelectableItems: () => ({

@@ -43,6 +43,8 @@ export type NodeKind =
   | 'transform'  // Transform
   | 'wait'       // Wait
   | 'download_file' // Download File
+  | 'public_link' // Public Link (expiring signed URL for a stored file)
+  | 'media'      // Media (probe/mux/mix/extract audio-video via ffmpeg sidecar)
   | 'http_request'  // HTTP Request
   | 'data_input'    // Data Input
   | 'filter'     // Filter
@@ -227,6 +229,26 @@ const NODE_DEFINITIONS: Record<string, NodeDefinition> = {
     singleEntry: false,
     terminal: false,
     label: 'Download File',
+    category: 'utility',
+  },
+  publicLinkNode: {
+    type: 'flowNode', // Public Link uses flowNode with kind='public_link'
+    prefix: 'core',
+    kind: 'public_link',
+    hasPorts: false,
+    singleEntry: false,
+    terminal: false,
+    label: 'Public Link',
+    category: 'utility',
+  },
+  mediaNode: {
+    type: 'flowNode', // Media uses flowNode with kind='media'
+    prefix: 'core',
+    kind: 'media',
+    hasPorts: false,
+    singleEntry: false,
+    terminal: false,
+    label: 'Media',
     category: 'utility',
   },
   httpRequestNode: {
@@ -777,7 +799,7 @@ class NodeRegistry {
     if (controlTypes.includes(type)) return true;
 
     // Check by kind for flowNode-based control nodes
-    const controlKinds = ['transform', 'wait', 'download_file', 'http_request', 'data_input', 'filter', 'sort', 'limit', 'remove_duplicates', 'summarize', 'date_time', 'crypto_jwt', 'xml', 'compression', 'rss', 'convert_to_file', 'extract_from_file', 'compare_datasets', 'set', 'html_extract', 'sub_workflow', 'respond_to_webhook', 'send_email', 'email_inbox', 'code', 'task', 'stop_on_error', 'ssh', 'sftp', 'database', 'output', 'exit'];
+    const controlKinds = ['transform', 'wait', 'download_file', 'public_link', 'media', 'http_request', 'data_input', 'filter', 'sort', 'limit', 'remove_duplicates', 'summarize', 'date_time', 'crypto_jwt', 'xml', 'compression', 'rss', 'convert_to_file', 'extract_from_file', 'compare_datasets', 'set', 'html_extract', 'sub_workflow', 'respond_to_webhook', 'send_email', 'email_inbox', 'code', 'task', 'stop_on_error', 'ssh', 'sftp', 'database', 'output', 'exit'];
     if (controlKinds.includes(kind)) return true;
 
     // Check by is*Node() for nodes created from palette with generic kind: 'action'
@@ -1029,6 +1051,23 @@ class NodeRegistry {
            nodeDataId === 'download_file' ||
            nodeDataId.startsWith('download-file-') ||
            nodeDataId.startsWith('download_file-');
+  }
+
+  isPublicLinkNode(node: Node<BuilderNodeData>): boolean {
+    const nodeDataId = node.data?.id || '';
+    const kind = (node.data as any)?.kind;
+    return kind === 'public_link' ||
+           nodeDataId === 'public_link' ||
+           nodeDataId.startsWith('public-link-') ||
+           nodeDataId.startsWith('public_link-');
+  }
+
+  isMediaNode(node: Node<BuilderNodeData>): boolean {
+    const nodeDataId = node.data?.id || '';
+    const kind = (node.data as any)?.kind;
+    return kind === 'media' ||
+           nodeDataId === 'media' ||
+           nodeDataId.startsWith('media-');
   }
 
   isHttpRequestNode(node: Node<BuilderNodeData>): boolean {
@@ -1456,6 +1495,8 @@ export const {
   isTransformNode,
   isWaitNode,
   isDownloadFileNode,
+  isPublicLinkNode,
+  isMediaNode,
   isHttpRequestNode,
   isDataInputNode,
   isExitNode,

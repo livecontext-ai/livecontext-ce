@@ -15,8 +15,9 @@
  *    BuilderCanvas must hand <Background> a unique, SVG-safe id.
  */
 import React from 'react';
+import { act } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, within } from '@testing-library/react';
+import { render, within, waitFor } from '@testing-library/react';
 
 // --- Configurable state, driven per-test ---
 let mockMode: { isRunMode: boolean; isPreviewOnly: boolean };
@@ -51,6 +52,7 @@ vi.mock('reactflow', () => ({
   ConnectionMode: { Loose: 'loose', Strict: 'strict' },
   getBezierPath: () => ['', 0, 0, 0, 0],
   getSmoothStepPath: () => ['', 0, 0, 0, 0],
+  useUpdateNodeInternals: () => () => {},
 }));
 
 // Heavy graph/builder internals - not under test.
@@ -58,7 +60,10 @@ vi.mock('../../constants/graphTypes', () => ({ nodeTypes: {}, edgeTypes: {} }));
 vi.mock('../../contexts/ValidationContext', () => ({ useValidationOptional: () => null }));
 vi.mock('../../utils/workflowPlanGenerator', () => ({ generateWorkflowPlan: vi.fn() }));
 vi.mock('../../utils/connectionValidator', () => ({ validateConnection: () => true }));
-vi.mock('../../services/LayoutService', () => ({ applyDagreLayout: (n: unknown) => n }));
+vi.mock('../../services/LayoutService', () => ({
+  applyDagreLayout: (n: unknown) => n,
+  layoutConfigForDirection: () => ({}),
+}));
 vi.mock('../../services/nodeMatcher', () => ({ nodeMatchesStep: () => false }));
 vi.mock('../../registry/nodeRegistry', () => ({
   nodeRegistry: new Proxy({}, { get: () => () => false }),
@@ -191,5 +196,47 @@ describe('BuilderCanvas - unique Background pattern id per instance', () => {
     mockMode = { isRunMode: true, isPreviewOnly: false };
     const { queryAllByTestId } = render(<BuilderCanvas {...baseProps()} />);
     expect(queryAllByTestId('rf-background')).toHaveLength(0);
+  });
+});
+
+describe('BuilderCanvas - auto-layout after a hover-"+" insert', () => {
+  beforeEach(() => {
+    mockMode = { isRunMode: false, isPreviewOnly: false };
+  });
+
+  it('re-flows the graph when a hoverPlusNodeInserted event fires', async () => {
+    // The "+" add path dispatches `hoverPlusNodeInserted`; the canvas listens and
+    // runs auto-layout (onForceNodesUpdate). applyDagreLayout is mocked to identity,
+    // so a call to onForceNodesUpdate with the nodes proves the wiring.
+    const onForceNodesUpdate = vi.fn();
+    const nodes = [{ id: 'a', position: { x: 0, y: 0 }, data: {} }] as any[];
+    render(
+      <BuilderCanvas
+        {...baseProps()}
+        nodes={nodes}
+        onForceNodesUpdate={onForceNodesUpdate}
+      />,
+    );
+    expect(onForceNodesUpdate).not.toHaveBeenCalled();
+
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('hoverPlusNodeInserted'));
+    });
+    // The listener defers by 130ms so the new node/edge settle first.
+    await waitFor(() => expect(onForceNodesUpdate).toHaveBeenCalledWith(nodes), { timeout: 1000 });
+  });
+
+  it('does NOT re-flow on an unrelated event (only the "+" insert triggers it)', async () => {
+    const onForceNodesUpdate = vi.fn();
+    const nodes = [{ id: 'a', position: { x: 0, y: 0 }, data: {} }] as any[];
+    render(<BuilderCanvas {...baseProps()} nodes={nodes} onForceNodesUpdate={onForceNodesUpdate} />);
+
+    await act(async () => {
+      // A plain node-created event (fires on cancel and toolbox adds too) must NOT
+      // auto-layout - only the dedicated hover-"+" signal does.
+      window.dispatchEvent(new CustomEvent('workflowNodeCreated'));
+    });
+    await new Promise((r) => setTimeout(r, 250));
+    expect(onForceNodesUpdate).not.toHaveBeenCalled();
   });
 });

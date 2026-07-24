@@ -211,7 +211,8 @@ public class InterfaceSnapshotService {
                         && Objects.equals(snap.getCssTemplate(), live.getCssTemplate())
                         && Objects.equals(snap.getJsTemplate(), live.getJsTemplate())
                         && Objects.equals(snap.getName(), live.getName())
-                        && Objects.equals(snap.getDescription(), live.getDescription())) {
+                        && Objects.equals(snap.getDescription(), live.getDescription())
+                        && Objects.equals(snap.getFormat(), live.getFormat())) {
                     unchanged++;
                     continue;
                 }
@@ -221,6 +222,10 @@ public class InterfaceSnapshotService {
                 snap.setJsTemplate(live.getJsTemplate());
                 snap.setName(live.getName());
                 snap.setDescription(live.getDescription());
+                // Format is refreshable like the templates: re-shaping an interface must reach
+                // waiting runs. Omitting it from the comparison above would report "unchanged"
+                // for a format-only edit and never propagate it.
+                snap.setFormat(live.getFormat());
                 snapshotRepository.save(snap);
                 refreshed++;
                 log.info("Refreshed snapshot for interface={}, run={}",

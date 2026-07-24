@@ -41,5 +41,11 @@ public record WorkflowSummary(
     WorkflowEntity.WorkflowType workflowType,
     Integer pinnedVersion,
     boolean hasActiveRun,
-    String boardColumn
+    String boardColumn,
+    /**
+     * Optional cost budget in credits (1 credit = $0.001), or null when none is
+     * set. Edited in the workflow settings "Advanced" section. The frontend
+     * renders it as dollars in CE and raw credits in cloud.
+     */
+    java.math.BigDecimal budgetCredits
 ) {}

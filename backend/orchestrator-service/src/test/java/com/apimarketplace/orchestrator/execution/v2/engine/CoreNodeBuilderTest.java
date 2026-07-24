@@ -9,6 +9,8 @@ import com.apimarketplace.orchestrator.execution.v2.nodes.FilterNode;
 import com.apimarketplace.orchestrator.execution.v2.nodes.ForkNode;
 import com.apimarketplace.orchestrator.execution.v2.nodes.LimitNode;
 import com.apimarketplace.orchestrator.execution.v2.nodes.MergeNode;
+import com.apimarketplace.orchestrator.execution.v2.nodes.MediaNode;
+import com.apimarketplace.orchestrator.execution.v2.nodes.PublicLinkNode;
 import com.apimarketplace.orchestrator.execution.v2.nodes.RemoveDuplicatesNode;
 import com.apimarketplace.orchestrator.execution.v2.nodes.SortNode;
 import com.apimarketplace.orchestrator.execution.v2.nodes.SummarizeNode;
@@ -583,6 +585,156 @@ class CoreNodeBuilderTest {
             assertInstanceOf(SummarizeNode.class, nodeMap.get("core:sum"));
             SummarizeNode summarizeNode = (SummarizeNode) nodeMap.get("core:sum");
             assertEquals("{{table:orders.output.items}}", summarizeNode.getConfig().input());
+        }
+    }
+
+    @Nested
+    @DisplayName("createPublicLinkNodes() - config from the generic params map")
+    class CreatePublicLinkNodesTests {
+
+        private WorkflowPlan planWithPublicLinkCore(String label, Map<String, Object> params) {
+            Map<String, Object> data = createBasePlanData();
+            Map<String, Object> coreData = new HashMap<>();
+            coreData.put("id", "c1");
+            coreData.put("type", "public_link");
+            coreData.put("label", label);
+            if (params != null) {
+                coreData.put("params", params);
+            }
+            data.put("cores", List.of(coreData));
+            return WorkflowPlan.fromMap(data);
+        }
+
+        @Test
+        @DisplayName("Should create public link node with file, ttl_minutes and disposition from params")
+        void shouldCreatePublicLinkNodeFromParams() {
+            WorkflowPlan plan = planWithPublicLinkCore("Share Video", Map.of(
+                "file", "{{core:dl.output.file}}",
+                "ttl_minutes", 60,
+                "disposition", "attachment"));
+            Map<String, ExecutionNode> nodeMap = new HashMap<>();
+
+            builder.createPublicLinkNodes(nodeMap, plan);
+
+            assertTrue(nodeMap.containsKey("core:share_video"));
+            assertInstanceOf(PublicLinkNode.class, nodeMap.get("core:share_video"));
+            PublicLinkNode node = (PublicLinkNode) nodeMap.get("core:share_video");
+            assertEquals("{{core:dl.output.file}}", node.getFileExpression());
+            assertEquals(Integer.valueOf(60), node.getTtlMinutes());
+            assertEquals("attachment", node.getDisposition());
+        }
+
+        @Test
+        @DisplayName("Should accept camelCase ttlMinutes alias for the TTL")
+        void shouldAcceptCamelCaseTtlMinutesAlias() {
+            WorkflowPlan plan = planWithPublicLinkCore("Share Video", Map.of(
+                "file", "{{core:dl.output.file}}",
+                "ttlMinutes", 60));
+            Map<String, ExecutionNode> nodeMap = new HashMap<>();
+
+            builder.createPublicLinkNodes(nodeMap, plan);
+
+            PublicLinkNode node = (PublicLinkNode) nodeMap.get("core:share_video");
+            assertEquals(Integer.valueOf(60), node.getTtlMinutes());
+        }
+
+        @Test
+        @DisplayName("Should create node with null fileExpression when params has no file (fails at runtime, not build time)")
+        void shouldCreateNodeWithNullFileWhenFileMissing() {
+            WorkflowPlan plan = planWithPublicLinkCore("Share Video", Map.of("ttl_minutes", 60));
+            Map<String, ExecutionNode> nodeMap = new HashMap<>();
+
+            builder.createPublicLinkNodes(nodeMap, plan);
+
+            assertTrue(nodeMap.containsKey("core:share_video"));
+            PublicLinkNode node = (PublicLinkNode) nodeMap.get("core:share_video");
+            assertNull(node.getFileExpression());
+        }
+
+        @Test
+        @DisplayName("Should treat a blank file as null fileExpression")
+        void shouldTreatBlankFileAsNull() {
+            WorkflowPlan plan = planWithPublicLinkCore("Share Video", Map.of("file", "   "));
+            Map<String, ExecutionNode> nodeMap = new HashMap<>();
+
+            builder.createPublicLinkNodes(nodeMap, plan);
+
+            PublicLinkNode node = (PublicLinkNode) nodeMap.get("core:share_video");
+            assertNull(node.getFileExpression());
+        }
+
+        @Test
+        @DisplayName("Should ignore cores that are not public_link")
+        void shouldIgnoreNonPublicLinkCores() {
+            WorkflowPlan plan = createPlanWithCore("download_file", "DL");
+            Map<String, ExecutionNode> nodeMap = new HashMap<>();
+
+            builder.createPublicLinkNodes(nodeMap, plan);
+
+            assertTrue(nodeMap.isEmpty());
+        }
+    }
+
+    @Nested
+    @DisplayName("createMediaNodes() - generic params map passthrough")
+    class CreateMediaNodesTests {
+
+        private WorkflowPlan planWithMediaCore(String label, Map<String, Object> params) {
+            Map<String, Object> data = createBasePlanData();
+            Map<String, Object> coreData = new HashMap<>();
+            coreData.put("id", "m1");
+            coreData.put("type", "media");
+            coreData.put("label", label);
+            if (params != null) {
+                coreData.put("params", params);
+            }
+            data.put("cores", List.of(coreData));
+            return WorkflowPlan.fromMap(data);
+        }
+
+        @Test
+        @DisplayName("Should create media node carrying the FULL params map verbatim (validated at execute time)")
+        void shouldCreateMediaNodeWithParamsMap() {
+            Map<String, Object> params = Map.of(
+                "operation", "mux_audio",
+                "video", "{{interface:card.output.video}}",
+                "audio", "{{core:dl.output.file}}",
+                "volume", 80);
+            WorkflowPlan plan = planWithMediaCore("Add Music", params);
+            Map<String, ExecutionNode> nodeMap = new HashMap<>();
+
+            builder.createMediaNodes(nodeMap, plan);
+
+            assertTrue(nodeMap.containsKey("core:add_music"));
+            assertInstanceOf(MediaNode.class, nodeMap.get("core:add_music"));
+            MediaNode node = (MediaNode) nodeMap.get("core:add_music");
+            assertEquals("mux_audio", node.getParams().get("operation"));
+            assertEquals("{{interface:card.output.video}}", node.getParams().get("video"));
+            assertEquals(80, node.getParams().get("volume"));
+        }
+
+        @Test
+        @DisplayName("Should create node with empty params when the params map is absent (fails at runtime, not build time)")
+        void shouldCreateNodeWithEmptyParamsWhenAbsent() {
+            WorkflowPlan plan = planWithMediaCore("Add Music", null);
+            Map<String, ExecutionNode> nodeMap = new HashMap<>();
+
+            builder.createMediaNodes(nodeMap, plan);
+
+            assertTrue(nodeMap.containsKey("core:add_music"));
+            MediaNode node = (MediaNode) nodeMap.get("core:add_music");
+            assertTrue(node.getParams().isEmpty());
+        }
+
+        @Test
+        @DisplayName("Should ignore cores that are not media")
+        void shouldIgnoreNonMediaCores() {
+            WorkflowPlan plan = createPlanWithCore("download_file", "DL");
+            Map<String, ExecutionNode> nodeMap = new HashMap<>();
+
+            builder.createMediaNodes(nodeMap, plan);
+
+            assertTrue(nodeMap.isEmpty());
         }
     }
 

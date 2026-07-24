@@ -8,7 +8,8 @@ import type { Agent } from '@/lib/api/orchestrator/types';
 import { orchestratorApi } from '@/lib/api';
 import { getActivePublicPreview } from '@/contexts/PublicationSnapshotContext';
 import { WorkflowPlanImporter } from '../services/workflowPlanImporter/WorkflowPlanImporter';
-import { applyDagreLayout } from '../services/LayoutService';
+import { applyDagreLayout, layoutConfigForDirection } from '../services/LayoutService';
+import { useWorkflowLayoutDirectionSafe } from '@/contexts/WorkflowLayoutDirectionContext';
 
 interface UseWorkflowEventListenersOptions {
   workflowId?: string;
@@ -42,7 +43,7 @@ interface PendingHoverConnection {
   nodeId: string;
   handleId: string;
   handleType: 'source' | 'target';
-  handlePosition: 'left' | 'right' | 'top';
+  handlePosition: 'left' | 'right' | 'top' | 'bottom';
   position: { x: number; y: number };
 }
 
@@ -59,6 +60,19 @@ export function useWorkflowEventListeners({
   edgesRef,
   runContext,
 }: UseWorkflowEventListenersOptions): UseWorkflowEventListenersReturn {
+  // An agent-pushed plan must land in the direction the canvas is wired for.
+  const { direction: layoutDirection } = useWorkflowLayoutDirectionSafe();
+  // Read through a ref, NOT a dependency: this value must be the direction at the
+  // moment the plan is imported, but adding it to the effect deps below would
+  // re-register the listener (and, in the loader, re-fetch the workflow) every time
+  // the user flips the preference. A dependency-free read would instead capture the
+  // context's SEED value ('horizontal'): the provider restores the stored direction
+  // in a mount effect, and React flushes child effects BEFORE ancestor ones, so a
+  // hard load straight onto a builder URL would lay the graph out horizontally while
+  // every handle rendered vertically.
+  const layoutDirectionRef = React.useRef(layoutDirection);
+  layoutDirectionRef.current = layoutDirection;
+
   const queryClient = useQueryClient();
 
   // Schedule state
@@ -145,13 +159,17 @@ export function useWorkflowEventListeners({
           React.startTransition(async () => {
             try {
               const planJson = JSON.stringify(plan);
-              const importResult = await WorkflowPlanImporter.importPlan(planJson, []);
+              const importResult = await WorkflowPlanImporter.importPlan(planJson, [], layoutDirectionRef.current);
 
               if (importResult.success) {
                 // Always apply Dagre layout after sync (same algo as the toolbox auto-layout button)
                 // The importer may use applyMixedLayout (simple heuristic) when only some nodes
                 // lack positions, which produces poor results. Dagre gives consistent, clean layouts.
-                let layoutedNodes = applyDagreLayout(importResult.nodes, importResult.edges);
+                let layoutedNodes = applyDagreLayout(
+                  importResult.nodes,
+                  importResult.edges,
+                  layoutConfigForDirection(layoutDirectionRef.current),
+                );
 
                 // Resolve agent avatars for nodes with agentConfigId but no agentAvatarUrl
                 const agentNodesNeedingAvatar = layoutedNodes.filter(

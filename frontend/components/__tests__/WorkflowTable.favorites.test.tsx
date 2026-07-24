@@ -17,7 +17,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ getWorkflowsPage: vi.fn() }));
 const favs = vi.hoisted(() => ({ getFavoriteIds: vi.fn(), addFavorite: vi.fn(), removeFavorite: vi.fn() }));
 
-vi.mock('next-intl', () => ({ useTranslations: () => (key: string) => key }));
+vi.mock('next-intl', () => ({
+  // .raw mirrors the real next-intl API: template copy is read verbatim through it
+  // so workflow expressions like {{item}} are not parsed as ICU arguments.
+  useTranslations: () => Object.assign((key: string) => key, { raw: (key: string) => key }),
+}));
 vi.mock('@/i18n/navigation', () => ({ useRouter: () => ({ push: () => undefined }) }));
 vi.mock('@/lib/api', () => ({ orchestratorApi: mocks }));
 vi.mock('@/lib/api/orchestrator/favorite.service', () => ({ favoriteService: favs }));
@@ -39,6 +43,8 @@ vi.mock('@/hooks/useSelectableItems', () => ({
 vi.mock('@/lib/stores/current-org-store', () => ({
   useCanMutateInCurrentOrg: () => true,
   useCurrentOrgStore: (sel: any) => sel({ currentOrgId: null }),
+  // Consumed by the TemplateGallery banner, which scopes its collapsed pref per workspace.
+  useCurrentOrg: () => ({ currentOrgId: null }),
 }));
 vi.mock('@/lib/hooks/useOrgScopedReset', () => ({ useOrgScopedReset: () => undefined }));
 vi.mock('@/components/ui/select', () => ({

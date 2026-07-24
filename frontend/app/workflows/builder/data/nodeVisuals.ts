@@ -49,6 +49,8 @@ import {
   OctagonX,
   Terminal,
   HardDrive,
+  Link2,
+  Music4,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { createElement, forwardRef } from 'react';
@@ -281,6 +283,18 @@ export const NODE_VISUALS: Record<BuilderNodeKind, NodeVisuals> = {
     iconBg: 'bg-sky-50 dark:bg-sky-900/30 text-sky-600',
     badgeBg: 'bg-sky-100 dark:bg-sky-900/30 text-sky-700',
     textClass: 'text-sky-700',
+  },
+  public_link: {
+    accent: '#10b981',
+    iconBg: 'bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600',
+    badgeBg: 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700',
+    textClass: 'text-emerald-700',
+  },
+  media: {
+    accent: '#f43f5e',
+    iconBg: 'bg-rose-50 dark:bg-rose-900/30 text-rose-600',
+    badgeBg: 'bg-rose-100 dark:bg-rose-900/30 text-rose-700',
+    textClass: 'text-rose-700',
   },
   aggregate: {
     accent: '#8b5cf6',
@@ -535,6 +549,12 @@ export const NODE_ICON_REGISTRY: Record<string, NodeIconEntry> = {
   'download_file': { icon: Download, iconBg: CORE_BG },
   'download': { icon: Download, iconBg: CORE_BG },
   'file-download': { icon: Download, iconBg: CORE_BG },
+  'public_link': { icon: Link2, iconBg: CORE_BG },
+  'public-link': { icon: Link2, iconBg: CORE_BG },
+  'share-link': { icon: Link2, iconBg: CORE_BG },
+  'media': { icon: Music4, iconBg: CORE_BG },
+  'audio': { icon: Music4, iconBg: CORE_BG },
+  'mux': { icon: Music4, iconBg: CORE_BG },
   'http-request': { icon: Globe, iconBg: CORE_BG },
   'http_request': { icon: Globe, iconBg: CORE_BG },
   'http': { icon: Globe, iconBg: CORE_BG },

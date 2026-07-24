@@ -87,7 +87,11 @@ export function deriveNodeContextFlags(data: BuilderNodeData, nodeClassId?: stri
     data.kind === 'download_file' ||
     data.kind === 'convert_to_file' ||
     data.kind === 'compression' ||
-    data.kind === 'sftp';
+    data.kind === 'sftp' ||
+    // media outputs a FileRef `file` for every operation except probe: mux_audio/
+    // mix/extract_audio/concat/overlay produce audio or video, frame an image
+    // (probe outputs none - the FileRef walker simply finds nothing to display).
+    data.kind === 'media';
   const isInterfaceNode = nodeId === 'interface' || nodeId.startsWith('interface-');
 
   const triggerVariant: TriggerButtonVariant = isManualTrigger ? 'lightning'
@@ -207,15 +211,22 @@ export function useNodeContextualButtons({
     });
   }
 
-  // File-producing nodes - open the side-panel "Files" tab. Canvas-only:
-  // static core file nodes (download_file, convert_to_file, compression, sftp)
-  // always show; MCP/catalog nodes show once a FileRef is resolved (currentFile).
-  if (includeFiles && (flags.isStaticFileProducingNode || currentFile)) {
+  // File-producing nodes - open the side-panel "Files" tab. Canvas-only, and
+  // ONLY while no file strip is on screen: currentFile means FileNodePreview is
+  // showing its pill under the node, and that pill already carries the very same
+  // openFilesPanel button. The two must never coexist - the strip then takes the
+  // bar's row (calc(100% + 8px)) and the bar is lowered a row by FlowNode. Edit
+  // mode (and any run with no resolved file) keeps the button: static core file
+  // nodes (download_file, convert_to_file, compression, sftp, media) still need
+  // a way into their files with no strip to click.
+  if (includeFiles && flags.isStaticFileProducingNode && !currentFile) {
     buttons.push({
       key: 'files',
       icon: <FolderOpen className="h-3 w-3" strokeWidth={2} />,
       title: 'Files',
-      onClick: () => openFilesPanel(sidePanel, currentFile ?? undefined),
+      // No target file by construction: this button only exists while no strip is
+      // up, i.e. while nothing has resolved a FileRef. It opens the Files tab plain.
+      onClick: () => openFilesPanel(sidePanel),
     });
   }
 

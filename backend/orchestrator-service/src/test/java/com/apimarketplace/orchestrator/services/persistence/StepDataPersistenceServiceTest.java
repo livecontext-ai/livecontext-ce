@@ -106,7 +106,7 @@ class StepDataPersistenceServiceTest {
             when(plan.findStep(anyString())).thenReturn(Optional.empty());
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(UUID.randomUUID());
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(UUID.randomUUID()));
             when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(false);
 
             // Create result without item_index - will default to 0
@@ -135,7 +135,7 @@ class StepDataPersistenceServiceTest {
             when(plan.findStep(anyString())).thenReturn(Optional.empty());
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(UUID.randomUUID());
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(UUID.randomUUID()));
             when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(false);
 
             StepExecutionResult result = createSuccessResultWithItemIndex("test-step", 0);
@@ -143,6 +143,8 @@ class StepDataPersistenceServiceTest {
             StepPersistenceResult persistenceResult = service.recordStep(execution, "mcp:step", "alias", "graph", result);
 
             assertFalse(persistenceResult.persisted());
+            assertEquals(StepPersistenceResult.Disposition.DUPLICATE, persistenceResult.disposition(),
+                    "a v6-index conflict is a BENIGN duplicate - it must not be conflated with an insert error");
         }
 
         @Test
@@ -158,7 +160,7 @@ class StepDataPersistenceServiceTest {
             when(plan.findStep(anyString())).thenReturn(Optional.empty());
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(storageId);
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(storageId));
             when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
 
             StepExecutionResult result = createSuccessResultWithItemIndex("test-step", 0);
@@ -183,7 +185,7 @@ class StepDataPersistenceServiceTest {
             when(plan.findStep(anyString())).thenReturn(Optional.empty());
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(storageId);
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(storageId));
             when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
 
             StepExecutionResult result = createSuccessResultWithItemIndex("test-step", 0);
@@ -219,7 +221,7 @@ class StepDataPersistenceServiceTest {
             when(plan.findStep(anyString())).thenReturn(Optional.empty());
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(storageId);
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(storageId));
             when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
 
             String longErrorMessage = "404 Not Found on POST request: <!DOCTYPE html>" + "x".repeat(5000);
@@ -262,7 +264,7 @@ class StepDataPersistenceServiceTest {
             when(plan.findStep(anyString())).thenReturn(Optional.empty());
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(storageId);
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(storageId));
             when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
 
             int oversizedLength = ErrorMessageLimits.MAX_LENGTH * 4; // 64 K chars - well past cap
@@ -286,11 +288,15 @@ class StepDataPersistenceServiceTest {
         }
 
         @Test
-        @DisplayName("F2: stamps the storage-failure marker on the row when payload storage returns null (no silent corruption)")
-        void stampsStorageFailureMarkerWhenRetryReturnsNull() {
-            // Direct test of the F2 branch: storageId is null at the start of
-            // recordStep (e.g. caller skipped buildStepEntity), retry returns null,
-            // stamp branch must fire and the marker must reach the entity.
+        @DisplayName("Payload loss on a SUCCESS result: flips the row to FAILED naming the cause and reports payloadLost (row truth, tier 1)")
+        void flipsRowToFailedAndReportsPayloadLostWhenPayloadStorageFails() {
+            // Successor of the old F2 marker test: pre-fix the row kept
+            // status=COMPLETED with a null storageId and only a marker; nobody
+            // consumed it programmatically, so the step still reported success
+            // with its entire output blob gone. Post-fix: the row lands FAILED
+            // with an error_message naming the actual cause, and recordStep
+            // returns a PAYLOAD_LOST result the completion orchestrator uses
+            // to rewrite the in-memory result (tier 2).
             UUID workflowRunId = UUID.randomUUID();
             when(entityResolverService.resolveWorkflowRunId(execution)).thenReturn(Optional.of(workflowRunId));
             when(entityResolverService.getCurrentEpochFromRun(workflowRunId)).thenReturn(0);
@@ -300,16 +306,15 @@ class StepDataPersistenceServiceTest {
             when(plan.findStep(anyString())).thenReturn(Optional.empty());
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
-            // Both persistStepPayload overloads return null → storage completely down.
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt(), anyInt()))
-                    .thenReturn(null);
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt()))
-                    .thenReturn(null);
+            // Storage completely down after retries → discriminated TRANSIENT_EXHAUSTED.
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+                    .thenReturn(StepPayloadResult.failed(PayloadFailureCause.TRANSIENT_EXHAUSTED));
             when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
 
             StepExecutionResult result = createSuccessResultWithItemIndex("test-step", 0);
 
-            service.recordStep(execution, "mcp:step", "alias", "graph", result);
+            StepPersistenceResult persistenceResult =
+                service.recordStep(execution, "mcp:step", "alias", "graph", result);
 
             ArgumentCaptor<WorkflowStepDataEntity> captor = ArgumentCaptor.forClass(WorkflowStepDataEntity.class);
             verify(nativeRepository).insertIgnoringDuplicate(captor.capture());
@@ -317,10 +322,76 @@ class StepDataPersistenceServiceTest {
 
             assertNull(captured.getOutputStorageId(),
                     "Storage layer is down - outputStorageId must reflect that");
+            assertEquals("FAILED", captured.getStatus(),
+                    "Row truth: a step whose output is not durable is NOT COMPLETED");
             assertNotNull(captured.getErrorMessage(),
-                    "F2 marker must be stamped so the UI surfaces the storage failure");
-            assertTrue(captured.getErrorMessage().contains("[storage] Payload persist failed"),
-                    "Marker text must be the exact F2 contract - got: " + captured.getErrorMessage());
+                    "error_message must name the actual cause");
+            assertTrue(captured.getErrorMessage().contains("storage write failed after retries"),
+                    "error_message must name the discriminated cause - got: " + captured.getErrorMessage());
+
+            assertTrue(persistenceResult.persisted(), "a FAILED row DID land");
+            assertTrue(persistenceResult.payloadLost(), "the loss must be reported programmatically");
+            assertEquals(PayloadFailureCause.TRANSIENT_EXHAUSTED, persistenceResult.payloadLossCause());
+        }
+
+        @Test
+        @DisplayName("Payload loss with QUOTA_EXCEEDED names the quota cause on the FAILED row")
+        void quotaExceededLossNamesQuotaCauseOnRow() {
+            UUID workflowRunId = UUID.randomUUID();
+            when(entityResolverService.resolveWorkflowRunId(execution)).thenReturn(Optional.of(workflowRunId));
+            when(entityResolverService.getCurrentEpochFromRun(workflowRunId)).thenReturn(0);
+            when(entityResolverService.getCurrentSpawnFromRun(workflowRunId)).thenReturn(0);
+            when(execution.getRunId()).thenReturn("run-456");
+            when(execution.getPlan()).thenReturn(plan);
+            when(plan.findStep(anyString())).thenReturn(Optional.empty());
+            when(plan.getTenantId()).thenReturn("tenant-1");
+            when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+                    .thenReturn(StepPayloadResult.failed(PayloadFailureCause.QUOTA_EXCEEDED));
+            when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
+
+            StepPersistenceResult persistenceResult = service.recordStep(
+                execution, "mcp:step", "alias", "graph", createSuccessResultWithItemIndex("test-step", 0));
+
+            ArgumentCaptor<WorkflowStepDataEntity> captor = ArgumentCaptor.forClass(WorkflowStepDataEntity.class);
+            verify(nativeRepository).insertIgnoringDuplicate(captor.capture());
+            assertEquals("FAILED", captor.getValue().getStatus());
+            assertTrue(captor.getValue().getErrorMessage().contains("storage quota exceeded - free space or raise the limit"),
+                    "operators must be able to route the alert (tenant action vs infra action) - got: "
+                            + captor.getValue().getErrorMessage());
+            assertEquals(PayloadFailureCause.QUOTA_EXCEEDED, persistenceResult.payloadLossCause());
+        }
+
+        @Test
+        @DisplayName("Payload loss on an already-FAILED result keeps status FAILED and APPENDS the storage marker to the real error")
+        void appendsMarkerAndKeepsStatusWhenResultAlreadyFailed() {
+            UUID workflowRunId = UUID.randomUUID();
+            when(entityResolverService.resolveWorkflowRunId(execution)).thenReturn(Optional.of(workflowRunId));
+            when(entityResolverService.getCurrentEpochFromRun(workflowRunId)).thenReturn(0);
+            when(entityResolverService.getCurrentSpawnFromRun(workflowRunId)).thenReturn(0);
+            when(execution.getRunId()).thenReturn("run-456");
+            when(execution.getPlan()).thenReturn(plan);
+            when(plan.findStep(anyString())).thenReturn(Optional.empty());
+            when(plan.getTenantId()).thenReturn("tenant-1");
+            when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+                    .thenReturn(StepPayloadResult.failed(PayloadFailureCause.TRANSIENT_EXHAUSTED));
+            when(nativeRepository.insertIgnoringDuplicate(any())).thenReturn(true);
+
+            StepExecutionResult failedResult = new StepExecutionResult(
+                    "test-step", NodeStatus.FAILED, "real upstream failure",
+                    Map.of("item_index", 0), 100L, new RuntimeException("boom"));
+
+            service.recordStep(execution, "mcp:step", "alias", "graph", failedResult);
+
+            ArgumentCaptor<WorkflowStepDataEntity> captor = ArgumentCaptor.forClass(WorkflowStepDataEntity.class);
+            verify(nativeRepository).insertIgnoringDuplicate(captor.capture());
+            WorkflowStepDataEntity captured = captor.getValue();
+            assertEquals("FAILED", captured.getStatus());
+            assertTrue(captured.getErrorMessage().contains("real upstream failure"),
+                    "the node's own failure message must be preserved");
+            assertTrue(captured.getErrorMessage().contains("[storage] Output payload lost"),
+                    "the storage-loss marker must be appended, not replace the real error");
         }
 
         @Test
@@ -336,7 +407,7 @@ class StepDataPersistenceServiceTest {
             when(plan.findStep(anyString())).thenReturn(Optional.empty());
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(storageId);
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(storageId));
             when(nativeRepository.insertIgnoringDuplicate(any())).thenThrow(new RuntimeException("DB error"));
 
             StepExecutionResult result = createSuccessResultWithItemIndex("test-step", 0);
@@ -345,6 +416,8 @@ class StepDataPersistenceServiceTest {
 
             assertFalse(persistenceResult.persisted());
             assertNull(persistenceResult.storageId());
+            assertEquals(StepPersistenceResult.Disposition.ERROR, persistenceResult.disposition(),
+                    "an insert exception is an ERROR - it must not be conflated with a benign duplicate");
         }
     }
 
@@ -366,7 +439,7 @@ class StepDataPersistenceServiceTest {
             when(plan.findStep(anyString())).thenReturn(Optional.empty());
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(storageId);
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(storageId));
 
             StepExecutionResult result = createSuccessResultWithItemIndex("test-step", 0);
 
@@ -394,7 +467,7 @@ class StepDataPersistenceServiceTest {
             when(plan.findStep(anyString())).thenReturn(Optional.of(step));
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(UUID.randomUUID());
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(UUID.randomUUID()));
 
             StepExecutionResult result = createSuccessResultWithItemIndex("test-step", 0);
 
@@ -415,7 +488,7 @@ class StepDataPersistenceServiceTest {
             when(plan.findStep(anyString())).thenReturn(Optional.empty());
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(UUID.randomUUID());
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(UUID.randomUUID()));
 
             StepExecutionResult result = createSuccessResultWithItemIndex("test-step", 0);
 
@@ -435,7 +508,7 @@ class StepDataPersistenceServiceTest {
             when(plan.findStep(anyString())).thenReturn(Optional.empty());
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(UUID.randomUUID());
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(UUID.randomUUID()));
 
             StepExecutionResult result = new StepExecutionResult(
                     "test-step", NodeStatus.FAILED, "Connection timeout",
@@ -459,7 +532,7 @@ class StepDataPersistenceServiceTest {
             when(plan.findStep(anyString())).thenReturn(Optional.empty());
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(UUID.randomUUID());
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(UUID.randomUUID()));
 
             StepExecutionResult result = new StepExecutionResult(
                     "test-step", NodeStatus.COMPLETED, "Success",
@@ -608,7 +681,7 @@ class StepDataPersistenceServiceTest {
             when(plan.findStep(anyString())).thenReturn(Optional.empty());
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(UUID.randomUUID());
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(UUID.randomUUID()));
 
             Map<String, Object> resolvedParams = Map.of("param1", "value1", "param2", 42);
             StepExecutionResult result = new StepExecutionResult(
@@ -635,7 +708,7 @@ class StepDataPersistenceServiceTest {
             when(plan.findStep(anyString())).thenReturn(Optional.empty());
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(UUID.randomUUID());
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(UUID.randomUUID()));
 
             Map<String, Object> resolvedParams = new HashMap<>();
             resolvedParams.put("valid", "value");
@@ -676,7 +749,7 @@ class StepDataPersistenceServiceTest {
             when(plan.findStep(anyString())).thenReturn(Optional.empty());
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(UUID.randomUUID());
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(UUID.randomUUID()));
 
             StepExecutionResult result = createSuccessResultWithItemIndex("mcp:api_call", 0);
 
@@ -696,7 +769,7 @@ class StepDataPersistenceServiceTest {
             when(plan.findStep(anyString())).thenReturn(Optional.empty());
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(UUID.randomUUID());
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(UUID.randomUUID()));
 
             StepExecutionResult result = createSuccessResultWithItemIndex("trigger:start", 0);
 
@@ -716,7 +789,7 @@ class StepDataPersistenceServiceTest {
             when(plan.findStep(anyString())).thenReturn(Optional.empty());
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(UUID.randomUUID());
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(UUID.randomUUID()));
 
             StepExecutionResult result = createSuccessResultWithItemIndex("agent:analyzer", 0);
 
@@ -745,7 +818,7 @@ class StepDataPersistenceServiceTest {
             when(plan.findStep(anyString())).thenReturn(Optional.empty());
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(UUID.randomUUID());
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(UUID.randomUUID()));
 
             StepExecutionResult result = new StepExecutionResult(
                     "core:aggregate_posts", NodeStatus.COMPLETED, "Success",
@@ -770,7 +843,7 @@ class StepDataPersistenceServiceTest {
             when(plan.findStep(anyString())).thenReturn(Optional.empty());
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(UUID.randomUUID());
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(UUID.randomUUID()));
 
             StepExecutionResult result = new StepExecutionResult(
                     "core:split_posts", NodeStatus.COMPLETED, "Success",
@@ -795,7 +868,7 @@ class StepDataPersistenceServiceTest {
             when(plan.findStep(anyString())).thenReturn(Optional.empty());
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(UUID.randomUUID());
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(UUID.randomUUID()));
 
             StepExecutionResult result = new StepExecutionResult(
                     "aggregate_posts", NodeStatus.COMPLETED, "Success",
@@ -819,7 +892,7 @@ class StepDataPersistenceServiceTest {
             when(plan.findStep(anyString())).thenReturn(Optional.empty());
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(UUID.randomUUID());
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(UUID.randomUUID()));
 
             StepExecutionResult result = new StepExecutionResult(
                     "wait_all", NodeStatus.COMPLETED, "Success",
@@ -850,7 +923,7 @@ class StepDataPersistenceServiceTest {
             when(plan.findStep(anyString())).thenReturn(Optional.empty());
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(UUID.randomUUID());
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(UUID.randomUUID()));
 
             Map<String, Object> output = new HashMap<>();
             output.put("item_index", 0);
@@ -1045,7 +1118,7 @@ class StepDataPersistenceServiceTest {
             when(plan.findStep(anyString())).thenReturn(Optional.empty());
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(UUID.randomUUID());
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(UUID.randomUUID()));
 
             // MCP node - output has NO trigger_id (the canonical case).
             StepExecutionResult result = createSuccessResultWithItemIndex("mcp:fetch_emails", 0);
@@ -1069,7 +1142,7 @@ class StepDataPersistenceServiceTest {
             when(plan.findStep(anyString())).thenReturn(Optional.empty());
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(UUID.randomUUID());
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(UUID.randomUUID()));
 
             StepExecutionResult result = createSuccessResultWithItemIndex("mcp:fetch", 0);
 
@@ -1091,7 +1164,7 @@ class StepDataPersistenceServiceTest {
             when(plan.findStep(anyString())).thenReturn(Optional.empty());
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(UUID.randomUUID());
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(UUID.randomUUID()));
 
             // Trigger node - output explicitly publishes a different trigger_id.
             StepExecutionResult result = new StepExecutionResult(
@@ -1117,7 +1190,7 @@ class StepDataPersistenceServiceTest {
             when(plan.findStep(anyString())).thenReturn(Optional.empty());
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(UUID.randomUUID());
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(UUID.randomUUID()));
 
             StepExecutionResult result = createSuccessResultWithItemIndex("mcp:fetch", 0);
 
@@ -1142,7 +1215,7 @@ class StepDataPersistenceServiceTest {
             when(plan.findStep(anyString())).thenReturn(Optional.empty());
             when(plan.getTenantId()).thenReturn("tenant-1");
             when(metadataBuilder.buildMetadata(any(), any(), any(), any(), any())).thenReturn(new HashMap<>());
-            when(stepPayloadService.persistStepPayload(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(UUID.randomUUID());
+            when(stepPayloadService.persistStepPayloadOutcome(any(), any(), any(), any(), any(), anyInt(), anyInt())).thenReturn(StepPayloadResult.stored(UUID.randomUUID()));
 
             StepExecutionResult result = new StepExecutionResult(
                 "core:apply_ops",

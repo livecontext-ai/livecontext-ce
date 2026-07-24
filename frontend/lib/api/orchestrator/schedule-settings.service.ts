@@ -22,6 +22,12 @@ export interface ScheduleOverview {
   createdAt: string;
   description?: string;
   isActive: boolean;
+  /**
+   * The builder node that owns this standalone schedule (`schedule-<node.id>`).
+   * Used to adopt an existing row on reopen instead of minting a duplicate.
+   * Null for backend-created attached rows (keyed by workflowId + triggerId).
+   */
+  sourceNodeId?: string | null;
 }
 
 export interface ScheduleConfig {

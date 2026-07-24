@@ -17,7 +17,15 @@ import { useNodeExecutionStatus } from '../../contexts/StepByStepContext';
 import { NodeBottomBar } from './NodeBottomBar';
 
 
+import { useWorkflowLayoutDirectionSafe } from '@/contexts/WorkflowLayoutDirectionContext';
+import { getSourceHandleGeometry, getTargetHandleGeometry } from './handleGeometry';
 export function ResponseNode({ data, selected }: NodeProps<BuilderNodeData>) {
+  // Handle sides follow the canvas reading direction. Safe variant: nodes also
+  // render on provider-less surfaces (marketplace preview, snapshots).
+  const { direction: layoutDirection } = useWorkflowLayoutDirectionSafe();
+  const targetHandle = getTargetHandleGeometry(layoutDirection);
+  const sourceHandle = getSourceHandleGeometry(layoutDirection);
+
   const visuals = getNodeVisual('response');
   const { targetRef: nodeRef, isVisible: showActions, show } = useHoverVisibility<HTMLDivElement>();
 
@@ -123,14 +131,12 @@ export function ResponseNode({ data, selected }: NodeProps<BuilderNodeData>) {
       {/* Input handle */}
       <Handle
         type="target"
-        position={Position.Left}
+        position={targetHandle.position}
         id="target-left"
         isConnectable={true}
         className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
         style={{
-          left: -6,
-          top: '50%',
-          transform: 'translateY(-50%)',
+          ...targetHandle.style,
           backgroundColor: 'var(--border-color)',
           opacity: isRunMode ? 0 : 1,
           pointerEvents: isRunMode ? 'none' : 'auto'
@@ -140,14 +146,12 @@ export function ResponseNode({ data, selected }: NodeProps<BuilderNodeData>) {
       {/* Output handle - workflow can continue after response */}
       <Handle
         type="source"
-        position={Position.Right}
+        position={sourceHandle.position}
         id="source-right"
         isConnectable={true}
         className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
         style={{
-          right: -6,
-          top: '50%',
-          transform: 'translateY(-50%)',
+          ...sourceHandle.style,
           backgroundColor: 'var(--border-color)',
           opacity: isRunMode ? 0 : 1,
           pointerEvents: isRunMode ? 'none' : 'auto'

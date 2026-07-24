@@ -7,6 +7,8 @@ import {
   BaseEdge,
   EdgeLabelRenderer,
   EdgeProps,
+  useStore,
+  type ReactFlowState,
   getBezierPath,
   getStraightPath,
   getSmoothStepPath,
@@ -18,6 +20,8 @@ import type { DerivedNodeStatus } from '../types';
 import { EdgeStatusLabel } from './EdgeStatusLabel';
 import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
 
+import { useWorkflowLayoutDirectionSafe } from '@/contexts/WorkflowLayoutDirectionContext';
+import { isFlowBackward } from './nodes/handleGeometry';
 // Get stroke color based on status
 function getStatusStrokeColor(status?: DerivedNodeStatus): string {
   if (!status || status === 'pending') return 'var(--border-color)';
@@ -39,6 +43,8 @@ function getStatusStrokeColor(status?: DerivedNodeStatus): string {
 
 export function BuilderEdge({
   id,
+  source,
+  target,
   sourceX,
   sourceY,
   targetX,
@@ -50,6 +56,19 @@ export function BuilderEdge({
   style,
   data,
 }: EdgeProps) {
+  const { direction: layoutDirection } = useWorkflowLayoutDirectionSafe();
+  // Half-width of the widest endpoint node, so a vertical loop-back rail can clear
+  // the node BODY instead of only its centre-pinned handle. Selector returns a
+  // number (not an object), so it cannot loop on referential inequality.
+  const widestEndpointHalfWidth = useStore(
+    React.useCallback(
+      (s: ReactFlowState) => {
+        const w = (id2: string) => s.nodeInternals.get(id2)?.width ?? 0;
+        return Math.max(w(source), w(target)) / 2;
+      },
+      [source, target],
+    ),
+  );
   const t = useTranslations('workflowBuilder.nodes');
   const isBackEdge = data?.isBackEdge === true;
   const isWhileBodyEdge = data?.isWhileBodyEdge === true;
@@ -57,18 +76,24 @@ export function BuilderEdge({
   const isWhileEdge = isWhileBodyEdge || isLoopBackEdge;
   const baseConnectionType: ConnectionType = data?.connectionType || 'bezier';
 
-  // Use smoothstep when connection goes "backwards" for better visual display
-  // Back-edges always use smoothstep
-  // Detect connection direction based on source handle position
-  const isHorizontalConnection = sourcePosition === 'right' || sourcePosition === 'left';
-  const isVerticalConnection = sourcePosition === 'top' || sourcePosition === 'bottom';
-
-  // Horizontal (left/right handles): backward when source is to the right of target
-  // Vertical (top/bottom handles): backward when source is below target (top handle outputs upward)
-  const isHorizontalBackward = isHorizontalConnection && sourceX > targetX;
-  const isVerticalBackward = isVerticalConnection && sourceY < targetY;
-  const isBackwardConnection = isHorizontalBackward || isVerticalBackward;
-  const connectionType: ConnectionType = isBackEdge ? 'smoothstep' : (isBackwardConnection ? 'smoothstep' : baseConnectionType);
+  // Use smoothstep when a connection goes "backwards" (against the flow) for better
+  // visual display; back-edges always use smoothstep.
+  //
+  // "Backwards" is relative to the CANVAS READING DIRECTION, not to the handle
+  // position: with the flow running left-to-right an edge is backward when it points
+  // left, and with it running top-to-bottom when it points up. Deriving this from
+  // `sourcePosition` alone (as this did) inverts the test the moment the canvas turns
+  // vertical: every ordinary top-to-bottom edge has sourceY < targetY and would be
+  // flagged backward, while a genuine loop back UP would not be.
+  const isVerticalFlow = layoutDirection === 'vertical';
+  // 'auto' picks the edge shape from the reading direction: the gentle `wave` bezier
+  // reads well left-to-right, while `smoothstep`'s right angles read cleaner running
+  // top-to-bottom. Resolved here, per edge, so no direction has to be threaded into
+  // edge data.
+  const resolvedBase: ConnectionType =
+    baseConnectionType === 'auto' ? (isVerticalFlow ? 'smoothstep' : 'wave') : baseConnectionType;
+  const isBackwardConnection = isFlowBackward(layoutDirection, sourceX, sourceY, targetX, targetY);
+  const connectionType: ConnectionType = isBackEdge ? 'smoothstep' : (isBackwardConnection ? 'smoothstep' : resolvedBase);
 
   // Select the path function according to the connection type
   let edgePath: string;
@@ -82,27 +107,70 @@ export function BuilderEdge({
   //   target ←── ╯
   if (isLoopBackEdge) {
     const r = 16;
-    const hPad = 28;
-    const vPad = 50;
-    const bottomY = Math.max(sourceY, targetY) + vPad;
-    const rightX = sourceX + hPad;
-    const leftX = targetX - hPad;
+    const pad = 28;
+    const clearance = 50;
+    // Horizontal routes the rail under the nodes, where a fixed 50px clears any node
+    // (they are ~80-140px tall and the handles sit on their left/right borders).
+    // Vertical routes it beside them, where the handles sit at the horizontal CENTRE
+    // of a 200-900px-wide node, so the rail has to clear a real half-width. Measure
+    // the widest endpoint rather than guessing a constant.
+    const railClearance = clearance + widestEndpointHalfWidth;
 
-    edgePath = [
-      `M ${sourceX},${sourceY}`,
-      `H ${rightX - r}`,
-      `A ${r},${r} 0 0 1 ${rightX},${sourceY + r}`,
-      `V ${bottomY - r}`,
-      `A ${r},${r} 0 0 1 ${rightX - r},${bottomY}`,
-      `H ${leftX + r}`,
-      `A ${r},${r} 0 0 1 ${leftX},${bottomY - r}`,
-      `V ${targetY + r}`,
-      `A ${r},${r} 0 0 1 ${leftX + r},${targetY}`,
-      `H ${targetX}`,
-    ].join(' ');
+    if (isVerticalFlow) {
+      // Mirror of the horizontal U, rotated a quarter turn: the flow runs down, so
+      // the loop-back exits below the source, routes up a rail CLEAR of the column,
+      // and drops into the target's top handle.
+      //
+      // The rail must clear the node body, not just the handle: in vertical, handles
+      // sit at the horizontal CENTRE of their row, and nodes are 200-900px wide, so a
+      // fixed "+50 from the handle" (the mirror of the horizontal version, where a
+      // node is only ~80px tall) would run the rail straight through the node.
+      // `railClearance` is the measured half-width of the widest endpoint node.
+      const rightX = Math.max(sourceX, targetX) + railClearance;
+      const downY = sourceY + pad;
+      const upY = targetY - pad;
 
-    labelX = (rightX + leftX) / 2;
-    labelY = bottomY;
+      edgePath = [
+        `M ${sourceX},${sourceY}`,
+        `V ${downY - r}`,
+        `A ${r},${r} 0 0 0 ${sourceX + r},${downY}`,
+        `H ${rightX - r}`,
+        `A ${r},${r} 0 0 0 ${rightX},${downY - r}`,
+        `V ${upY + r}`,
+        `A ${r},${r} 0 0 0 ${rightX - r},${upY}`,
+        `H ${targetX + r}`,
+        // Arrives heading WEST and leaves heading SOUTH into the top handle, so the
+        // fillet ends BELOW the corner (upY + r). Ending at `upY - r` sent the path
+        // 16px above the corner and then retraced back down over itself.
+        // Sweep 0 like the other three corners: west -> south is (-1,0)x(0,1) = -1,
+        // i.e. counter-clockwise in screen coordinates (y grows downward).
+        `A ${r},${r} 0 0 0 ${targetX},${upY + r}`,
+        `V ${targetY}`,
+      ].join(' ');
+
+      labelX = rightX;
+      labelY = (downY + upY) / 2;
+    } else {
+      const bottomY = Math.max(sourceY, targetY) + clearance;
+      const rightX = sourceX + pad;
+      const leftX = targetX - pad;
+
+      edgePath = [
+        `M ${sourceX},${sourceY}`,
+        `H ${rightX - r}`,
+        `A ${r},${r} 0 0 1 ${rightX},${sourceY + r}`,
+        `V ${bottomY - r}`,
+        `A ${r},${r} 0 0 1 ${rightX - r},${bottomY}`,
+        `H ${leftX + r}`,
+        `A ${r},${r} 0 0 1 ${leftX},${bottomY - r}`,
+        `V ${targetY + r}`,
+        `A ${r},${r} 0 0 1 ${leftX + r},${targetY}`,
+        `H ${targetX}`,
+      ].join(' ');
+
+      labelX = (rightX + leftX) / 2;
+      labelY = bottomY;
+    }
   } else {
     switch (connectionType) {
       case 'straight':

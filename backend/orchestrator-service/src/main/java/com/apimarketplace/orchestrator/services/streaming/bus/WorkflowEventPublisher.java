@@ -10,6 +10,8 @@ import com.apimarketplace.orchestrator.services.streaming.events.LoopEventType;
 import com.apimarketplace.orchestrator.services.streaming.events.MergeEvent;
 import com.apimarketplace.orchestrator.services.streaming.events.MergeEventType;
 import com.apimarketplace.orchestrator.services.streaming.events.RetryEvent;
+import com.apimarketplace.orchestrator.services.streaming.events.RunBudgetBlockedEvent;
+import com.apimarketplace.orchestrator.services.streaming.events.RunCostEvent;
 import com.apimarketplace.orchestrator.services.streaming.events.StepLifecycle;
 import com.apimarketplace.orchestrator.services.streaming.events.StepStatusEvent;
 import com.apimarketplace.orchestrator.services.streaming.events.WorkflowStatisticsEvent;
@@ -115,7 +117,9 @@ public class WorkflowEventPublisher {
         Map.entry("RetryEvent", "retryEvent"),
         Map.entry("DebugLogEvent", "debugLog"),
         Map.entry("MergeEvent", "mergeEvent"),
-        Map.entry("AgentToolCallEvent", "agentToolCall")
+        Map.entry("AgentToolCallEvent", "agentToolCall"),
+        Map.entry("RunCostEvent", "runCost"),
+        Map.entry("RunBudgetBlockedEvent", "runBudgetBlocked")
     );
 
     static String wireEventType(Class<?> eventClass) {
@@ -277,6 +281,43 @@ public class WorkflowEventPublisher {
             sanitizePayload(payload),
             itemIndex,
             iteration,
+            now()
+        );
+        publish(event);
+    }
+
+    /**
+     * Emit the run's fresh accumulated cost after an agent execution settled.
+     * All figures in credits (1 credit = $0.001); {@code budgetCredits} is null
+     * when the workflow has no budget.
+     */
+    public void emitRunCost(String runId,
+                            int epoch,
+                            java.math.BigDecimal epochCostCredits,
+                            java.math.BigDecimal totalCostCredits,
+                            java.math.BigDecimal budgetCredits) {
+        RunCostEvent event = new RunCostEvent(
+            runId,
+            epoch,
+            epochCostCredits,
+            totalCostCredits,
+            budgetCredits,
+            now()
+        );
+        publish(event);
+    }
+
+    /**
+     * Emit the "budget reached, new epoch refused" notice so a live viewer gets
+     * an explanatory toast. Figures in credits.
+     */
+    public void emitRunBudgetBlocked(String runId,
+                                     java.math.BigDecimal spentCredits,
+                                     java.math.BigDecimal budgetCredits) {
+        RunBudgetBlockedEvent event = new RunBudgetBlockedEvent(
+            runId,
+            spentCredits,
+            budgetCredits,
             now()
         );
         publish(event);

@@ -33,6 +33,8 @@ public class InterfaceDto {
     private Instant createdAt;
     private Instant updatedAt;
     private String interfaceType;
+    /** Display/capture format (preset name or "WIDTHxHEIGHT"). Null = full page at 1280x800. */
+    private String format;
     private Map<String, Object> data;
     private String agentId;
     private String messageId;
@@ -97,6 +99,9 @@ public class InterfaceDto {
 
     public String getInterfaceType() { return interfaceType; }
     public void setInterfaceType(String interfaceType) { this.interfaceType = interfaceType; }
+
+    public String getFormat() { return format; }
+    public void setFormat(String format) { this.format = format; }
 
     public Map<String, Object> getData() { return data; }
     public void setData(Map<String, Object> data) { this.data = data; }

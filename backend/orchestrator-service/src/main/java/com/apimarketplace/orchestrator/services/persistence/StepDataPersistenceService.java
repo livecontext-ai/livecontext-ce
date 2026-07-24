@@ -90,19 +90,21 @@ public class StepDataPersistenceService {
     public StepPersistenceResult recordStep(WorkflowExecution execution, String stepId, String stepAliasOrId,
                               String graphNodeId, StepExecutionResult result, int explicitEpoch, String triggerId) {
         UUID workflowRunId = entityResolverService.resolveWorkflowRunId(execution).orElse(null);
-        if (workflowRunId == null) return StepPersistenceResult.notPersisted();
+        if (workflowRunId == null) return StepPersistenceResult.error();
 
         String runId = execution.getRunId();
         int currentEpoch = (explicitEpoch > 0) ? explicitEpoch : entityResolverService.getCurrentEpochFromRun(workflowRunId);
         int currentSpawn = entityResolverService.getCurrentSpawnFromRun(workflowRunId);
 
-        WorkflowStepDataEntity entity;
+        BuiltStep built;
         try {
-            entity = buildStepEntity(execution, workflowRunId, stepId, stepAliasOrId, graphNodeId, result, currentEpoch, currentSpawn, triggerId);
+            built = buildStepEntityWithOutcome(execution, workflowRunId, stepId, stepAliasOrId, graphNodeId, result, currentEpoch, currentSpawn, triggerId);
         } catch (Exception e) {
             logger.warn("Unable to build step entity for step {} (run {}): {}", stepId, runId, e.getMessage(), e);
-            return StepPersistenceResult.notPersisted();
+            return StepPersistenceResult.error();
         }
+        WorkflowStepDataEntity entity = built.entity();
+        StepPayloadResult payloadOutcome = built.payloadOutcome();
 
         // Defense-in-depth (F24/F25): never silently drop a step because the node forgot to put
         // 'item_index' in its output map. Default to 0 and surface a warn so the node author
@@ -116,41 +118,52 @@ public class StepDataPersistenceService {
         }
 
         try {
-            UUID storageId = entity.getOutputStorageId();
-            if (storageId == null) {
-                storageId = stepPayloadService.persistStepPayload(execution, stepId, stepAliasOrId, result, Collections.emptyMap(), currentEpoch);
-                entity.setOutputStorageId(storageId);
-            }
-            // F2 - silent-null guard: if the payload write failed (S3 quota, MinIO
-            // outage, JSON-serialize error), StepPayloadService returns null but
-            // returns null silently. Without this stamp the row would land with
-            // status=COMPLETED + outputStorageId=NULL → downstream templates
-            // resolve to empty input → false-success cascade. Surface the failure
-            // on the row's error_message so the user sees it in the UI without
-            // changing the step's COMPLETED/FAILED status semantics. Existing
-            // error_message (real step failure) is preserved by appending.
-            if (storageId == null) {
-                String marker = "[storage] Payload persist failed - output blob unavailable. See logs for cause.";
-                String existing = entity.getErrorMessage();
-                String combined = existing == null || existing.isBlank()
-                        ? marker
-                        : existing + " | " + marker;
-                // Defense-in-depth: a pathological pre-existing 16K-capped message
-                // plus the marker could exceed the column cap on concat. Route
-                // through the shared truncate utility - hot path is identity.
-                entity.setErrorMessage(com.apimarketplace.orchestrator.domain.workflow.ErrorMessageLimits.truncate(combined));
-                logger.error("Storage payload missing on step row - stamping error_message: runId={} stepId={} status={}",
-                        runId, stepId, entity.getStatus());
+            // Row truth (tier 1 of the payload-loss contract): a step whose
+            // output is not durable is NOT COMPLETED. The payload write already
+            // ran its ONE deliberate bounded retry inside StepPayloadService
+            // (the old accidental second attempt here was folded into it).
+            // When the payload is finally lost for a SUCCESS result, the row
+            // lands as FAILED with an error_message naming the actual cause -
+            // downstream durable readers (state reconstruction, run context,
+            // split item resolution) then see an honest failure instead of a
+            // COMPLETED step with a vanished output blob. Failed/skipped
+            // results keep their status; the marker is appended so the loss of
+            // the diagnostic blob is still visible.
+            boolean payloadLost = payloadOutcome != null && !payloadOutcome.stored();
+            PayloadFailureCause lossCause = payloadLost ? payloadOutcome.cause() : null;
+            if (payloadLost) {
+                String marker = "[storage] Output payload lost: " + lossCause.userMessage();
+                boolean successResult = result != null && result.isSuccess();
+                if (successResult) {
+                    entity.setStatus(com.apimarketplace.orchestrator.domain.execution.NodeStatus.FAILED.name());
+                    entity.setErrorMessage(
+                        com.apimarketplace.orchestrator.domain.workflow.ErrorMessageLimits.truncate(marker));
+                } else {
+                    String existing = entity.getErrorMessage();
+                    String combined = existing == null || existing.isBlank()
+                            ? marker
+                            : existing + " | " + marker;
+                    // Defense-in-depth: a pathological pre-existing 16K-capped message
+                    // plus the marker could exceed the column cap on concat. Route
+                    // through the shared truncate utility - hot path is identity.
+                    entity.setErrorMessage(
+                        com.apimarketplace.orchestrator.domain.workflow.ErrorMessageLimits.truncate(combined));
+                }
+                logger.error("Storage payload lost on step row - status={} cause={} runId={} stepId={}",
+                        entity.getStatus(), lossCause, runId, stepId);
             }
             boolean inserted = nativeRepository.insertIgnoringDuplicate(entity);
             if (!inserted) {
                 logger.debug("Duplicate step detected, skipping: step={} run={}", stepId, runId);
-                return StepPersistenceResult.notPersisted();
+                return StepPersistenceResult.duplicate();
             }
-            return StepPersistenceResult.success(storageId);
+            if (payloadLost) {
+                return StepPersistenceResult.payloadLost(lossCause);
+            }
+            return StepPersistenceResult.success(entity.getOutputStorageId());
         } catch (Exception e) {
             logger.error("Exception saving step {} for run {}: {}", stepId, runId, e.getMessage(), e);
-            return StepPersistenceResult.notPersisted();
+            return StepPersistenceResult.error();
         }
     }
 
@@ -191,6 +204,27 @@ public class StepDataPersistenceService {
                                                    String stepId, String stepAliasOrId, String graphNodeId,
                                                    StepExecutionResult result, int currentEpoch, int currentSpawn,
                                                    String triggerId) {
+        return buildStepEntityWithOutcome(execution, workflowRunId, stepId, stepAliasOrId, graphNodeId,
+                result, currentEpoch, currentSpawn, triggerId).entity();
+    }
+
+    /**
+     * A built step entity together with the DISCRIMINATED payload-storage
+     * outcome that produced its {@code outputStorageId}. {@code recordStep}
+     * consumes the outcome to apply row truth (flip a SUCCESS row to FAILED
+     * when the payload was lost, error_message naming the cause).
+     */
+    record BuiltStep(WorkflowStepDataEntity entity, StepPayloadResult payloadOutcome) {}
+
+    /**
+     * Entity-building core shared by {@link #buildStepEntity} (back-compat,
+     * entity only) and {@code recordStep} (which also needs the payload
+     * outcome for the row-truth stamp).
+     */
+    BuiltStep buildStepEntityWithOutcome(WorkflowExecution execution, UUID workflowRunId,
+                                                   String stepId, String stepAliasOrId, String graphNodeId,
+                                                   StepExecutionResult result, int currentEpoch, int currentSpawn,
+                                                   String triggerId) {
         String lookupKey = stepAliasOrId != null ? stepAliasOrId : (result.stepId() != null ? result.stepId() : stepId);
         Optional<Step> stepOpt = execution.getPlan().findStep(lookupKey);
         String stepLabel = stepOpt.map(Step::label).orElse(LabelNormalizer.extractLabelFromKey(lookupKey));
@@ -199,7 +233,16 @@ public class StepDataPersistenceService {
         Map<String, Object> inputData = extractInputData(result);
         Map<String, Object> metadata = metadataBuilder.buildMetadata(execution, stepId, graphNodeId, result, workflowRunId);
 
-        UUID storageId = stepPayloadService.persistStepPayload(execution, stepId, stepAliasOrId, result, metadata, currentEpoch, currentSpawn);
+        StepPayloadResult payloadOutcome = stepPayloadService.persistStepPayloadOutcome(
+                execution, stepId, stepAliasOrId, result, metadata, currentEpoch, currentSpawn);
+        if (payloadOutcome == null) {
+            // Defensive: the real service never returns null. A null here (test
+            // double, future regression) must NOT resurrect the silent
+            // success-with-null-storageId semantics this fix removed.
+            logger.warn("persistStepPayloadOutcome returned null for step {} - treating as payload loss", stepId);
+            payloadOutcome = StepPayloadResult.failed(PayloadFailureCause.TRANSIENT_EXHAUSTED);
+        }
+        UUID storageId = payloadOutcome.storageId();
 
         Instant endTime = Instant.now();
         Instant startTime = result.executionTime() > 0 ? endTime.minusMillis(result.executionTime()) : endTime;
@@ -240,7 +283,7 @@ public class StepDataPersistenceService {
                 : "trigger:default");
         }
 
-        return entity;
+        return new BuiltStep(entity, payloadOutcome);
     }
 
     /**

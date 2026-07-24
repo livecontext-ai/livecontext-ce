@@ -513,7 +513,28 @@ public class AgentAsyncCompletionService {
             //     (enrichAgentFields, selectedBranch derivation, everything) - no
             //     parallel logic.
             StepExecutionResult stepResult = buildStepResult(execution, pending, result);
-            persistStepResult(execution, pending, stepResult);
+            com.apimarketplace.orchestrator.services.completion.StepCompletionResult completion =
+                persistStepResult(execution, pending, stepResult);
+
+            // Payload-lost rewrite (tier 2, traversal truth): the orchestrator
+            // flipped this success to FAILED because the output blob could not
+            // be stored (row + snapshot + WS event already reflect FAILED).
+            // Rewrite the local stepResult and treat the delivery as a failure
+            // for every traversal decision below (loop back-edge advance is
+            // success-only; the skip cascade fires like any async failure).
+            boolean payloadLost = completion != null && completion.payloadLost();
+            if (payloadLost && stepResult.isSuccess()) {
+                logger.error("[AgentAsyncCompletion] Output payload lost - treating async agent result as FAILED: runId={}, nodeId={}, message={}",
+                    runId, nodeId, completion.payloadLostMessage());
+                stepResult = new StepExecutionResult(
+                    stepResult.stepId(),
+                    com.apimarketplace.orchestrator.domain.execution.NodeStatus.FAILED,
+                    completion.payloadLostMessage(),
+                    stepResult.output(),
+                    stepResult.executionTime(),
+                    null);
+            }
+            boolean effectiveSuccess = result.success() && !payloadLost;
 
             // 3b. Decrement the running count in RunningNodeTracker under the
             // per-epoch Redis key (P2.3.1). The async path bypasses
@@ -564,7 +585,7 @@ public class AgentAsyncCompletionService {
             //     a loop body drops the iterate edge and the loop runs the body exactly once instead
             //     of N times. Success only (a failed agent goes through the cascade below); delegated
             //     to SignalResumeService so the back-edge + snapshot-reset logic stays single-sourced.
-            if (result.success() && signalResumeService != null) {
+            if (effectiveSuccess && signalResumeService != null) {
                 signalResumeService.advanceLoopBackEdgeForAsyncCompletedNode(
                     runId, pending.itemId(), pending.nodeId(), pending.itemIndex(),
                     pending.epoch(), pending.dagTriggerId(), nodeResult);
@@ -596,7 +617,7 @@ public class AgentAsyncCompletionService {
             // try/catch at line ~370 would re-register the pending agent for retry, which
             // is the wrong recovery for a cascade-only failure (FAILED row already exists,
             // re-delivery would just retry the cascade).
-            if (!result.success() && skipPropagationService != null) {
+            if (!effectiveSuccess && skipPropagationService != null) {
                 try {
                     ExecutionNode failedNode = lookupNode(runId, pending.nodeId());
                     if (failedNode != null) {
@@ -647,7 +668,8 @@ public class AgentAsyncCompletionService {
         }
     }
 
-    private void persistStepResult(WorkflowExecution execution, PendingAgent pending, StepExecutionResult stepResult) {
+    private com.apimarketplace.orchestrator.services.completion.StepCompletionResult persistStepResult(
+            WorkflowExecution execution, PendingAgent pending, StepExecutionResult stepResult) {
         // Phase 2.E (2026-04-29): for split-async items, suppress the global EpochState
         // mark so the first per-item failure doesn't poison failedNodeIds for the whole
         // node. The aggregate global status is written ONCE at barrier seal via
@@ -667,7 +689,9 @@ public class AgentAsyncCompletionService {
                 null,
                 pending.epoch(),
                 suppressGlobal);
-        stepCompletionOrchestrator.complete(ctx, pending.dagTriggerId());
+        // Return the completion result: it carries the payload-lost rewrite
+        // (tier 2) that deliverUnderLock must honor for its traversal decision.
+        return stepCompletionOrchestrator.complete(ctx, pending.dagTriggerId());
     }
 
     /**
@@ -1183,10 +1207,16 @@ public class AgentAsyncCompletionService {
         Map<String, Object> output = stepResult.output() != null
             ? new HashMap<>(stepResult.output())
             : new HashMap<>();
-        NodeStatus status = result.success() ? NodeStatus.COMPLETED : NodeStatus.FAILED;
-        Optional<String> errorMessage = result.success()
+        // Success requires BOTH the worker's verdict AND a non-failed stepResult:
+        // the payload-lost rewrite (deliverUnderLock) flips stepResult to FAILED
+        // when the output blob could not be stored, and the downstream events /
+        // split barrier must observe the same failure the row recorded.
+        boolean success = result.success() && !stepResult.isFailure();
+        NodeStatus status = success ? NodeStatus.COMPLETED : NodeStatus.FAILED;
+        Optional<String> errorMessage = success
             ? Optional.empty()
-            : Optional.ofNullable(result.errorMessage()).or(() -> Optional.of("Async agent execution failed"));
+            : Optional.ofNullable(result.success() ? stepResult.message() : result.errorMessage())
+                .or(() -> Optional.of("Async agent execution failed"));
         return new NodeExecutionResult(
             pending.nodeId(),
             status,

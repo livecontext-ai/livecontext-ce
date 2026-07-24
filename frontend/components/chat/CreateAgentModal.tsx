@@ -167,6 +167,22 @@ interface AgentData {
     interfaces?: string[];
     agents?: string[];
     webSearch?: boolean;
+    // Access axes the modal already reads (getGrant / the restore effects) but
+    // did not declare, which forced every caller to cast through `any` and hid
+    // the fact that a template's mode and access modes were being dropped.
+    workflowsGrant?: string;
+    tablesGrant?: string;
+    interfacesGrant?: string;
+    agentsGrant?: string;
+    applicationsGrant?: string;
+    // Narrowed to the union the state actually holds, so a restore assigns
+    // without a cast and an invalid value is caught at the call site.
+    workflowAccessMode?: 'read' | 'write';
+    tableAccessMode?: 'read' | 'write';
+    interfaceAccessMode?: 'read' | 'write';
+    agentAccessMode?: 'read' | 'write';
+    applicationAccessMode?: 'read' | 'write';
+    skillAccessMode?: 'read' | 'write';
   } | null;
 }
 
@@ -1003,6 +1019,39 @@ export const CreateAgentModal: React.FC<CreateAgentModalProps> = ({
         setWebSearchEnabled(false);
       }
     }
+  }, [isEditMode, agent?.toolsConfig]);
+
+  // Apply a TEMPLATE prefill (an `agent` prop with a toolsConfig but no id).
+  //
+  // The two restore effects around this one are gated on `isEditMode`, so a
+  // prefill's `mode` and `*AccessMode` were silently dropped and fell back to
+  // the create defaults ('all' tools, 'write' access) - the exact opposite of
+  // what a locked-down template declares. Per-family GRANTS were never affected
+  // (their useState initializers call getGrant unconditionally), so only these
+  // two axes need handling here.
+  //
+  // Kept as its own effect rather than widening the gates: every existing edit
+  // path stays byte-identical, and this one cannot fire for the other callers
+  // (they pass either a real agent, which has an id, or no agent at all).
+  useEffect(() => {
+    // No cast: AgentData now declares the grant / access-mode keys this reads.
+    const tc = agent?.toolsConfig;
+    if (isEditMode || !tc || typeof tc !== 'object') return;
+
+    if (tc.mode === 'none' || tc.mode === 'custom' || tc.mode === 'off' || tc.mode === 'all') {
+      setToolsMode(tc.mode);
+    }
+    // webSearch defaults to TRUE in create mode, so a template that says "no
+    // tools" ships an agent that can still search the web unless this is read.
+    if (tc.webSearch === false) setWebSearchEnabled(false);
+    if (tc.tableAccessMode) setTableAccessMode(tc.tableAccessMode);
+    if (tc.workflowAccessMode) setWorkflowAccessMode(tc.workflowAccessMode);
+    if (tc.interfaceAccessMode) setInterfaceAccessMode(tc.interfaceAccessMode);
+    if (tc.agentAccessMode) setAgentAccessMode(tc.agentAccessMode);
+    if (tc.applicationAccessMode) setApplicationAccessMode(tc.applicationAccessMode);
+    // Kept at parity with the edit effect below: omitting one is how a declared
+    // restriction gets silently dropped, which is the bug this effect fixes.
+    if (tc.skillAccessMode) setSkillAccessMode(tc.skillAccessMode);
   }, [isEditMode, agent?.toolsConfig]);
 
   // Restore access modes on edit

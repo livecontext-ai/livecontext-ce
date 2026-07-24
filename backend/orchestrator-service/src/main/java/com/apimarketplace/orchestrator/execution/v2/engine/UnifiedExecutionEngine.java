@@ -497,7 +497,21 @@ public class UnifiedExecutionEngine {
         // Null-safe for split-internal traversals where eventService may be null
         if (!ExecutionMetadataKeys.isSplitAlreadyPersisted(result.metadata())) {
             if (eventService != null) {
-                eventService.emitNodeComplete(execution, node, result, item, itemIndex, updatedContext);
+                var completion = eventService.emitNodeComplete(execution, node, result, item, itemIndex, updatedContext);
+                // Payload-lost rewrite (tier 2, traversal truth): persistence
+                // flipped this SUCCESS to FAILED because its output blob could
+                // not be stored (row + snapshot + WS event + billing already
+                // reflect FAILED). Rewrite the in-memory result so the caller
+                // (traverseTree) takes the FAILURE branch: no success-path
+                // successors, and shouldCascadeSkipFromResult drives the
+                // SKIPPED cascade via V2SkipPropagationService - a step whose
+                // output is not durable is NOT COMPLETED.
+                if (completion != null && completion.payloadLost() && result.isSuccess()) {
+                    logger.error("💥 Output payload lost - treating node as FAILED for traversal: nodeId={}, runId={}, message={}",
+                        nodeId, runId, completion.payloadLostMessage());
+                    result = NodeExecutionResult.failure(nodeId, completion.payloadLostMessage(), result.durationMs());
+                    updatedContext = contextWithStart.withResult(nodeId, result);
+                }
             }
         } else {
             logger.debug("⏭️  Skipping emitNodeComplete (split already persisted): nodeId={}", nodeId);
@@ -1193,7 +1207,18 @@ public class UnifiedExecutionEngine {
 
         // Emit node complete event (skip if split already persisted each item)
         if (!ExecutionMetadataKeys.isSplitAlreadyPersisted(result.metadata())) {
-            eventService.emitNodeComplete(execution, node, result, item, itemIndex, updatedContext);
+            var completion = eventService.emitNodeComplete(execution, node, result, item, itemIndex, updatedContext);
+            // Payload-lost rewrite (tier 2, traversal truth) - same contract as
+            // executeNodeCore: the row/snapshot already say FAILED, so the
+            // step-by-step path must decide successors/readyNodes and run the
+            // skip cascade below from the SAME failure, not the node's
+            // original success.
+            if (completion != null && completion.payloadLost() && result.isSuccess()) {
+                logger.error("💥 [V2StepByStep] Output payload lost - treating node as FAILED for traversal: nodeId={}, runId={}, message={}",
+                    nodeId, runId, completion.payloadLostMessage());
+                result = NodeExecutionResult.failure(nodeId, completion.payloadLostMessage(), result.durationMs());
+                updatedContext = contextWithStart.withResult(nodeId, result);
+            }
         } else {
             logger.debug("[V2StepByStep] Skipping emitNodeComplete (split already persisted): nodeId={}", nodeId);
         }

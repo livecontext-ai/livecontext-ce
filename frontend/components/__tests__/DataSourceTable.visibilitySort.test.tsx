@@ -46,6 +46,8 @@ vi.mock('@/hooks/useSelectableItems', () => ({
 vi.mock('@/components/ui/dialog', () => ({
   Dialog: ({ children }: any) => children, DialogContent: ({ children }: any) => children,
   DialogHeader: ({ children }: any) => children, DialogTitle: ({ children }: any) => children,
+  // Used by the templates modal in the page header.
+  DialogDescription: ({ children }: any) => children,
 }));
 vi.mock('@/components/ui/select', async () => {
   const ReactLib = await vi.importActual<typeof import('react')>('react');

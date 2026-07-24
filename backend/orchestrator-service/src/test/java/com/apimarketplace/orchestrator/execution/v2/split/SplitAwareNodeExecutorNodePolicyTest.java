@@ -280,6 +280,54 @@ class SplitAwareNodeExecutorNodePolicyTest {
     }
 
     // =====================================================================
+    // Payload-lost rewrite (tier 2) - per-item traversal truth
+    // =====================================================================
+
+    @Test
+    @DisplayName("Payload-lost item: a SUCCESS item whose completion reports payloadLost does NOT traverse its successor and the summary records the failure")
+    void payloadLostItemTreatedAsFailedForTraversalAndSummary() {
+        stubSplitOfThreeItems();
+        lenient().when(context.plan()).thenReturn(null);
+
+        TestNode successor = new TestNode("mcp:after", NodeType.MCP);
+        TestNode node = new TestNode(NODE_ID, NodeType.MCP);
+        node.setPredecessors(List.of(SPLIT_KEY));
+        node.addSuccessor(successor);
+        node.setDynamicResult(ctx -> NodeExecutionResult.success(NODE_ID, Map.of("item", currentIndexOf(ctx))));
+        nodeMap.put(NODE_ID, node);
+
+        String lossMessage = "[storage] Output payload lost: storage write failed after retries";
+        // Item 1's completion reports payloadLost (row flipped to FAILED - tier 1);
+        // items 0 and 2 persist normally.
+        when(nodeCompletionService.emitNodeComplete(eq(execution), eq(node), any(), any(), anyInt(), any()))
+            .thenAnswer(inv -> {
+                int subItemIndex = inv.getArgument(4);
+                return subItemIndex == 1
+                    ? com.apimarketplace.orchestrator.services.completion.StepCompletionResult
+                        .persistedPayloadLost(Map.of(), Map.of(), lossMessage)
+                    : com.apimarketplace.orchestrator.services.completion.StepCompletionResult
+                        .persisted(Map.of(), Map.of());
+            });
+
+        List<Integer> traversedItems = new CopyOnWriteArrayList<>();
+        SplitAwareNodeExecutor.SuccessorTraverser traverser = (succ, ctx, subItemIndex) -> {
+            traversedItems.add(subItemIndex);
+            return ctx;
+        };
+
+        NodeExecutionResult result = executor.execute(node, context, RUN_ID, nodeMap,
+            execution, new TriggerItem("item-1", 0, Map.of()), 0, traverser);
+
+        // Traversal truth: item 1's success path must NOT run - its output blob is gone.
+        assertThat(traversedItems).containsExactlyInAnyOrder(0, 2);
+        // Summary truth: the loss is a per-item failure, named by cause.
+        assertThat(result.output()).containsEntry(ExecutionMetadataKeys.SPLIT_PARTIAL_FAILURE, true);
+        @SuppressWarnings("unchecked")
+        List<String> errors = (List<String>) result.output().get(ExecutionMetadataKeys.SPLIT_ERRORS);
+        assertThat(errors).anySatisfy(e -> assertThat(e).contains("Output payload lost"));
+    }
+
+    // =====================================================================
     // Test node (mirrors SplitAwareNodeExecutorTest.TestNode)
     // =====================================================================
 

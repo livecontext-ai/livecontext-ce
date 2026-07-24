@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import clsx from 'clsx';
-import { Handle, NodeProps, Position } from 'reactflow';
+import { Handle, NodeProps, Position, useReactFlow, useStore, useStoreApi } from 'reactflow';
 import { Eye, EyeOff, AppWindow } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { ResizableNodeWrapper } from './ResizableNodeWrapper';
@@ -16,6 +16,14 @@ import { useWorkflowMode } from '@/contexts/WorkflowModeContext';
 import { useRun } from '@/contexts/WorkflowRunContext';
 import { useInterfaceRender, useInterfaceById } from '../../hooks/useInterfaces';
 import { InterfaceThumbnail } from '../interface/InterfaceThumbnail';
+import { DEFAULT_FORMAT_VIEWPORT, resolveInterfaceFormat } from '@/lib/interfaces/interfaceFormats';
+import {
+  MIN_NODE_WIDTH,
+  MAX_NODE_WIDTH,
+  MIN_NODE_HEIGHT,
+  MAX_NODE_HEIGHT,
+  snapBoxToFormat,
+} from '../../utils/interfaceNodeBox';
 import type { RenderMode } from '../../utils/interfaceHtmlUtils';
 import { translateWithMapping, mergeTriggerDataIntoResolved } from '../../utils/interfaceHtmlUtils';
 import LoadingSpinner from '@/components/LoadingSpinner';
@@ -24,11 +32,28 @@ import { useNodeExecutionStatus } from '../../contexts/StepByStepContext';
 import { NodePlayButton, deriveNodeStatus } from '../NodePlayButton';
 import { NodeBottomBar } from './NodeBottomBar';
 
+import { useWorkflowLayoutDirectionSafe } from '@/contexts/WorkflowLayoutDirectionContext';
+import { getSourceHandleGeometry, getTargetHandleGeometry, getSideAttachment } from './handleGeometry';
 interface InterfacePreviewNodeProps extends NodeProps<BuilderNodeData> {
   onOpenFullscreen?: () => void;
 }
 
+/**
+ * Run-mode snap verified-retry tuning: after dispatching the box write, wait this
+ * long, check the ReactFlow store actually holds the snapped box, and re-arm the
+ * effect if the dispatch was silently lost (see the effect for the two loss modes).
+ * Bounded: a box that never lands stops retrying after MAX attempts.
+ */
+const RUN_SNAP_VERIFY_DELAY_MS = 250;
+const MAX_RUN_SNAP_ATTEMPTS = 5;
+
 export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNodeProps) {
+  // Handle sides follow the canvas reading direction. Safe variant: nodes also
+  // render on provider-less surfaces (marketplace preview, snapshots).
+  const { direction: layoutDirection } = useWorkflowLayoutDirectionSafe();
+  const targetHandle = getTargetHandleGeometry(layoutDirection);
+  const sourceHandle = getSourceHandleGeometry(layoutDirection);
+
   const t = useTranslations('workflowBuilder.nodes');
   // "Item X / Y" semantic label for the spawn-item pager (run-mode context).
   const tRun = useTranslations('runMode');
@@ -158,6 +183,16 @@ export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNod
     viewingEpoch ?? undefined
   );
 
+  // The INTERFACE's display format -> thumbnail virtual viewport, so the canvas node has the
+  // same shape as the capture. The render result wins over the entity: a run reads its frozen
+  // snapshot, and in public preview the entity fetch is disabled entirely (useInterfaceById is
+  // gated off there), so the render is the only source. undefined keeps the thumbnail's classic
+  // 1280x800 default (no declared format, or nothing loaded yet).
+  const formatViewport = React.useMemo(
+    () => resolveInterfaceFormat(renderData?.format ?? interfaceDetails?.format) ?? undefined,
+    [renderData?.format, interfaceDetails?.format]
+  );
+
   // Debounced refetch when execution state changes.
   // Uses executionTotal (monotonically increasing sum of all per-node statusCounts)
   // instead of resolvedStepCount (Set-based, unreliable across epoch resets).
@@ -245,11 +280,127 @@ export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNod
     ? (data as any).isPreviewMode === true
     : (interfaceData?.showPreview !== false || isRunMode);
 
+  // Snap the node box to the interface's declared format so the node IS the format:
+  // the content fills it edge-to-edge (no internal letterbox) and the ring, when shown,
+  // hugs the real shape. This effect PERSISTS the box (interfaceData.previewWidth/
+  // Height, which useGraphOperations mirrors into the node's style), so it stays
+  // edit-only: a write in run mode would dirty a workflow the user is only watching.
+  // Run mode gets the same shape from the local-only effect below.
+  const effectiveViewport = formatViewport ?? DEFAULT_FORMAT_VIEWPORT;
+  React.useEffect(() => {
+    if (isRunMode || !isPreviewMode || !data.onNodeUpdate || isLoadingInterface) return;
+    // Yield to the template-load effect: both spread the same (stale) `data`, so a snap
+    // update fired in the same commit would wholesale-replace the update that just wrote
+    // editorExpression. Wait until the template state is settled, then snap.
+    const templateLoadPending =
+      !editorExpression && !!(interfaceDetails?.htmlTemplate || interfaceDetails?.editorExpression);
+    if (templateLoadPending) return;
+    const prevW = interfaceData.previewWidth as number | undefined;
+    const prevH = interfaceData.previewHeight as number | undefined;
+    const { width: w, height: h } = snapBoxToFormat(effectiveViewport, { width: prevW, height: prevH });
+    // 1px tolerance so resize rounding never fights the snap in a loop.
+    if (prevW != null && prevH != null && Math.abs(w - prevW) <= 1 && Math.abs(h - prevH) <= 1) return;
+    data.onNodeUpdate({ ...data, interfaceData: { ...interfaceData, previewWidth: w, previewHeight: h } });
+  }, [effectiveViewport, isRunMode, isPreviewMode, isLoadingInterface, editorExpression, interfaceDetails, interfaceData, data]);
+
+  // Same snap for RUN mode, applied to the live node box only - never persisted.
+  // The persisted box is written by the edit-mode effect above, so it is only ever
+  // right for a workflow that has been OPENED in the builder since its interface
+  // got its format. A run opened straight in run mode (agent-triggered via the MCP
+  // execute action, the runs list, a shared link) renders whatever the plan stored,
+  // and a plan that never went through edit mode carries the importer's historical
+  // 400x250 default: the vertical interface then sat letterboxed in the middle of a
+  // landscape card. Snapping here makes the node the format in EVERY entry point.
+  //
+  // The CURRENT box is read from the ReactFlow store, not from a setNodes callback
+  // argument, for two reasons: (1) it puts the "already the right shape?" check in
+  // the effect, so setNodes is dispatched ONLY on a real change - `setNodes` in a
+  // controlled flow emits a `reset` change for every node, which replaces the whole
+  // array, so an unconditional dispatch on every render would be a needless chance
+  // to clobber a status update queued in the same batch; (2) it makes the box part
+  // of the deps, so a wholesale rebuild of the nodes back to the stored 400x250
+  // (a workflow refetch while still in run mode) re-fires this and self-heals,
+  // instead of leaving the letterbox back for good.
+  const { setNodes } = useReactFlow();
+  // Serialized so the selector returns a primitive: an object would be a new
+  // identity on every store tick and re-run the effect forever.
+  const storeBox = useStore((s) => {
+    const style = s.nodeInternals.get(id)?.style;
+    const w = typeof style?.width === 'number' ? style.width : '';
+    const h = typeof style?.height === 'number' ? style.height : '';
+    return `${w}x${h}`;
+  });
+  const storeApi = useStoreApi();
+  // Re-arms the snap effect when a dispatched write is detected as LOST (see below).
+  const [snapRetryTick, setSnapRetryTick] = React.useState(0);
+  const snapAttemptsRef = React.useRef(0);
+  React.useEffect(() => {
+    // No declared format resolved (yet, or at all): keep the persisted box rather
+    // than reshape a legacy free-form node to the 1280x800 default behind the user.
+    // Leaving the armed state (exiting run mode, format unresolving) also clears the
+    // attempt counter, so re-entering run mode always starts with fresh retries.
+    if (!isRunMode || !isPreviewMode || !formatViewport) {
+      snapAttemptsRef.current = 0;
+      return;
+    }
+    const [rawW, rawH] = storeBox.split('x');
+    const prevW = rawW ? Number(rawW) : undefined;
+    const prevH = rawH ? Number(rawH) : undefined;
+    const { width, height } = snapBoxToFormat(formatViewport, { width: prevW, height: prevH });
+    // 1px tolerance, same as the edit-mode snap: resize rounding must not fight it.
+    // This is also what terminates the loop - the snapped box feeds back through
+    // storeBox, matches, and stops here.
+    if (prevW != null && prevH != null && Math.abs(width - prevW) <= 1 && Math.abs(height - prevH) <= 1) {
+      snapAttemptsRef.current = 0;
+      return;
+    }
+    setNodes((nodes) => nodes.map((n) => (n.id === id ? { ...n, style: { ...n.style, width, height } } : n)));
+    // VERIFIED RETRY - the dispatch above can be silently LOST while storeBox stays
+    // unchanged, in which case this effect never re-fires on its own and the node
+    // stays letterboxed in the importer's 400x250 for good (reproduced under CPU
+    // throttle, WF-AUTH-026). Two loss modes, both one-shot races on page load:
+    // (1) useReactFlow().setNodes on a CONTROLLED flow only EMITS `reset` changes
+    //     through the store's onNodesChange, which is not registered yet when this
+    //     effect fires during a mount commit (child effects run before ReactFlow's
+    //     own prop-to-store effects) - the emission is a silent no-op;
+    // (2) the reset lands in the parent state but a concurrent stale parent write
+    //     batched into the same render wipes it before ReactFlow syncs the store.
+    // So: verify the write actually landed and re-arm for another attempt if not.
+    // Bounded so a box that can genuinely never be written cannot retry forever;
+    // the attempt counter resets whenever the box is observed matching, keeping the
+    // pre-existing self-heal (a mid-run plan rebuild) on fresh retries.
+    if (snapAttemptsRef.current >= MAX_RUN_SNAP_ATTEMPTS) return;
+    snapAttemptsRef.current += 1;
+    const timer = window.setTimeout(() => {
+      const style = storeApi.getState().nodeInternals.get(id)?.style as React.CSSProperties | undefined;
+      const w = typeof style?.width === 'number' ? style.width : undefined;
+      const h = typeof style?.height === 'number' ? style.height : undefined;
+      const landed = w != null && h != null && Math.abs(width - w) <= 1 && Math.abs(height - h) <= 1;
+      if (!landed) setSnapRetryTick((t) => t + 1);
+    }, RUN_SNAP_VERIFY_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [isRunMode, isPreviewMode, formatViewport, id, storeBox, setNodes, storeApi, snapRetryTick]);
+
   // Get node visuals for compact view - always use 'interface' kind for interface nodes
   const visuals = getNodeVisual('interface');
 
   const borderColor = getStatusBorderColor(effectiveStatus, undefined, undefined, data.statusCounts);
   const isSkipped = !stepByStepStatus.isStepByStepMode && effectiveStatus === 'skipped';
+
+  // Ring policy for the format preview: no ring by default (the idle grey border is
+  // gone). A status color still rings the REAL format frame, and selection adds the
+  // accent ring inside it - both hug the interface's declared format, never a letterbox.
+  // INSET shadows are mandatory here: the frame sits inside overflow-hidden ancestors
+  // (the thumbnail's contain container, the content wrapper) that are the SAME size as
+  // the frame once the box is snapped, so an outward ring would be clipped invisible.
+  const statusRingColor = borderColor !== 'var(--border-color)' ? borderColor : null;
+  const frameRing = statusRingColor
+    ? selected
+      ? `inset 0 0 0 2px ${statusRingColor}, inset 0 0 0 4px var(--accent-primary)`
+      : `inset 0 0 0 2px ${statusRingColor}`
+    : selected
+      ? 'inset 0 0 0 2px var(--accent-primary)'
+      : undefined;
 
   // Application mode handler (dispatch event to parent)
   const handleOpenApplicationMode = React.useCallback((e: React.MouseEvent) => {
@@ -262,10 +413,11 @@ export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNod
     }));
   }, [interfaceId, interfaceData.actionMapping]);
 
-  // Determine if we're showing HTML content (not a placeholder state)
-  // In run mode: always transparent container (no border/bg), whether loading or showing content
-  // In edit mode: transparent when we have template and no error
-  const isShowingHtml = isRunMode || (htmlTemplate && !error);
+  // Determine if we're showing HTML content (not a placeholder state).
+  // Placeholder states (loading, error, no template) keep the bordered card in EVERY
+  // mode, so a run-mode spinner or error message never floats chrome-less on the canvas;
+  // only real content renders in the transparent, format-hugging frame.
+  const isShowingHtml = !!htmlTemplate && !error && !isLoading;
 
   // Check if node is running (for shimmer animation) - show shimmer in all modes
   const isNodeRunning = effectiveStatus === 'running';
@@ -340,7 +492,7 @@ export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNod
             hover={{ isVisible: showActions, onHover: show }}
             borderColor={borderColor}
             isRunning={isNodeRunning}
-            extraTopOffset={viewingEpoch != null && totalPages > 1}
+            extraOffset={viewingEpoch != null && totalPages > 1}
             buttons={[{
               key: 'interface',
               icon: <AppWindow className="h-3 w-3" strokeWidth={2} />,
@@ -360,8 +512,8 @@ export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNod
         {/* Pagination controls - below node (spawn items only, not epochs) */}
         {isRunMode && viewingEpoch != null && totalPages > 1 && (
           <div
-            className="absolute left-1/2 -translate-x-1/2 nodrag nopan"
-            style={{ top: 'calc(100% + 8px)' }}
+            className="absolute nodrag nopan"
+            style={getSideAttachment(layoutDirection, 8)}
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
@@ -377,12 +529,10 @@ export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNod
         {/* Target handle (left) */}
         <Handle
           type="target"
-          position={Position.Left}
+          position={targetHandle.position}
           className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
           style={{
-            left: -6,
-            top: '50%',
-            transform: 'translateY(-50%)',
+            ...targetHandle.style,
             backgroundColor: 'var(--border-color)',
           }}
         />
@@ -390,13 +540,11 @@ export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNod
         {/* Source handle (right) */}
         <Handle
           type="source"
-          position={Position.Right}
+          position={sourceHandle.position}
           id="source-right"
           className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
           style={{
-            right: -6,
-            top: '50%',
-            transform: 'translateY(-50%)',
+            ...sourceHandle.style,
             backgroundColor: 'var(--border-color)',
           }}
         />
@@ -409,18 +557,21 @@ export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNod
     <div
       ref={nodeRef}
       className={clsx(
-        'group relative rounded-[28px] border-2',
-        // Only show opaque background when NOT showing HTML content
-        !isShowingHtml && 'bg-white/95 dark:bg-gray-800/95 backdrop-blur',
+        'group relative',
+        // The showing-HTML node has NO permanent chrome: the interface frame carries the
+        // rounding and (when relevant) the status/selection ring. Placeholder states keep
+        // the classic bordered card so the node stays visible with nothing to render.
+        isShowingHtml
+          ? 'rounded-xl'
+          : 'rounded-[28px] border-2 bg-white/95 dark:bg-gray-800/95 backdrop-blur',
         'focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent-primary)] focus-visible:outline-offset-2',
         'transition-colors p-0',
         isSkipped && !selected && 'opacity-50 focus-visible:opacity-100',
         isSkipped && selected && 'opacity-100',
       )}
       style={{
-        borderColor,
-        borderStyle: 'solid',
-        boxShadow: selected ? '0 0 0 2px var(--accent-primary)' : 'none',
+        ...(isShowingHtml ? {} : { borderColor, borderStyle: 'solid' }),
+        boxShadow: !isShowingHtml && selected ? '0 0 0 2px var(--accent-primary)' : 'none',
         minWidth: '100px',
         minHeight: '80px',
         width: '100%',
@@ -432,8 +583,8 @@ export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNod
       {/* Content - fixed viewport scaled down via CSS transform */}
       <div
         className={clsx(
-          'w-full h-full overflow-hidden relative rounded-[26px]',
-          !isShowingHtml && 'border border-theme bg-[var(--bg-primary)]'
+          'w-full h-full relative',
+          !isShowingHtml && 'overflow-hidden rounded-[26px] border border-theme bg-[var(--bg-primary)]'
         )}
         style={{ pointerEvents: 'none' }}
       >
@@ -458,6 +609,12 @@ export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNod
               customCss={cssTemplate}
               jsTemplate={jsTemplate}
               fit="contain"
+              viewport={formatViewport}
+              // The frame is the interface's REAL format (vp * scale): round + clip the
+              // content there, and draw the status/selection ring on it so the ring hugs
+              // the true shape even when the node box does not match (legacy run data).
+              frameClassName="rounded-xl overflow-hidden"
+              frameStyle={frameRing ? { boxShadow: frameRing } : undefined}
               // Forward bridge inputs in run mode so prefillForms() populates
               // form fields with the trigger's previous values. The overlay
               // div below intercepts pointer events so the bridge's submit/
@@ -475,7 +632,7 @@ export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNod
       {/* Shimmer effect when running */}
       {isNodeRunning && (
         <div
-          className="absolute inset-0 pointer-events-none rounded-[26px]"
+          className="absolute inset-0 pointer-events-none rounded-xl"
           style={{
             background: 'linear-gradient(90deg, transparent 0%, rgba(59, 130, 246, 0.15) 50%, transparent 100%)',
             backgroundSize: '200% 100%',
@@ -487,8 +644,8 @@ export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNod
       {/* Pagination controls - below node (spawn items only, not epochs) */}
       {isRunMode && viewingEpoch != null && totalPages > 1 && (
         <div
-          className="absolute left-1/2 -translate-x-1/2 nodrag nopan z-20"
-          style={{ top: 'calc(100% + 8px)' }}
+          className="absolute nodrag nopan z-20"
+          style={getSideAttachment(layoutDirection, 8)}
           onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}
         >
@@ -555,13 +712,16 @@ export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNod
         />
       )}
 
-      {/* NodeResizer - 4 sides + 4 corners, visible on hover/selection */}
+      {/* NodeResizer - 4 sides + 4 corners, visible on hover/selection.
+          keepAspectRatio: the box was snapped to the interface's declared format, so a
+          resize preserves that exact shape (the ratio is the current box's ratio). */}
       <ResizableNodeWrapper
         enabled={true}
-        minWidth={100}
-        maxWidth={800}
-        minHeight={80}
-        maxHeight={500}
+        minWidth={MIN_NODE_WIDTH}
+        maxWidth={MAX_NODE_WIDTH}
+        minHeight={MIN_NODE_HEIGHT}
+        maxHeight={MAX_NODE_HEIGHT}
+        keepAspectRatio
         onResizeEnd={(w, h) => {
           data.onNodeUpdate?.({
             ...data,
@@ -573,12 +733,10 @@ export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNod
       {/* Target handle (left) */}
       <Handle
         type="target"
-        position={Position.Left}
+        position={targetHandle.position}
         className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
         style={{
-          left: -6,
-          top: '50%',
-          transform: 'translateY(-50%)',
+          ...targetHandle.style,
           backgroundColor: 'var(--border-color)',
           opacity: isRunMode ? 0 : 1,
           pointerEvents: isRunMode ? 'none' : 'auto'
@@ -588,13 +746,11 @@ export function InterfacePreviewNode({ data, selected, id }: InterfacePreviewNod
       {/* Source handle (right) */}
       <Handle
         type="source"
-        position={Position.Right}
+        position={sourceHandle.position}
         id="source-right"
         className="!h-3 !w-3 !rounded-full !border-2 !border-[var(--bg-primary)] nodrag nopan"
         style={{
-          right: -6,
-          top: '50%',
-          transform: 'translateY(-50%)',
+          ...sourceHandle.style,
           backgroundColor: 'var(--border-color)',
           opacity: isRunMode ? 0 : 1,
           pointerEvents: isRunMode ? 'none' : 'auto'

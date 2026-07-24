@@ -1284,6 +1284,8 @@ public final class WorkflowPlanParser {
                 // smooth when it is null/blank/unknown.
                 String videoMode = data.get("videoMode") instanceof String s3 && !s3.isBlank() ? s3 : null;
                 Integer videoFps = data.get("videoFps") instanceof Number n2 ? n2.intValue() : null;
+                // A legacy `format` key on the node is ignored: the display format belongs to
+                // the interface entity, and the render path reads it from there.
 
                 return new InterfaceDef(id, label, actionMapping, variableMapping, showPreview, position,
                     isEntryInterface, generateScreenshot, exposeRenderedSource, generatePdf, pdfFormat, pdfLandscape,

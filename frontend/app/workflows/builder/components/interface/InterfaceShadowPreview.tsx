@@ -4,7 +4,7 @@ import * as React from 'react';
 import { InterfaceIframe } from './InterfaceIframe';
 import type { ContentSize } from './InterfaceIframe';
 import type { RenderMode } from '../../utils/interfaceHtmlUtils';
-import { SAFE_CENTERING_CSS } from '../../utils/safeCenteringCss';
+import { centeringCssFor } from '../../utils/safeCenteringCss';
 
 export interface InterfaceShadowPreviewProps {
   /** HTML template with {{variable}} syntax */
@@ -84,10 +84,12 @@ export const InterfaceShadowPreview = React.memo(function InterfaceShadowPreview
   // Compatibility: .shadow-root CSS was used with Shadow DOM, map to body for iframe
   const adjustedCss = customCss?.replace(/\.shadow-root\b/g, 'body');
 
-  // Prepend safe-centering CSS so small interfaces stay centered while tall ones
-  // (marketplace dashboards, full app pages) remain scrollable from their top.
-  // Publisher rules come AFTER and can still override anything they redeclare.
-  const finalCss = SAFE_CENTERING_CSS + (adjustedCss ?? '');
+  // Prepend safe-centering CSS so small FRAGMENT interfaces stay centered while
+  // tall ones (marketplace dashboards, full app pages) remain scrollable from
+  // their top. Publisher rules come AFTER and can still override anything they
+  // redeclare. A COMPLETE document gets nothing: its author owns the body
+  // layout, and the screenshot/video renderer injects nothing either.
+  const finalCss = centeringCssFor(htmlTemplate) + (adjustedCss ?? '');
 
   // Build style: apply auto-height only when consumer doesn't set explicit height
   const iframeStyle: React.CSSProperties = {

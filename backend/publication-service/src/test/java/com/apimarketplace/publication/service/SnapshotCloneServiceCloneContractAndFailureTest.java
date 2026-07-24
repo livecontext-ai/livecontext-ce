@@ -279,6 +279,39 @@ class SnapshotCloneServiceCloneContractAndFailureTest {
         assertThat((List<Object>) triggers.get(0).get("interfaceIds")).containsExactly(oldIface);
     }
 
+    @Test
+    @DisplayName("The published format reaches the cloned interface, and _snapshot_format is scrubbed from the plan")
+    @SuppressWarnings("unchecked")
+    void interfaceCloneCarriesTheFormatAndScrubsTheSnapshotKey() {
+        // The format travels with the templates: acquiring an app published from a vertical
+        // interface must install a vertical interface, not a full-page 1280x800 one. And the
+        // transport key must not survive into the cloned plan, where nothing reads it.
+        Map<String, Object> ifaceNode = new LinkedHashMap<>();
+        ifaceNode.put("id", "iface-src-1");
+        ifaceNode.put("_snapshot_htmlTemplate", "<div>story</div>");
+        ifaceNode.put("_snapshot_name", "Story");
+        ifaceNode.put("_snapshot_format", "vertical");
+
+        Map<String, Object> plan = new LinkedHashMap<>();
+        plan.put("interfaces", new ArrayList<>(List.of(ifaceNode)));
+
+        InterfaceDto created = new InterfaceDto();
+        created.setId(UUID.randomUUID());
+        ArgumentCaptor<InterfaceCreateRequest> captor = ArgumentCaptor.forClass(InterfaceCreateRequest.class);
+        when(interfaceClient.createInterface(captor.capture(), anyString())).thenReturn(created);
+        when(orchestratorClient.createApplicationWorkflow(any(), anyString()))
+                .thenReturn(Map.of("id", "created-wf-id"));
+
+        service.cloneFromSnapshot(plan, TENANT, PUBLICATION_ID, "App", "desc", null);
+
+        assertThat(captor.getValue().getFormat()).isEqualTo("vertical");
+
+        Map<String, Object> req = capturedRootRequest();
+        Map<String, Object> sentPlan = (Map<String, Object>) req.get("plan");
+        List<Map<String, Object>> ifaces = (List<Map<String, Object>>) sentPlan.get("interfaces");
+        assertThat(ifaces.get(0)).doesNotContainKey("_snapshot_format");
+    }
+
     // ========================================================================
     // Datasource create returning null
     // ========================================================================

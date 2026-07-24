@@ -107,9 +107,19 @@ public final class OAuth2Models {
             @JsonProperty("credential_name") String credentialName
     ) {}
 
-    /** Response carrying the short-lived access token for the Google Picker. */
+    /**
+     * Response carrying the short-lived access token for the Google Picker, plus the Picker App ID.
+     *
+     * <p>{@code appId} is the Cloud project number of the OAuth client the token was minted from.
+     * The browser must pass it to {@code PickerBuilder.setAppId}, which Google REQUIRES for the
+     * {@code drive.file} scope: without it the picked file is never granted to the app and every
+     * later API call on it fails with a 404. It is derived server-side (see
+     * {@code GooglePickerAppId}) so cloud, CE and BYOK each get their own correct value with no
+     * client-side configuration. Null when the client ID is not a Google one.
+     */
     public record PickerTokenResponse(
-            @JsonProperty("access_token") String accessToken
+            @JsonProperty("access_token") String accessToken,
+            @JsonProperty("app_id") String appId
     ) {}
 
     /**

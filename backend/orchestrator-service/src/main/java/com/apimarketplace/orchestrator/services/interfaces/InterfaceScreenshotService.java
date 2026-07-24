@@ -61,6 +61,13 @@ public interface InterfaceScreenshotService {
      * @param spawn      spawn index for rerun isolation within the epoch (0 for first execution)
      * @param itemIndex  item index for loop/split contexts (optional, null when not item-scoped)
      */
+    /**
+     * The capture dimensions come from the INTERFACE's own declared format (resolved from the
+     * render snapshot by the implementation), not from the caller: an interface's HTML is
+     * authored for one fixed viewport width, so its shape is intrinsic to it. An interface that
+     * declares a format is captured as an exact {@code width x height} frame; one that declares
+     * none keeps the historical full-page capture at a 1280x800 viewport.
+     */
     Optional<FileRef> capture(
         String tenantId,
         String runId,
@@ -102,9 +109,13 @@ public interface InterfaceScreenshotService {
      * Same best-effort contract: any failure logs a warning and returns {@link Optional#empty()}
      * so the workflow continues without a {@code video} output field.
      *
-     * @param videoPreset         capture format: {@code vertical} (1080x1920) / {@code horizontal}
-     *                            (1920x1080) / {@code square} (1080x1080); null/blank falls back to
-     *                            vertical
+     * <p>Dimension precedence: an explicit {@code videoPreset} wins (the per-video override),
+     * otherwise the INTERFACE's own declared format drives the recording viewport (width/height
+     * floored to even for the H.264 encoder), otherwise the vertical preset default applies.</p>
+     *
+     * @param videoPreset         per-video override of the capture dimensions: {@code vertical}
+     *                            (1080x1920) / {@code horizontal} (1920x1080) / {@code square}
+     *                            (1080x1080); null/blank defers to the interface's own format
      * @param maxDurationSeconds  recording ceiling in seconds; null/non-positive falls back to the
      *                            default (30s), values are clamped to the renderer's hard maximum
      * @param videoMode           {@code smooth} (offline frame-by-frame render under a virtual

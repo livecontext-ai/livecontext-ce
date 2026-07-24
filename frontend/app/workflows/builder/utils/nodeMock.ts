@@ -16,8 +16,23 @@ import { nodeRegistry } from '../registry/nodeRegistry';
 
 const VALID_SOURCES = new Set(['static', 'catalog_example', 'error']);
 
+/** Upper bound of `durationMs` (10 minutes) - mirrors the backend parse cap. */
+export const MOCK_MAX_DURATION_MS = 600_000;
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Coerces a raw `durationMs` value (number or numeric string, mirroring the
+ * backend's lenient-shape parse) into rounded milliseconds. `undefined` when
+ * not a finite number.
+ */
+export function coerceDurationMsValue(raw: unknown): number | undefined {
+  const num =
+    typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : raw;
+  if (typeof num !== 'number' || !Number.isFinite(num)) return undefined;
+  return Math.round(num);
 }
 
 /**
@@ -29,10 +44,14 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  *  - `output` only when a plain object,
  *  - `port` only when a non-empty string,
  *  - `error` only when an object with a non-empty string message
- *    (its optional `output` is kept when a plain object).
+ *    (its optional `output` is kept when a plain object),
+ *  - `durationMs` only when a finite positive number, rounded and clamped to
+ *    MOCK_MAX_DURATION_MS (the backend REJECTS values beyond the cap at parse
+ *    time, which would fail every editor run - the builder must never emit one).
  *
  * Returns `undefined` when nothing meaningful remains: an empty block = no
- * mock, so plans without one stay byte-identical.
+ * mock, so plans without one stay byte-identical. A lone `durationMs` (like a
+ * lone `enabled`) carries no mock content.
  */
 export function sanitizeNodeMock(raw: unknown): NodeMock | undefined {
   if (!isPlainObject(raw)) return undefined;
@@ -65,8 +84,13 @@ export function sanitizeNodeMock(raw: unknown): NodeMock | undefined {
     }
   }
 
-  // A lone `enabled: false` (or nothing at all) carries no mock content.
-  const contentKeys = Object.keys(mock).filter((k) => k !== 'enabled');
+  const durationNum = coerceDurationMsValue(source.durationMs ?? source.duration_ms);
+  if (durationNum !== undefined && durationNum > 0) {
+    mock.durationMs = Math.min(durationNum, MOCK_MAX_DURATION_MS);
+  }
+
+  // A lone `enabled: false` / `durationMs` (or nothing at all) carries no mock content.
+  const contentKeys = Object.keys(mock).filter((k) => k !== 'enabled' && k !== 'durationMs');
   return contentKeys.length > 0 ? mock : undefined;
 }
 
@@ -142,7 +166,7 @@ export function gateNodeMockForNode(
     const { port: _dropped, ...rest } = gated;
     gated = rest;
   }
-  const contentKeys = Object.keys(gated).filter((k) => k !== 'enabled');
+  const contentKeys = Object.keys(gated).filter((k) => k !== 'enabled' && k !== 'durationMs');
   return contentKeys.length > 0 ? gated : undefined;
 }
 

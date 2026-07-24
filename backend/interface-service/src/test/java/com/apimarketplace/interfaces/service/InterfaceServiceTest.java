@@ -405,6 +405,52 @@ class InterfaceServiceTest {
             assertThat(result.getOrganizationId()).isEqualTo("org-x");
             assertThat(result.getSourcePublicationId()).isEqualTo(publicationId);
         }
+
+        @Test
+        @DisplayName("createFromSnapshot restores the published shape, normalised")
+        void createFromSnapshotCarriesTheFormat() {
+            // The acquire path: an app published from a vertical interface must install vertical.
+            when(variableExtractor.extractTemplateVariables(anyString())).thenReturn(List.of());
+            when(interfaceRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            InterfaceEntity result = interfaceService.createFromSnapshot(
+                    TENANT, "Snapshot Page", null, "<main/>", null, null,
+                    "html", null, null, null, null, "16:9");
+
+            assertThat(result.getFormat())
+                    .as("stored canonical, like every other write path")
+                    .isEqualTo("widescreen");
+        }
+
+        @Test
+        @DisplayName("createFromSnapshot keeps an unset format unset (never defaulted)")
+        void createFromSnapshotKeepsUnsetFormatUnset() {
+            when(variableExtractor.extractTemplateVariables(anyString())).thenReturn(List.of());
+            when(interfaceRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            InterfaceEntity result = interfaceService.createFromSnapshot(
+                    TENANT, "Snapshot Page", null, "<main/>", null, null,
+                    "html", null, null, null, null, null);
+
+            assertThat(result.getFormat()).isNull();
+        }
+
+        @Test
+        @DisplayName("createInterface stores the canonical form, and unset stays unset")
+        void createStoresCanonicalFormat() {
+            when(variableExtractor.extractTemplateVariables(anyString())).thenReturn(List.of());
+            when(interfaceRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            InterfaceEntity aliased = interfaceService.createInterface(
+                    TENANT, "UI", null, "<div/>", null, null, null, null, null, null, null, null, null, "Landscape");
+            assertThat(aliased.getFormat()).isEqualTo("classic");
+
+            InterfaceEntity unset = interfaceService.createInterface(
+                    TENANT, "UI", null, "<div/>", null, null, null, null, null, null, null, null, null, null);
+            assertThat(unset.getFormat())
+                    .as("unset is a real value (full-page capture), never coalesced to a preset")
+                    .isNull();
+        }
     }
 
     @Nested
@@ -432,6 +478,58 @@ class InterfaceServiceTest {
 
             assertThat(result.getName()).isEqualTo("New Name");
             assertThat(result.getDescription()).isEqualTo("Desc"); // unchanged
+        }
+
+        @Test
+        @DisplayName("format is only written when updateFormat is set, and is stored canonical")
+        void shouldApplyFormatOnlyWhenFlagged() {
+            InterfaceEntity existing = createSavedEntity();
+            existing.setOrganizationId(ORG);
+            existing.setFormat("classic");
+            when(interfaceRepository.findByIdAndOrganizationIdStrict(existing.getId(), ORG))
+                    .thenReturn(Optional.of(existing));
+            when(orgAccessService.canWrite(eq(ORG), eq(TENANT), eq("interface"), anyString(), eq("MEMBER")))
+                    .thenReturn(true);
+            when(interfaceRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            // Not flagged: this is a merge-style update, so an omitted format must not wipe it.
+            InterfaceEntity untouched = interfaceService.updateInterface(
+                    existing.getId(), TENANT, ORG, "MEMBER",
+                    "New Name", null, null, null, null,
+                    null, null, null, null, null, null, null,
+                    null, null);
+            assertThat(untouched.getFormat()).isEqualTo("classic");
+
+            // Flagged: applied, and normalised to the canonical stored form (alias -> preset).
+            InterfaceEntity reshaped = interfaceService.updateInterface(
+                    existing.getId(), TENANT, ORG, "MEMBER",
+                    null, null, null, null, null,
+                    null, null, null, null, null, null, null,
+                    "16:9", Boolean.TRUE);
+            assertThat(reshaped.getFormat()).isEqualTo("widescreen");
+        }
+
+        @Test
+        @DisplayName("updateFormat with a null value clears the format back to unset (full page)")
+        void shouldClearFormatWhenFlaggedWithNull() {
+            // "Unset" is a real, distinct value (full-page capture), not the classic preset, so
+            // there has to be a way back to it - hence the flag rather than a plain null merge.
+            InterfaceEntity existing = createSavedEntity();
+            existing.setOrganizationId(ORG);
+            existing.setFormat("vertical");
+            when(interfaceRepository.findByIdAndOrganizationIdStrict(existing.getId(), ORG))
+                    .thenReturn(Optional.of(existing));
+            when(orgAccessService.canWrite(eq(ORG), eq(TENANT), eq("interface"), anyString(), eq("MEMBER")))
+                    .thenReturn(true);
+            when(interfaceRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            InterfaceEntity result = interfaceService.updateInterface(
+                    existing.getId(), TENANT, ORG, "MEMBER",
+                    null, null, null, null, null,
+                    null, null, null, null, null, null, null,
+                    null, Boolean.TRUE);
+
+            assertThat(result.getFormat()).isNull();
         }
 
         @Test
@@ -777,6 +875,25 @@ class InterfaceServiceTest {
         // Tests rewritten to the #150 4-arg org-aware overload using an ORG
         // fixture - exercises the strict-isolation finder pair via findInScope.
         private static final String ORG = "org-clone";
+
+        @Test
+        @DisplayName("A clone keeps the source's shape (the format travels with the templates)")
+        void cloneCarriesTheFormat() {
+            // "Duplicate" on a vertical interface must produce a vertical interface: the copy's
+            // HTML is the same, so it is authored for the same width.
+            InterfaceEntity source = createSavedEntity();
+            source.setOrganizationId(ORG);
+            source.setFormat("vertical");
+            when(interfaceRepository.findByIdAndOrganizationIdStrict(source.getId(), ORG))
+                    .thenReturn(Optional.of(source));
+            when(orgAccessService.canWrite(eq(ORG), eq(TENANT), eq("interface"), anyString(), eq("MEMBER")))
+                    .thenReturn(true);
+            when(interfaceRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            InterfaceEntity cloned = interfaceService.cloneInterface(source.getId(), TENANT, ORG, "MEMBER");
+
+            assertThat(cloned.getFormat()).isEqualTo("vertical");
+        }
 
         @Test
         void shouldCloneWithCopySuffix() {

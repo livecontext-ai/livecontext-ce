@@ -253,8 +253,10 @@ public class SplitAwareNodeExecutor {
      * exceptions are byte-identical to calling {@code node.execute(ctx)} directly.
      */
     private NodeExecutionResult executeNodeBody(ExecutionNode node, ExecutionContext ctx) {
-        // Per-node mock mode: checked BEFORE the timeout wrapper - a mock is a
-        // constant-time substitution, bounding it would be pointless overhead.
+        // Per-node mock mode: checked BEFORE the timeout wrapper. A mock is served
+        // without real execution; its optional simulated duration (mock.durationMs)
+        // is deliberately NOT bounded by nodePolicy.timeoutMs (it is an authored
+        // constant, parse-capped at 10 minutes).
         NodeExecutionResult mocked = tryMock(node, ctx);
         if (mocked != null) {
             return mocked;
@@ -494,7 +496,7 @@ public class SplitAwareNodeExecutor {
         // Execute for all items and launch parallel traversals
         return executeForAllItemsAndTraverse(
             node, context, splitContext, runId,
-            execution, triggerItem, workflowItemIndex, successorTraverser, options);
+            execution, triggerItem, workflowItemIndex, successorTraverser, options, nodeMap);
     }
 
     /**
@@ -525,6 +527,15 @@ public class SplitAwareNodeExecutor {
      * to ensure proper Spring transaction context and avoid connection leaks.
      *
      * For nodes after Classify/Decision, only items that were routed to this node are executed.
+     *
+     * @param nodeMap map of all nodes, used by the warm-skip veto to scope {@code node}'s
+     *                transitive in-split ancestors (see {@link #inMemorySlotsComplete}). The
+     *                STEP_BY_STEP / resume path passes the full map from
+     *                {@code buildNodeMapFromAllRoots(tree)}, which is the path every cross-pod
+     *                resume takes and therefore the one that needs the scope. AUTO passes a
+     *                {@code {nodeId: node}} singleton, which degrades the veto to direct
+     *                predecessors and is safe there: AUTO cannot reach the dense-but-incomplete
+     *                state at all (rationale + call sites in {@link #inMemorySlotsComplete}).
      */
     private NodeExecutionResult executeForAllItemsAndTraverse(
             ExecutionNode node,
@@ -535,7 +546,8 @@ public class SplitAwareNodeExecutor {
             TriggerItem triggerItem,
             int workflowItemIndex,
             SuccessorTraverser successorTraverser,
-            SplitExecutionOptions options) {
+            SplitExecutionOptions options,
+            Map<String, ExecutionNode> nodeMap) {
 
         String nodeId = node.getNodeId();
         List<Object> items = splitContext.items();
@@ -724,7 +736,7 @@ public class SplitAwareNodeExecutor {
         //      (UnifiedSignalService.registerSignal is first-registration-wins), so a degraded
         //      resolution is unrecoverable. One durable epoch query per pause inside a split is the
         //      accepted cost of never freezing a collapsed message.
-        //   c. (inside inMemorySlotsComplete) a direct non-split predecessor of the reader that is
+        //   c. (inside inMemorySlotsComplete) any TRANSITIVE in-split ancestor of the reader that is
         //      entirely ABSENT from the map - memory provably cannot serve it, so the map is not
         //      warm no matter how dense the present entries are.
         // The second clause (consumer SHAPE) still gates all of them: a DIRECT split successor
@@ -734,7 +746,7 @@ public class SplitAwareNodeExecutor {
             (stepOutputService != null
                     && (perItemContinuation
                         || isSignalYieldingNode(node)
-                        || !inMemorySlotsComplete(splitContext, routedItemIndices, node))
+                        || !inMemorySlotsComplete(splitContext, routedItemIndices, node, nodeMap))
                     && (isCrossItemPerItemConsumer(node)
                         || readsNonSplitPredecessor(node, splitContext.splitNodeId())
                         || perItemContinuation))
@@ -984,21 +996,33 @@ public class SplitAwareNodeExecutor {
                 // Terminal sync result - persist + traverse on the main thread (transactional context).
                 // Per-item continuation: suppress the node-level EpochState mark (same Phase 2.E
                 // mechanism as the split-async path) - the seal writes it once at the end.
+                // persistItemResult returns the EFFECTIVE result: on a payload-lost item
+                // (output blob unstorable, row flipped to FAILED - tier 2 of the
+                // payload-loss contract) it comes back as a FAILURE so the traversal
+                // decision below and the summary bookkeeping see the same truth as the row.
+                NodeExecutionResult effectiveItemResult = itemResult.result;
                 if (canPersist && itemResult.context != null) {
-                    persistItemResult(execution, node, itemResult.result, triggerItem, itemResult.index,
+                    effectiveItemResult = persistItemResult(execution, node, itemResult.result, triggerItem, itemResult.index,
                         itemResult.context, perItemContinuation);
+                    if (effectiveItemResult.isFailure() && !itemResult.result.isFailure()) {
+                        // Payload-lost rewrite: sync the summary bookkeeping with the row truth.
+                        results.set(results.size() - 1, effectiveItemResult);
+                        hasFailure = true;
+                        errors.add("Item " + itemResult.index + ": " +
+                            effectiveItemResult.errorMessage().orElse("Output payload lost"));
+                    }
                 }
 
                 // continueOnFailure policy: this item's final result is FAILED (recorded as
                 // such above) but its policy asks traversal to proceed - same reuse of the
                 // SKIPPED-with-error continuation semantic as the engine's traverseTree.
-                boolean continueOnFailureItem = itemResult.result.isFailure()
-                    && ExecutionMetadataKeys.isContinueOnFailure(itemResult.result.metadata());
+                boolean continueOnFailureItem = effectiveItemResult.isFailure()
+                    && ExecutionMetadataKeys.isContinueOnFailure(effectiveItemResult.metadata());
 
-                if (canTraverseSuccessors && (itemResult.result.isSuccess() || continueOnFailureItem)
+                if (canTraverseSuccessors && (effectiveItemResult.isSuccess() || continueOnFailureItem)
                         && itemResult.context != null) {
-                    ExecutionContext contextWithResult = itemResult.context.withResult(nodeId, itemResult.result);
-                    List<ExecutionNode> successors = node.getNextNodes(itemResult.result);
+                    ExecutionContext contextWithResult = itemResult.context.withResult(nodeId, effectiveItemResult);
+                    List<ExecutionNode> successors = node.getNextNodes(effectiveItemResult);
                     if (successors.isEmpty() && continueOnFailureItem) {
                         // getNextNodes filters successors on failure - restore them, mirroring
                         // UnifiedExecutionEngine's continue-on-failure continuation (step 6b).
@@ -1600,7 +1624,7 @@ public class SplitAwareNodeExecutor {
      * True when the in-memory {@link SplitContext#resultsByNode} can already serve every routed item
      * from RAM, so a durable read would be wasted work. "Complete" means the cache is non-empty AND
      * every node currently in it has a non-null slot for every routed item index AND (absent-key
-     * hardening, see below) every direct non-split predecessor of {@code node} has an entry at all.
+     * hardening, see below) every in-split ANCESTOR of {@code node} has an entry at all.
      * An empty cache (restoreContext rebuilt items only after a cross-pod/restart) or any
      * missing/short/null slot (unsealed async barrier) returns {@code false} - exactly the states
      * where the durable backfill recovers a real per-item value instead of the collapsed "item 0"
@@ -1611,23 +1635,75 @@ public class SplitAwareNodeExecutor {
      * map used to read as warm and starve the durable backfill (prod symptom: with 2 replicas and
      * sequential async agents, the pod sealing the barrier held a dense map for the walk-executed
      * nodes but no entry for a post-agent code node that ran elsewhere - the approval delegation
-     * template referencing it froze empty). This method now returns {@code false} when a DIRECT
-     * non-split predecessor step key of {@code node} has no entry in the map: memory provably
-     * cannot serve that predecessor. The split node itself is exempt (its per-item value is
-     * current_item, injected separately by enrichContextWithItem), so the first-node-after-split
-     * hot path stays query-free. INDIRECT absent predecessors (a template reaching two hops back)
-     * are not detectable here without graph plumbing; signal-yielding nodes and per-item
-     * continuation walks are covered by their unconditional durable load (see the gate in
-     * executeForAllItemsAndTraverse), but a PLAIN chained node outside a walk keeps that residual
-     * (bounded scope - the full fix is SplitMergeHandler-style subgraph-ancestor scoping).
+     * template referencing it froze empty). This method returns {@code false} when any in-split
+     * ancestor step key of {@code node} has no entry in the map: memory provably cannot serve it.
+     *
+     * <p>The scope is the reader's TRANSITIVE ancestors, not only its direct predecessors
+     * (2026-07-15). A template may reach any node behind the reader, and the intervening node is
+     * often present while the one actually read is not: the prod chain
+     * {@code split -> snap -> echo_before -> think(async agent) -> echo_after} collapsed
+     * {@code {{core:snap.output.v}}} to item 0's value on ~3 runs in 5 with 2 replicas, because
+     * {@code echo_after}'s only DIRECT predecessor ({@code think}) WAS present, so a direct-only
+     * check read the map as warm and vetoed the backfill for {@code snap}, which had run on the
+     * other pod. The ancestor set comes from
+     * {@link SplitMergeHandler#collectTransitiveAncestors(String, Map, Set)} (the same bounded,
+     * cycle-safe BFS the merge path uses), walled at the split's base node key so the walk stays
+     * inside the split subgraph.
+     *
+     * <p>The split node itself is exempt (its per-item value is current_item, injected separately
+     * by enrichContextWithItem), so the first-node-after-split hot path stays query-free: its only
+     * ancestor is the wall. Direct predecessors are ALSO checked straight off
+     * {@code node.getPredecessorIds()}, which is what keeps the hardening alive when the walk
+     * cannot run at all: a null {@code nodeMap}, or one that does not contain {@code node}, makes
+     * the BFS return an empty set, and without this seed the check would silently pass instead of
+     * degrading to its pre-2026-07-15 direct-only scope. (The AUTO singleton map is a different
+     * case: the BFS seeds from {@code startNode.getPredecessorIds()}, so it still yields the
+     * direct predecessors there, it just cannot expand them. The seed and the walk therefore
+     * overlap by one hop on every path. That overlap is deliberate: it is a cheap set union and
+     * the only thing standing between a partial nodeMap and a silent regression.)
      * {@code node == null} skips the hardening (defensive, pre-existing 2-arg semantics).
      *
-     * <p>The merge path ({@link SplitMergeHandler#mergeDurablePerItem}) closes the same class of
-     * residual by scoping against the split-subgraph ancestors, which this executor path lacks the
-     * node map to compute.
+     * <p><b>FAIL-OPEN on a truncated walk (defensive net, unreachable on real plans).</b> The BFS
+     * is bounded by the ACTUAL graph size ({@code max(50, nodeMap.size() + 1)}) and reports
+     * {@link SplitMergeHandler.AncestorWalk#truncated()} when it stops with work still queued.
+     * Because the visited-dedup processes each distinct node at most once, a plan whose
+     * predecessors all resolve in {@code nodeMap} can never exhaust the bound: truncation only
+     * fires on a genuinely pathological input (predecessor lists referencing more distinct
+     * unresolvable ids than the bound's remaining slack). If it ever fires, a partial ancestor set cannot
+     * prove memory is complete: an absent ancestor beyond the bound would be invisible and would
+     * silently resurrect this exact collapse. A truncated walk therefore returns {@code false}
+     * (not warm) and lets the durable backfill run. One extra query on such a graph is the
+     * correct trade against a silent wrong value.
+     *
+     * <p><b>AUTO mode is not affected by the singleton nodeMap it passes.</b>
+     * {@code UnifiedExecutionEngine.executeNodeCore} builds {@code nodeMap = {nodeId: node}}, so
+     * the walk there resolves the reader's direct predecessors but cannot expand them (they are
+     * absent from the map): the effective scope degrades to direct predecessors. That is
+     * harmless because AUTO provably cannot reach the dense-but-incomplete state this guards:
+     * AUTO is ONE recursive call stack in ONE JVM, so every in-split node ahead of the reader ran
+     * on THIS pod and recorded its slots (direct successors via the per-item loop, chained nodes
+     * via recordChainedDownstreamResult). The cross-pod sparse map only appears after a resume,
+     * and AUTO never traverses through one: {@code executeNodeCore} RETURNS
+     * {@code NodeExecutionOutcome.yielded} at both AWAITING_SIGNAL and ASYNC_RUNNING, ending the
+     * stack at the yield. The resume re-enters through {@code AgentAsyncCompletionService} (async
+     * agents) or {@code InternalSbsController} (signals), which dispatch successors via
+     * {@code V2StepByStepService.executeNode} to {@code UnifiedExecutionEngine.executeSingleNode},
+     * and THAT path passes the full {@code buildNodeMapFromAllRoots(tree)} map. The prod chain in
+     * this bug (a post-async-agent reader) executes on the full-map path, which is where the
+     * ancestor scope applies.
+     *
+     * <p>An ancestor that is absent because it is not per-item at all costs one durable epoch query
+     * per {@link #executeForAllItemsAndTraverse} call (loaded ONCE and reused for every item, NOT
+     * per item) and nothing more: the backfill only fills nodes ABSENT from memory
+     * ({@link #injectPredecessorPerItemOutputs}), so a superfluous load can never overwrite a good
+     * in-memory value. Three topologies escape the wall this way: an outside rejoin edge entering
+     * the split subgraph; a NESTED split (the outer body's walk reaches the inner split's nodes,
+     * whose slots live in the INNER split's context and so read absent here, a permanent veto for
+     * that node); and a LOOP inside a split (the back-edge pulls in body nodes that have not
+     * executed yet on iteration 1).
      */
     boolean inMemorySlotsComplete(SplitContext splitContext, Set<Integer> routedItemIndices,
-            ExecutionNode node) {  // package-private for tests
+            ExecutionNode node, Map<String, ExecutionNode> nodeMap) {  // package-private for tests
         if (splitContext == null) {
             return false;
         }
@@ -1642,27 +1718,68 @@ public class SplitAwareNodeExecutor {
                 }
             }
         }
-        // Absent-key hardening: a direct non-split predecessor with NO entry in the map means
-        // it ran on another pod (or was never recorded here) - the map is dense but incomplete.
+        // Absent-key hardening: an in-split ancestor with NO entry in the map means it ran on
+        // another pod (or was never recorded here) - the map is dense but incomplete.
         if (node != null && splitContext.splitNodeId() != null) {
             String splitKey = extractBaseSplitKey(splitContext.splitNodeId());
             if (splitKey == null) {
                 splitKey = splitContext.splitNodeId();
             }
-            for (String predId : node.getPredecessorIds()) {
-                if (predId == null) {
-                    continue;
-                }
-                String predKey = EdgeRefParser.getNodeKey(predId);
-                if (predKey == null) {
-                    predKey = predId;
-                }
-                if (!splitKey.equals(predKey) && !allResults.containsKey(predKey)) {
-                    return false; // predecessor ran elsewhere → memory cannot serve it
+            SplitMergeHandler.AncestorWalk walk = collectInSplitAncestorKeys(node, splitKey, nodeMap);
+            if (walk.truncated()) {
+                // Partial ancestor set: cannot prove memory is complete, so fail open (see javadoc).
+                logger.debug("[SplitAware] Ancestor walk truncated at the graph-size bound "
+                    + "(pathological graph), forcing the durable backfill: nodeId={}, split={}",
+                    node.getNodeId(), splitKey);
+                return false;
+            }
+            for (String ancestorId : walk.ancestors()) {
+                if (!allResults.containsKey(ancestorId)) {
+                    return false; // ancestor ran elsewhere → memory cannot serve it
                 }
             }
         }
         return true;
+    }
+
+    /**
+     * The step keys of {@code node}'s ancestors that live INSIDE the split subgraph: its direct
+     * predecessors (always available from the node itself) plus, when {@code nodeMap} resolves the
+     * node, every transitive ancestor up to the split. {@code splitKey} is the wall and is never
+     * returned; port suffixes are normalized to bare step keys so the result can be looked up in
+     * {@link SplitContext#getAllResults()} directly. The walk's truncation flag is propagated
+     * verbatim: a truncated walk yields a PARTIAL key set that must not be read as authoritative.
+     */
+    private SplitMergeHandler.AncestorWalk collectInSplitAncestorKeys(ExecutionNode node, String splitKey,
+            Map<String, ExecutionNode> nodeMap) {
+        Set<String> keys = new LinkedHashSet<>();
+        for (String predId : node.getPredecessorIds()) {
+            addInSplitAncestorKey(keys, predId, splitKey);
+        }
+        boolean truncated = false;
+        if (nodeMap != null) {
+            SplitMergeHandler.AncestorWalk walk = SplitMergeHandler.collectTransitiveAncestors(
+                node.getNodeId(), nodeMap, Set.of(splitKey));
+            for (String ancestorId : walk.ancestors()) {
+                addInSplitAncestorKey(keys, ancestorId, splitKey);
+            }
+            truncated = walk.truncated();
+        }
+        return new SplitMergeHandler.AncestorWalk(keys, truncated);
+    }
+
+    /** Normalizes {@code rawId} to a bare step key and adds it unless it is the split wall. */
+    private void addInSplitAncestorKey(Set<String> keys, String rawId, String splitKey) {
+        if (rawId == null) {
+            return;
+        }
+        String key = EdgeRefParser.getNodeKey(rawId);
+        if (key == null) {
+            key = rawId;
+        }
+        if (!splitKey.equals(key)) {
+            keys.add(key);
+        }
     }
 
     /**
@@ -1833,17 +1950,24 @@ public class SplitAwareNodeExecutor {
      * persistence path via NodeCompletionService, which applies OutputSchemaMapper
      * for consistent DB format.
      */
-    private void persistItemResult(
+    private NodeExecutionResult persistItemResult(
             WorkflowExecution execution,
             ExecutionNode node,
             NodeExecutionResult result,
             TriggerItem triggerItem,
             int subItemIndex,
             ExecutionContext context) {
-        persistItemResult(execution, node, result, triggerItem, subItemIndex, context, false);
+        return persistItemResult(execution, node, result, triggerItem, subItemIndex, context, false);
     }
 
-    private void persistItemResult(
+    /**
+     * Persists one item's result and returns the EFFECTIVE result: normally the
+     * input unchanged, but when persistence reports payload-lost (the item's
+     * output blob could not be stored, row flipped to FAILED - tier 2 of the
+     * payload-loss contract) the returned result is a FAILURE so the caller's
+     * per-item traversal decision skips this item's success path.
+     */
+    private NodeExecutionResult persistItemResult(
             WorkflowExecution execution,
             ExecutionNode node,
             NodeExecutionResult result,
@@ -1853,7 +1977,7 @@ public class SplitAwareNodeExecutor {
             boolean suppressGlobalMark) {
         try {
             if (nodeCompletionService == null) {
-                return;
+                return result;
             }
 
             // Extract iteration first (null for non-loop context)
@@ -1863,12 +1987,22 @@ public class SplitAwareNodeExecutor {
             // DB persistence (with OutputSchemaMapper) → StateSnapshot update → streaming event.
             // suppressGlobalMark=true (per-item continuation walks) keeps the node-level
             // EpochState mark for the seal - Phase 2.E semantics, same as split-async.
+            com.apimarketplace.orchestrator.services.completion.StepCompletionResult completion;
             if (suppressGlobalMark) {
-                nodeCompletionService.emitNodeCompletePerItem(
+                completion = nodeCompletionService.emitNodeCompletePerItem(
                     execution, node, result, triggerItem, subItemIndex, context);
             } else {
-                nodeCompletionService.emitNodeComplete(
+                completion = nodeCompletionService.emitNodeComplete(
                     execution, node, result, triggerItem, subItemIndex, context);
+            }
+            // Payload-lost rewrite (tier 2): the row/snapshot already recorded
+            // FAILED for this item - the edge emission and per-item cascade
+            // below, and the caller's traversal, must observe the same failure.
+            if (completion != null && completion.payloadLost() && result.isSuccess()) {
+                logger.error("[SplitAware] Output payload lost for split item - treating as FAILED: nodeId={}, subItem={}, message={}",
+                    node.getNodeId(), subItemIndex, completion.payloadLostMessage());
+                result = NodeExecutionResult.failure(
+                    node.getNodeId(), completion.payloadLostMessage(), result.durationMs());
             }
             logger.debug("[SplitAware] Persisted item result: nodeId={}, subItem={}",
                 node.getNodeId(), subItemIndex);
@@ -1922,6 +2056,7 @@ public class SplitAwareNodeExecutor {
             logger.error("[SplitAware] Failed to persist: nodeId={}, subItem={}, error={}",
                 node.getNodeId(), subItemIndex, e.getMessage(), e);
         }
+        return result;
     }
 
     /**

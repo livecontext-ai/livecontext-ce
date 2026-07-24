@@ -110,6 +110,13 @@ public class SplitMergeHandler {
      * <p>Example branch-rejoin: classify → [label_a, label_b, label_c] → merge
      * All three labels share "classify" as common predecessor → branch-rejoin.
      *
+     * <p>Third consumer of the graph-size-bounded ancestor walk (besides the merge scoping in
+     * {@link #splitSubgraphAncestors} and the warm-skip veto in
+     * {@link SplitAwareNodeExecutor#inMemorySlotsComplete}): the old constant 50-node cap could
+     * hide a common ancestor deeper than 50 nodes in a predecessor's closure and MISCLASSIFY a
+     * branch-rejoin as a split-aggregation on a >50-node plan; the graph-size bound classifies by
+     * the FULL closure, so the topologically correct answer is returned regardless of plan size.
+     *
      * @param mergeNodeId the merge node ID
      * @param nodeMap map of all execution nodes
      * @return true if this is a branch-rejoin merge
@@ -175,27 +182,74 @@ public class SplitMergeHandler {
     }
 
     /**
+     * The outcome of a bounded ancestor walk.
+     *
+     * @param ancestors the ancestors collected before the walk stopped
+     * @param truncated {@code true} when the graph-size processing bound fired with work still
+     *                  queued, i.e. {@code ancestors} is a PARTIAL view of the real ancestor set.
+     *                  Unreachable on any real plan (visited-dedup + bound >= graph size, see
+     *                  {@link #collectTransitiveAncestors(String, Map, Set)}), so it only signals
+     *                  a genuinely pathological input. A caller that needs an authoritative answer
+     *                  (every ancestor seen) MUST still treat a truncated walk as "unknown" rather
+     *                  than as "no more ancestors": the difference is invisible in
+     *                  {@code ancestors} alone.
+     */
+    record AncestorWalk(Set<String> ancestors, boolean truncated) {}
+
+    /**
      * BFS backwards from a node to collect all transitive ancestors (excluding the node itself).
-     * Stops at a max depth to prevent infinite loops in cyclic graphs.
+     * Cycle-safe via the visited set and bounded by the graph size (see the 3-arg overload).
      */
     private static Set<String> collectTransitiveAncestors(String startNodeId, Map<String, ExecutionNode> nodeMap) {
+        return collectTransitiveAncestors(startNodeId, nodeMap, Set.of()).ancestors();
+    }
+
+    /**
+     * BFS backwards from a node to collect all transitive ancestors (excluding the node itself),
+     * stopping at a boundary and reporting whether the graph-size processing bound truncated the
+     * result.
+     *
+     * <p>{@code stopNodeKeys} are treated as walls: a resolved ancestor listed there is neither
+     * returned nor expanded, so the walk never escapes past it. Callers scoping to a split
+     * subgraph pass the split's base node key, which keeps the result to the per-item nodes
+     * BETWEEN the split and {@code startNodeId} (see
+     * {@link SplitAwareNodeExecutor#inMemorySlotsComplete}). An empty set walks the whole graph.
+     *
+     * <p>Cycle-safe and bounded: a {@code visited} set makes each node enqueue at most once, and
+     * the processing bound is the ACTUAL graph size ({@code max(50, nodeMap.size() + 1)}; 50 is a
+     * floor, never a cap below the graph). Because of the visited-dedup, a walk over a real plan
+     * (every referenced predecessor resolvable in {@code nodeMap}) processes at most one entry per
+     * distinct node and therefore can NEVER exhaust the bound: truncation is unreachable there.
+     * The bound only fires on a genuinely pathological input: predecessor lists referencing more
+     * distinct UNRESOLVABLE ids than the bound's remaining slack (bound minus the resolvable
+     * closure; on a tiny map that slack is the whole 50 floor). When it does fire with nodes
+     * still queued, {@link AncestorWalk#truncated()} is {@code true} so callers can fail safe
+     * instead of mistaking a partial set for a complete one.
+     */
+    static AncestorWalk collectTransitiveAncestors(String startNodeId, Map<String, ExecutionNode> nodeMap,
+            Set<String> stopNodeKeys) {
         Set<String> ancestors = new HashSet<>();
         Set<String> visited = new HashSet<>();
         Queue<String> queue = new LinkedList<>();
 
+        if (nodeMap == null) return new AncestorWalk(ancestors, false);
+
         // Seed with direct predecessors of the start node
         ExecutionNode startNode = nodeMap.get(startNodeId);
-        if (startNode == null) return ancestors;
+        if (startNode == null) return new AncestorWalk(ancestors, false);
 
         for (String predId : startNode.getPredecessorIds()) {
-            String resolved = resolveBaseNodeId(predId, nodeMap);
-            if (!visited.contains(resolved)) {
-                queue.add(resolved);
-                visited.add(resolved);
-            }
+            enqueueAncestor(predId, nodeMap, stopNodeKeys, visited, queue);
         }
 
-        int maxNodes = 50; // safety limit on nodes processed
+        // Bound the walk by the ACTUAL graph size, floored at 50 so a tiny or partial nodeMap
+        // never lowers the historical bound. The visited set already enqueues each resolved id
+        // at most once, so on a real plan (every referenced predecessor resolvable in nodeMap)
+        // processed can never exceed the number of distinct nodes and the bound is unreachable.
+        // It only fires on a genuinely pathological input, i.e. predecessor lists referencing
+        // more distinct unresolvable ids than the bound's remaining slack (bound minus the
+        // resolvable closure) - a pure defensive net.
+        int maxNodes = Math.max(50, nodeMap.size() + 1);
         int processed = 0;
         while (!queue.isEmpty() && processed < maxNodes) {
             String current = queue.poll();
@@ -206,15 +260,26 @@ public class SplitMergeHandler {
             if (currentNode == null) continue;
 
             for (String predId : currentNode.getPredecessorIds()) {
-                String resolved = resolveBaseNodeId(predId, nodeMap);
-                if (!visited.contains(resolved)) {
-                    queue.add(resolved);
-                    visited.add(resolved);
-                }
+                enqueueAncestor(predId, nodeMap, stopNodeKeys, visited, queue);
             }
         }
 
-        return ancestors;
+        // Work still queued means the bound cut the walk short: the caller is holding a partial set.
+        return new AncestorWalk(ancestors, !queue.isEmpty());
+    }
+
+    /**
+     * Resolves {@code predId} to its base node id and enqueues it unless it is a stop boundary
+     * or already visited.
+     */
+    private static void enqueueAncestor(String predId, Map<String, ExecutionNode> nodeMap,
+            Set<String> stopNodeKeys, Set<String> visited, Queue<String> queue) {
+        if (predId == null) return;
+        String resolved = resolveBaseNodeId(predId, nodeMap);
+        if (stopNodeKeys.contains(resolved)) return; // boundary: not an ancestor, never expanded
+        if (visited.add(resolved)) {
+            queue.add(resolved);
+        }
     }
 
     /**
@@ -441,16 +506,56 @@ public class SplitMergeHandler {
      * the split node nor any ancestor of the split (trigger / pre-split). Computed by subtracting the
      * split's ancestor closure (plus the split itself) from the merge's, reusing the same audited BFS
      * as {@link #isBranchRejoinMerge}. Empty when the nodeMap can't resolve the topology.
+     *
+     * <p><b>Walk truncation is unreachable on any real plan</b>: the walk is bounded by the actual
+     * graph size ({@code max(50, nodeMap.size() + 1)}) and the visited-dedup processes each
+     * distinct node at most once, so a plan whose predecessors all resolve in {@code nodeMap} can
+     * never exhaust the bound (see {@link #collectTransitiveAncestors(String, Map, Set)}). The
+     * truncated flag, the WARN below, and the fail-open in
+     * {@link SplitAwareNodeExecutor#inMemorySlotsComplete} remain as pure defensive nets for a
+     * genuinely pathological input (a graph referencing more distinct unresolvable ids than the
+     * bound's remaining slack).
+     *
+     * <p><b>If that net ever fires, truncation is still NOT fail-open here, unlike
+     * {@code inMemorySlotsComplete}, because the two walks fail in OPPOSITE directions and only
+     * one of them can drop data:</b>
+     * <ul>
+     *   <li>The SPLIT walk ({@code splitAndAbove}) truncating is already safe: a short subtrahend
+     *       removes FEWER nodes, so {@code eligible} grows. The consequence is the pollution this
+     *       method exists to avoid (a pre-split node such as {@code trigger:manual} reaching
+     *       aggregated_results / nodes_executed), never a dropped per-item value.</li>
+     *   <li>The MERGE walk truncating is the real hazard: a short ancestor set makes
+     *       {@code eligible} too small, so a per-item node beyond the bound is neither counted by
+     *       the warm check nor backfilled, and the aggregate silently loses its values. This is
+     *       logged at WARN so the condition is observable rather than invisible.</li>
+     * </ul>
+     *
+     * <p>The residual pathological case is NOT auto-corrected because every available correction
+     * trades that (now unreachable-on-real-plans) drop for a worse or wider change: unioning the
+     * durable key universe would pour EVERY epoch node (pre-split, sibling, post-merge) into
+     * aggregated_results, which is precisely the pollution the scoping was built to prevent; and
+     * walling the merge walk at the split would change which nodes qualify in a rare topology (a
+     * pre-split node with an edge directly into the split body is currently subtracted, and a
+     * walled walk would keep it). Either is a merge-path behaviour change that belongs in its own
+     * audited fix.
      */
     private Set<String> splitSubgraphAncestors(String mergeNodeId, String baseSplitKey,
                                                Map<String, ExecutionNode> nodeMap) {
-        Set<String> mergeAncestors = collectTransitiveAncestors(mergeNodeId, nodeMap);
+        AncestorWalk mergeWalk = collectTransitiveAncestors(mergeNodeId, nodeMap, Set.of());
+        Set<String> mergeAncestors = mergeWalk.ancestors();
         if (mergeAncestors.isEmpty()) {
             return Set.of();
         }
-        Set<String> splitAndAbove = collectTransitiveAncestors(baseSplitKey, nodeMap);
+        Set<String> splitAndAbove = collectTransitiveAncestors(baseSplitKey, nodeMap, Set.of()).ancestors();
         splitAndAbove.add(baseSplitKey);
         mergeAncestors.removeAll(splitAndAbove);
+        if (mergeWalk.truncated()) {
+            logger.warn("[SplitMerge] Ancestor walk hit the graph-size bound for merge={} (split={}), "
+                    + "which no real plan can do (pathological graph): the split-subgraph scope is "
+                    + "PARTIAL, so a per-item node beyond the bound may be excluded from the durable "
+                    + "backfill and lost from the aggregate",
+                mergeNodeId, baseSplitKey);
+        }
         return mergeAncestors;
     }
 

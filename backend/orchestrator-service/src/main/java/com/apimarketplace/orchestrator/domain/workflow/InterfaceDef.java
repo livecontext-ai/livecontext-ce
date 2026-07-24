@@ -8,6 +8,11 @@ import java.util.Map;
  * Interface definition from the workflow plan.
  * Represents a UI interface node that participates in DAG execution.
  *
+ * <p>There is deliberately no display format here: it belongs to the interface entity itself (an
+ * interface's HTML is authored for one fixed viewport width, so its shape is intrinsic to it) and
+ * the render path resolves it from there. A plan written before that move may still carry a
+ * {@code format} key on the node; it is ignored.
+ *
  * @param id                    UUID of the interface entity
  * @param label                 Display label
  * @param actionMapping         CSS selector to action target key mapping

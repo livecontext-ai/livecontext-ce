@@ -32,6 +32,7 @@ public class InterfaceDtoMapper {
         dto.setCreatedAt(entity.getCreatedAt());
         dto.setUpdatedAt(entity.getUpdatedAt());
         dto.setInterfaceType(entity.getInterfaceType());
+        dto.setFormat(entity.getFormat());
         dto.setData(entity.getData());
         dto.setAgentId(entity.getAgentId());
         dto.setMessageId(entity.getMessageId());
@@ -44,6 +45,11 @@ public class InterfaceDtoMapper {
         return dto;
     }
 
+    /**
+     * Light list payload: the templates are dropped, but {@code format} is deliberately KEPT.
+     * List cards render a thumbnail and need the interface's shape to size it - without the
+     * format they would all fall back to 1280x800.
+     */
     public InterfaceDto toListDto(InterfaceEntity entity) {
         InterfaceDto dto = toDto(entity);
         if (dto == null) return null;
@@ -68,6 +74,7 @@ public class InterfaceDtoMapper {
         dto.setHtmlTemplate(entity.getHtmlTemplate());
         dto.setCssTemplate(entity.getCssTemplate());
         dto.setJsTemplate(entity.getJsTemplate());
+        dto.setFormat(entity.getFormat());
         dto.setVariableMappings(entity.getVariableMappings());
         dto.setActionMappings(entity.getActionMappings());
         dto.setCreatedAt(entity.getCreatedAt());

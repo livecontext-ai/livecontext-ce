@@ -1,0 +1,163 @@
+{
+  "schemaVersion": 1,
+  "kind": "workflow",
+  "meta": {
+    "slug": "interface-page",
+    "kind": "workflow",
+    "order": 45,
+    "difficulty": "intermediate",
+    "icon": "Monitor",
+    "runnable": true,
+    "teachesCount": 3,
+    "nodeKinds": [
+      "manual",
+      "transform",
+      "interface"
+    ]
+  },
+  "plan": {
+    "triggers": [
+      {
+        "id": "trigger-1",
+        "type": "manual",
+        "label": "Start",
+        "position": {
+          "x": 120,
+          "y": 320
+        },
+        "params": {}
+      }
+    ],
+    "mcps": [],
+    "cores": [
+      {
+        "id": "core-data",
+        "type": "transform",
+        "label": "Build page data",
+        "position": {
+          "x": 460,
+          "y": 320
+        },
+        "transform": {
+          "mappings": [
+            {
+              "label": "headline",
+              "expression": "templates.workflow.interfacePage.page.headline"
+            },
+            {
+              "label": "meta",
+              "expression": "templates.workflow.interfacePage.page.meta"
+            },
+            {
+              "label": "hint",
+              "expression": "templates.workflow.interfacePage.page.hint"
+            },
+            {
+              "label": "cta",
+              "expression": "templates.workflow.interfacePage.page.cta"
+            },
+            {
+              "label": "who",
+              "expression": "{{trigger:start.output.triggered_by}}"
+            }
+          ]
+        }
+      }
+    ],
+    "interfaces": [
+      {
+        "id": "__template_interface__",
+        "label": "Result page",
+        "position": {
+          "x": 860,
+          "y": 320
+        },
+        "isEntryInterface": true,
+        "showPreview": true,
+        "variableMapping": {
+          "headline": "{{core:build_page_data.output.transformed.headline}}",
+          "meta": "{{core:build_page_data.output.transformed.meta}}",
+          "hint": "{{core:build_page_data.output.transformed.hint}}",
+          "cta": "{{core:build_page_data.output.transformed.cta}}",
+          "who": "{{core:build_page_data.output.transformed.who}}"
+        },
+        "_template_description": "templates.workflow.interfacePage.interfaceDescription",
+        "_template_htmlTemplate": "<div class=\"page\">\n  <h1>{{headline}}</h1>\n  <p class=\"meta\">{{meta}} <strong>{{who}}</strong></p>\n  <p class=\"hint\">{{hint}}</p>\n  <button data-action=\"__continue\">{{cta}}</button>\n</div>",
+        "_template_cssTemplate": ".page{font-family:system-ui,sans-serif;max-width:640px;margin:0 auto;padding:32px;color:#0f172a}\n.page h1{font-size:24px;margin:0 0 12px}\n.meta{color:#475569;margin:0 0 16px}\n.hint{color:#64748b;font-size:14px;line-height:1.5}\nbutton{margin-top:24px;padding:10px 18px;border-radius:10px;border:1px solid #cbd5e1;background:#fff;font-size:14px;cursor:pointer}\nbutton:hover{background:#f8fafc}",
+        "_template_jsTemplate": ""
+      }
+    ],
+    "notes": [
+      {
+        "id": "note-backend-frontend",
+        "type": "note",
+        "label": "templates.workflow.interfacePage.notes.backendFrontend.label",
+        "text": "templates.workflow.interfacePage.notes.backendFrontend.text",
+        "color": "#fef3c7",
+        "borderColor": "#fbbf24",
+        "textColor": "#92400e",
+        "width": 340,
+        "height": 190,
+        "position": {
+          "x": 420,
+          "y": 40
+        }
+      },
+      {
+        "id": "note-variable-mapping",
+        "type": "note",
+        "label": "templates.workflow.interfacePage.notes.variableMapping.label",
+        "text": "templates.workflow.interfacePage.notes.variableMapping.text",
+        "color": "#dbeafe",
+        "borderColor": "#3b82f6",
+        "textColor": "#1e40af",
+        "width": 360,
+        "height": 220,
+        "position": {
+          "x": 820,
+          "y": 20
+        }
+      },
+      {
+        "id": "note-pauses",
+        "type": "note",
+        "label": "templates.workflow.interfacePage.notes.pauses.label",
+        "text": "templates.workflow.interfacePage.notes.pauses.text",
+        "color": "#e9d5ff",
+        "borderColor": "#a855f7",
+        "textColor": "#6b21a8",
+        "width": 360,
+        "height": 210,
+        "position": {
+          "x": 820,
+          "y": 560
+        }
+      },
+      {
+        "id": "note-own-copy",
+        "type": "note",
+        "label": "templates.workflow.interfacePage.notes.ownCopy.label",
+        "text": "templates.workflow.interfacePage.notes.ownCopy.text",
+        "color": "#d1fae5",
+        "borderColor": "#10b981",
+        "textColor": "#065f46",
+        "width": 340,
+        "height": 190,
+        "position": {
+          "x": 60,
+          "y": 560
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "trigger:start",
+        "to": "core:build_page_data"
+      },
+      {
+        "from": "core:build_page_data",
+        "to": "interface:result_page"
+      }
+    ]
+  }
+}

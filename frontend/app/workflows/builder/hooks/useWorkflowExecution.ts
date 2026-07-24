@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import type { Node, Edge } from 'reactflow';
+import type { WorkflowLayoutDirection } from '@/contexts/WorkflowLayoutDirectionContext';
 import type { AppRouterInstance } from 'next/dist/shared/lib/app-router-context.shared-runtime';
 import type { BuilderNodeData } from '../types';
 import { orchestratorApi, type TriggerTypeValue } from '@/lib/api';
@@ -36,6 +37,9 @@ export interface UseWorkflowExecutionConfig {
   /** Optional callback to save workflow before execution (ensures webhookTokens exist).
    *  Returns the planJson string if save was successful, so the same plan can be reused for execution. */
   onSaveBeforeExecute?: () => Promise<string | undefined>;
+  /** Active reading direction, stamped into any plan this hook generates (fallback
+   *  + validate paths) so it matches the primary save. */
+  layoutDirection?: WorkflowLayoutDirection;
 }
 
 export interface UseWorkflowExecutionResult {
@@ -136,6 +140,7 @@ export function useWorkflowExecution(config: UseWorkflowExecutionConfig): UseWor
     workflowId,
     nodes,
     edges,
+    layoutDirection,
     router,
     setWorkflowStatus,
     pauseResumeActions,
@@ -175,7 +180,7 @@ export function useWorkflowExecution(config: UseWorkflowExecutionConfig): UseWor
       planJson = await onSaveBeforeExecuteRef.current();
     }
     if (!planJson) {
-      const fallbackPlan = generateWorkflowPlan(nodes, edges);
+      const fallbackPlan = generateWorkflowPlan(nodes, edges, layoutDirection);
       planJson = JSON.stringify(fallbackPlan);
     }
     let plan = JSON.parse(planJson);
@@ -260,7 +265,7 @@ export function useWorkflowExecution(config: UseWorkflowExecutionConfig): UseWor
   const onValidate = React.useCallback(async () => {
     try {
       // Generate workflow plan
-      const plan = generateWorkflowPlan(nodes, edges);
+      const plan = generateWorkflowPlan(nodes, edges, layoutDirection);
       const planJson = JSON.stringify(plan);
 
       const result = await orchestratorApi.validateWorkflow({
@@ -285,7 +290,7 @@ export function useWorkflowExecution(config: UseWorkflowExecutionConfig): UseWor
         context: {},
       }]);
     }
-  }, [nodes, edges]);
+  }, [nodes, edges, layoutDirection]);
 
   // ==================== Normal execution ====================
 
@@ -397,7 +402,7 @@ export function useWorkflowExecution(config: UseWorkflowExecutionConfig): UseWor
     return () => {
       window.removeEventListener('workflowViewStart', handleStartEvent as EventListener);
     };
-  }, [workflowId, nodes, edges, router, setWorkflowStatus, isPreviewOnly, canMutate]);
+  }, [workflowId, nodes, edges, layoutDirection, router, setWorkflowStatus, isPreviewOnly, canMutate]);
 
   // ==================== Step-by-step execution ====================
 
@@ -480,7 +485,7 @@ export function useWorkflowExecution(config: UseWorkflowExecutionConfig): UseWor
     return () => {
       window.removeEventListener('workflowStartStepByStep', handleStepByStepStart as EventListener);
     };
-  }, [workflowId, nodes, edges, router, setWorkflowStatus, isPreviewOnly, canMutate]);
+  }, [workflowId, nodes, edges, layoutDirection, router, setWorkflowStatus, isPreviewOnly, canMutate]);
 
   return {
     backendValidationErrors,

@@ -164,16 +164,23 @@ export function ApplicationPanelContent({ publicationId, runId: runIdOverride }:
 
         if (!runId) { setError('No run available'); return; }
 
-        const iface = interfaces.find((i: any) =>
-          i?.actionMapping && Object.keys(i.actionMapping).length > 0
-        );
+        // The app's declared ENTRY page wins (same rule as the showcase/card previews:
+        // ApplicationShowcaseResolver = flagged entry, else first). Only when no entry
+        // is flagged fall back to the first interactive interface, then the showcase id.
+        const iface = interfaces.find((i: any) => i?.isEntryInterface === true)
+          ?? interfaces.find((i: any) =>
+            i?.actionMapping && Object.keys(i.actionMapping).length > 0
+          );
 
         if (!cancelled) {
+          const interfaceId = iface?.id || pub.showcaseInterfaceId || '';
+          // The display format is not passed down: it belongs to the interface, and
+          // ApplicationTabContent resolves it from the render/interface it already loads.
           setPanelData({
             runId,
             workflowId: effectiveWorkflowId,
             appConfig: {
-              interfaceId: iface?.id || pub.showcaseInterfaceId || '',
+              interfaceId,
               label: iface?.label || pub.title || 'Application',
               actionMapping: iface?.actionMapping || {},
             },

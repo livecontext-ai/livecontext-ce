@@ -97,9 +97,25 @@ public class MockRunGate {
 
     private MockRunMode loadMode(String runId) {
         try {
-            return runRepository.findByRunIdPublic(runId)
+            MockRunMode fromMetadata = runRepository.findByRunIdPublic(runId)
                     .map(run -> resolve(run.getMetadata()))
                     .orElse(MockRunMode.OFF);
+            if (fromMetadata == MockRunMode.OFF) {
+                return MockRunMode.OFF;
+            }
+            // PRODUCTION NEVER MOCKS. The metadata cannot decide this: pinning
+            // promotes an existing run (usually the editor run the user tested with)
+            // and strips neither __editorRun__ nor a leftover __mockMode__, so a
+            // promoted production run can carry both. The FK is the identity test.
+            // Checked only on the non-OFF path, so the common case stays one query.
+            // Exposure window: the verdict is cached (modeCache); a run promoted
+            // while cached rides out the short TTL before this guard applies.
+            if (runRepository.isProductionRunByRunIdPublic(runId)) {
+                logger.info("[MockRunGate] Run {} is the workflow's production run - ignoring its {} metadata, "
+                        + "production fires never mock", runId, fromMetadata);
+                return MockRunMode.OFF;
+            }
+            return fromMetadata;
         } catch (Exception e) {
             logger.warn("[MockRunGate] Failed to resolve mock mode for run {} - defaulting to OFF: {}",
                     runId, e.getMessage());
@@ -108,9 +124,11 @@ public class MockRunGate {
     }
 
     private MockRunMode resolve(Map<String, Object> metadata) {
-        // Hard guard: mocks apply to EDITOR runs only. Production / trigger-dispatched
-        // runs never carry __editorRun__ and therefore never apply a mock, even if a
-        // published plan still carries mock blocks (inert data there).
+        // First gate: mocks apply to runs carrying __editorRun__ only. NOTE this flag
+        // does NOT mean "not production" - pinning promotes an editor run and never
+        // strips it - which is why loadMode adds the FK-based production check on the
+        // non-OFF path. This metadata gate alone still stops legacy/flag-less runs
+        // from ever mocking, even if a published plan carries mock blocks.
         if (metadata == null || !Boolean.TRUE.equals(metadata.get(EDITOR_RUN_KEY))) {
             return MockRunMode.OFF;
         }

@@ -1,0 +1,190 @@
+{
+  "schemaVersion": 1,
+  "kind": "workflow",
+  "meta": {
+    "slug": "branch-decision",
+    "kind": "workflow",
+    "order": 20,
+    "difficulty": "beginner",
+    "icon": "GitBranch",
+    "runnable": true,
+    "teachesCount": 3,
+    "nodeKinds": [
+      "manual",
+      "transform",
+      "decision",
+      "transform",
+      "transform"
+    ]
+  },
+  "plan": {
+    "triggers": [
+      {
+        "id": "trigger-1",
+        "type": "manual",
+        "label": "Start",
+        "position": {
+          "x": 120,
+          "y": 320
+        },
+        "params": {}
+      }
+    ],
+    "mcps": [],
+    "cores": [
+      {
+        "id": "core-amount",
+        "type": "transform",
+        "label": "Make amount",
+        "position": {
+          "x": 440,
+          "y": 320
+        },
+        "transform": {
+          "mappings": [
+            {
+              "label": "amount",
+              "expression": "{{120}}"
+            }
+          ]
+        }
+      },
+      {
+        "id": "core-check",
+        "type": "decision",
+        "label": "Check amount",
+        "position": {
+          "x": 760,
+          "y": 320
+        },
+        "decisionConditions": [
+          {
+            "id": "cond-if",
+            "type": "if",
+            "label": "templates.workflow.branchDecision.ports.above",
+            "expression": "{{core:make_amount.output.transformed.amount}} > 100"
+          },
+          {
+            "id": "cond-else",
+            "type": "else",
+            "label": "templates.workflow.branchDecision.ports.belowOrEqual"
+          }
+        ]
+      },
+      {
+        "id": "core-big",
+        "type": "transform",
+        "label": "Big path",
+        "position": {
+          "x": 1100,
+          "y": 200
+        },
+        "transform": {
+          "mappings": [
+            {
+              "label": "outcome",
+              "expression": "Took the if branch"
+            }
+          ]
+        }
+      },
+      {
+        "id": "core-small",
+        "type": "transform",
+        "label": "Small path",
+        "position": {
+          "x": 1100,
+          "y": 460
+        },
+        "transform": {
+          "mappings": [
+            {
+              "label": "outcome",
+              "expression": "Took the else branch"
+            }
+          ]
+        }
+      }
+    ],
+    "notes": [
+      {
+        "id": "note-one-branch",
+        "type": "note",
+        "label": "templates.workflow.branchDecision.notes.oneBranch.label",
+        "text": "templates.workflow.branchDecision.notes.oneBranch.text",
+        "color": "#fef3c7",
+        "borderColor": "#fbbf24",
+        "textColor": "#92400e",
+        "width": 320,
+        "height": 170,
+        "position": {
+          "x": 700,
+          "y": 60
+        }
+      },
+      {
+        "id": "note-ports",
+        "type": "note",
+        "label": "templates.workflow.branchDecision.notes.ports.label",
+        "text": "templates.workflow.branchDecision.notes.ports.text",
+        "color": "#dbeafe",
+        "borderColor": "#3b82f6",
+        "textColor": "#1e40af",
+        "width": 340,
+        "height": 190,
+        "position": {
+          "x": 1080,
+          "y": 640
+        }
+      },
+      {
+        "id": "note-else",
+        "type": "note",
+        "label": "templates.workflow.branchDecision.notes.elseRequired.label",
+        "text": "templates.workflow.branchDecision.notes.elseRequired.text",
+        "color": "#fed7aa",
+        "borderColor": "#f97316",
+        "textColor": "#9a3412",
+        "width": 320,
+        "height": 170,
+        "position": {
+          "x": 700,
+          "y": 640
+        }
+      },
+      {
+        "id": "note-skipped",
+        "type": "note",
+        "label": "templates.workflow.branchDecision.notes.skipped.label",
+        "text": "templates.workflow.branchDecision.notes.skipped.text",
+        "color": "#d1fae5",
+        "borderColor": "#10b981",
+        "textColor": "#065f46",
+        "width": 340,
+        "height": 190,
+        "position": {
+          "x": 1460,
+          "y": 300
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "trigger:start",
+        "to": "core:make_amount"
+      },
+      {
+        "from": "core:make_amount",
+        "to": "core:check_amount"
+      },
+      {
+        "from": "core:check_amount:if",
+        "to": "core:big_path"
+      },
+      {
+        "from": "core:check_amount:else",
+        "to": "core:small_path"
+      }
+    ]
+  }
+}

@@ -17,6 +17,15 @@ export interface FeatureCapabilitiesState {
   isLoading: boolean;
 }
 
+export interface UseFeatureCapabilitiesOptions {
+  /**
+   * Gate the fetch itself (default true). Pass false when the consumer mounts in a
+   * context that has nothing to warn about (e.g. a validation provider wrapping an
+   * empty/static canvas) - the query then never fires and `capabilities` stays null.
+   */
+  enabled?: boolean;
+}
+
 /**
  * Availability of the deployment's optional components (screenshot/PDF renderer,
  * browser agent + web search). Cloud reports everything available, so the
@@ -24,9 +33,9 @@ export interface FeatureCapabilitiesState {
  * that did not opt in. Cached 5 min - availability only changes on a stack
  * restart (or a cloud link/unlink).
  */
-export function useFeatureCapabilities(): FeatureCapabilitiesState {
+export function useFeatureCapabilities(options?: UseFeatureCapabilitiesOptions): FeatureCapabilitiesState {
   const { isLoading: isAuthLoading, isAuthenticated } = useAuth();
-  const enabled = !isAuthLoading && isAuthenticated;
+  const enabled = (options?.enabled ?? true) && !isAuthLoading && isAuthenticated;
   // Workspace-scoped: the browsing verdict is per-tenant (cloud-link CLOUD-source
   // selection), so a workspace switch must not serve the previous workspace's verdict.
   const { data, isPending } = useOrgScopedQuery({

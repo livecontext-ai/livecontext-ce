@@ -1,0 +1,206 @@
+{
+  "schemaVersion": 1,
+  "kind": "workflow",
+  "meta": {
+    "slug": "resilient-steps",
+    "kind": "workflow",
+    "order": 50,
+    "difficulty": "advanced",
+    "icon": "ShieldCheck",
+    "runnable": false,
+    "teachesCount": 3,
+    "nodeKinds": [
+      "manual",
+      "http_request",
+      "decision",
+      "transform",
+      "stop_on_error"
+    ]
+  },
+  "plan": {
+    "triggers": [
+      {
+        "id": "trigger-1",
+        "type": "manual",
+        "label": "Start",
+        "position": {
+          "x": 120,
+          "y": 340
+        },
+        "params": {}
+      }
+    ],
+    "mcps": [],
+    "cores": [
+      {
+        "id": "core-call",
+        "type": "http_request",
+        "label": "Call api",
+        "position": {
+          "x": 460,
+          "y": 340
+        },
+        "httpRequest": {
+          "method": "GET",
+          "url": "https://example.com/replace-this-url",
+          "authType": "none",
+          "bodyType": "none",
+          "timeout": 5000
+        },
+        "nodePolicy": {
+          "retryCount": 2,
+          "retryBackoffMs": 1000,
+          "timeoutMs": 15000,
+          "continueOnFailure": true
+        }
+      },
+      {
+        "id": "core-check",
+        "type": "decision",
+        "label": "Check result",
+        "position": {
+          "x": 820,
+          "y": 340
+        },
+        "decisionConditions": [
+          {
+            "id": "cond-if",
+            "type": "if",
+            "label": "templates.workflow.resilientSteps.ports.succeeded",
+            "expression": "{{core:call_api.output.success}} == true"
+          },
+          {
+            "id": "cond-else",
+            "type": "else",
+            "label": "templates.workflow.resilientSteps.ports.failed"
+          }
+        ]
+      },
+      {
+        "id": "core-continue",
+        "type": "transform",
+        "label": "Continue",
+        "position": {
+          "x": 1180,
+          "y": 200
+        },
+        "transform": {
+          "mappings": [
+            {
+              "label": "outcome",
+              "expression": "The call went through"
+            }
+          ]
+        }
+      },
+      {
+        "id": "core-fail",
+        "type": "stop_on_error",
+        "label": "Fail loudly",
+        "position": {
+          "x": 1180,
+          "y": 480
+        },
+        "stopOnError": {
+          "errorMessage": "templates.workflow.resilientSteps.stopMessage",
+          "errorCode": "ERR_UPSTREAM_CALL"
+        }
+      }
+    ],
+    "notes": [
+      {
+        "id": "note-replace-url",
+        "type": "note",
+        "label": "templates.workflow.resilientSteps.notes.replaceUrl.label",
+        "text": "templates.workflow.resilientSteps.notes.replaceUrl.text",
+        "color": "#fed7aa",
+        "borderColor": "#f97316",
+        "textColor": "#9a3412",
+        "width": 340,
+        "height": 180,
+        "position": {
+          "x": 400,
+          "y": 60
+        }
+      },
+      {
+        "id": "note-retry",
+        "type": "note",
+        "label": "templates.workflow.resilientSteps.notes.retry.label",
+        "text": "templates.workflow.resilientSteps.notes.retry.text",
+        "color": "#fef3c7",
+        "borderColor": "#fbbf24",
+        "textColor": "#92400e",
+        "width": 340,
+        "height": 200,
+        "position": {
+          "x": 400,
+          "y": 620
+        }
+      },
+      {
+        "id": "note-continue-on-failure",
+        "type": "note",
+        "label": "templates.workflow.resilientSteps.notes.continueOnFailure.label",
+        "text": "templates.workflow.resilientSteps.notes.continueOnFailure.text",
+        "color": "#dbeafe",
+        "borderColor": "#3b82f6",
+        "textColor": "#1e40af",
+        "width": 360,
+        "height": 220,
+        "position": {
+          "x": 790,
+          "y": 620
+        }
+      },
+      {
+        "id": "note-timeout",
+        "type": "note",
+        "label": "templates.workflow.resilientSteps.notes.timeout.label",
+        "text": "templates.workflow.resilientSteps.notes.timeout.text",
+        "color": "#e9d5ff",
+        "borderColor": "#a855f7",
+        "textColor": "#6b21a8",
+        "width": 350,
+        "height": 200,
+        "position": {
+          "x": 790,
+          "y": 40
+        }
+      },
+      {
+        "id": "note-stop",
+        "type": "note",
+        "label": "templates.workflow.resilientSteps.notes.stopOnError.label",
+        "text": "templates.workflow.resilientSteps.notes.stopOnError.text",
+        "color": "#fce7f3",
+        "borderColor": "#ec4899",
+        "textColor": "#831843",
+        "width": 350,
+        "height": 200,
+        "position": {
+          "x": 1540,
+          "y": 420
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "trigger:start",
+        "to": "core:call_api"
+      },
+      {
+        "from": "core:call_api",
+        "to": "core:check_result"
+      },
+      {
+        "from": "core:check_result:if",
+        "to": "core:continue"
+      },
+      {
+        "from": "core:check_result:else",
+        "to": "core:fail_loudly"
+      }
+    ]
+  }
+}

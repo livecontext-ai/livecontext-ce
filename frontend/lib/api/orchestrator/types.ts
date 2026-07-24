@@ -66,6 +66,14 @@ export interface Workflow {
   hasActiveRun?: boolean;
   /** Board column classification: draft | production | needsReview | paused */
   boardColumn?: WorkflowBoardColumn;
+  /**
+   * Optional cost budget in CREDITS (1 credit = $0.001), or null/absent when
+   * none is set. Edited in the workflow settings "Advanced" section, and sent
+   * back on the update PUT under the same key. Always in credits; the UI renders
+   * dollars in CE, credits in cloud. When a run's accumulated cost reaches this,
+   * no new epoch is started.
+   */
+  budgetCredits?: number | null;
 }
 
 // ============================================
@@ -89,6 +97,17 @@ export interface WorkflowBoardCard {
    * gives an at-a-glance view of how active a pinned workflow is in prod.
    */
   productionRunEpochCount?: number | null;
+  /**
+   * Total accumulated cost of the production run across all epochs, in CREDITS
+   * (1 credit = $0.001). Null/absent when no production run exists. Rendered as
+   * dollars in CE, credits in cloud.
+   */
+  costCredits?: number | null;
+  /**
+   * The workflow's cost budget in CREDITS, or null/absent when none is set.
+   * Lets the card mark the over-budget state (costCredits >= budgetCredits).
+   */
+  budgetCredits?: number | null;
   lastExecutedAt?: string | null;
   updatedAt?: string | null;
   runCount: number;
@@ -188,6 +207,19 @@ export interface WorkflowRun {
    * epoch has fired yet - caller falls back to `startedAt`.
    */
   lastFireAt?: string;
+  /**
+   * Total accumulated cost of this run across ALL epochs, in CREDITS (1 credit
+   * = $0.001). Agent executions are the only cost source. Live-updated by the
+   * `runCost` WS event; seeded from the run-state payload. Rendered as dollars
+   * in CE, credits in cloud.
+   */
+  costCredits?: number | null;
+  /**
+   * The workflow's cost budget in CREDITS, or null when none is set. Shown
+   * next to the run cost in the RunInfo panel and used to paint the over-budget
+   * warning. When the accumulated cost reaches it, no new epoch starts.
+   */
+  budgetCredits?: number | null;
 }
 
 export interface WorkflowStep {
@@ -254,6 +286,12 @@ export interface Interface {
   htmlTemplate?: string;
   cssTemplate?: string;
   jsTemplate?: string;
+  /**
+   * Display/capture format: a preset name or "WIDTHxHEIGHT" (see lib/interfaces/interfaceFormats).
+   * Drives the screenshot/video dimensions and the shape of every preview of this interface.
+   * Undefined = no declared shape (full page at 1280x800), which is NOT the same as 'classic'.
+   */
+  format?: string | null;
   dataSourceId?: number | null;
   createdAt?: string;
   updatedAt?: string;
@@ -1334,6 +1372,8 @@ export interface InterfaceRenderResult {
   htmlTemplate: string;
   cssTemplate?: string;
   jsTemplate?: string;
+  /** The interface's declared format; null/undefined = full page at 1280x800. */
+  format?: string | null;
   items: InterfaceResolvedItem[];
   pagination: {
     page: number;
@@ -1412,6 +1452,12 @@ export interface WorkflowRunState {
   awaitingSignalStepIds?: string[];
   currentEpoch?: number;
   epochTimestamps?: Array<{ epoch: number; startedAt: string; endedAt: string | null }>;
+  /** Total accumulated run cost across all epochs, in credits (1 credit = $0.001). */
+  costCredits?: number | null;
+  /** Per-epoch cost breakdown, epoch number (as string) -> credits. */
+  costByEpoch?: Record<string, number> | null;
+  /** Workflow cost budget in credits, or null when none is set. */
+  budgetCredits?: number | null;
   loops?: Record<string, {
     loopId: string;
     type: string;

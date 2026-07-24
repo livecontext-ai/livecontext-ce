@@ -641,6 +641,10 @@ public class MonolithSecurityFilter implements Filter {
                // avatars via plain <img>). MonolithFileController.avatarById only resolves
                // rows uploaded through the generic 'avatar' category with an image mime.
                path.startsWith("/api/files/avatar/") ||
+               // HMAC-signed public file proxy (public_link node) - the signature IS the
+               // auth; MonolithFileController.proxySignedDownload verifies it and 403s
+               // everything else. Mirrors the cloud gateway PUBLIC_ENDPOINTS entry.
+               path.startsWith("/api/files/proxy-signed") ||
                path.equals("/ws") || path.startsWith("/ws?") ||
                path.startsWith("/share/") ||
                path.startsWith("/s/") ||

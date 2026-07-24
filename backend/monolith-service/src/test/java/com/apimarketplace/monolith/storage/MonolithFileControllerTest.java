@@ -48,7 +48,11 @@ class MonolithFileControllerTest {
     @Mock private OrgAccessGuard orgAccessGuard;
 
     private MonolithFileController controller() {
-        return new MonolithFileController(fileStorageService, publicFileUrlBuilder, storageService, orgAccessGuard);
+        // Blank-secret signer + real MimeTypeRegistry: this class covers upload + raw serve;
+        // the signed-proxy branches live in MonolithFileControllerSignedTest.
+        return new MonolithFileController(fileStorageService, publicFileUrlBuilder, storageService, orgAccessGuard,
+                new com.apimarketplace.common.storage.signing.ShowcaseUrlSigner(""),
+                new com.apimarketplace.storage.util.MimeTypeRegistry());
     }
 
     private MultipartFile fileOf(long size, byte[] content) throws IOException {
@@ -59,6 +63,76 @@ class MonolithFileControllerTest {
         lenient().when(file.getContentType()).thenReturn("text/plain");
         lenient().when(file.getInputStream()).thenReturn(new ByteArrayInputStream(content));
         return file;
+    }
+
+    @Nested
+    @DisplayName("upload (workflow context) - the endpoint 404ed on CE before this mount")
+    class WorkflowUpload {
+
+        @Test
+        @DisplayName("Regression: POST /api/files/upload exists on CE and returns the bare FileRef (data_input, trigger-panel and interface-form uploads all 404ed)")
+        void uploadsWithWorkflowContextAndReturnsBareFileRef() throws IOException {
+            byte[] content = "workflow bytes".getBytes(StandardCharsets.UTF_8);
+            MultipartFile file = fileOf(content.length, content);
+            FileRef ref = FileRef.of("42/wf-1/run-1/data_input/abc_report.txt", "report.txt", "text/plain", content.length,
+                    "00000000-0000-0000-0000-000000000002");
+
+            AtomicReference<String> orgDuringUpload = new AtomicReference<>();
+            when(fileStorageService.upload(eq("42"), eq("wf-1"), eq("run-1"), eq("data_input"),
+                    eq("report.txt"), eq("text/plain"), any(), anyLong()))
+                    .thenAnswer(inv -> {
+                        orgDuringUpload.set(TenantResolver.currentRequestOrganizationId());
+                        return ref;
+                    });
+
+            ResponseEntity<?> response = controller().uploadFile(file, "wf-1", "run-1", "data_input", "42", "org-9", "MEMBER");
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            // Bare FileRef body, byte-compatible with the cloud FileController response
+            // (fileService.uploadFile parses it directly as the FileRef).
+            assertThat(response.getBody()).isSameAs(ref);
+            // Persisted INSIDE runWithOrgScope so the indexed row lands in the caller's workspace.
+            assertThat(orgDuringUpload.get()).isEqualTo("org-9");
+        }
+
+        @Test
+        @DisplayName("Oversized upload is refused 413 before touching storage")
+        void oversizedRefused() throws IOException {
+            MultipartFile file = fileOf(FileConstants.MAX_FILE_SIZE_BYTES + 1, new byte[0]);
+
+            ResponseEntity<?> response = controller().uploadFile(file, "wf-1", "run-1", "upload", "42", null, null);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.PAYLOAD_TOO_LARGE);
+            verify(fileStorageService, never()).upload(anyString(), anyString(), anyString(), anyString(),
+                    anyString(), anyString(), any(), anyLong());
+        }
+
+        @Test
+        @DisplayName("Empty upload is refused 400")
+        void emptyRefused() throws IOException {
+            MultipartFile file = fileOf(0, new byte[0]);
+
+            ResponseEntity<?> response = controller().uploadFile(file, "wf-1", "run-1", "upload", "42", null, null);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        }
+
+        @Test
+        @DisplayName("Storage quota rejection maps to 413 with the quota message")
+        void quotaMapsTo413() throws IOException {
+            byte[] content = "q".getBytes(StandardCharsets.UTF_8);
+            MultipartFile file = fileOf(content.length, content);
+            when(fileStorageService.upload(anyString(), anyString(), anyString(), anyString(),
+                    anyString(), anyString(), any(), anyLong()))
+                    .thenThrow(new QuotaExceededException("over quota"));
+
+            ResponseEntity<?> response = controller().uploadFile(file, "wf-1", "run-1", "upload", "42", null, null);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.PAYLOAD_TOO_LARGE);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> body = (Map<String, Object>) response.getBody();
+            assertThat(body).containsEntry("error", "Storage quota exceeded");
+        }
     }
 
     @Nested

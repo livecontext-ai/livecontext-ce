@@ -73,6 +73,9 @@ public class LandingInterfaceSnapshotter {
         snapshot.put("htmlTemplate", iface.getHtmlTemplate());
         snapshot.put("cssTemplate", iface.getCssTemplate());
         snapshot.put("jsTemplate", iface.getJsTemplate());
+        // The format travels with the templates: the marketplace cards and the landing preview
+        // shape their iframe from it, and without it a vertical landing renders at 1280x800.
+        snapshot.put("format", iface.getFormat());
         snapshot.put("interfaceType", iface.getInterfaceType());
         snapshot.put("data", iface.getData());
         logger.debug("Built landing-interface snapshot for {} (tenant {}, org {})",

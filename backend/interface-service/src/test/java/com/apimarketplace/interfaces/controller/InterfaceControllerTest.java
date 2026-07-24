@@ -8,6 +8,7 @@ import com.apimarketplace.interfaces.service.InterfaceService;
 import com.apimarketplace.interfaces.service.InterfaceSnapshotService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -56,7 +57,7 @@ class InterfaceControllerTest {
             InterfaceEntity entity = createEntity();
             when(interfaceService.createInterface(
                     eq(TENANT), eq("Test"), isNull(), eq("<div>{{title}}</div>"),
-                    eq(".c{}"), eq("js"), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                    eq(".c{}"), eq("js"), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), any()))
                     .thenReturn(entity);
 
             Map<String, Object> body = Map.of(
@@ -72,6 +73,36 @@ class InterfaceControllerTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.name").value("Test"))
                     .andExpect(jsonPath("$.htmlTemplate").value("<div>{{title}}</div>"));
+        }
+
+        @Test
+        @DisplayName("An unusable format is a 400 on CREATE too, and never reaches the service")
+        void unusableFormatOnCreateIsBadRequest() throws Exception {
+            // Symmetric with update and with the interface tool. Letting it through would
+            // normalise to null and hand the caller a shapeless interface it never asked for.
+            String body = "{\"name\": \"Test\", \"htmlTemplate\": \"<div/>\", \"format\": \"9999x9999\"}";
+
+            mockMvc.perform(post("/api/interfaces")
+                            .header("X-User-ID", TENANT)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body))
+                    .andExpect(status().isBadRequest());
+
+            verifyNoInteractions(interfaceService);
+        }
+
+        @Test
+        @DisplayName("A wrong-typed format is a 400 on CREATE (not an uncaught cast -> 500)")
+        void wrongTypedFormatOnCreateIsBadRequest() throws Exception {
+            String body = "{\"name\": \"Test\", \"htmlTemplate\": \"<div/>\", \"format\": 1080}";
+
+            mockMvc.perform(post("/api/interfaces")
+                            .header("X-User-ID", TENANT)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body))
+                    .andExpect(status().isBadRequest());
+
+            verifyNoInteractions(interfaceService);
         }
 
         @Test
@@ -105,7 +136,7 @@ class InterfaceControllerTest {
             // A numeric STRING must still be accepted (defensive parse), mirroring the internal path.
             InterfaceEntity entity = createEntity();
             when(interfaceService.createInterface(any(), any(), any(), any(), any(), any(),
-                    any(), any(), any(), any(), any(), any(), any()))
+                    any(), any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(entity);
 
             Map<String, Object> body = Map.of(
@@ -123,7 +154,7 @@ class InterfaceControllerTest {
             InterfaceEntity entity = createEntity();
             when(interfaceService.createInterface(
                     eq(TENANT), eq("Test"), isNull(), eq("<div>hi</div>"),
-                    isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
+                    isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), any()))
                     .thenReturn(entity);
 
             Map<String, Object> body = Map.of(
@@ -144,7 +175,7 @@ class InterfaceControllerTest {
         void createInterface_responseCamelCaseJsonFormat() throws Exception {
             InterfaceEntity entity = createEntity();
             when(interfaceService.createInterface(any(), any(), any(), any(), any(), any(),
-                    any(), any(), any(), any(), any(), any(), any()))
+                    any(), any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(entity);
 
             Map<String, Object> body = Map.of("name", "Test", "htmlTemplate", "<div>hi</div>");
@@ -270,10 +301,87 @@ class InterfaceControllerTest {
     @Nested
     class UpdateInterface {
         @Test
+        @DisplayName("A wrong-typed format is a 400, not a 500 - and never reaches the service")
+        void wrongTypedFormatIsBadRequest() throws Exception {
+            // interface-service has no exception-mapping advice, so an unguarded cast would
+            // surface as a generic 500. It must also never reach the service: a non-String
+            // parses to null, which on this merge-style update reads as an explicit CLEAR.
+            String body = "{\"format\": 1080}";
+
+            mockMvc.perform(put("/api/interfaces/{id}", UUID.randomUUID())
+                            .header("X-User-ID", TENANT)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body))
+                    .andExpect(status().isBadRequest());
+
+            verifyNoInteractions(interfaceService);
+        }
+
+        @Test
+        @DisplayName("An unusable format string is a 400, matching the interface tool's contract")
+        void unusableFormatStringIsBadRequest() throws Exception {
+            // Without this the REST path would normalise it to null and silently wipe the shape,
+            // while the tool path rejects the very same value.
+            String body = "{\"format\": \"9999x9999\"}";
+
+            mockMvc.perform(put("/api/interfaces/{id}", UUID.randomUUID())
+                            .header("X-User-ID", TENANT)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body))
+                    .andExpect(status().isBadRequest());
+
+            verifyNoInteractions(interfaceService);
+        }
+
+        @Test
+        @DisplayName("An explicit format: null clears the shape (key presence drives the clear)")
+        void explicitNullFormatClearsTheShape() throws Exception {
+            // "Unset" is a distinct value (full-page capture), so it must be reachable. The flag
+            // is keyed off the KEY's presence - a null value with the key present means clear.
+            InterfaceEntity entity = createEntity();
+            when(interfaceService.updateInterface(eq(entity.getId()), eq(TENANT), isNull(), isNull(),
+                    any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
+                    isNull(), eq(Boolean.TRUE)))
+                    .thenReturn(entity);
+
+            String body = "{\"format\": null}";
+
+            mockMvc.perform(put("/api/interfaces/{id}", entity.getId())
+                            .header("X-User-ID", TENANT)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body))
+                    .andExpect(status().isOk());
+
+            verify(interfaceService).updateInterface(eq(entity.getId()), eq(TENANT), isNull(), isNull(),
+                    any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
+                    isNull(), eq(Boolean.TRUE));
+        }
+
+        @Test
+        @DisplayName("An omitted format leaves the shape untouched (no clear flag)")
+        void omittedFormatLeavesShapeUntouched() throws Exception {
+            InterfaceEntity entity = createEntity();
+            when(interfaceService.updateInterface(eq(entity.getId()), eq(TENANT), isNull(), isNull(),
+                    eq("Updated"), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
+                    isNull(), isNull()))
+                    .thenReturn(entity);
+
+            mockMvc.perform(put("/api/interfaces/{id}", entity.getId())
+                            .header("X-User-ID", TENANT)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(Map.of("name", "Updated"))))
+                    .andExpect(status().isOk());
+
+            verify(interfaceService).updateInterface(eq(entity.getId()), eq(TENANT), isNull(), isNull(),
+                    eq("Updated"), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
+                    isNull(), isNull());
+        }
+
+        @Test
         void shouldUpdate() throws Exception {
             InterfaceEntity entity = createEntity();
             when(interfaceService.updateInterface(eq(entity.getId()), eq(TENANT), isNull(), isNull(),
-                    eq("Updated"), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                    eq("Updated"), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(entity);
 
             Map<String, Object> body = Map.of("name", "Updated");
@@ -291,7 +399,7 @@ class InterfaceControllerTest {
             // X-Organization-Role and threads them into the scope-aware overload.
             InterfaceEntity entity = createEntity();
             when(interfaceService.updateInterface(eq(entity.getId()), eq(TENANT), eq("org-1"), eq("MEMBER"),
-                    eq("Updated"), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                    eq("Updated"), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(entity);
 
             mockMvc.perform(put("/api/interfaces/{id}", entity.getId())
@@ -303,7 +411,7 @@ class InterfaceControllerTest {
                     .andExpect(status().isOk());
 
             verify(interfaceService).updateInterface(eq(entity.getId()), eq(TENANT), eq("org-1"), eq("MEMBER"),
-                    eq("Updated"), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+                    eq("Updated"), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
         }
 
         @Test

@@ -12,6 +12,13 @@ vi.mock('@/lib/api/api-client', () => ({ apiClient: { post: postMock } }));
 
 import { GoogleDrivePickerField } from '../GoogleDrivePickerField';
 
+/**
+ * What the component actually pushed into the Picker. `appId` is the load-bearing one: Google
+ * requires setAppId for the drive.file scope, and without it a picked file is never granted to the
+ * app (every later API call 404s), so we pin that the call happens.
+ */
+const built: { appIdCalls: string[] } = { appIdCalls: [] };
+
 /** Installs a minimal window.gapi + window.google.picker, capturing the picker callback. */
 function installGoogleSDK(captureCallback: (cb: (data: any) => void) => void) {
   (window as any).gapi = {
@@ -29,6 +36,10 @@ function installGoogleSDK(captureCallback: (cb: (data: any) => void) => void) {
           return this;
         }
         setDeveloperKey() {
+          return this;
+        }
+        setAppId(id: string) {
+          built.appIdCalls.push(id);
           return this;
         }
         addView() {
@@ -51,6 +62,7 @@ function installGoogleSDK(captureCallback: (cb: (data: any) => void) => void) {
 
 beforeEach(() => {
   postMock.mockReset();
+  built.appIdCalls = [];
   // Pre-inject the gapi script so loadScript() resolves immediately (jsdom never fires onload).
   const s = document.createElement('script');
   s.src = 'https://apis.google.com/js/api.js';
@@ -139,6 +151,57 @@ describe('GoogleDrivePickerField', () => {
 
     pickerCallback!({ action: 'picked', documents: [{ id: 'FILE_123' }] });
     expect(onChange).toHaveBeenCalledWith('FILE_123');
+  });
+
+  /**
+   * Regression: the Picker was built without setAppId, which Google requires for the drive.file
+   * scope. The pick looked fine (the file ID came back and landed in the field) but no grant was
+   * ever recorded, so the workflow's later API call answered 404 "Requested entity was not found".
+   * Only a file the app had already created kept working, which is exactly the case where the
+   * Picker is pointless - hence nobody caught it.
+   */
+  it('passes the App ID returned with the token to the Picker, so a drive.file pick actually grants access', async () => {
+    process.env.NEXT_PUBLIC_GOOGLE_PICKER_API_KEY = 'browser-key';
+    postMock.mockResolvedValue({ access_token: 'ya29.fresh', app_id: '785967600625' });
+    installGoogleSDK(() => undefined);
+
+    render(
+      <GoogleDrivePickerField
+        paramName="documentId"
+        value=""
+        onChange={vi.fn()}
+        mimeType="application/vnd.google-apps.document"
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('param-pick-documentId'));
+
+    await waitFor(() => expect(built.appIdCalls).toEqual(['785967600625']));
+  });
+
+  it('omits the App ID when the backend could not resolve one, rather than passing a bogus value', async () => {
+    process.env.NEXT_PUBLIC_GOOGLE_PICKER_API_KEY = 'browser-key';
+    postMock.mockResolvedValue({ access_token: 'ya29.fresh' });
+    let pickerCallback: ((data: any) => void) | undefined;
+    installGoogleSDK((cb) => {
+      pickerCallback = cb;
+    });
+
+    render(
+      <GoogleDrivePickerField
+        paramName="documentId"
+        value=""
+        onChange={vi.fn()}
+        mimeType="application/vnd.google-apps.document"
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('param-pick-documentId'));
+
+    // The Picker must still open (a wrong App ID breaks it outright); it just cannot grant.
+    await waitFor(() => expect(typeof pickerCallback).toBe('function'));
+    expect(built.appIdCalls).toEqual([]);
+    expect(screen.queryByTestId('param-pick-error-documentId')).toBeNull();
   });
 
   it('maps Docs and Slides mimeTypes to their integration when requesting the token', async () => {

@@ -71,6 +71,46 @@ class RunCloneServiceCloneStorageTest {
     }
 
     @Test
+    @DisplayName("Regression 2026-07-21: cloneRun COPIES metadata (never aliases the source map) and strips __mockMode__")
+    void cloneRunCopiesMetadataAndStripsMockMode() {
+        // Aliasing let a later mutation on either entity silently edit the other,
+        // and a marketplace showcase clone must not embed the publisher's editor
+        // mock override.
+        java.util.Map<String, Object> sourceMeta = new java.util.HashMap<>();
+        sourceMeta.put("__editorRun__", Boolean.TRUE);
+        sourceMeta.put("__mockMode__", "all_mcp");
+
+        com.apimarketplace.orchestrator.domain.WorkflowRunEntity sourceRun =
+                new com.apimarketplace.orchestrator.domain.WorkflowRunEntity();
+        sourceRun.setRunIdPublic("run-source-1");
+        sourceRun.setTenantId("tenant-pub");
+        sourceRun.setMetadata(sourceMeta);
+
+        org.mockito.Mockito.when(workflowRunRepository.findByRunIdPublic("run-source-1"))
+                .thenReturn(Optional.of(sourceRun));
+        org.mockito.Mockito.when(workflowRunRepository.save(
+                org.mockito.ArgumentMatchers.any(com.apimarketplace.orchestrator.domain.WorkflowRunEntity.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+        org.mockito.Mockito.when(workflowStepDataRepository.findByWorkflowRunIdOrderByIdAsc(
+                org.mockito.ArgumentMatchers.any())).thenReturn(List.of());
+        org.mockito.Mockito.lenient().when(interfaceClient.getSnapshotsForRun(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(List.of());
+
+        com.apimarketplace.orchestrator.domain.WorkflowRunEntity clone =
+                runCloneService.cloneRun("run-source-1", "showcase", null);
+
+        assertThat(clone.getMetadata())
+                .as("clone metadata is a COPY, not the source's map instance")
+                .isNotSameAs(sourceMeta);
+        assertThat(clone.getMetadata())
+                .doesNotContainKey("__mockMode__")
+                .containsEntry("__editorRun__", Boolean.TRUE);
+        // The strip must not leak back into the source.
+        assertThat(sourceMeta).containsEntry("__mockMode__", "all_mcp");
+    }
+
+    @Test
     @DisplayName("clone preserves organization_id on org-scoped source row")
     void preservesOrgIdOnOrgScopedSource() {
         UUID sourceId = UUID.randomUUID();

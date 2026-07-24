@@ -130,7 +130,7 @@ public record Core(
 
     // Valid core types
     private static final Set<String> VALID_TYPES = Set.of(
-        "decision", "switch", "loop", "split", "merge", "fork", "transform", "wait", "download_file",
+        "decision", "switch", "loop", "split", "merge", "fork", "transform", "wait", "download_file", "public_link", "media",
         "exit", "end", "response", "option", "aggregate", "http_request", "approval", "data_input",
         "filter", "sort", "limit", "remove_duplicates",
         "summarize", "date_time", "crypto_jwt",
@@ -1137,19 +1137,29 @@ public record Core(
     /**
      * SendEmail configuration - send emails via SMTP with user-provided credentials.
      *
-     * @param smtpHost SMTP server hostname
-     * @param smtpPort SMTP server port (default: 587)
-     * @param smtpUsername SMTP authentication username
-     * @param smtpPassword SMTP authentication password
-     * @param smtpUseTls Whether to use TLS (default: true for port 587/465)
-     * @param fromEmail Sender email address
-     * @param fromName Sender display name (optional)
+     * <p>The connection fields below ({@code smtpHost}, {@code smtpPort}, {@code smtpUsername},
+     * {@code smtpPassword}, {@code smtpUseTls}) are LEGACY and ignored at run time: SendEmailNode
+     * always reads the connection from the SMTP credential (Settings &gt; Credentials), selected by
+     * {@code credentialId} or falling back to the default. They are kept only so older stored plans
+     * still deserialize.
+     *
+     * @param smtpHost Legacy, ignored - the credential supplies the host
+     * @param smtpPort Legacy, ignored - the credential supplies the port
+     * @param smtpUsername Legacy, ignored - the credential supplies the username
+     * @param smtpPassword Legacy, ignored - the credential supplies the password
+     * @param smtpUseTls Legacy, ignored - the credential supplies use_tls
+     * @param fromEmail Sender address, overriding the credential's from_email (optional)
+     * @param fromName Sender display name, overriding the credential's from_name (optional)
      * @param toEmail Recipient email(s), comma-separated for multiple
      * @param ccEmail CC email(s), comma-separated (optional)
      * @param bccEmail BCC email(s), comma-separated (optional)
      * @param subject Email subject
      * @param body Email body (plain text or HTML)
      * @param isHtml Whether body is HTML (default: false)
+     * @param credentialId Selected SMTP credential id (falls back to the default SMTP credential)
+     * @param inReplyTo Reply threading: the original message's Message-ID (In-Reply-To header)
+     * @param references Reply threading: the References header chain (defaults to inReplyTo)
+     * @param replyTo Reply-To header, when replies should not go to the sender address (optional)
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record SendEmailConfig(
@@ -1170,7 +1180,9 @@ public record Core(
         // Reply threading: set In-Reply-To / References headers so the sent mail threads under
         // an existing conversation. Pass the original message's messageId (from email_inbox output).
         String inReplyTo,
-        String references
+        String references,
+        // Reply-To header: where replies should go when that is not the sender address.
+        String replyTo
     ) {
         public SendEmailConfig {
             smtpPort = smtpPort <= 0 ? 587 : smtpPort;
@@ -1203,9 +1215,10 @@ public record Core(
      * @param limit Max messages to return in READ mode (1-100, default: 10)
      * @param markSeen In READ mode, mark fetched messages as seen (default: false)
      * @param sinceDays In READ mode, only messages received within the last N days (0 = no limit)
-     * @param action none | mark_read | mark_unread | flag | unflag | move | delete (default: none)
+     * @param action none | list_folders | create_folder | mark_read | mark_unread | flag | unflag | move | delete (default: none)
      * @param messageUid IMAP UID of the message to act on (required when action != none); SpEL-resolved
-     * @param targetFolder Destination folder for the move action
+     * @param targetFolder Destination folder for the move action; the folder to create for create_folder
+     * @param createTargetIfMissing For move: create targetFolder when it does not exist yet (default: false)
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record EmailInboxConfig(
@@ -1225,13 +1238,17 @@ public record Core(
         boolean flaggedOnly,
         int beforeDays,
         // ---- attachments ----
-        boolean downloadAttachments
+        boolean downloadAttachments,
+        // ---- move ----
+        boolean createTargetIfMissing
     ) {
-        // Actions needing a messageUid (single-message). 'none' READS, 'list_folders' lists folders.
+        // Actions needing a messageUid (single-message). 'none' READS, 'list_folders' lists
+        // folders, 'create_folder' creates targetFolder.
         public static final Set<String> MESSAGE_ACTIONS = Set.of(
             "mark_read", "mark_unread", "flag", "unflag", "move", "delete");
         public static final Set<String> VALID_ACTIONS = Set.of(
-            "none", "mark_read", "mark_unread", "flag", "unflag", "move", "delete", "list_folders");
+            "none", "mark_read", "mark_unread", "flag", "unflag", "move", "delete",
+            "list_folders", "create_folder");
 
         public EmailInboxConfig {
             folder = (folder == null || folder.isBlank()) ? "INBOX" : folder.trim();
