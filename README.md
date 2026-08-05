@@ -1,5 +1,7 @@
 # LiveContext
 
+[![MCP Toplist](https://mcptoplist.com/badge/glama%2Flivecontext-ai%2Flivecontext-ce.svg)](https://mcptoplist.com/server/glama%2Flivecontext-ai%2Flivecontext-ce)
+
 **The AI automation platform.** One message in, a working automation out.
 
 Describe the job in chat and LiveContext builds it in front of you: a workflow you can read,
