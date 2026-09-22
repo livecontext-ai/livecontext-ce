@@ -72,7 +72,7 @@ services:
           memory: 384M
 
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:latest
     container_name: livecontext-minio
     restart: unless-stopped
     environment:
@@ -93,7 +93,7 @@ services:
           memory: 256M
 
   minio-init:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:latest
     container_name: livecontext-minio-init
     depends_on:
       minio:
@@ -108,7 +108,7 @@ services:
     restart: "no"
 
   bridge:
-    image: ghcr.io/livecontext-ai/livecontext-ce-bridge:v0.3.0
+    image: ghcr.io/livecontext-ai/livecontext-ce-bridge:v0.3.1
     container_name: livecontext-bridge
     restart: unless-stopped
     depends_on:
@@ -136,7 +136,7 @@ services:
           memory: 512M
 
   livecontext:
-    image: ghcr.io/livecontext-ai/livecontext-ce:v0.3.0
+    image: ghcr.io/livecontext-ai/livecontext-ce:v0.3.1
     container_name: livecontext-app
     restart: unless-stopped
     depends_on:
@@ -371,7 +371,7 @@ services:
   # secrets - HTML in, bytes out; reached only by the app over the compose network.
   screenshot-renderer:
     profiles: ["renderer"]
-    image: ghcr.io/livecontext-ai/livecontext-ce-screenshot-renderer:v0.3.0
+    image: ghcr.io/livecontext-ai/livecontext-ce-screenshot-renderer:v0.3.1
     container_name: livecontext-screenshot-renderer
     restart: unless-stopped
     environment:
@@ -395,7 +395,7 @@ services:
           memory: 1024M
 
   frontend:
-    image: ghcr.io/livecontext-ai/livecontext-ce-frontend:v0.3.0
+    image: ghcr.io/livecontext-ai/livecontext-ce-frontend:v0.3.1
     container_name: livecontext-frontend
     restart: unless-stopped
     depends_on:
